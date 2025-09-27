@@ -1,34 +1,10 @@
-use crate::types::*;
-use crate::config::*;
+use super::types::*;
+use super::config::*;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::{Duration, Instant};
-
-pub fn process_entities(input: Input) -> ProcessResult {
-    let config = CONFIG.read().unwrap();
-    let exceptions = EXCEPTIONS_CONFIG.read().unwrap();
-    let mut entities_to_tick = Vec::new();
-    for entity in input.entities {
-        if entity.is_block_entity || exceptions.critical_entity_types.contains(&entity.entity_type) {
-            entities_to_tick.push(entity.id);
-            continue;
-        }
-        let rate = if entity.distance <= config.close_radius {
-            config.close_rate
-        } else if entity.distance <= config.medium_radius {
-            config.medium_rate
-        } else {
-            config.far_rate
-        };
-        let period = (1.0 / rate) as u64;
-        if period == 0 || (input.tick_count + entity.id as u64) % period == 0 {
-            entities_to_tick.push(entity.id);
-        }
-    }
-    ProcessResult { entities_to_tick }
-}
 
 pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
     let config = ITEM_CONFIG.read().unwrap();
@@ -115,29 +91,4 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
     }
 
     ItemProcessResult { items_to_remove, merged_count: local_merged, despawned_count: local_despawned, item_updates }
-}
-
-pub fn process_mob_ai(input: MobInput) -> MobProcessResult {
-    let config = AI_CONFIG.read().unwrap();
-    let exceptions = EXCEPTIONS_CONFIG.read().unwrap();
-    let mut mobs_to_disable_ai = Vec::new();
-    let mut mobs_to_simplify_ai = Vec::new();
-    for mob in input.mobs {
-        if exceptions.critical_entity_types.contains(&mob.entity_type) {
-            continue;
-        }
-        if mob.is_passive {
-            if mob.distance > config.passive_disable_distance {
-                mobs_to_disable_ai.push(mob.id);
-            }
-        } else {
-            if mob.distance > config.hostile_simplify_distance {
-                let period = (1.0 / config.ai_tick_rate_far) as u64;
-                if period == 0 || (input.tick_count + mob.id as u64) % period == 0 {
-                    mobs_to_simplify_ai.push(mob.id);
-                }
-            }
-        }
-    }
-    MobProcessResult { mobs_to_disable_ai, mobs_to_simplify_ai }
 }

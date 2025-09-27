@@ -1,11 +1,18 @@
 extern crate lazy_static;
 
-mod types;
-mod config;
-mod processing;
-mod bindings;
+mod shared;
+mod entity;
+mod item;
+mod mob;
 
-pub use types::*;
-pub use config::*;
-pub use processing::*;
-pub use bindings::*;
+pub use shared::*;
+pub use entity::*;
+pub use item::*;
+pub use mob::*;
+
+use jni::{JNIEnv, objects::JClass, sys::jstring};
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustPerformance_freeStringNative(_env: JNIEnv, _class: JClass, _s: jstring) {
+    // jstring is managed by JVM, no need to free
+}
