@@ -4,11 +4,13 @@ mod shared;
 mod entity;
 mod item;
 mod mob;
+mod block;
 
 pub use shared::*;
 pub use entity::*;
 pub use item::*;
 pub use mob::*;
+pub use block::*;
 
 use jni::{JNIEnv, objects::JClass, sys::jstring};
 use sysinfo::System;

@@ -159,6 +159,7 @@ public class ExampleMod {
         List<EntityData> entities = new ArrayList<>();
         List<ItemEntityData> items = new ArrayList<>();
         List<MobData> mobs = new ArrayList<>();
+        List<BlockEntityData> blockEntities = new ArrayList<>();
         for (ServerLevel level : server.getAllLevels()) {
             for (Entity entity : level.getEntities().getAll()) {
                 if (entity instanceof ItemEntity itemEntity) {
@@ -178,8 +179,13 @@ public class ExampleMod {
                     mobs.add(new MobData((long) entity.getId(), distance, isPassive, entity.getType().toString()));
                 }
             }
+            // TODO: Collect block entities - requires proper chunk iteration API
+            // For now, block entity optimization is placeholder
         }
         List<Long> toTick = RustPerformance.getEntitiesToTick(entities);
+
+        // Process block entity optimization
+        var blockResult = RustPerformance.getBlockEntitiesToTick(blockEntities);
 
         // Process item optimization
         var itemResult = RustPerformance.processItemEntities(items);
@@ -215,8 +221,9 @@ public class ExampleMod {
         }
 
         // Log only every 100 ticks (5 seconds at 20 TPS) and only if there are optimizations
-        if (tickCounter % 100 == 0 && (!toTick.isEmpty() || itemResult.mergedCount > 0 || itemResult.despawnedCount > 0 || !mobResult.mobsToDisableAI.isEmpty() || !mobResult.mobsToSimplifyAI.isEmpty())) {
+        if (tickCounter % 100 == 0 && (!toTick.isEmpty() || itemResult.mergedCount > 0 || itemResult.despawnedCount > 0 || !mobResult.mobsToDisableAI.isEmpty() || !mobResult.mobsToSimplifyAI.isEmpty() || !blockResult.isEmpty())) {
             LOGGER.info("Entities to tick: {}", toTick.size());
+            LOGGER.info("Block entities to tick: {}", blockResult.size());
             LOGGER.info("Item optimization: {} merged, {} despawned", itemResult.mergedCount, itemResult.despawnedCount);
             LOGGER.info("Mob AI optimization: {} disabled, {} simplified", mobResult.mobsToDisableAI.size(), mobResult.mobsToSimplifyAI.size());
         }

@@ -56,6 +56,7 @@ public class RustPerformance {
     private static native String processEntitiesNative(String jsonInput);
     private static native String processItemEntitiesNative(String jsonInput);
     private static native String processMobAiNative(String jsonInput);
+    private static native String processBlockEntitiesNative(String jsonInput);
     private static native String getMemoryStatsNative();
     private static native void freeStringNative(String s);
 
@@ -148,6 +149,33 @@ public class RustPerformance {
         }
         // Fallback: no optimization
         return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
+    }
+
+    public static List<Long> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
+        try {
+            Map<String, Object> input = new HashMap<>();
+            input.put("tick_count", tickCount++);
+            input.put("block_entities", blockEntities);
+            String jsonInput = gson.toJson(input);
+            String jsonResult = processBlockEntitiesNative(jsonInput);
+            if (jsonResult != null) {
+                JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
+                JsonArray entitiesToTick = result.getAsJsonArray("block_entities_to_tick");
+                List<Long> resultList = new ArrayList<>();
+                for (JsonElement e : entitiesToTick) {
+                    resultList.add(e.getAsLong());
+                }
+                return resultList;
+            }
+        } catch (Exception e) {
+            ExampleMod.LOGGER.error("Error calling Rust for block entity processing", e);
+        }
+        // Fallback: return all
+        List<Long> all = new ArrayList<>();
+        for (BlockEntityData e : blockEntities) {
+            all.add(e.id);
+        }
+        return all;
     }
 
     public static class ItemUpdate {
