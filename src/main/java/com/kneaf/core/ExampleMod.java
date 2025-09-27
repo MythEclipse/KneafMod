@@ -50,6 +50,12 @@ import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.TickingBlockEntity;
+import net.minecraft.world.level.chunk.LevelChunk;
+import java.lang.reflect.Field;
+import java.util.Map;
 
 // The value here should match an entry in the META-INF/neoforge.mods.toml file
 @Mod(ExampleMod.MODID)
@@ -179,8 +185,25 @@ public class ExampleMod {
                     mobs.add(new MobData((long) entity.getId(), distance, isPassive, entity.getType().toString()));
                 }
             }
-            // TODO: Collect block entities - requires proper chunk iteration API
-            // For now, block entity optimization is placeholder
+            // Collect ticking block entities using reflection
+            try {
+                Field tickersField = ServerLevel.class.getDeclaredField("blockEntityTickers");
+                tickersField.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                Map<BlockPos, TickingBlockEntity> tickers = (Map<BlockPos, TickingBlockEntity>) tickersField.get(level);
+                for (var entry : tickers.entrySet()) {
+                    BlockPos pos = entry.getKey();
+                    BlockEntity be = level.getBlockEntity(pos);
+                    if (be != null) {
+                        double distance = calculateDistanceToNearestPlayer(pos, level);
+                        String blockType = be.getType().toString();
+                        long id = ((long) pos.getX() << 32) | ((long) pos.getZ() << 16) | pos.getY();
+                        blockEntities.add(new BlockEntityData(id, distance, blockType, pos.getX(), pos.getY(), pos.getZ()));
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.error("Failed to collect block entities", e);
+            }
         }
         List<Long> toTick = RustPerformance.getEntitiesToTick(entities);
 
@@ -242,6 +265,15 @@ public class ExampleMod {
         double minDist = Double.MAX_VALUE;
         for (ServerPlayer player : level.players()) {
             double dist = entity.distanceTo(player);
+            if (dist < minDist) minDist = dist;
+        }
+        return minDist;
+    }
+
+    private double calculateDistanceToNearestPlayer(BlockPos pos, ServerLevel level) {
+        double minDist = Double.MAX_VALUE;
+        for (ServerPlayer player : level.players()) {
+            double dist = Math.sqrt(pos.distSqr(player.blockPosition()));
             if (dist < minDist) minDist = dist;
         }
         return minDist;
