@@ -22,6 +22,7 @@ public class RustPerfStatusCommand {
         long throttledTicks = RustPerformance.getTotalThrottledTicks();
         long totalMerged = RustPerformance.getTotalMerged();
         long totalDespawned = RustPerformance.getTotalDespawned();
+        String memoryStats = RustPerformance.getMemoryStats();
 
         // Send message
         source.sendSuccess(() -> Component.literal(String.format(
@@ -30,8 +31,9 @@ public class RustPerfStatusCommand {
             "Normally Ticked Entities: %d\n" +
             "Throttled Entities: %d\n" +
             "Total Merged Items: %d\n" +
-            "Total Despawned Items: %d",
-            tps, normalTicks, throttledTicks, totalMerged, totalDespawned)), false);
+            "Total Despawned Items: %d\n" +
+            "Memory Stats: %s",
+            tps, normalTicks, throttledTicks, totalMerged, totalDespawned, memoryStats)), false);
 
         return 1;
     }

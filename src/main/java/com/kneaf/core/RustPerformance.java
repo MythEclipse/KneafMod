@@ -56,6 +56,7 @@ public class RustPerformance {
     private static native String processEntitiesNative(String jsonInput);
     private static native String processItemEntitiesNative(String jsonInput);
     private static native String processMobAiNative(String jsonInput);
+    private static native String getMemoryStatsNative();
     private static native void freeStringNative(String s);
 
     public static List<Long> getEntitiesToTick(List<EntityData> entities) {
@@ -180,6 +181,15 @@ public class RustPerformance {
         public MobProcessResult(List<Long> mobsToDisableAI, List<Long> mobsToSimplifyAI) {
             this.mobsToDisableAI = mobsToDisableAI;
             this.mobsToSimplifyAI = mobsToSimplifyAI;
+        }
+    }
+
+    public static String getMemoryStats() {
+        try {
+            return getMemoryStatsNative();
+        } catch (Exception e) {
+            ExampleMod.LOGGER.error("Error getting memory stats from Rust", e);
+            return "{\"error\": \"Failed to get memory stats\"}";
         }
     }
 
