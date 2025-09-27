@@ -207,7 +207,7 @@ def getRustLibName() {
     } else if (os.contains('mac')) {
         return 'librustperf.dylib'
     } else {
-        throw new GradleException("Unsupported OS: $os")
+        throw new RuntimeException("Unsupported OS: $os")
     }
 }
 
