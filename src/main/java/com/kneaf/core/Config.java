@@ -1,4 +1,4 @@
-package com.example.examplemod;
+package com.kneaf.core;
 
 import java.util.List;
 import java.util.Set;
