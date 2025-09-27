@@ -58,7 +58,7 @@ public class RustPerformance {
     private static native String processMobAiNative(String jsonInput);
     private static native void freeStringNative(String s);
 
-    public static List<Integer> getEntitiesToTick(List<EntityData> entities) {
+    public static List<Long> getEntitiesToTick(List<EntityData> entities) {
         try {
             Map<String, Object> input = new HashMap<>();
             input.put("tick_count", tickCount++);
@@ -68,9 +68,9 @@ public class RustPerformance {
             if (jsonResult != null) {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
                 JsonArray entitiesToTick = result.getAsJsonArray("entities_to_tick");
-                List<Integer> resultList = new ArrayList<>();
+                List<Long> resultList = new ArrayList<>();
                 for (JsonElement e : entitiesToTick) {
-                    resultList.add(e.getAsInt());
+                    resultList.add(e.getAsLong());
                 }
                 totalNormalTicks += resultList.size();
                 totalThrottledTicks += entities.size() - resultList.size();
@@ -80,9 +80,9 @@ public class RustPerformance {
             ExampleMod.LOGGER.error("Error calling Rust for entity processing", e);
         }
         // Fallback: return all
-        List<Integer> all = new ArrayList<>();
+        List<Long> all = new ArrayList<>();
         for (EntityData e : entities) {
-            all.add((int) e.id);
+            all.add(e.id);
         }
         return all;
     }
@@ -96,9 +96,9 @@ public class RustPerformance {
             if (jsonResult != null) {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
                 JsonArray itemsToRemove = result.getAsJsonArray("items_to_remove");
-                List<Integer> removeList = new ArrayList<>();
+                List<Long> removeList = new ArrayList<>();
                 for (JsonElement e : itemsToRemove) {
-                    removeList.add(e.getAsInt());
+                    removeList.add(e.getAsLong());
                 }
                 long merged = result.get("merged_count").getAsLong();
                 long despawned = result.get("despawned_count").getAsLong();
@@ -132,13 +132,13 @@ public class RustPerformance {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
                 JsonArray disableAi = result.getAsJsonArray("mobs_to_disable_ai");
                 JsonArray simplifyAi = result.getAsJsonArray("mobs_to_simplify_ai");
-                List<Integer> disableList = new ArrayList<>();
-                List<Integer> simplifyList = new ArrayList<>();
+                List<Long> disableList = new ArrayList<>();
+                List<Long> simplifyList = new ArrayList<>();
                 for (JsonElement e : disableAi) {
-                    disableList.add(e.getAsInt());
+                    disableList.add(e.getAsLong());
                 }
                 for (JsonElement e : simplifyAi) {
-                    simplifyList.add(e.getAsInt());
+                    simplifyList.add(e.getAsLong());
                 }
                 return new MobProcessResult(disableList, simplifyList);
             }
@@ -160,12 +160,12 @@ public class RustPerformance {
     }
 
     public static class ItemProcessResult {
-        public List<Integer> itemsToRemove;
+        public List<Long> itemsToRemove;
         public long mergedCount;
         public long despawnedCount;
         public List<ItemUpdate> itemUpdates;
 
-        public ItemProcessResult(List<Integer> itemsToRemove, long mergedCount, long despawnedCount, List<ItemUpdate> itemUpdates) {
+        public ItemProcessResult(List<Long> itemsToRemove, long mergedCount, long despawnedCount, List<ItemUpdate> itemUpdates) {
             this.itemsToRemove = itemsToRemove;
             this.mergedCount = mergedCount;
             this.despawnedCount = despawnedCount;
@@ -174,10 +174,10 @@ public class RustPerformance {
     }
 
     public static class MobProcessResult {
-        public List<Integer> mobsToDisableAI;
-        public List<Integer> mobsToSimplifyAI;
+        public List<Long> mobsToDisableAI;
+        public List<Long> mobsToSimplifyAI;
 
-        public MobProcessResult(List<Integer> mobsToDisableAI, List<Integer> mobsToSimplifyAI) {
+        public MobProcessResult(List<Long> mobsToDisableAI, List<Long> mobsToSimplifyAI) {
             this.mobsToDisableAI = mobsToDisableAI;
             this.mobsToSimplifyAI = mobsToSimplifyAI;
         }

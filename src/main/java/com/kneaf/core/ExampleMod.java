@@ -34,6 +34,7 @@ import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraft.server.level.ServerPlayer;
 import com.kneaf.core.EntityData;
 import com.kneaf.core.ItemEntityData;
+import com.kneaf.core.MobData;
 import com.kneaf.core.RustPerformance;
 import com.kneaf.core.ModCompatibility;
 import java.util.List;
@@ -139,19 +140,30 @@ public class ExampleMod {
         RustPerfStatusCommand.register(event.getDispatcher());
     }
     private static int tickCounter = 0;
+    private static long lastTickTime = 0;
 
     // You can use SubscribeEvent and let the Event Bus discover methods to call
     @SubscribeEvent
     public void onServerTick(ServerTickEvent.Post event) {
+        // Calculate TPS
+        long currentTime = System.nanoTime();
+        if (lastTickTime != 0) {
+            long delta = currentTime - lastTickTime;
+            double tps = 1_000_000_000.0 / delta;
+            RustPerformance.currentTPS = Math.min(tps, 20.0);
+        }
+        lastTickTime = currentTime;
+
         tickCounter++;
         MinecraftServer server = event.getServer();
         List<EntityData> entities = new ArrayList<>();
         List<ItemEntityData> items = new ArrayList<>();
+        List<MobData> mobs = new ArrayList<>();
         for (ServerLevel level : server.getAllLevels()) {
             for (Entity entity : level.getEntities().getAll()) {
                 if (entity instanceof ItemEntity itemEntity) {
                     double distance = calculateDistanceToNearestPlayer(entity, level);
-                    entities.add(new EntityData(entity.getId(), distance, false, entity.getType().toString()));
+                    entities.add(new EntityData((long) entity.getId(), distance, false, entity.getType().toString()));
 
                     // Collect item data
                     var chunkPos = entity.chunkPosition();
@@ -159,11 +171,15 @@ public class ExampleMod {
                     var itemType = itemStack.getItem().getDescriptionId();
                     var count = itemStack.getCount();
                     var ageSeconds = itemEntity.getAge() / 20; // ticks to seconds
-                    items.add(new ItemEntityData(entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
+                    items.add(new ItemEntityData((long) entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
+                } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
+                    double distance = calculateDistanceToNearestPlayer(entity, level);
+                    boolean isPassive = !(mob instanceof net.minecraft.world.entity.monster.Monster);
+                    mobs.add(new MobData((long) entity.getId(), distance, isPassive, entity.getType().toString()));
                 }
             }
         }
-        List<Integer> toTick = RustPerformance.getEntitiesToTick(entities);
+        List<Long> toTick = RustPerformance.getEntitiesToTick(entities);
 
         // Process item optimization
         var itemResult = RustPerformance.processItemEntities(items);
@@ -178,15 +194,36 @@ public class ExampleMod {
             }
         }
 
+        // Process mob AI optimization
+        var mobResult = RustPerformance.processMobAI(mobs);
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Long id : mobResult.mobsToDisableAI) {
+                Entity entity = level.getEntity(id.intValue());
+                if (entity instanceof net.minecraft.world.entity.Mob mob) {
+                    mob.setNoAi(true);
+                }
+            }
+            for (Long id : mobResult.mobsToSimplifyAI) {
+                Entity entity = level.getEntity(id.intValue());
+                if (entity instanceof net.minecraft.world.entity.Mob mob) {
+                    // Simplify AI: for example, reduce pathfinding frequency
+                    // For simplicity, just log or set a flag
+                    // In real implementation, modify goal selectors or something
+                    LOGGER.debug("Simplifying AI for mob {}", id);
+                }
+            }
+        }
+
         // Log only every 100 ticks (5 seconds at 20 TPS) and only if there are optimizations
-        if (tickCounter % 100 == 0 && (!toTick.isEmpty() || itemResult.mergedCount > 0 || itemResult.despawnedCount > 0)) {
+        if (tickCounter % 100 == 0 && (!toTick.isEmpty() || itemResult.mergedCount > 0 || itemResult.despawnedCount > 0 || !mobResult.mobsToDisableAI.isEmpty() || !mobResult.mobsToSimplifyAI.isEmpty())) {
             LOGGER.info("Entities to tick: {}", toTick.size());
             LOGGER.info("Item optimization: {} merged, {} despawned", itemResult.mergedCount, itemResult.despawnedCount);
+            LOGGER.info("Mob AI optimization: {} disabled, {} simplified", mobResult.mobsToDisableAI.size(), mobResult.mobsToSimplifyAI.size());
         }
 
         for (ServerLevel level : server.getAllLevels()) {
-            for (Integer id : itemResult.itemsToRemove) {
-                Entity entity = level.getEntity(id);
+            for (Long id : itemResult.itemsToRemove) {
+                Entity entity = level.getEntity(id.intValue());
                 if (entity != null) {
                     entity.remove(RemovalReason.DISCARDED);
                 }
@@ -203,29 +240,6 @@ public class ExampleMod {
         return minDist;
     }
 
-    // You can use SubscribeEvent and let the Event Bus discover methods to call
-    // @SubscribeEvent
-    // public void onLivingTick(LivingTickEvent event) {
-    //     if (!(event.getEntity() instanceof net.minecraft.world.entity.Mob mob)) {
-    //         return;
-    //     }
-    //     // Collect mob data
-    //     double distance = calculateDistanceToNearestPlayer(event.getEntity(), (ServerLevel) event.getEntity().level());
-    //     boolean isPassive = !(mob instanceof net.minecraft.world.entity.monster.Monster);
-    //     MobData mobData = new MobData(event.getEntity().getId(), distance, isPassive);
-
-    //     // Process AI optimization
-    //     var mobResult = RustPerformance.processMobAI(List.of(mobData));
-    //     if (mobResult.mobsToDisableAI.contains(event.getEntity().getId())) {
-    //         // Disable AI
-    //         mob.setNoAi(true);
-    //     } else if (mobResult.mobsToSimplifyAI.contains(event.getEntity().getId())) {
-    //         // Simplify AI: for example, reduce pathfinding frequency
-    //         // For simplicity, just log or set a flag
-    //         // In real implementation, modify goal selectors or something
-    //         LOGGER.debug("Simplifying AI for mob {}", event.getEntity().getId());
-    //     }
-    // }
 
     // You can use SubscribeEvent and let the Event Bus discover methods to call
     @SubscribeEvent
