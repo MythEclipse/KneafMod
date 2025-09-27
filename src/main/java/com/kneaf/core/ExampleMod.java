@@ -4,6 +4,11 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.Entity.RemovalReason;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -26,9 +31,21 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraft.client.Minecraft;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.minecraft.server.level.ServerPlayer;
+import com.kneaf.core.EntityData;
+import com.kneaf.core.ItemEntityData;
+import com.kneaf.core.RustPerformance;
+import com.kneaf.core.ModCompatibility;
+import java.util.List;
+import java.util.ArrayList;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
+// import net.neoforged.neoforge.event.entity.living.LivingTickEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent.Pre;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import com.kneaf.core.RustPerfStatusCommand;
 import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
@@ -87,6 +104,9 @@ public class ExampleMod {
         // Register the item to a creative tab
         modEventBus.addListener(this::addCreative);
 
+        // Register commands - handled by @SubscribeEvent since class is registered
+        LOGGER.info("Commands listener will be registered via @SubscribeEvent on class registration");
+
         // Register our mod's ModConfigSpec so that FML can create and load the config file for us
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
     }
@@ -102,6 +122,9 @@ public class ExampleMod {
         LOGGER.info("{}{}", Config.MAGIC_NUMBER_INTRODUCTION.get(), Config.MAGIC_NUMBER.getAsInt());
 
         Config.ITEM_STRINGS.get().forEach((item) -> LOGGER.info("ITEM >> {}", item));
+
+        // Check for mod compatibility and log warnings
+        ModCompatibility.checkForConflicts();
     }
 
     // Add the example block item to the building blocks tab
@@ -110,6 +133,83 @@ public class ExampleMod {
             event.accept(EXAMPLE_BLOCK_ITEM);
         }
     }
+
+    // Register commands
+    @SubscribeEvent
+    private void registerCommands(RegisterCommandsEvent event) {
+        RustPerfStatusCommand.register(event.getDispatcher());
+    }
+    // You can use SubscribeEvent and let the Event Bus discover methods to call
+    @SubscribeEvent
+    public void onServerTick(ServerTickEvent.Pre event) {
+        MinecraftServer server = event.getServer();
+        List<EntityData> entities = new ArrayList<>();
+        List<ItemEntityData> items = new ArrayList<>();
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Entity entity : level.getEntities().getAll()) {
+                if (entity instanceof ItemEntity itemEntity) {
+                    double distance = calculateDistanceToNearestPlayer(entity, level);
+                    entities.add(new EntityData(entity.getId(), distance, false, entity.getType().toString()));
+
+                    // Collect item data
+                    var chunkPos = entity.chunkPosition();
+                    var itemStack = itemEntity.getItem();
+                    var itemType = itemStack.getItem().getDescriptionId();
+                    var count = itemStack.getCount();
+                    var ageSeconds = itemEntity.getAge() / 20; // ticks to seconds
+                    items.add(new ItemEntityData(entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
+                }
+            }
+        }
+        List<Integer> toTick = RustPerformance.getEntitiesToTick(entities);
+        // For now, just log the count
+        LOGGER.info("Entities to tick: {}", toTick.size());
+
+        // Process item optimization
+        var itemResult = RustPerformance.processItemEntities(items);
+        LOGGER.info("Item optimization: {} merged, {} despawned", itemResult.mergedCount, itemResult.despawnedCount);
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Integer id : itemResult.itemsToRemove) {
+                Entity entity = level.getEntity(id);
+                if (entity != null) {
+                    entity.remove(RemovalReason.DISCARDED);
+                }
+            }
+        }
+    }
+
+    private double calculateDistanceToNearestPlayer(Entity entity, ServerLevel level) {
+        double minDist = Double.MAX_VALUE;
+        for (ServerPlayer player : level.players()) {
+            double dist = entity.distanceTo(player);
+            if (dist < minDist) minDist = dist;
+        }
+        return minDist;
+    }
+
+    // You can use SubscribeEvent and let the Event Bus discover methods to call
+    // @SubscribeEvent
+    // public void onLivingTick(LivingTickEvent event) {
+    //     if (!(event.getEntity() instanceof net.minecraft.world.entity.Mob mob)) {
+    //         return;
+    //     }
+    //     // Collect mob data
+    //     double distance = calculateDistanceToNearestPlayer(event.getEntity(), (ServerLevel) event.getEntity().level());
+    //     boolean isPassive = !(mob instanceof net.minecraft.world.entity.monster.Monster);
+    //     MobData mobData = new MobData(event.getEntity().getId(), distance, isPassive);
+
+    //     // Process AI optimization
+    //     var mobResult = RustPerformance.processMobAI(List.of(mobData));
+    //     if (mobResult.mobsToDisableAI.contains(event.getEntity().getId())) {
+    //         // Disable AI
+    //         mob.setNoAi(true);
+    //     } else if (mobResult.mobsToSimplifyAI.contains(event.getEntity().getId())) {
+    //         // Simplify AI: for example, reduce pathfinding frequency
+    //         // For simplicity, just log or set a flag
+    //         // In real implementation, modify goal selectors or something
+    //         LOGGER.debug("Simplifying AI for mob {}", event.getEntity().getId());
+    //     }
+    // }
 
     // You can use SubscribeEvent and let the Event Bus discover methods to call
     @SubscribeEvent

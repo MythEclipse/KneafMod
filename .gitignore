@@ -22,5 +22,6 @@ eclipse
 run
 runs
 run-data
-
+**/target/**
 repo
+test_server/

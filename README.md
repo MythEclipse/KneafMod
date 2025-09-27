@@ -1,25 +1,52 @@
+# Kneaf Core
 
-Installation information
-=======
+A server-side performance optimization mod for Minecraft 1.21 using Rust for high-performance computations.
 
-This template repository can be directly cloned to get you started with a new
-mod. Simply create a new repository cloned from this one, by following the
-instructions provided by [GitHub](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template).
+## Features
 
-Once you have your clone, simply open the repository in the IDE of your choice. The usual recommendation for an IDE is either IntelliJ IDEA or Eclipse.
+- **Dynamic Entity Ticking Throttling**: Reduces tick rates for distant entities to improve server performance
+- **Item Stack Merging**: Automatically merges duplicate item entities to reduce entity count
+- **AI Optimization**: Simplifies pathfinding for distant mobs
+- **Rust Integration**: Uses Rust libraries for efficient data processing
+- **Server-Side Only**: Compatible with vanilla clients
 
-If at any point you are missing libraries in your IDE, or you've run into problems you can
-run `gradlew --refresh-dependencies` to refresh the local cache. `gradlew clean` to reset everything 
-{this does not affect your code} and then start the process again.
+## Installation
 
-Mapping Names:
-============
-By default, the MDK is configured to use the official mapping names from Mojang for methods and fields 
-in the Minecraft codebase. These names are covered by a specific license. All modders should be aware of this
-license. For the latest license text, refer to the mapping file itself, or the reference copy here:
-https://github.com/NeoForged/NeoForm/blob/main/Mojang.md
+1. Download the mod jar from [Modrinth](https://modrinth.com/mod/kneaf-core) or [CurseForge](https://www.curseforge.com/minecraft/mc-mods/kneaf-core)
+2. Place the jar file in your server's `mods` folder
+3. Start the server
 
-Additional Resources: 
-==========
-Community Documentation: https://docs.neoforged.net/  
-NeoForged Discord: https://discord.neoforged.net/
+## Configuration
+
+Edit `config/rustperf.toml` to customize:
+- Throttling distances and rates
+- Item merging limits
+- AI optimization settings
+
+## Compatibility
+
+- **Server-Side**: Fully compatible with vanilla clients
+- **Large Modpacks**: Tested with 50+ mods
+- **Incompatible with**: Lithium, Starlight, FerriteCore (conflicting optimizations)
+
+## Commands
+
+- `/rustperf status`: View real-time performance metrics
+
+## Building from Source
+
+Requires Java 21 and Rust.
+
+```bash
+./gradlew build
+```
+
+This will compile the Rust library and package it into the mod jar.
+
+## License
+
+MIT License
+
+## Support
+
+Report issues at [GitHub Issues](https://github.com/yourusername/kneafmod/issues)

@@ -1,0 +1,33 @@
+[throttling]
+close_radius = 32.0
+medium_radius = 128.0
+close_rate = 1.0
+medium_rate = 0.5
+far_rate = 0.2
+
+[item_optimization]
+max_items_per_chunk = 100
+despawn_time_seconds = 300
+merge_enabled = true
+
+[ai_optimization]
+passive_disable_distance = 64.0
+hostile_simplify_distance = 128.0
+ai_tick_rate_far = 0.2
+[logging]
+level = "info"
+
+[metrics]
+export_prometheus = false
+prometheus_port = 9090
+
+
+[compatibility]
+# Automatically disable features if conflicting mods are detected
+disable_tick_optimization_if_lithium = true
+disable_item_optimization_if_ferritecore = false
+disable_ai_optimization_if_starlight = false
+
+[exceptions]
+# Entity types that should not be optimized (e.g., boss entities, critical machines)
+critical_entity_types = ["minecraft:wither", "minecraft:ender_dragon"]

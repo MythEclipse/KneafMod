@@ -19,6 +19,7 @@ group = mod_group_id
 
 repositories {
     // Add here additional repositories if required by some of the dependencies below.
+    mavenCentral()
 }
 
 base {
@@ -112,6 +113,9 @@ configurations {
 }
 
 dependencies {
+    // j4rs for Rust FFI
+    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation 'io.github.astonbitecode:j4rs:0.17.0'
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // compileOnly "mezz.jei:jei-${mc_version}-common-api:${jei_version}"
@@ -178,6 +182,40 @@ publishing {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
+
+// Task to build Rust library
+task buildRust(type: Exec) {
+    workingDir 'rust'
+    commandLine 'cargo', 'build', '--release'
+}
+
+// Task to copy Rust library to resources
+task copyRustLib(type: Copy) {
+    dependsOn buildRust
+    from 'rust/target/release/'
+    include getRustLibName()
+    into 'src/main/resources/natives/'
+}
+
+// Helper method to get the correct library name based on OS
+def getRustLibName() {
+    def os = System.getProperty('os.name').toLowerCase()
+    if (os.contains('windows')) {
+        return 'rustperf.dll'
+    } else if (os.contains('linux')) {
+        return 'librustperf.so'
+    } else if (os.contains('mac')) {
+        return 'librustperf.dylib'
+    } else {
+        throw new GradleException("Unsupported OS: $os")
+    }
+}
+
+// Ensure Rust lib is built before compiling Java
+compileJava.dependsOn copyRustLib
+
+// Ensure processResources runs after copyRustLib
+processResources.dependsOn copyRustLib
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {
