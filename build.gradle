@@ -183,17 +183,58 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
 
-// Task to build Rust library
-task buildRust(type: Exec) {
-    workingDir 'rust'
-    commandLine 'cargo', 'build', '--release'
+// Task to build Rust library for both platforms
+task buildRust {
+    doLast {
+        def os = System.getProperty('os.name').toLowerCase()
+        if (os.contains('windows')) {
+            // Build for Windows (native) and Linux (cross)
+            exec {
+                workingDir 'rust'
+                commandLine 'cargo', 'build', '--release'
+            }
+            exec {
+                workingDir 'rust'
+                commandLine 'cargo', 'build', '--release', '--target', 'x86_64-unknown-linux-gnu'
+            }
+        } else if (os.contains('linux')) {
+            // Build for Linux (native) and Windows (cross)
+            exec {
+                workingDir 'rust'
+                commandLine 'cargo', 'build', '--release'
+            }
+            exec {
+                workingDir 'rust'
+                commandLine 'cargo', 'build', '--release', '--target', 'x86_64-pc-windows-gnu'
+            }
+        } else {
+            // For other OS (e.g., macOS), build native only
+            exec {
+                workingDir 'rust'
+                commandLine 'cargo', 'build', '--release'
+            }
+        }
+    }
 }
 
-// Task to copy Rust library to resources
+// Task to copy Rust libraries to resources
 task copyRustLib(type: Copy) {
     dependsOn buildRust
-    from 'rust/target/release/'
-    include getRustLibName()
+    def os = System.getProperty('os.name').toLowerCase()
+    if (os.contains('windows')) {
+        from 'rust/target/release/'
+        from 'rust/target/x86_64-unknown-linux-gnu/release/'
+        include 'rustperf.dll'
+        include 'librustperf.so'
+    } else if (os.contains('linux')) {
+        from 'rust/target/release/'
+        from 'rust/target/x86_64-pc-windows-gnu/release/'
+        include 'librustperf.so'
+        include 'rustperf.dll'
+    } else {
+        from 'rust/target/release/'
+        include getRustLibName()
+    }
     into 'src/main/resources/natives/'
 }
 
