@@ -13,14 +13,21 @@ import java.io.*;
 import java.nio.file.*;
 
 public class RustPerformance {
+    private RustPerformance() {}
+
     private static long tickCount = 0;
     // Metrics
-    public static long lastTickNano = 0;
-    public static double currentTPS = 20.0;
-    public static long totalNormalTicks = 0;
-    public static long totalThrottledTicks = 0;
-    public static long totalMerged = 0;
-    public static long totalDespawned = 0;
+    private static double currentTPS = 20.0;
+    private static long totalNormalTicks = 0;
+    private static long totalThrottledTicks = 0;
+    private static long totalMerged = 0;
+    private static long totalDespawned = 0;
+
+    public static void setCurrentTPS(double currentTPS) {
+        RustPerformance.currentTPS = currentTPS;
+    }
+
+    private static final String TICK_COUNT_KEY = "tick_count";
     private static final Gson gson = new Gson();
 
     static {
@@ -33,7 +40,7 @@ public class RustPerformance {
             InputStream in = RustPerformance.class.getClassLoader().getResourceAsStream(resourcePath);
             if (in == null) {
                 ExampleMod.LOGGER.error("Native library not found: {}", resourcePath);
-                throw new RuntimeException("Native library not found: " + resourcePath);
+                throw new IllegalStateException("Native library not found: " + resourcePath);
             }
             ExampleMod.LOGGER.info("Found native library resource, extracting to temp directory");
             Path tempDir = Files.createTempDirectory("kneafcore-natives");
@@ -46,9 +53,9 @@ public class RustPerformance {
             // Optionally delete on exit, but for now keep it
             tempFile.toFile().deleteOnExit();
             tempDir.toFile().deleteOnExit();
-        } catch (Exception e) {
-            ExampleMod.LOGGER.error("Failed to load Rust library", e);
-            throw new RuntimeException("Failed to load Rust library", e);
+        } catch (Exception e) { // NOSONAR
+            ExampleMod.LOGGER.error("Failed to load Rust library: {}", e.getMessage(), e);
+            throw new IllegalStateException("Failed to load Rust library: " + e.getMessage(), e);
         }
     }
 
@@ -58,12 +65,11 @@ public class RustPerformance {
     private static native String processMobAiNative(String jsonInput);
     private static native String processBlockEntitiesNative(String jsonInput);
     private static native String getMemoryStatsNative();
-    private static native void freeStringNative(String s);
 
     public static List<Long> getEntitiesToTick(List<EntityData> entities) {
         try {
             Map<String, Object> input = new HashMap<>();
-            input.put("tick_count", tickCount++);
+            input.put(TICK_COUNT_KEY, tickCount++);
             input.put("entities", entities);
             String jsonInput = gson.toJson(input);
             String jsonResult = processEntitiesNative(jsonInput);
@@ -79,12 +85,12 @@ public class RustPerformance {
                 return resultList;
             }
         } catch (Exception e) {
-            ExampleMod.LOGGER.error("Error calling Rust for entity processing", e);
+            ExampleMod.LOGGER.error("Error calling Rust for entity processing: {}", e.getMessage(), e);
         }
         // Fallback: return all
         List<Long> all = new ArrayList<>();
         for (EntityData e : entities) {
-            all.add(e.id);
+            all.add(e.getId());
         }
         return all;
     }
@@ -117,7 +123,7 @@ public class RustPerformance {
                 return new ItemProcessResult(removeList, merged, despawned, updates);
             }
         } catch (Exception e) {
-            ExampleMod.LOGGER.error("Error calling Rust for item processing", e);
+            ExampleMod.LOGGER.error("Error calling Rust for item processing: {}", e.getMessage(), e);
         }
         // Fallback: no optimization
         return new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>());
@@ -126,7 +132,7 @@ public class RustPerformance {
     public static MobProcessResult processMobAI(List<MobData> mobs) {
         try {
             Map<String, Object> input = new HashMap<>();
-            input.put("tick_count", tickCount);
+            input.put(TICK_COUNT_KEY, tickCount);
             input.put("mobs", mobs);
             String jsonInput = gson.toJson(input);
             String jsonResult = processMobAiNative(jsonInput);
@@ -145,7 +151,7 @@ public class RustPerformance {
                 return new MobProcessResult(disableList, simplifyList);
             }
         } catch (Exception e) {
-            ExampleMod.LOGGER.error("Error calling Rust for mob AI processing", e);
+            ExampleMod.LOGGER.error("Error calling Rust for mob AI processing: {}", e.getMessage(), e);
         }
         // Fallback: no optimization
         return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
@@ -154,7 +160,7 @@ public class RustPerformance {
     public static List<Long> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
         try {
             Map<String, Object> input = new HashMap<>();
-            input.put("tick_count", tickCount++);
+            input.put(TICK_COUNT_KEY, tickCount++);
             input.put("block_entities", blockEntities);
             String jsonInput = gson.toJson(input);
             String jsonResult = processBlockEntitiesNative(jsonInput);
@@ -168,31 +174,39 @@ public class RustPerformance {
                 return resultList;
             }
         } catch (Exception e) {
-            ExampleMod.LOGGER.error("Error calling Rust for block entity processing", e);
+            ExampleMod.LOGGER.error("Error calling Rust for block entity processing: {}", e.getMessage(), e);
         }
         // Fallback: return all
         List<Long> all = new ArrayList<>();
         for (BlockEntityData e : blockEntities) {
-            all.add(e.id);
+            all.add(e.getId());
         }
         return all;
     }
 
     public static class ItemUpdate {
-        public long id;
-        public int newCount;
+        private long id;
+        private int newCount;
 
         public ItemUpdate(long id, int newCount) {
             this.id = id;
             this.newCount = newCount;
         }
+
+        public long getId() {
+            return id;
+        }
+
+        public int getNewCount() {
+            return newCount;
+        }
     }
 
     public static class ItemProcessResult {
-        public List<Long> itemsToRemove;
-        public long mergedCount;
-        public long despawnedCount;
-        public List<ItemUpdate> itemUpdates;
+        private List<Long> itemsToRemove;
+        private long mergedCount;
+        private long despawnedCount;
+        private List<ItemUpdate> itemUpdates;
 
         public ItemProcessResult(List<Long> itemsToRemove, long mergedCount, long despawnedCount, List<ItemUpdate> itemUpdates) {
             this.itemsToRemove = itemsToRemove;
@@ -200,15 +214,38 @@ public class RustPerformance {
             this.despawnedCount = despawnedCount;
             this.itemUpdates = itemUpdates;
         }
+
+        public List<Long> getItemsToRemove() {
+            return itemsToRemove;
+        }
+
+        public long getMergedCount() {
+            return mergedCount;
+        }
+
+        public long getDespawnedCount() {
+            return despawnedCount;
+        }
+
+        public List<ItemUpdate> getItemUpdates() {
+            return itemUpdates;
+        }
     }
 
     public static class MobProcessResult {
-        public List<Long> mobsToDisableAI;
-        public List<Long> mobsToSimplifyAI;
+        private List<Long> mobsToDisableAI;
+        private List<Long> mobsToSimplifyAI;
 
         public MobProcessResult(List<Long> mobsToDisableAI, List<Long> mobsToSimplifyAI) {
             this.mobsToDisableAI = mobsToDisableAI;
             this.mobsToSimplifyAI = mobsToSimplifyAI;
+        }
+        public List<Long> getMobsToDisableAI() {
+            return mobsToDisableAI;
+        }
+
+        public List<Long> getMobsToSimplifyAI() {
+            return mobsToSimplifyAI;
         }
     }
 
@@ -216,7 +253,7 @@ public class RustPerformance {
         try {
             return getMemoryStatsNative();
         } catch (Exception e) {
-            ExampleMod.LOGGER.error("Error getting memory stats from Rust", e);
+            ExampleMod.LOGGER.error("Error getting memory stats from Rust: {}", e.getMessage(), e);
             return "{\"error\": \"Failed to get memory stats\"}";
         }
     }

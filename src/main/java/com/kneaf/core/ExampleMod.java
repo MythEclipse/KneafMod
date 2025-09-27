@@ -32,20 +32,13 @@ import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraft.client.Minecraft;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraft.server.level.ServerPlayer;
-import com.kneaf.core.EntityData;
-import com.kneaf.core.ItemEntityData;
-import com.kneaf.core.MobData;
-import com.kneaf.core.RustPerformance;
-import com.kneaf.core.ModCompatibility;
 import java.util.List;
 import java.util.ArrayList;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
-// import net.neoforged.neoforge.event.entity.living.LivingTickEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
-import com.kneaf.core.RustPerfStatusCommand;
 import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
@@ -53,7 +46,6 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.TickingBlockEntity;
-import net.minecraft.world.level.chunk.LevelChunk;
 import java.lang.reflect.Field;
 import java.util.Map;
 
@@ -85,9 +77,7 @@ public class ExampleMod {
             .title(Component.translatable("itemGroup.kneafcore")) //The language key for the title of your CreativeModeTab
             .withTabsBefore(CreativeModeTabs.COMBAT)
             .icon(() -> EXAMPLE_ITEM.get().getDefaultInstance())
-            .displayItems((parameters, output) -> {
-                output.accept(EXAMPLE_ITEM.get()); // Add the example item to the tab. For your own tabs, this method is preferred over the event
-            }).build());
+            .displayItems((parameters, output) -> output.accept(EXAMPLE_ITEM.get())).build());
 
     // The constructor for the mod class is the first code that is run when your mod is loaded.
     // FML will recognize some parameter types like IEventBus or ModContainer and pass them in automatically.
@@ -127,7 +117,7 @@ public class ExampleMod {
 
         LOGGER.info("{}{}", Config.MAGIC_NUMBER_INTRODUCTION.get(), Config.MAGIC_NUMBER.getAsInt());
 
-        Config.ITEM_STRINGS.get().forEach((item) -> LOGGER.info("ITEM >> {}", item));
+        Config.ITEM_STRINGS.get().forEach(item -> LOGGER.info("ITEM >> {}", item));
 
         // Check for mod compatibility and log warnings
         ModCompatibility.checkForConflicts();
@@ -150,109 +140,145 @@ public class ExampleMod {
 
     // You can use SubscribeEvent and let the Event Bus discover methods to call
     @SubscribeEvent
-    public void onServerTick(ServerTickEvent.Post event) {
-        // Calculate TPS
+    public static void onServerTick(ServerTickEvent.Post event) {
+        updateTPS();
+        tickCounter++;
+        MinecraftServer server = event.getServer();
+        var data = collectEntityData(server);
+        var results = processOptimizations(data);
+        applyOptimizations(server, results);
+        logOptimizations(results);
+        removeItems(server, results.itemResult());
+    }
+
+    private static void updateTPS() {
         long currentTime = System.nanoTime();
         if (lastTickTime != 0) {
             long delta = currentTime - lastTickTime;
             double tps = 1_000_000_000.0 / delta;
-            RustPerformance.currentTPS = Math.min(tps, 20.0);
+            RustPerformance.setCurrentTPS(Math.min(tps, 20.0));
         }
         lastTickTime = currentTime;
+    }
 
-        tickCounter++;
-        MinecraftServer server = event.getServer();
+    private static EntityDataCollection collectEntityData(MinecraftServer server) {
         List<EntityData> entities = new ArrayList<>();
         List<ItemEntityData> items = new ArrayList<>();
         List<MobData> mobs = new ArrayList<>();
         List<BlockEntityData> blockEntities = new ArrayList<>();
         for (ServerLevel level : server.getAllLevels()) {
-            for (Entity entity : level.getEntities().getAll()) {
-                if (entity instanceof ItemEntity itemEntity) {
-                    double distance = calculateDistanceToNearestPlayer(entity, level);
-                    entities.add(new EntityData((long) entity.getId(), distance, false, entity.getType().toString()));
+            collectEntitiesFromLevel(level, entities, items, mobs);
+            collectBlockEntitiesFromLevel(level, blockEntities);
+        }
+        return new EntityDataCollection(entities, items, mobs, blockEntities);
+    }
 
-                    // Collect item data
-                    var chunkPos = entity.chunkPosition();
-                    var itemStack = itemEntity.getItem();
-                    var itemType = itemStack.getItem().getDescriptionId();
-                    var count = itemStack.getCount();
-                    var ageSeconds = itemEntity.getAge() / 20; // ticks to seconds
-                    items.add(new ItemEntityData((long) entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
-                } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
-                    double distance = calculateDistanceToNearestPlayer(entity, level);
-                    boolean isPassive = !(mob instanceof net.minecraft.world.entity.monster.Monster);
-                    mobs.add(new MobData((long) entity.getId(), distance, isPassive, entity.getType().toString()));
-                }
-            }
-            // Collect ticking block entities using reflection
-            try {
-                Field tickersField = ServerLevel.class.getDeclaredField("blockEntityTickers");
-                tickersField.setAccessible(true);
-                @SuppressWarnings("unchecked")
-                Map<BlockPos, TickingBlockEntity> tickers = (Map<BlockPos, TickingBlockEntity>) tickersField.get(level);
-                for (var entry : tickers.entrySet()) {
-                    BlockPos pos = entry.getKey();
-                    BlockEntity be = level.getBlockEntity(pos);
-                    if (be != null) {
-                        double distance = calculateDistanceToNearestPlayer(pos, level);
-                        String blockType = be.getType().toString();
-                        long id = ((long) pos.getX() << 32) | ((long) pos.getZ() << 16) | pos.getY();
-                        blockEntities.add(new BlockEntityData(id, distance, blockType, pos.getX(), pos.getY(), pos.getZ()));
-                    }
-                }
-            } catch (Exception e) {
-                LOGGER.error("Failed to collect block entities", e);
+    private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs) {
+        for (Entity entity : level.getEntities().getAll()) {
+            if (entity instanceof ItemEntity itemEntity) {
+                collectItemEntity(entity, itemEntity, level, entities, items);
+            } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
+                collectMobEntity(entity, mob, level, mobs);
             }
         }
-        List<Long> toTick = RustPerformance.getEntitiesToTick(entities);
+    }
 
-        // Process block entity optimization
-        var blockResult = RustPerformance.getBlockEntitiesToTick(blockEntities);
+    private static void collectItemEntity(Entity entity, ItemEntity itemEntity, ServerLevel level, List<EntityData> entities, List<ItemEntityData> items) {
+        double distance = calculateDistanceToNearestPlayer(entity, level);
+        entities.add(new EntityData(entity.getId(), distance, false, entity.getType().toString()));
+        var chunkPos = entity.chunkPosition();
+        var itemStack = itemEntity.getItem();
+        var itemType = itemStack.getItem().getDescriptionId();
+        var count = itemStack.getCount();
+        var ageSeconds = itemEntity.getAge() / 20;
+        items.add(new ItemEntityData(entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
+    }
 
-        // Process item optimization
-        var itemResult = RustPerformance.processItemEntities(items);
+    private static void collectMobEntity(Entity entity, net.minecraft.world.entity.Mob mob, ServerLevel level, List<MobData> mobs) {
+        double distance = calculateDistanceToNearestPlayer(entity, level);
+        boolean isPassive = !(mob instanceof net.minecraft.world.entity.monster.Monster);
+        mobs.add(new MobData(entity.getId(), distance, isPassive, entity.getType().toString()));
+    }
 
-        // Apply item updates
-        for (var update : itemResult.itemUpdates) {
+    private static void collectBlockEntitiesFromLevel(ServerLevel level, List<BlockEntityData> blockEntities) {
+        try {
+            Field tickersField = ServerLevel.class.getDeclaredField("blockEntityTickers");
+            tickersField.setAccessible(true); // NOSONAR
+            @SuppressWarnings("unchecked")
+            Map<BlockPos, TickingBlockEntity> tickers = (Map<BlockPos, TickingBlockEntity>) tickersField.get(level);
+            for (var entry : tickers.entrySet()) {
+                BlockPos pos = entry.getKey();
+                BlockEntity be = level.getBlockEntity(pos);
+                if (be != null) {
+                    double distance = calculateDistanceToNearestPlayer(pos, level);
+                    String blockType = be.getType().toString();
+                    long id = ((long) pos.getX() << 32) | ((long) pos.getZ() << 16) | pos.getY();
+                    blockEntities.add(new BlockEntityData(id, distance, blockType, pos.getX(), pos.getY(), pos.getZ()));
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.error("Failed to collect block entities", e);
+        }
+    }
+
+    private static OptimizationResults processOptimizations(EntityDataCollection data) {
+        List<Long> toTick = RustPerformance.getEntitiesToTick(data.entities());
+        List<Long> blockResult = RustPerformance.getBlockEntitiesToTick(data.blockEntities());
+        RustPerformance.ItemProcessResult itemResult = RustPerformance.processItemEntities(data.items());
+        RustPerformance.MobProcessResult mobResult = RustPerformance.processMobAI(data.mobs());
+        return new OptimizationResults(toTick, blockResult, itemResult, mobResult);
+    }
+
+    private static void applyOptimizations(MinecraftServer server, OptimizationResults results) {
+        applyItemUpdates(server, results.itemResult());
+        applyMobOptimizations(server, results.mobResult());
+    }
+
+    private static void applyItemUpdates(MinecraftServer server, RustPerformance.ItemProcessResult itemResult) {
+        for (var update : itemResult.getItemUpdates()) {
             for (ServerLevel level : server.getAllLevels()) {
-                Entity entity = level.getEntity((int) update.id);
+                Entity entity = level.getEntity((int) update.getId());
                 if (entity instanceof ItemEntity itemEntity) {
-                    itemEntity.getItem().setCount(update.newCount);
+                    itemEntity.getItem().setCount(update.getNewCount());
                 }
             }
         }
+    }
 
-        // Process mob AI optimization
-        var mobResult = RustPerformance.processMobAI(mobs);
+    private static void applyMobOptimizations(MinecraftServer server, RustPerformance.MobProcessResult mobResult) {
         for (ServerLevel level : server.getAllLevels()) {
-            for (Long id : mobResult.mobsToDisableAI) {
+            for (Long id : mobResult.getMobsToDisableAI()) {
                 Entity entity = level.getEntity(id.intValue());
                 if (entity instanceof net.minecraft.world.entity.Mob mob) {
                     mob.setNoAi(true);
                 }
             }
-            for (Long id : mobResult.mobsToSimplifyAI) {
+            for (Long id : mobResult.getMobsToSimplifyAI()) {
                 Entity entity = level.getEntity(id.intValue());
-                if (entity instanceof net.minecraft.world.entity.Mob mob) {
-                    // Simplify AI: for example, reduce pathfinding frequency
-                    // For simplicity, just log or set a flag
-                    // In real implementation, modify goal selectors or something
+                if (entity instanceof net.minecraft.world.entity.Mob) {
                     LOGGER.debug("Simplifying AI for mob {}", id);
                 }
             }
         }
+    }
 
-        // Log only every 100 ticks (5 seconds at 20 TPS) and only if there are optimizations
-        if (tickCounter % 100 == 0 && (!toTick.isEmpty() || itemResult.mergedCount > 0 || itemResult.despawnedCount > 0 || !mobResult.mobsToDisableAI.isEmpty() || !mobResult.mobsToSimplifyAI.isEmpty() || !blockResult.isEmpty())) {
-            LOGGER.info("Entities to tick: {}", toTick.size());
-            LOGGER.info("Block entities to tick: {}", blockResult.size());
-            LOGGER.info("Item optimization: {} merged, {} despawned", itemResult.mergedCount, itemResult.despawnedCount);
-            LOGGER.info("Mob AI optimization: {} disabled, {} simplified", mobResult.mobsToDisableAI.size(), mobResult.mobsToSimplifyAI.size());
+    private static void logOptimizations(OptimizationResults results) {
+        if (tickCounter % 100 == 0 && hasOptimizations(results)) {
+            LOGGER.info("Entities to tick: {}", results.toTick().size());
+            LOGGER.info("Block entities to tick: {}", results.blockResult().size());
+            LOGGER.info("Item optimization: {} merged, {} despawned", results.itemResult().getMergedCount(), results.itemResult().getDespawnedCount());
+            LOGGER.info("Mob AI optimization: {} disabled, {} simplified", results.mobResult().getMobsToDisableAI().size(), results.mobResult().getMobsToSimplifyAI().size());
         }
+    }
 
+    private static boolean hasOptimizations(OptimizationResults results) {
+        return !results.toTick().isEmpty() || results.itemResult().getMergedCount() > 0 || results.itemResult().getDespawnedCount() > 0 ||
+               !results.mobResult().getMobsToDisableAI().isEmpty() || !results.mobResult().getMobsToSimplifyAI().isEmpty() || !results.blockResult().isEmpty();
+    }
+
+    private static void removeItems(MinecraftServer server, RustPerformance.ItemProcessResult itemResult) {
         for (ServerLevel level : server.getAllLevels()) {
-            for (Long id : itemResult.itemsToRemove) {
+            for (Long id : itemResult.getItemsToRemove()) {
                 Entity entity = level.getEntity(id.intValue());
                 if (entity != null) {
                     entity.remove(RemovalReason.DISCARDED);
@@ -261,7 +287,10 @@ public class ExampleMod {
         }
     }
 
-    private double calculateDistanceToNearestPlayer(Entity entity, ServerLevel level) {
+    private record EntityDataCollection(List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, List<BlockEntityData> blockEntities) {}
+    private record OptimizationResults(List<Long> toTick, List<Long> blockResult, RustPerformance.ItemProcessResult itemResult, RustPerformance.MobProcessResult mobResult) {}
+
+    private static double calculateDistanceToNearestPlayer(Entity entity, ServerLevel level) {
         double minDist = Double.MAX_VALUE;
         for (ServerPlayer player : level.players()) {
             double dist = entity.distanceTo(player);
@@ -270,7 +299,7 @@ public class ExampleMod {
         return minDist;
     }
 
-    private double calculateDistanceToNearestPlayer(BlockPos pos, ServerLevel level) {
+    private static double calculateDistanceToNearestPlayer(BlockPos pos, ServerLevel level) {
         double minDist = Double.MAX_VALUE;
         for (ServerPlayer player : level.players()) {
             double dist = Math.sqrt(pos.distSqr(player.blockPosition()));
@@ -290,6 +319,8 @@ public class ExampleMod {
     // You can use EventBusSubscriber to automatically register all static methods in the class annotated with @SubscribeEvent
     @EventBusSubscriber(modid = ExampleMod.MODID, bus = EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
     static class ClientModEvents {
+        private ClientModEvents() {}
+
         @SubscribeEvent
         static void onClientSetup(FMLClientSetupEvent event) {
             // Some client setup code

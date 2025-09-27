@@ -7,6 +7,8 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 
 public class RustPerfStatusCommand {
+    private RustPerfStatusCommand() {}
+
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("rustperf")
             .then(Commands.literal("status")
@@ -25,15 +27,16 @@ public class RustPerfStatusCommand {
         String memoryStats = RustPerformance.getMemoryStats();
 
         // Send message
-        source.sendSuccess(() -> Component.literal(String.format(
-            "RustPerf Status:\n" +
-            "Current TPS: %.2f\n" +
-            "Normally Ticked Entities: %d\n" +
-            "Throttled Entities: %d\n" +
-            "Total Merged Items: %d\n" +
-            "Total Despawned Items: %d\n" +
-            "Memory Stats: %s",
-            tps, normalTicks, throttledTicks, totalMerged, totalDespawned, memoryStats)), false);
+        String message = """
+            RustPerf Status:
+            Current TPS: %.2f
+            Normally Ticked Entities: %d
+            Throttled Entities: %d
+            Total Merged Items: %d
+            Total Despawned Items: %d
+            Memory Stats: %s
+            """.formatted(tps, normalTicks, throttledTicks, totalMerged, totalDespawned, memoryStats);
+        source.sendSuccess(() -> Component.literal(message), false);
 
         return 1;
     }
