@@ -27,7 +27,7 @@ public class Config {
             .define("magicNumberIntroduction", "The magic number is... ");
 
     // a list of strings that are treated as resource locations for items
-// NOSONAR - false positive, the lambda is not a constant expression
+// NOSONAR - false positive, the lambda is not a constant expressiona
 public static final ConfigValue<List<? extends String>> ITEM_STRINGS = BUILDER // NOSONAR
                 .comment("A list of items to log on common setup.")
                 .defineListAllowEmpty("items", List.of("minecraft:iron_ingot"), () -> "", Config::validateItemName); // NOSONAR
