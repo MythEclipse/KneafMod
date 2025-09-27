@@ -42,7 +42,6 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 // import net.neoforged.neoforge.event.entity.living.LivingTickEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
-import net.neoforged.neoforge.event.tick.ServerTickEvent.Pre;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import com.kneaf.core.RustPerfStatusCommand;
@@ -143,7 +142,7 @@ public class ExampleMod {
 
     // You can use SubscribeEvent and let the Event Bus discover methods to call
     @SubscribeEvent
-    public void onServerTick(ServerTickEvent.Pre event) {
+    public void onServerTick(ServerTickEvent.Post event) {
         tickCounter++;
         MinecraftServer server = event.getServer();
         List<EntityData> entities = new ArrayList<>();
@@ -168,6 +167,16 @@ public class ExampleMod {
 
         // Process item optimization
         var itemResult = RustPerformance.processItemEntities(items);
+
+        // Apply item updates
+        for (var update : itemResult.itemUpdates) {
+            for (ServerLevel level : server.getAllLevels()) {
+                Entity entity = level.getEntity((int) update.id);
+                if (entity instanceof ItemEntity itemEntity) {
+                    itemEntity.getItem().setCount(update.newCount);
+                }
+            }
+        }
 
         // Log only every 100 ticks (5 seconds at 20 TPS) and only if there are optimizations
         if (tickCounter % 100 == 0 && (!toTick.isEmpty() || itemResult.mergedCount > 0 || itemResult.despawnedCount > 0)) {

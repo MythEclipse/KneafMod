@@ -41,10 +41,17 @@ pub struct ItemInput {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct ItemUpdate {
+    pub id: u64,
+    pub new_count: u32,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct ItemProcessResult {
     pub items_to_remove: Vec<u64>,
     pub merged_count: u64,
     pub despawned_count: u64,
+    pub item_updates: Vec<ItemUpdate>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -155,6 +162,7 @@ pub extern "C" fn Java_com_kneaf_core_RustPerformance_processItemEntitiesNative(
     let input: ItemInput = serde_json::from_str(&input).unwrap_or(ItemInput { items: vec![] });
     let config = ITEM_CONFIG.read().unwrap();
     let mut items_to_remove = Vec::new();
+    let mut item_updates = Vec::new();
     let mut local_merged = 0u64;
     let mut local_despawned = 0u64;
 
@@ -173,27 +181,24 @@ pub extern "C" fn Java_com_kneaf_core_RustPerformance_processItemEntitiesNative(
             }
             for (_type, type_items) in type_map {
                 if type_items.len() > 1 {
-                    // Find the one with max count, keep it, remove others
-                    let mut max_count = 0;
+                    // Merge stacks: sum counts, update one item, remove others
+                    let mut total_count = 0u32;
                     let mut keep_id = None;
-                    let mut _total_count = 0;
                     for item in &type_items {
-                        _total_count += item.count as i32;
-                        if item.count > max_count {
-                            max_count = item.count;
+                        total_count += item.count;
+                        if keep_id.is_none() {
                             keep_id = Some(item.id);
                         }
                     }
-                    // Update the kept item's count to total
-                    // But since we can't modify, just remove others
-                    for item in &type_items {
-                        if Some(item.id) != keep_id {
-                            items_to_remove.push(item.id);
-                            local_merged += 1;
+                    if let Some(keep_id) = keep_id {
+                        item_updates.push(ItemUpdate { id: keep_id, new_count: total_count });
+                        for item in &type_items {
+                            if item.id != keep_id {
+                                items_to_remove.push(item.id);
+                                local_merged += 1;
+                            }
                         }
                     }
-                    // Note: In reality, you'd need to update the kept item's count, but since we're in Rust and Java handles removal, perhaps return updates too.
-                    // For simplicity, assume merging by removing extras.
                 }
             }
         }
@@ -240,7 +245,7 @@ pub extern "C" fn Java_com_kneaf_core_RustPerformance_processItemEntitiesNative(
         *DESPAWNED_COUNT.write().unwrap() = 0;
     }
 
-    let result = ItemProcessResult { items_to_remove, merged_count: local_merged, despawned_count: local_despawned };
+    let result = ItemProcessResult { items_to_remove, merged_count: local_merged, despawned_count: local_despawned, item_updates };
     let output = serde_json::to_string(&result).unwrap();
     env.new_string(&output).expect("Couldn't create java string!").into_raw()
 }

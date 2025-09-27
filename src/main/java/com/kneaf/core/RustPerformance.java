@@ -102,15 +102,23 @@ public class RustPerformance {
                 }
                 long merged = result.get("merged_count").getAsLong();
                 long despawned = result.get("despawned_count").getAsLong();
+                JsonArray itemUpdatesArray = result.getAsJsonArray("item_updates");
+                List<ItemUpdate> updates = new ArrayList<>();
+                for (JsonElement e : itemUpdatesArray) {
+                    JsonObject obj = e.getAsJsonObject();
+                    long id = obj.get("id").getAsLong();
+                    int newCount = obj.get("new_count").getAsInt();
+                    updates.add(new ItemUpdate(id, newCount));
+                }
                 totalMerged += merged;
                 totalDespawned += despawned;
-                return new ItemProcessResult(removeList, merged, despawned);
+                return new ItemProcessResult(removeList, merged, despawned, updates);
             }
         } catch (Exception e) {
             ExampleMod.LOGGER.error("Error calling Rust for item processing", e);
         }
         // Fallback: no optimization
-        return new ItemProcessResult(new ArrayList<>(), 0, 0);
+        return new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>());
     }
 
     public static MobProcessResult processMobAI(List<MobData> mobs) {
@@ -141,15 +149,27 @@ public class RustPerformance {
         return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
     }
 
+    public static class ItemUpdate {
+        public long id;
+        public int newCount;
+
+        public ItemUpdate(long id, int newCount) {
+            this.id = id;
+            this.newCount = newCount;
+        }
+    }
+
     public static class ItemProcessResult {
         public List<Integer> itemsToRemove;
         public long mergedCount;
         public long despawnedCount;
+        public List<ItemUpdate> itemUpdates;
 
-        public ItemProcessResult(List<Integer> itemsToRemove, long mergedCount, long despawnedCount) {
+        public ItemProcessResult(List<Integer> itemsToRemove, long mergedCount, long despawnedCount, List<ItemUpdate> itemUpdates) {
             this.itemsToRemove = itemsToRemove;
             this.mergedCount = mergedCount;
             this.despawnedCount = despawnedCount;
+            this.itemUpdates = itemUpdates;
         }
     }
 
