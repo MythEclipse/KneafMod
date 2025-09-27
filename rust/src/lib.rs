@@ -203,7 +203,18 @@ pub extern "C" fn Java_com_kneaf_core_RustPerformance_processItemEntitiesNative(
             }
         }
 
-        // Enforce max per chunk
+        // Enforce max per chunk - DISABLED to not break vanilla gameplay
+        /*
+        let mut sorted_items: Vec<&ItemEntityData> = items.iter().filter(|i| !items_to_remove.contains(&i.id)).cloned().collect();
+        sorted_items.sort_by_key(|i| i.age_seconds);
+        if sorted_items.len() > config.max_items_per_chunk {
+            let excess = sorted_items.len() - config.max_items_per_chunk;
+            for i in 0..excess {
+                items_to_remove.push(sorted_items[i].id);
+                local_despawned += 1;
+            }
+        }
+        */
         let mut sorted_items: Vec<&ItemEntityData> = items.iter().filter(|i| !items_to_remove.contains(&i.id)).cloned().collect();
         sorted_items.sort_by_key(|i| i.age_seconds);
         if sorted_items.len() > config.max_items_per_chunk {
