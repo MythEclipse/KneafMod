@@ -139,9 +139,12 @@ public class ExampleMod {
     private void registerCommands(RegisterCommandsEvent event) {
         RustPerfStatusCommand.register(event.getDispatcher());
     }
+    private static int tickCounter = 0;
+
     // You can use SubscribeEvent and let the Event Bus discover methods to call
     @SubscribeEvent
     public void onServerTick(ServerTickEvent.Pre event) {
+        tickCounter++;
         MinecraftServer server = event.getServer();
         List<EntityData> entities = new ArrayList<>();
         List<ItemEntityData> items = new ArrayList<>();
@@ -162,12 +165,16 @@ public class ExampleMod {
             }
         }
         List<Integer> toTick = RustPerformance.getEntitiesToTick(entities);
-        // For now, just log the count
-        LOGGER.info("Entities to tick: {}", toTick.size());
 
         // Process item optimization
         var itemResult = RustPerformance.processItemEntities(items);
-        LOGGER.info("Item optimization: {} merged, {} despawned", itemResult.mergedCount, itemResult.despawnedCount);
+
+        // Log only every 100 ticks (5 seconds at 20 TPS) and only if there are optimizations
+        if (tickCounter % 100 == 0 && (!toTick.isEmpty() || itemResult.mergedCount > 0 || itemResult.despawnedCount > 0)) {
+            LOGGER.info("Entities to tick: {}", toTick.size());
+            LOGGER.info("Item optimization: {} merged, {} despawned", itemResult.mergedCount, itemResult.despawnedCount);
+        }
+
         for (ServerLevel level : server.getAllLevels()) {
             for (Integer id : itemResult.itemsToRemove) {
                 Entity entity = level.getEntity(id);
