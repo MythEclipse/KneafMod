@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 
 import com.kneaf.core.data.EntityData;
 import com.kneaf.core.data.ItemEntityData;
@@ -32,8 +34,41 @@ public class PerformanceManager {
     private static int tickCounter = 0;
     private static long lastTickTime = 0;
 
-    // Multithreading executor for server tasks
-    private static final ExecutorService SERVER_TASK_EXECUTOR = Executors.newFixedThreadPool(4); // Adjust pool size as needed
+    // Configuration (loaded from config/kneaf-performance.properties)
+    private static final PerformanceConfig CONFIG = PerformanceConfig.load();
+
+    // Multithreading executor for server tasks - created lazily so we can respect config and JVM shutdown
+    private static ExecutorService serverTaskExecutor = null;
+
+    // Rolling TPS average to make decisions about whether to offload work
+    private static final int TPS_WINDOW = 20;
+    private static final double[] tpsWindow = new double[TPS_WINDOW];
+    private static int tpsWindowIndex = 0;
+
+    private static synchronized ExecutorService getExecutor() {
+        if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
+            ThreadFactory factory = r -> {
+                Thread t = new Thread(r, "kneaf-perf-worker");
+                t.setDaemon(true);
+                return t;
+            };
+            serverTaskExecutor = Executors.newFixedThreadPool(CONFIG.getThreadPoolSize(), factory);
+        }
+        return serverTaskExecutor;
+    }
+
+    public static void shutdown() {
+        if (serverTaskExecutor != null) {
+            try {
+                serverTaskExecutor.shutdown();
+                serverTaskExecutor.awaitTermination(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                serverTaskExecutor = null;
+            }
+        }
+    }
 
     private PerformanceManager() {}
 
@@ -44,22 +79,58 @@ public class PerformanceManager {
      * Now uses multithreading for processing optimizations asynchronously.
      */
     public static void onServerTick(MinecraftServer server) {
+        if (!CONFIG.isEnabled()) return;
+
         updateTPS();
         tickCounter++;
 
-        // Collect data synchronously
+        // Collect data synchronously (cheap collection)
         EntityDataCollection data = collectEntityData(server);
 
-        // Process optimizations asynchronously. Application of changes must run on the server thread.
-        SERVER_TASK_EXECUTOR.submit(() -> {
-            OptimizationResults results = processOptimizations(data);
-            // Schedule modifications back on server thread to stay thread-safe with Minecraft internals
-            server.execute(() -> {
-                applyOptimizations(server, results);
-                logOptimizations(results);
-                removeItems(server, results.itemResult());
+        // Decide whether to offload heavy processing based on rolling TPS and config
+        double avgTps = getRollingAvgTPS();
+        if (avgTps >= CONFIG.getTpsThresholdForAsync()) {
+            submitAsyncOptimizations(server, data);
+        } else {
+            runSynchronousOptimizations(server, data);
+        }
+    }
+
+    private static void submitAsyncOptimizations(MinecraftServer server, EntityDataCollection data) {
+        try {
+            getExecutor().submit(() -> {
+                try {
+                    OptimizationResults results = processOptimizations(data);
+                    // Schedule modifications back on server thread to stay thread-safe with Minecraft internals
+                    server.execute(() -> {
+                        try {
+                            applyOptimizations(server, results);
+                            logOptimizations(results);
+                            removeItems(server, results.itemResult());
+                        } catch (Exception e) {
+                            LOGGER.warn("Error applying optimizations on server thread", e);
+                        }
+                    });
+                } catch (Exception e) {
+                    LOGGER.warn("Error during async processing of optimizations", e);
+                }
             });
-        });
+        } catch (Exception e) {
+            // Fallback to synchronous processing if executor rejects
+            LOGGER.debug("Executor rejected task; running synchronously", e);
+            runSynchronousOptimizations(server, data);
+        }
+    }
+
+    private static void runSynchronousOptimizations(MinecraftServer server, EntityDataCollection data) {
+        try {
+            OptimizationResults results = processOptimizations(data);
+            applyOptimizations(server, results);
+            if (tickCounter % CONFIG.getLogIntervalTicks() == 0) logOptimizations(results);
+            removeItems(server, results.itemResult());
+        } catch (Exception ex) {
+            LOGGER.warn("Error processing optimizations synchronously", ex);
+        }
     }
 
     private static void updateTPS() {
@@ -67,9 +138,22 @@ public class PerformanceManager {
         if (lastTickTime != 0) {
             long delta = currentTime - lastTickTime;
             double tps = 1_000_000_000.0 / delta;
-            RustPerformance.setCurrentTPS(Math.min(tps, 20.0));
+            double capped = Math.min(tps, 20.0);
+            RustPerformance.setCurrentTPS(capped);
+            // update rolling window
+            tpsWindow[tpsWindowIndex % TPS_WINDOW] = capped;
+            tpsWindowIndex = (tpsWindowIndex + 1) % TPS_WINDOW;
         }
         lastTickTime = currentTime;
+    }
+
+    private static double getRollingAvgTPS() {
+        double sum = 0.0;
+        int count = 0;
+        for (double v : tpsWindow) {
+            if (v > 0) { sum += v; count++; }
+        }
+        return count == 0 ? 20.0 : sum / count;
     }
 
     private static EntityDataCollection collectEntityData(MinecraftServer server) {
@@ -171,6 +255,21 @@ public class PerformanceManager {
             LOGGER.info("Block entities to tick: {}", results.blockResult().size());
             LOGGER.info("Item optimization: {} merged, {} despawned", results.itemResult().getMergedCount(), results.itemResult().getDespawnedCount());
             LOGGER.info("Mob AI optimization: {} disabled, {} simplified", results.mobResult().getMobsToDisableAI().size(), results.mobResult().getMobsToSimplifyAI().size());
+        }
+
+        // Also write a compact metrics line to the performance log periodically
+        if (tickCounter % CONFIG.getLogIntervalTicks() == 0) {
+            double avg = getRollingAvgTPS();
+            String summary = String.format("avgTps=%.2f entitiesToTick=%d blockEntities=%d itemsMerged=%d itemsDespawned=%d mobsDisabled=%d mobsSimplified=%d itemsRemoved=%d",
+                    avg,
+                    results.toTick().size(),
+                    results.blockResult().size(),
+                    results.itemResult().getMergedCount(),
+                    results.itemResult().getDespawnedCount(),
+                    results.mobResult().getMobsToDisableAI().size(),
+                    results.mobResult().getMobsToSimplifyAI().size(),
+                    results.itemResult().getItemsToRemove().size());
+            PerformanceMetricsLogger.logOptimizations(summary);
         }
     }
 

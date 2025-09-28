@@ -100,7 +100,14 @@ public class KneafCore {
         // Do something when the server starts
         LOGGER.info("HELLO from server starting");
         // Initialize Valence integration for performance optimizations
-
+        // Ensure PerformanceManager executor is shut down on JVM exit
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                com.kneaf.core.performance.PerformanceManager.shutdown();
+            } catch (Exception e) {
+                LOGGER.warn("Error while shutting down PerformanceManager", e);
+            }
+        }, "kneaf-perf-shutdown"));
     }
 
     // You can use EventBusSubscriber to automatically register all static methods in the class annotated with @SubscribeEvent
