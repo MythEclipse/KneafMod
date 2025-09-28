@@ -5,18 +5,13 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Entity.RemovalReason;
 import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.entity.TickingBlockEntity;
-import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
 
 import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
 
-import java.lang.reflect.Field;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Map;
 
 import com.kneaf.core.data.EntityData;
 import com.kneaf.core.data.ItemEntityData;
@@ -35,6 +30,8 @@ public class PerformanceManager {
     private static long lastTickTime = 0;
 
     private PerformanceManager() {}
+
+    private record EntityDataCollection(List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, List<BlockEntityData> blockEntities, List<PlayerData> players) {}
 
     /**
      * Called on every server tick to perform performance optimizations.
@@ -68,7 +65,7 @@ public class PerformanceManager {
         List<PlayerData> players = new ArrayList<>();
         for (ServerLevel level : server.getAllLevels()) {
             collectEntitiesFromLevel(level, entities, items, mobs);
-            collectBlockEntitiesFromLevel(level, blockEntities);
+            collectBlockEntitiesFromLevel();
             collectPlayersFromLevel(level, players);
         }
         return new EntityDataCollection(entities, items, mobs, blockEntities, players);
@@ -103,25 +100,11 @@ public class PerformanceManager {
         mobs.add(new MobData(entity.getId(), distance, isPassive, entity.getType().toString()));
     }
 
-    private static void collectBlockEntitiesFromLevel(ServerLevel level, List<BlockEntityData> blockEntities) {
-        try {
-            Field tickersField = ServerLevel.class.getDeclaredField("blockEntityTickers");
-            tickersField.setAccessible(true); // NOSONAR
-            @SuppressWarnings("unchecked")
-            Map<BlockPos, TickingBlockEntity> tickers = (Map<BlockPos, TickingBlockEntity>) tickersField.get(level);
-            for (var entry : tickers.entrySet()) {
-                BlockPos pos = entry.getKey();
-                BlockEntity be = level.getBlockEntity(pos);
-                if (be != null) {
-                    double distance = calculateDistanceToNearestPlayer(pos, level);
-                    String blockType = be.getType().toString();
-                    long id = ((long) pos.getX() << 32) | ((long) pos.getZ() << 16) | pos.getY();
-                    blockEntities.add(new BlockEntityData(id, distance, blockType, pos.getX(), pos.getY(), pos.getZ()));
-                }
-            }
-        } catch (Exception e) {
-            LOGGER.error("Failed to collect block entities", e);
-        }
+    private static void collectBlockEntitiesFromLevel() {
+        // TODO: Implement proper block entity collection for Minecraft 1.21
+        // For now, skip block entity collection to avoid crashes
+        // Block entities can be added back once the correct API is identified
+        LOGGER.debug("Block entity collection skipped - needs implementation for MC 1.21");
     }
 
     private static void collectPlayersFromLevel(ServerLevel level, List<PlayerData> players) {
@@ -131,6 +114,7 @@ public class PerformanceManager {
     }
 
     private static OptimizationResults processOptimizations(EntityDataCollection data) {
+        // Use parallel performance optimizations
         List<Long> toTick = RustPerformance.getEntitiesToTick(data.entities(), data.players());
         List<Long> blockResult = RustPerformance.getBlockEntitiesToTick(data.blockEntities());
         RustPerformance.ItemProcessResult itemResult = RustPerformance.processItemEntities(data.items());
@@ -205,15 +189,6 @@ public class PerformanceManager {
         return minDist;
     }
 
-    private static double calculateDistanceToNearestPlayer(BlockPos pos, ServerLevel level) {
-        double minDist = Double.MAX_VALUE;
-        for (ServerPlayer player : level.players()) {
-            double dist = Math.sqrt(pos.distSqr(player.blockPosition()));
-            if (dist < minDist) minDist = dist;
-        }
-        return minDist;
-    }
 
-        private record EntityDataCollection(List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, List<BlockEntityData> blockEntities, List<PlayerData> players) {}
     private record OptimizationResults(List<Long> toTick, List<Long> blockResult, RustPerformance.ItemProcessResult itemResult, RustPerformance.MobProcessResult mobResult) {}
 }

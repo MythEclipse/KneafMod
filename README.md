@@ -1,52 +1,71 @@
-# Kneaf Core
+# KneafMod Optimization Library
 
-A server-side performance optimization mod for Minecraft 1.21 using Rust for high-performance computations.
+This is a Rust-based optimization library for Minecraft mods, providing high-performance parallel processing for entity, mob, block, and spatial operations.
 
 ## Features
 
-- **Dynamic Entity Ticking Throttling**: Reduces tick rates for distant entities to improve server performance
-- **Item Stack Merging**: Automatically merges duplicate item entities to reduce entity count
-- **AI Optimization**: Simplifies pathfinding for distant mobs
-- **Rust Integration**: Uses Rust libraries for efficient data processing
-- **Server-Side Only**: Compatible with vanilla clients
+- **Parallel Processing**: Utilizes Rayon for parallel computation of entity, mob, and block processing
+- **SIMD Operations**: Optimized distance calculations using AVX2 SIMD instructions
+- **Spatial Partitioning**: Quadtree-based spatial partitioning for efficient entity queries
+- **JNI Integration**: Seamless integration with Java-based Minecraft mods
+- **Batch Processing**: Support for processing entities in batches for better performance
 
-## Installation
+## Performance Optimizations
 
-1. Download the mod jar from [Modrinth](https://modrinth.com/mod/kneaf-core) or [CurseForge](https://www.curseforge.com/minecraft/mc-mods/kneaf-core)
-2. Place the jar file in your server's `mods` folder
-3. Start the server
+The library achieves performance gains through:
 
-## Configuration
+1. **Parallel Entity Processing**: Entities are processed in parallel using Rayon's parallel iterators
+2. **Parallel Mob Processing**: Mob AI and behavior calculations run concurrently
+3. **Parallel Block Processing**: Block entity updates are parallelized
+4. **SIMD Distance Calculations**: Vectorized operations for distance computations
+5. **Spatial Indexing**: Quadtree structure for fast spatial queries
 
-Edit `config/rustperf.toml` to customize:
-- Throttling distances and rates
-- Item merging limits
-- AI optimization settings
+## Usage
 
-## Compatibility
+Add this to your `Cargo.toml`:
 
-- **Server-Side**: Fully compatible with vanilla clients
-- **Large Modpacks**: Tested with 50+ mods
-- **Incompatible with**: Lithium, Starlight, FerriteCore (conflicting optimizations)
-
-## Commands
-
-- `/rustperf status`: View real-time performance metrics
-
-## Building from Source
-
-Requires Java 21 and Rust.
-
-```bash
-./gradlew build
+```toml
+[dependencies]
+rustperf = { path = "../rust" }
 ```
 
-This will compile the Rust library and package it into the mod jar.
+Then use the JNI bindings from your Java mod:
 
-## License
+```java
+// Example usage from Java
+RustPerformance.processEntities(entities);
+RustPerformance.processMobs(mobs);
+RustPerformance.processBlocks(blocks);
+```
 
-MIT License
+## Building
 
-## Support
+```bash
+cd rust
+cargo build --release
+```
 
-Report issues at [GitHub Issues](https://github.com/yourusername/kneafmod/issues)
+## Testing
+
+```bash
+cd rust
+cargo test
+```
+
+## Benchmarks
+
+Run performance benchmarks:
+
+```bash
+cd rust
+cargo bench
+```
+
+## Architecture
+
+- `src/lib.rs`: JNI bindings and main library interface
+- `src/entity/`: Entity processing with parallel batch operations
+- `src/mob/`: Mob processing without throttling
+- `src/block/`: Block entity processing
+- `src/spatial.rs`: Quadtree spatial partitioning
+- `src/shared/`: Shared utilities and SIMD operations

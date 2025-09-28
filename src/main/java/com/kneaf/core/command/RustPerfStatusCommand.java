@@ -22,8 +22,9 @@ public class RustPerfStatusCommand {
 
         // Get metrics from RustPerformance
         double tps = RustPerformance.getCurrentTPS();
-        long normalTicks = RustPerformance.getTotalNormalTicks();
-        long throttledTicks = RustPerformance.getTotalThrottledTicks();
+        long entitiesProcessed = RustPerformance.getTotalEntitiesProcessed();
+        long mobsProcessed = RustPerformance.getTotalMobsProcessed();
+        long blocksProcessed = RustPerformance.getTotalBlocksProcessed();
         long totalMerged = RustPerformance.getTotalMerged();
         long totalDespawned = RustPerformance.getTotalDespawned();
         String memoryStats = RustPerformance.getMemoryStats();
@@ -32,12 +33,13 @@ public class RustPerfStatusCommand {
         String message = """
             RustPerf Status:
             Current TPS: %.2f
-            Normally Ticked Entities: %d
-            Throttled Entities: %d
+            Entities Processed: %d
+            Mobs Processed: %d
+            Blocks Processed: %d
             Total Merged Items: %d
             Total Despawned Items: %d
             Memory Stats: %s
-            """.formatted(tps, normalTicks, throttledTicks, totalMerged, totalDespawned, memoryStats);
+            """.formatted(tps, entitiesProcessed, mobsProcessed, blocksProcessed, totalMerged, totalDespawned, memoryStats);
         source.sendSuccess(() -> Component.literal(message), false);
 
         return 1;

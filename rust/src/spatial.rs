@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use valence::prelude::*;
+use glam::Vec3;
+use bevy_ecs::prelude::Entity;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +83,7 @@ pub struct QuadTree<T> {
     pub max_depth: usize,
 }
 
-impl<T: Clone + PartialEq> QuadTree<T> {
+impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     pub fn new(bounds: Aabb, max_entities: usize, max_depth: usize) -> Self {
         Self {
             bounds,
@@ -147,6 +148,7 @@ impl<T: Clone + PartialEq> QuadTree<T> {
         let mut new_children = Box::new(children);
 
         let entities = std::mem::take(&mut self.entities);
+        // Redistribute entities to children
         for (entity, pos) in entities {
             let quadrant = self.get_quadrant(pos);
             new_children[quadrant].insert(entity, pos, depth + 1);
@@ -173,7 +175,7 @@ pub struct SpatialPartition<T> {
     pub entity_positions: HashMap<T, [f64; 3]>,
 }
 
-impl<T: Clone + PartialEq + std::hash::Hash + Eq> SpatialPartition<T> {
+impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition<T> {
     pub fn new(world_bounds: Aabb, max_entities: usize, max_depth: usize) -> Self {
         Self {
             quadtree: QuadTree::new(world_bounds, max_entities, max_depth),
@@ -182,7 +184,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq> SpatialPartition<T> {
     }
 
     pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) {
-        if let Some(old_pos) = self.entity_positions.insert(entity.clone(), pos) {
+        if let Some(_old_pos) = self.entity_positions.insert(entity.clone(), pos) {
             // Remove from old position - in a real implementation, we'd need to remove from quadtree
             // For simplicity, we'll rebuild the quadtree periodically
         }
@@ -203,6 +205,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq> SpatialPartition<T> {
         let max_depth = self.quadtree.max_depth;
         let mut new_quadtree = QuadTree::new(world_bounds, max_entities, max_depth);
 
+        // Rebuild the quadtree
         for (entity, pos) in &self.entity_positions {
             new_quadtree.insert(entity.clone(), *pos, 0);
         }

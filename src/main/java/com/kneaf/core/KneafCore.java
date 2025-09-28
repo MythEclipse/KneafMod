@@ -139,7 +139,7 @@ public class KneafCore {
      * Handles server tick events for performance optimizations.
      */
     @SubscribeEvent
-    public static void onServerTick(ServerTickEvent.Post event) {
+    public void onServerTick(ServerTickEvent.Post event) {
         PerformanceManager.onServerTick(event.getServer());
     }
 
@@ -148,6 +148,8 @@ public class KneafCore {
     public void onServerStarting(ServerStartingEvent event) {
         // Do something when the server starts
         LOGGER.info("HELLO from server starting");
+        // Initialize Valence integration for performance optimizations
+        // com.kneaf.core.performance.RustPerformance.initializeValenceIntegration(); // TODO: Fix JNI issue
     }
 
     // You can use EventBusSubscriber to automatically register all static methods in the class annotated with @SubscribeEvent

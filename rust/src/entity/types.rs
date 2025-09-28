@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
 
 #[derive(Serialize, Deserialize)]
 pub struct EntityData {

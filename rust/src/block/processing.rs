@@ -7,3 +7,8 @@ pub fn process_block_entities(input: BlockInput) -> BlockProcessResult {
     let block_entities_to_tick: Vec<u64> = input.block_entities.par_iter().map(|be| be.id).collect();
     BlockProcessResult { block_entities_to_tick }
 }
+
+/// Batch process multiple block entity collections in parallel
+pub fn process_block_entities_batch(inputs: Vec<BlockInput>) -> Vec<BlockProcessResult> {
+    inputs.into_par_iter().map(|input| process_block_entities(input)).collect()
+}

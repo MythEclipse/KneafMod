@@ -23,7 +23,7 @@ public class ModCompatibility {
 
     // Map of mod IDs to their potential conflicts
     private static final Map<String, String> CONFLICT_DESCRIPTIONS = Map.of(
-        "lithium", "Lithium optimizes entity ticking, which may conflict with KneafMod's tick throttling.",
+        "lithium", "Lithium optimizes entity ticking, which may conflict with KneafMod's parallel processing optimizations.",
         "starlight", "Starlight replaces the lighting engine, which may interfere with performance optimizations.",
         "ferritecore", "FerriteCore optimizes memory usage, which may conflict with entity data management."
     );

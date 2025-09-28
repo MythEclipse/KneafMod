@@ -25,8 +25,9 @@ public class RustPerformance {
     private static long tickCount = 0;
     // Metrics
     private static double currentTPS = 20.0;
-    private static long totalNormalTicks = 0;
-    private static long totalThrottledTicks = 0;
+    private static long totalEntitiesProcessed = 0;
+    private static long totalMobsProcessed = 0;
+    private static long totalBlocksProcessed = 0;
     private static long totalMerged = 0;
     private static long totalDespawned = 0;
 
@@ -88,8 +89,7 @@ public class RustPerformance {
                 for (JsonElement e : entitiesToTick) {
                     resultList.add(e.getAsLong());
                 }
-                totalNormalTicks += resultList.size();
-                totalThrottledTicks += entities.size() - resultList.size();
+                totalEntitiesProcessed += resultList.size();
                 return resultList;
             }
         } catch (Exception e) {
@@ -156,6 +156,7 @@ public class RustPerformance {
                 for (JsonElement e : simplifyAi) {
                     simplifyList.add(e.getAsLong());
                 }
+                totalMobsProcessed += mobs.size();
                 return new MobProcessResult(disableList, simplifyList);
             }
         } catch (Exception e) {
@@ -179,6 +180,7 @@ public class RustPerformance {
                 for (JsonElement e : entitiesToTick) {
                     resultList.add(e.getAsLong());
                 }
+                totalBlocksProcessed += resultList.size();
                 return resultList;
             }
         } catch (Exception e) {
@@ -266,9 +268,15 @@ public class RustPerformance {
         }
     }
 
+    public static void startValenceServer() {
+        // Method removed - Valence integration is no longer supported
+        KneafCore.LOGGER.info("Valence integration has been removed");
+    }
+
     public static double getCurrentTPS() { return currentTPS; }
-    public static long getTotalNormalTicks() { return totalNormalTicks; }
-    public static long getTotalThrottledTicks() { return totalThrottledTicks; }
+    public static long getTotalEntitiesProcessed() { return totalEntitiesProcessed; }
+    public static long getTotalMobsProcessed() { return totalMobsProcessed; }
+    public static long getTotalBlocksProcessed() { return totalBlocksProcessed; }
     public static long getTotalMerged() { return totalMerged; }
     public static long getTotalDespawned() { return totalDespawned; }
 }
