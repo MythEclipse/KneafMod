@@ -31,10 +31,21 @@ public class NetworkOptimizer {
     private static final List<Packet<?>> packetBatch = new ArrayList<>();
     private static final int BATCH_SIZE = 10; // Send batch every 10 packets
 
-    // Compression
-    private static final Deflater deflater = new Deflater(Deflater.BEST_SPEED);
+    // Compression: use thread-local Deflater to be thread-safe
+    private static final ThreadLocal<Deflater> DEFLATER_LOCAL = ThreadLocal.withInitial(() -> new Deflater(Deflater.BEST_SPEED));
 
     private NetworkOptimizer() {}
+
+    // Ensure we clean up thread-local state to avoid potential leaks in long-running servers
+    static {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                DEFLATER_LOCAL.remove();
+            } catch (Exception e) {
+                // ignore
+            }
+        }));
+    }
 
     @SubscribeEvent(priority = EventPriority.LOW)
     public static void onServerTick(ServerTickEvent.Post event) {
@@ -69,17 +80,25 @@ public class NetworkOptimizer {
      * Compresses packet data if applicable.
      */
     public static byte[] compressPacketData(byte[] data) {
+        Deflater deflater = DEFLATER_LOCAL.get();
+        deflater.reset();
         deflater.setInput(data);
         deflater.finish();
-        byte[] compressed = new byte[data.length];
-        int compressedLength = deflater.deflate(compressed);
-        deflater.reset();
-        if (compressedLength < data.length) {
-            byte[] result = new byte[compressedLength];
-            System.arraycopy(compressed, 0, result, 0, compressedLength);
-            return result;
+        try (java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream(data.length)) {
+            byte[] buffer = new byte[1024];
+            while (!deflater.finished()) {
+                int len = deflater.deflate(buffer);
+                if (len > 0) baos.write(buffer, 0, len);
+            }
+            byte[] compressed = baos.toByteArray();
+            if (compressed.length < data.length) return compressed;
+            return data;
+        } catch (java.io.IOException e) {
+            LOGGER.warn("Failed to compress packet data: {}", e.getMessage());
+            return data;
+        } finally {
+            deflater.reset();
         }
-        return data; // Return original if compression doesn't help
     }
 
     private static void sendBatchedPackets() {

@@ -120,6 +120,7 @@ public class RustPerformance {
 
     private static final String TICK_COUNT_KEY = "tickCount";
     private static final Gson gson = new Gson();
+    private static volatile boolean nativeAvailable = false;
 
     static {
         KneafCore.LOGGER.info("Initializing RustPerformance native library");
@@ -130,23 +131,37 @@ public class RustPerformance {
             KneafCore.LOGGER.info("Loading native library from resource path: {}", resourcePath);
             InputStream in = RustPerformance.class.getClassLoader().getResourceAsStream(resourcePath);
             if (in == null) {
-                KneafCore.LOGGER.error("Native library not found: {}", resourcePath);
-                throw new IllegalStateException("Native library not found: " + resourcePath);
+                KneafCore.LOGGER.warn("Native library not found in resources: {}. Native optimizations disabled.", resourcePath);
+                nativeAvailable = false;
+            } else {
+                KneafCore.LOGGER.info("Found native library resource, extracting to temp directory");
+                Path tempDir = Files.createTempDirectory("kneafcore-natives");
+                Path tempFile = tempDir.resolve(libName);
+                Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
+                in.close();
+                KneafCore.LOGGER.info("Extracted native library to: {}", tempFile.toAbsolutePath());
+                tryLoadNative(tempFile);
+                tempFile.toFile().deleteOnExit();
+                tempDir.toFile().deleteOnExit();
             }
-            KneafCore.LOGGER.info("Found native library resource, extracting to temp directory");
-            Path tempDir = Files.createTempDirectory("kneafcore-natives");
-            Path tempFile = tempDir.resolve(libName);
-            Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
-            in.close();
-            KneafCore.LOGGER.info("Extracted native library to: {}", tempFile.toAbsolutePath());
+        } catch (Exception e) {
+            KneafCore.LOGGER.warn("Failed to initialize Rust native library: {}. Native optimizations disabled.", e.getMessage());
+            nativeAvailable = false;
+        }
+    }
+
+    private static void ensureNativeAvailable() {
+        if (!nativeAvailable) throw new RustPerformanceException("Rust native library is not available");
+    }
+
+    private static void tryLoadNative(Path tempFile) {
+        try {
             System.load(tempFile.toAbsolutePath().toString());
+            nativeAvailable = true;
             KneafCore.LOGGER.info("Successfully loaded native library");
-            // Optionally delete on exit, but for now keep it
-            tempFile.toFile().deleteOnExit();
-            tempDir.toFile().deleteOnExit();
-        } catch (Exception e) { // NOSONAR
-            KneafCore.LOGGER.error("Failed to load Rust library: {}", e.getMessage(), e);
-            throw new IllegalStateException("Failed to load Rust library: " + e.getMessage(), e);
+        } catch (Exception e) {
+            KneafCore.LOGGER.warn("Failed to load native library binary: {}. Native optimizations disabled.", e.getMessage());
+            nativeAvailable = false;
         }
     }
 
@@ -375,6 +390,7 @@ public class RustPerformance {
 
     public static String getMemoryStats() {
         try {
+            ensureNativeAvailable();
             return getMemoryStatsNative();
         } catch (Exception e) {
             KneafCore.LOGGER.error("Error getting memory stats from Rust: {}", e.getMessage(), e);
@@ -384,6 +400,7 @@ public class RustPerformance {
 
     public static String getCpuStats() {
         try {
+            ensureNativeAvailable();
             return getCpuStatsNative();
         } catch (Exception e) {
             KneafCore.LOGGER.error("Error getting CPU stats from Rust: {}", e.getMessage(), e);

@@ -50,12 +50,15 @@ public class PerformanceManager {
         // Collect data synchronously
         EntityDataCollection data = collectEntityData(server);
 
-        // Process optimizations asynchronously
+        // Process optimizations asynchronously. Application of changes must run on the server thread.
         SERVER_TASK_EXECUTOR.submit(() -> {
             OptimizationResults results = processOptimizations(data);
-            applyOptimizations(server, results);
-            logOptimizations(results);
-            removeItems(server, results.itemResult());
+            // Schedule modifications back on server thread to stay thread-safe with Minecraft internals
+            server.execute(() -> {
+                applyOptimizations(server, results);
+                logOptimizations(results);
+                removeItems(server, results.itemResult());
+            });
         });
     }
 
