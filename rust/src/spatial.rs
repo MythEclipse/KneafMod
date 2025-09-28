@@ -5,6 +5,7 @@ use bevy_ecs::prelude::Entity;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Aabb {
     pub min_x: f64,
     pub min_y: f64,

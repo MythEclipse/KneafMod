@@ -1,6 +1,7 @@
 use std::sync::RwLock;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Config {
     pub close_radius: f32,
     pub medium_radius: f32,

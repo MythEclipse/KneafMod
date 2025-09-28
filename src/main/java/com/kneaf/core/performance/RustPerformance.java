@@ -83,7 +83,32 @@ public class RustPerformance {
             input.put(TICK_COUNT_KEY, tickCount++);
             input.put("entities", entities);
             input.put("players", players);
+            
+            // Add entity config
+            Map<String, Object> config = new HashMap<>();
+            config.put("closeRadius", 16.0f);
+            config.put("mediumRadius", 32.0f);
+            config.put("closeRate", 1.0f);
+            config.put("mediumRate", 0.5f);
+            config.put("farRate", 0.1f);
+            config.put("useSpatialPartitioning", true);
+            
+            // World bounds (example values)
+            Map<String, Object> worldBounds = new HashMap<>();
+            worldBounds.put("minX", -1000.0);
+            worldBounds.put("minY", 0.0);
+            worldBounds.put("minZ", -1000.0);
+            worldBounds.put("maxX", 1000.0);
+            worldBounds.put("maxY", 256.0);
+            worldBounds.put("maxZ", 1000.0);
+            config.put("worldBounds", worldBounds);
+            
+            config.put("quadtreeMaxEntities", 1000);
+            config.put("quadtreeMaxDepth", 10);
+            input.put("entityConfig", config);
+            
             String jsonInput = gson.toJson(input);
+            KneafCore.LOGGER.info("Sending JSON to Rust: {}", jsonInput);
             String jsonResult = processEntitiesNative(jsonInput);
             if (jsonResult != null) {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
