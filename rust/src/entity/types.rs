@@ -13,6 +13,7 @@ pub struct EntityData {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlayerData {
     pub id: u64,
     pub x: f64,
@@ -21,6 +22,7 @@ pub struct PlayerData {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Input {
     pub tick_count: u64,
     pub entities: Vec<EntityData>,
@@ -29,6 +31,7 @@ pub struct Input {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProcessResult {
     pub entities_to_tick: Vec<u64>,
 }

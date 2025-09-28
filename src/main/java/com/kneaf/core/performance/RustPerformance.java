@@ -35,7 +35,7 @@ public class RustPerformance {
         RustPerformance.currentTPS = currentTPS;
     }
 
-    private static final String TICK_COUNT_KEY = "tick_count";
+    private static final String TICK_COUNT_KEY = "tickCount";
     private static final Gson gson = new Gson();
 
     static {
