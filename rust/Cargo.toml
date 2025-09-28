@@ -20,6 +20,9 @@ sysinfo = "0.30"
 rayon = "1.8"
 valence = { git = "https://github.com/valence-rs/valence" }
 bevy_reflect = "0.14"
+bevy_ecs = "0.14"
+rand = "0.8"
+glam = "0.27"
 
 [dev-dependencies]
 criterion = "0.5"
