@@ -16,7 +16,9 @@ public class PerformanceCommand {
         dispatcher.register(Commands.literal("kneaf")
             .then(Commands.literal("perf")
                 .then(Commands.literal("toggle").executes(PerformanceCommand::toggle))
-                .then(Commands.literal("status").executes(PerformanceCommand::status))));
+                .then(Commands.literal("status").executes(PerformanceCommand::status))
+                .then(Commands.literal("metrics").executes(PerformanceCommand::metrics))
+                .then(Commands.literal("rotatelog").executes(PerformanceCommand::rotateLog))));
     }
 
     private static int toggle(CommandContext<CommandSourceStack> context) {
@@ -32,6 +34,21 @@ public class PerformanceCommand {
         double tps = RustPerformance.getCurrentTPS();
         String msg = String.format("Kneaf Performance - enabled=%s TPS=%.2f log=run/logs/kneaf-performance.log", PerformanceManager.isEnabled(), tps);
         source.sendSuccess(() -> Component.literal(msg), false);
+        return 1;
+    }
+
+    private static int metrics(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        String msg = String.format("EntitiesProcessed=%d MobsProcessed=%d BlocksProcessed=%d ItemsMerged=%d ItemsDespawned=%d",
+                RustPerformance.getTotalEntitiesProcessed(), RustPerformance.getTotalMobsProcessed(), RustPerformance.getTotalBlocksProcessed(), RustPerformance.getTotalMerged(), RustPerformance.getTotalDespawned());
+        source.sendSuccess(() -> Component.literal(msg), false);
+        return 1;
+    }
+
+    private static int rotateLog(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        com.kneaf.core.performance.PerformanceMetricsLogger.rotateNow();
+        source.sendSuccess(() -> Component.literal("Kneaf performance log rotated."), false);
         return 1;
     }
 }

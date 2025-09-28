@@ -52,9 +52,19 @@ public class PerformanceManager {
                 t.setDaemon(true);
                 return t;
             };
-            serverTaskExecutor = Executors.newFixedThreadPool(CONFIG.getThreadPoolSize(), factory);
+            int threads = CONFIG.getThreadPoolSize();
+            if (CONFIG.isAdaptiveThreadPool()) {
+                threads = clamp(Runtime.getRuntime().availableProcessors() - 1, 1, CONFIG.getMaxThreadPoolSize());
+            }
+            serverTaskExecutor = Executors.newFixedThreadPool(threads, factory);
         }
         return serverTaskExecutor;
+    }
+
+    private static int clamp(int v, int min, int max) {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
     }
 
     public static void shutdown() {
@@ -168,26 +178,50 @@ public class PerformanceManager {
         List<MobData> mobs = new ArrayList<>();
         List<BlockEntityData> blockEntities = new ArrayList<>();
         List<PlayerData> players = new ArrayList<>();
+
+        int maxEntities = CONFIG.getMaxEntitiesToCollect();
+        double distanceCutoff = CONFIG.getEntityDistanceCutoff();
         for (ServerLevel level : server.getAllLevels()) {
-            collectEntitiesFromLevel(level, entities, items, mobs);
+            collectEntitiesFromLevel(level, entities, items, mobs, maxEntities, distanceCutoff);
             // Block entity collection skipped for performance - can be added if needed
             collectPlayersFromLevel(level, players);
+            if (entities.size() >= maxEntities) break; // global cap
         }
         return new EntityDataCollection(entities, items, mobs, blockEntities, players);
     }
 
-    private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs) {
+    private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, int maxEntities, double distanceCutoff) {
+        // Cache distances for this level pass to avoid repeated player distance calculations
+        java.util.Map<Integer, Double> distanceCache = new java.util.HashMap<>();
+        String[] excluded = CONFIG.getExcludedEntityTypes();
         for (Entity entity : level.getEntities().getAll()) {
-            double distance = calculateDistanceToNearestPlayer(entity, level);
-            boolean isBlockEntity = false; // Regular entities are not block entities
-            entities.add(new EntityData(entity.getId(), entity.getX(), entity.getY(), entity.getZ(), distance, isBlockEntity, entity.getType().toString()));
+            // If we've reached the maximum, stop scanning further entities in this level
+            if (entities.size() >= maxEntities) break;
 
-            if (entity instanceof ItemEntity itemEntity) {
-                collectItemEntity(entity, itemEntity, items);
-            } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
-                collectMobEntity(entity, mob, level, mobs);
+            String typeStr = entity.getType().toString();
+            double distance = distanceCache.computeIfAbsent(entity.getId(), id -> calculateDistanceToNearestPlayer(entity, level));
+
+            // single combined skip condition implemented as a guarded block to avoid multiple continue/break
+            if (!(distance > distanceCutoff || isExcludedType(typeStr, excluded))) {
+                boolean isBlockEntity = false; // Regular entities are not block entities
+                entities.add(new EntityData(entity.getId(), entity.getX(), entity.getY(), entity.getZ(), distance, isBlockEntity, typeStr));
+
+                if (entity instanceof ItemEntity itemEntity) {
+                    collectItemEntity(entity, itemEntity, items);
+                } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
+                    collectMobEntity(entity, mob, level, mobs);
+                }
             }
         }
+    }
+
+    private static boolean isExcludedType(String typeStr, String[] excluded) {
+        if (excluded == null || excluded.length == 0) return false;
+        for (String ex : excluded) {
+            if (ex == null || ex.isEmpty()) continue;
+            if (typeStr.contains(ex)) return true;
+        }
+        return false;
     }
 
     private static void collectItemEntity(Entity entity, ItemEntity itemEntity, List<ItemEntityData> items) {
