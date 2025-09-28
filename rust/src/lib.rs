@@ -5,12 +5,14 @@ mod entity;
 mod item;
 mod mob;
 mod block;
+mod valence_integration;
 
 pub use shared::*;
 pub use entity::*;
 pub use item::*;
 pub use mob::*;
 pub use block::*;
+pub use valence_integration::*;
 
 use jni::{JNIEnv, objects::JClass, sys::jstring};
 use sysinfo::System;

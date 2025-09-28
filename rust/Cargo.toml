@@ -18,3 +18,4 @@ jni = "0.21"
 lazy_static = "1.4"
 sysinfo = "0.30"
 rayon = "1.8"
+valence = { git = "https://github.com/valence-rs/valence" }
