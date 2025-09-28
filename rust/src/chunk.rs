@@ -88,7 +88,7 @@ lazy_static! {
 
 /// JNI function to pre-generate nearby chunks
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_preGenerateNearbyChunks(
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_preGenerateNearbyChunksNative(
     _env: jni::JNIEnv,
     _class: jni::objects::JClass,
     center_x: i32,
