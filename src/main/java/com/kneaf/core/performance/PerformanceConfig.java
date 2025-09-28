@@ -5,7 +5,10 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Properties;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Loads runtime configuration for the performance manager from
@@ -13,6 +16,7 @@ import java.util.Properties;
  */
 public final class PerformanceConfig {
     private static final String DEFAULT_CONFIG_PATH = "config/kneaf-performance.properties";
+    private static final Logger LOGGER = Logger.getLogger(PerformanceConfig.class.getName());
 
     private final boolean enabled;
     private final int threadPoolSize;
@@ -134,7 +138,10 @@ public final class PerformanceConfig {
             try (InputStream in = Files.newInputStream(path)) {
                 props.load(in);
             } catch (IOException e) {
-                // ignore and use defaults
+                if (LOGGER.isLoggable(Level.WARNING)) {
+                    LOGGER.log(Level.WARNING, "Failed to read performance config at {0}, using defaults", path);
+                    LOGGER.log(Level.FINE, "Exception reading performance config", e);
+                }
             }
         }
 
@@ -182,5 +189,22 @@ public final class PerformanceConfig {
     private static double parseDoubleOrDefault(String v, double def) {
         if (v == null) return def;
         try { return Double.parseDouble(v.trim()); } catch (NumberFormatException e) { return def; }
+    }
+
+    @Override
+    public String toString() {
+        return "PerformanceConfig{" +
+                "enabled=" + enabled +
+                ", threadPoolSize=" + threadPoolSize +
+                ", logIntervalTicks=" + logIntervalTicks +
+                ", scanIntervalTicks=" + scanIntervalTicks +
+                ", tpsThresholdForAsync=" + tpsThresholdForAsync +
+                ", maxEntitiesToCollect=" + maxEntitiesToCollect +
+                ", entityDistanceCutoff=" + entityDistanceCutoff +
+                ", maxLogBytes=" + maxLogBytes +
+                ", adaptiveThreadPool=" + adaptiveThreadPool +
+                ", maxThreadPoolSize=" + maxThreadPoolSize +
+                ", excludedEntityTypes=" + Arrays.toString(excludedEntityTypes) +
+                '}';
     }
 }

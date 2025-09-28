@@ -283,7 +283,7 @@ pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32
                                      chunk.get(3).map(|p| p.1).unwrap_or(0.0),
                                      chunk.get(2).map(|p| p.1).unwrap_or(0.0),
                                      chunk.get(1).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(0).map(|p| p.0).unwrap_or(0.0));
+                                     chunk.get(0).map(|p| p.1).unwrap_or(0.0));
             let pz = _mm256_set_ps(chunk.get(7).map(|p| p.2).unwrap_or(0.0),
                                      chunk.get(6).map(|p| p.2).unwrap_or(0.0),
                                      chunk.get(5).map(|p| p.2).unwrap_or(0.0),
