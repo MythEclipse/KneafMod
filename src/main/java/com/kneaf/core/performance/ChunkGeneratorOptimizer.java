@@ -19,7 +19,7 @@ public class ChunkGeneratorOptimizer {
 
     @SubscribeEvent
     public static void onChunkLoad(ChunkEvent.Load event) {
-        if (event.getLevel() instanceof ServerLevel level) {
+        if (event.getLevel() instanceof ServerLevel) {
             // Pre-generate nearby chunks using Rust
             int chunkX = event.getChunk().getPos().x;
             int chunkZ = event.getChunk().getPos().z;
