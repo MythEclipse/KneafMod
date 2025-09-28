@@ -26,18 +26,92 @@ public final class PerformanceConfig {
     private final int maxThreadPoolSize;
     private final String[] excludedEntityTypes;
 
-    private PerformanceConfig(boolean enabled, int threadPoolSize, int logIntervalTicks, int scanIntervalTicks, double tpsThresholdForAsync, int maxEntitiesToCollect, double entityDistanceCutoff, long maxLogBytes, boolean adaptiveThreadPool, int maxThreadPoolSize, String[] excludedEntityTypes) {
-        this.enabled = enabled;
-        this.threadPoolSize = threadPoolSize;
-        this.logIntervalTicks = logIntervalTicks;
-        this.scanIntervalTicks = scanIntervalTicks;
-        this.tpsThresholdForAsync = tpsThresholdForAsync;
-        this.maxEntitiesToCollect = maxEntitiesToCollect;
-        this.entityDistanceCutoff = entityDistanceCutoff;
-        this.maxLogBytes = maxLogBytes;
-        this.adaptiveThreadPool = adaptiveThreadPool;
-        this.maxThreadPoolSize = maxThreadPoolSize;
-        this.excludedEntityTypes = excludedEntityTypes;
+    // Use a Builder to avoid long constructor parameter lists (satisfies java:S107)
+    private PerformanceConfig(Builder b) {
+        this.enabled = b.enabled;
+        this.threadPoolSize = b.threadPoolSize;
+        this.logIntervalTicks = b.logIntervalTicks;
+        this.scanIntervalTicks = b.scanIntervalTicks;
+        this.tpsThresholdForAsync = b.tpsThresholdForAsync;
+        this.maxEntitiesToCollect = b.maxEntitiesToCollect;
+        this.entityDistanceCutoff = b.entityDistanceCutoff;
+        this.maxLogBytes = b.maxLogBytes;
+        this.adaptiveThreadPool = b.adaptiveThreadPool;
+        this.maxThreadPoolSize = b.maxThreadPoolSize;
+        this.excludedEntityTypes = b.excludedEntityTypes;
+    }
+
+    /**
+     * Builder for PerformanceConfig to improve readability and avoid long constructors.
+     */
+    public static final class Builder {
+        private boolean enabled;
+        private int threadPoolSize;
+        private int logIntervalTicks;
+        private int scanIntervalTicks;
+        private double tpsThresholdForAsync;
+        private int maxEntitiesToCollect;
+        private double entityDistanceCutoff;
+        private long maxLogBytes;
+        private boolean adaptiveThreadPool;
+        private int maxThreadPoolSize;
+        private String[] excludedEntityTypes;
+
+        public Builder enabled(boolean v) { this.enabled = v; return this; }
+        public Builder threadPoolSize(int v) { this.threadPoolSize = v; return this; }
+        public Builder logIntervalTicks(int v) { this.logIntervalTicks = v; return this; }
+        public Builder scanIntervalTicks(int v) { this.scanIntervalTicks = v; return this; }
+        public Builder tpsThresholdForAsync(double v) { this.tpsThresholdForAsync = v; return this; }
+        public Builder maxEntitiesToCollect(int v) { this.maxEntitiesToCollect = v; return this; }
+        public Builder entityDistanceCutoff(double v) { this.entityDistanceCutoff = v; return this; }
+        public Builder maxLogBytes(long v) { this.maxLogBytes = v; return this; }
+        public Builder adaptiveThreadPool(boolean v) { this.adaptiveThreadPool = v; return this; }
+        public Builder maxThreadPoolSize(int v) { this.maxThreadPoolSize = v; return this; }
+        public Builder excludedEntityTypes(String[] v) { this.excludedEntityTypes = v; return this; }
+
+        public PerformanceConfig build() {
+            // Apply same defensive constraints as before and build a config using this Builder
+            boolean vEnabled = this.enabled;
+            int vThreadPoolSize = Math.max(1, this.threadPoolSize);
+            int vLogIntervalTicks = Math.max(1, this.logIntervalTicks);
+            int vScanIntervalTicks = Math.max(1, this.scanIntervalTicks);
+            double vTpsThresholdForAsync = this.tpsThresholdForAsync;
+            int vMaxEntitiesToCollect = Math.max(1, this.maxEntitiesToCollect);
+            double vEntityDistanceCutoff = Math.max(0.0, this.entityDistanceCutoff);
+            long vMaxLogBytes = Math.max(0L, this.maxLogBytes);
+            boolean vAdaptiveThreadPool = this.adaptiveThreadPool;
+            int vMaxThreadPoolSize = Math.max(1, this.maxThreadPoolSize);
+            String[] vExcludedEntityTypes = this.excludedEntityTypes == null ? new String[0] : this.excludedEntityTypes;
+
+            Builder validated = new Builder();
+            validated.enabled(vEnabled)
+                    .threadPoolSize(vThreadPoolSize)
+                    .logIntervalTicks(vLogIntervalTicks)
+                    .scanIntervalTicks(vScanIntervalTicks)
+                    .tpsThresholdForAsync(vTpsThresholdForAsync)
+                    .maxEntitiesToCollect(vMaxEntitiesToCollect)
+                    .entityDistanceCutoff(vEntityDistanceCutoff)
+                    .maxLogBytes(vMaxLogBytes)
+                    .adaptiveThreadPool(vAdaptiveThreadPool)
+                    .maxThreadPoolSize(vMaxThreadPoolSize)
+                    .excludedEntityTypes(vExcludedEntityTypes);
+            return new PerformanceConfig(validated);
+        }
+
+        // Default constructor for Builder. Initialize sensible defaults so build() can be used directly.
+        public Builder() {
+            this.enabled = true;
+            this.threadPoolSize = 4;
+            this.logIntervalTicks = 100;
+            this.scanIntervalTicks = 1;
+            this.tpsThresholdForAsync = 19.0;
+            this.maxEntitiesToCollect = 20000;
+            this.entityDistanceCutoff = 256.0;
+            this.maxLogBytes = 10L * 1024 * 1024;
+            this.adaptiveThreadPool = false;
+            this.maxThreadPoolSize = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+            this.excludedEntityTypes = new String[0];
+        }
     }
 
     public boolean isEnabled() { return enabled; }
@@ -77,7 +151,21 @@ public final class PerformanceConfig {
 
     long maxLogBytes = parseLongOrDefault(props.getProperty("maxLogBytes"), 10L * 1024 * 1024); // 10MB default
 
-        return new PerformanceConfig(enabled, Math.max(1, threadPoolSize), Math.max(1, logIntervalTicks), Math.max(1, scanIntervalTicks), tpsThresholdForAsync, Math.max(1, maxEntitiesToCollect), Math.max(0.0, entityDistanceCutoff), Math.max(0L, maxLogBytes), adaptiveThreadPool, Math.max(1, maxThreadPoolSize), excludedEntityTypes);
+    // Build the validated PerformanceConfig via Builder to avoid long constructors
+    Builder b = new Builder()
+        .enabled(enabled)
+        .threadPoolSize(threadPoolSize)
+        .logIntervalTicks(logIntervalTicks)
+        .scanIntervalTicks(scanIntervalTicks)
+        .tpsThresholdForAsync(tpsThresholdForAsync)
+        .maxEntitiesToCollect(maxEntitiesToCollect)
+        .entityDistanceCutoff(entityDistanceCutoff)
+        .maxLogBytes(maxLogBytes)
+        .adaptiveThreadPool(adaptiveThreadPool)
+        .maxThreadPoolSize(maxThreadPoolSize)
+        .excludedEntityTypes(excludedEntityTypes);
+
+    return b.build();
     }
 
     private static long parseLongOrDefault(String v, long def) {

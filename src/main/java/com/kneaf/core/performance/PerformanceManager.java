@@ -12,6 +12,8 @@ import com.mojang.logging.LogUtils;
 
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -100,8 +102,17 @@ public class PerformanceManager {
         updateTPS();
         tickCounter++;
 
+        // Respect configured scan interval to reduce overhead on busy servers
+        if (tickCounter % CONFIG.getScanIntervalTicks() != 0) {
+            return;
+        }
+
         // Collect data synchronously (cheap collection)
         EntityDataCollection data = collectEntityData(server);
+
+        // Consolidate collected items (aggregation by chunk+type) to reduce downstream work
+        List<ItemEntityData> consolidated = consolidateItemEntities(data.items());
+        data = new EntityDataCollection(data.entities(), consolidated, data.mobs(), data.blockEntities(), data.players());
 
         // Decide whether to offload heavy processing based on rolling TPS and config
         double avgTps = getRollingAvgTPS();
@@ -192,14 +203,21 @@ public class PerformanceManager {
 
     private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, int maxEntities, double distanceCutoff) {
         // Cache distances for this level pass to avoid repeated player distance calculations
-        java.util.Map<Integer, Double> distanceCache = new java.util.HashMap<>();
+        Map<Integer, Double> distanceCache = new HashMap<>();
         String[] excluded = CONFIG.getExcludedEntityTypes();
+
+        // Precompute player positions once per level to speed up distance checks
+        List<PlayerData> players = new ArrayList<>();
+        for (ServerPlayer p : level.players()) {
+            players.add(new PlayerData(p.getId(), p.getX(), p.getY(), p.getZ()));
+        }
+
         for (Entity entity : level.getEntities().getAll()) {
             // If we've reached the maximum, stop scanning further entities in this level
             if (entities.size() >= maxEntities) break;
 
             String typeStr = entity.getType().toString();
-            double distance = distanceCache.computeIfAbsent(entity.getId(), id -> calculateDistanceToNearestPlayer(entity, level));
+            double distance = distanceCache.computeIfAbsent(entity.getId(), id -> calculateDistanceToNearestPlayer(entity, players));
 
             // single combined skip condition implemented as a guarded block to avoid multiple continue/break
             if (!(distance > distanceCutoff || isExcludedType(typeStr, excluded))) {
@@ -245,6 +263,52 @@ public class PerformanceManager {
         for (ServerPlayer player : level.players()) {
             players.add(new PlayerData(player.getId(), player.getX(), player.getY(), player.getZ()));
         }
+    }
+
+    /**
+     * Consolidate collected item entity data by chunk X/Z and item type to reduce the number
+     * of items we hand to the downstream Rust processing. This only aggregates the collected
+     * snapshot and does not modify world state directly, so it is safe and purely an optimization.
+     */
+    private static List<ItemEntityData> consolidateItemEntities(List<ItemEntityData> items) {
+        if (items == null || items.isEmpty()) return items;
+        class Key {
+            final int cx, cz;
+            final String type;
+
+            Key(int cx, int cz, String t) {
+                this.cx = cx;
+                this.cz = cz;
+                this.type = t;
+            }
+
+            @Override
+            public int hashCode() {
+                return (cx * 31 + cz) * 31 + (type == null ? 0 : type.hashCode());
+            }
+
+            @Override
+            public boolean equals(Object o) {
+                if (this == o) return true;
+                if (!(o instanceof Key)) return false;
+                Key k = (Key) o;
+                return k.cx == cx && k.cz == cz && (type == null ? k.type == null : type.equals(k.type));
+            }
+        }
+        Map<Key, ItemEntityData> agg = new HashMap<>();
+        for (ItemEntityData it : items) {
+            Key k = new Key(it.chunkX(), it.chunkZ(), it.itemType());
+            ItemEntityData cur = agg.get(k);
+            if (cur == null) {
+                agg.put(k, it);
+            } else {
+                // sum counts and keep smallest age to represent the merged group
+                int newCount = cur.count() + it.count();
+                int newAge = Math.min(cur.ageSeconds(), it.ageSeconds());
+                agg.put(k, new ItemEntityData(-1, k.cx, k.cz, k.type, newCount, newAge));
+            }
+        }
+        return new ArrayList<>(agg.values());
     }
 
     private static OptimizationResults processOptimizations(EntityDataCollection data) {
@@ -336,6 +400,19 @@ public class PerformanceManager {
             if (dist < minDist) minDist = dist;
         }
         return minDist;
+    }
+
+    // Overload that accepts a precomputed list of PlayerData to avoid iterating server player collections repeatedly
+    private static double calculateDistanceToNearestPlayer(Entity entity, List<PlayerData> players) {
+        double minDist = Double.MAX_VALUE;
+        for (PlayerData p : players) {
+            double dx = entity.getX() - p.x();
+            double dy = entity.getY() - p.y();
+            double dz = entity.getZ() - p.z();
+            double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            if (dist < minDist) minDist = dist;
+        }
+        return minDist == Double.MAX_VALUE ? Double.MAX_VALUE : minDist;
     }
 
 
