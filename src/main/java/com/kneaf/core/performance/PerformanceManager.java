@@ -72,6 +72,12 @@ public class PerformanceManager {
 
     private PerformanceManager() {}
 
+    // Runtime toggle (initialized from config)
+    private static volatile boolean enabled = CONFIG.isEnabled();
+
+    public static boolean isEnabled() { return enabled; }
+    public static void setEnabled(boolean val) { enabled = val; }
+
     private record EntityDataCollection(List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, List<BlockEntityData> blockEntities, List<PlayerData> players) {}
 
     /**

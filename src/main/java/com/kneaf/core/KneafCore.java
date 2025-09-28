@@ -17,6 +17,7 @@ import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
@@ -84,6 +85,7 @@ public class KneafCore {
     @SubscribeEvent
     private void registerCommands(RegisterCommandsEvent event) {
         RustPerfStatusCommand.register(event.getDispatcher());
+        com.kneaf.core.command.PerformanceCommand.register(event.getDispatcher());
     }
 
     /**
@@ -100,14 +102,18 @@ public class KneafCore {
         // Do something when the server starts
         LOGGER.info("HELLO from server starting");
         // Initialize Valence integration for performance optimizations
-        // Ensure PerformanceManager executor is shut down on JVM exit
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try {
-                com.kneaf.core.performance.PerformanceManager.shutdown();
-            } catch (Exception e) {
-                LOGGER.warn("Error while shutting down PerformanceManager", e);
-            }
-        }, "kneaf-perf-shutdown"));
+        // Server start logic continues; PerformanceManager initialized lazily
+    }
+
+    // Prefer event-based shutdown when the mod loader provides it
+    @SubscribeEvent
+    public void onServerStopping(ServerStoppingEvent event) {
+        LOGGER.info("Server stopping - shutting down PerformanceManager");
+        try {
+            com.kneaf.core.performance.PerformanceManager.shutdown();
+        } catch (Exception e) {
+            LOGGER.warn("Error while shutting down PerformanceManager", e);
+        }
     }
 
     // You can use EventBusSubscriber to automatically register all static methods in the class annotated with @SubscribeEvent
