@@ -6,6 +6,7 @@ mod item;
 mod mob;
 mod block;
 mod valence_integration;
+mod spatial;
 
 pub use shared::*;
 pub use entity::*;
@@ -13,6 +14,7 @@ pub use item::*;
 pub use mob::*;
 pub use block::*;
 pub use valence_integration::*;
+pub use spatial::*;
 
 use jni::{JNIEnv, objects::{JClass, JString}, sys::jstring};
 use sysinfo::System;

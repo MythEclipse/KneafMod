@@ -49,7 +49,7 @@ pub fn load_config_from_toml(
                 entity_config.medium_radius = toml_config.throttling.medium_radius;
                 entity_config.close_rate = toml_config.throttling.close_rate;
                 entity_config.medium_rate = toml_config.throttling.medium_rate;
-                entity_config.far_rate = toml_config.throttling.far_rate;
+                entity_config.far_rate = toml_config.throttling.far_rate as f64;
             }
 
             // Update block config (assuming same as entity for now)

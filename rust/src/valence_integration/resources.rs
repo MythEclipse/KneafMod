@@ -2,14 +2,14 @@ use valence::prelude::*;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use crate::spatial::{QuadTree, ChunkData, ChunkCoord};
+use crate::{QuadTree, ChunkData, ChunkCoord, Aabb};
 use crate::{EntityConfig, BlockConfig, AiConfig, ExceptionsConfig};
 
 // Valence-specific resources
 #[derive(Resource)]
-pub struct SpatialPartition {
-    pub player_quadtree: QuadTree,
-    pub entity_quadtree: QuadTree,
+pub struct ValenceSpatialPartition {
+    pub player_quadtree: QuadTree<Entity>,
+    pub entity_quadtree: QuadTree<Entity>,
 }
 
 #[derive(Resource)]

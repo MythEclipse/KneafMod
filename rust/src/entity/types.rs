@@ -1,17 +1,31 @@
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, RwLock};
 
 #[derive(Serialize, Deserialize)]
 pub struct EntityData {
     pub id: u64,
     pub entity_type: String,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
     pub distance: f32,
     pub is_block_entity: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PlayerData {
+    pub id: u64,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct Input {
     pub tick_count: u64,
     pub entities: Vec<EntityData>,
+    pub players: Vec<PlayerData>,
+    pub entity_config: super::config::Config,
 }
 
 #[derive(Serialize, Deserialize)]

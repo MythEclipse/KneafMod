@@ -22,6 +22,7 @@ import com.kneaf.core.data.EntityData;
 import com.kneaf.core.data.ItemEntityData;
 import com.kneaf.core.data.MobData;
 import com.kneaf.core.data.BlockEntityData;
+import com.kneaf.core.data.PlayerData;
 
 /**
  * Manages performance optimizations for the Minecraft server.
@@ -64,26 +65,30 @@ public class PerformanceManager {
         List<ItemEntityData> items = new ArrayList<>();
         List<MobData> mobs = new ArrayList<>();
         List<BlockEntityData> blockEntities = new ArrayList<>();
+        List<PlayerData> players = new ArrayList<>();
         for (ServerLevel level : server.getAllLevels()) {
             collectEntitiesFromLevel(level, entities, items, mobs);
             collectBlockEntitiesFromLevel(level, blockEntities);
+            collectPlayersFromLevel(level, players);
         }
-        return new EntityDataCollection(entities, items, mobs, blockEntities);
+        return new EntityDataCollection(entities, items, mobs, blockEntities, players);
     }
 
     private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs) {
         for (Entity entity : level.getEntities().getAll()) {
+            double distance = calculateDistanceToNearestPlayer(entity, level);
+            boolean isBlockEntity = false; // Regular entities are not block entities
+            entities.add(new EntityData(entity.getId(), entity.getX(), entity.getY(), entity.getZ(), distance, isBlockEntity, entity.getType().toString()));
+
             if (entity instanceof ItemEntity itemEntity) {
-                collectItemEntity(entity, itemEntity, level, entities, items);
+                collectItemEntity(entity, itemEntity, items);
             } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
                 collectMobEntity(entity, mob, level, mobs);
             }
         }
     }
 
-    private static void collectItemEntity(Entity entity, ItemEntity itemEntity, ServerLevel level, List<EntityData> entities, List<ItemEntityData> items) {
-        double distance = calculateDistanceToNearestPlayer(entity, level);
-        entities.add(new EntityData(entity.getId(), distance, false, entity.getType().toString()));
+    private static void collectItemEntity(Entity entity, ItemEntity itemEntity, List<ItemEntityData> items) {
         var chunkPos = entity.chunkPosition();
         var itemStack = itemEntity.getItem();
         var itemType = itemStack.getItem().getDescriptionId();
@@ -119,8 +124,14 @@ public class PerformanceManager {
         }
     }
 
+    private static void collectPlayersFromLevel(ServerLevel level, List<PlayerData> players) {
+        for (ServerPlayer player : level.players()) {
+            players.add(new PlayerData(player.getId(), player.getX(), player.getY(), player.getZ()));
+        }
+    }
+
     private static OptimizationResults processOptimizations(EntityDataCollection data) {
-        List<Long> toTick = RustPerformance.getEntitiesToTick(data.entities());
+        List<Long> toTick = RustPerformance.getEntitiesToTick(data.entities(), data.players());
         List<Long> blockResult = RustPerformance.getBlockEntitiesToTick(data.blockEntities());
         RustPerformance.ItemProcessResult itemResult = RustPerformance.processItemEntities(data.items());
         RustPerformance.MobProcessResult mobResult = RustPerformance.processMobAI(data.mobs());
@@ -203,6 +214,6 @@ public class PerformanceManager {
         return minDist;
     }
 
-    private record EntityDataCollection(List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, List<BlockEntityData> blockEntities) {}
+        private record EntityDataCollection(List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, List<BlockEntityData> blockEntities, List<PlayerData> players) {}
     private record OptimizationResults(List<Long> toTick, List<Long> blockResult, RustPerformance.ItemProcessResult itemResult, RustPerformance.MobProcessResult mobResult) {}
 }

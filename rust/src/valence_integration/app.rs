@@ -1,8 +1,8 @@
 use valence::prelude::*;
-use crate::spatial::{Aabb, QuadTree};
-use crate::resources::{SpatialPartition, PerformanceConfig, ChunkManager, TickCounter, Weather, GameTime};
+use crate::{Aabb, QuadTree};
+use crate::resources::{ValenceSpatialPartition, PerformanceConfig, ChunkManager, TickCounter, Weather, GameTime};
 use crate::systems::*;
-use crate::config::load_config_from_toml;
+use crate::valence_integration::config::load_config_from_toml;
 use crate::events::*;
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -17,7 +17,7 @@ pub fn create_valence_app() -> App {
 
     // Add our performance optimization systems
     app.insert_resource(TickCounter(0));
-    app.insert_resource(SpatialPartition {
+    app.insert_resource(ValenceSpatialPartition {
         player_quadtree: QuadTree::new(
             Aabb::from_center_size(Vec3::ZERO, Vec3::splat(1000.0)),
             16, 8,
@@ -34,6 +34,10 @@ pub fn create_valence_app() -> App {
             close_rate: 1.0,
             medium_rate: 0.5,
             far_rate: 0.1,
+            world_bounds: Aabb::from_center_size(Vec3::ZERO, Vec3::splat(1000.0)),
+            quadtree_max_entities: 16,
+            quadtree_max_depth: 8,
+            use_spatial_partitioning: true,
         })),
         block_config: Arc::new(RwLock::new(BlockConfig {
             close_radius: 96.0,

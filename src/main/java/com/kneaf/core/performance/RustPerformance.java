@@ -17,6 +17,7 @@ import com.kneaf.core.data.EntityData;
 import com.kneaf.core.data.ItemEntityData;
 import com.kneaf.core.data.MobData;
 import com.kneaf.core.data.BlockEntityData;
+import com.kneaf.core.data.PlayerData;
 
 public class RustPerformance {
     private RustPerformance() {}
@@ -72,11 +73,12 @@ public class RustPerformance {
     private static native String processBlockEntitiesNative(String jsonInput);
     private static native String getMemoryStatsNative();
 
-    public static List<Long> getEntitiesToTick(List<EntityData> entities) {
+    public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
         try {
             Map<String, Object> input = new HashMap<>();
             input.put(TICK_COUNT_KEY, tickCount++);
             input.put("entities", entities);
+            input.put("players", players);
             String jsonInput = gson.toJson(input);
             String jsonResult = processEntitiesNative(jsonInput);
             if (jsonResult != null) {

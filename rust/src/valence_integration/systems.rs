@@ -1,28 +1,27 @@
 use valence::prelude::*;
-use crate::spatial::{Aabb, QuadTree, ChunkCoord, calculate_chunk_distances_simd};
-use crate::resources::{SpatialPartition, PerformanceConfig, ChunkManager, TickCounter, Weather, GameTime};
-use crate::spatial::ChunkData;
+use crate::{Aabb, QuadTree, ChunkCoord, calculate_chunk_distances_simd, ChunkData};
+use crate::resources::{ValenceSpatialPartition, PerformanceConfig, ChunkManager, TickCounter, Weather, GameTime};
 use crate::components::{Player, Block as OurBlock, Mob, EntityType, BlockType, ShouldTick, NoAi, ShouldTickBlock, ShouldTickAi, Velocity, Gravity, OnGround, Health, ItemDrop, Inventory as OurInventory, BlockState as OurBlockState};
 use crate::events::*;
 
 
 // Systems for performance optimizations
 pub fn update_spatial_partition(
-    mut spatial_partition: ResMut<SpatialPartition>,
+    mut spatial_partition: ResMut<ValenceSpatialPartition>,
     player_query: Query<(Entity, &Position), With<Player>>,
     entity_query: Query<(Entity, &Position), Without<Player>>,
 ) {
     // Rebuild quadtrees each tick - in production, optimize with incremental updates
     let world_bounds = Aabb::from_center_size(Vec3::ZERO, Vec3::splat(1000.0));
-    spatial_partition.player_quadtree = QuadTree::new(world_bounds, 16, 8);
+    spatial_partition.player_quadtree = QuadTree::new(world_bounds.clone(), 16, 8);
     spatial_partition.entity_quadtree = QuadTree::new(world_bounds, 16, 8);
 
     for (entity, pos) in player_query.iter() {
-        spatial_partition.player_quadtree.insert(entity, pos.0.as_vec3(), 0);
+        spatial_partition.player_quadtree.insert(entity, [pos.0.x as f64, pos.0.y as f64, pos.0.z as f64], 0);
     }
 
     for (entity, pos) in entity_query.iter() {
-        spatial_partition.entity_quadtree.insert(entity, pos.0.as_vec3(), 0);
+        spatial_partition.entity_quadtree.insert(entity, [pos.0.x as f64, pos.0.y as f64, pos.0.z as f64], 0);
     }
 }
 
@@ -60,12 +59,12 @@ pub fn distance_based_entity_throttling(
             .map(|p| (p - entity_pos).length())
             .fold(f32::INFINITY, f32::min);
 
-        let rate = if min_distance <= entity_config.close_radius {
-            entity_config.close_rate
-        } else if min_distance <= entity_config.medium_radius {
-            entity_config.medium_rate
+        let rate = if min_distance <= entity_config.close_radius as f32 {
+            entity_config.close_rate as f32
+        } else if min_distance <= entity_config.medium_radius as f32 {
+            entity_config.medium_rate as f32
         } else {
-            entity_config.far_rate
+            entity_config.far_rate as f32
         };
 
         let period = (1.0 / rate) as u64;
@@ -317,12 +316,12 @@ pub fn chunk_based_entity_throttling(
 
         let chunk_distance = min_distance.sqrt() * 16.0; // Convert chunk distance to block distance
 
-        let rate = if chunk_distance <= entity_config.close_radius {
-            entity_config.close_rate
-        } else if chunk_distance <= entity_config.medium_radius {
-            entity_config.medium_rate
+        let rate = if chunk_distance <= entity_config.close_radius as f32 {
+            entity_config.close_rate as f32
+        } else if chunk_distance <= entity_config.medium_radius as f32 {
+            entity_config.medium_rate as f32
         } else {
-            entity_config.far_rate
+            entity_config.far_rate as f32
         };
 
         // Apply throttling to all entities in this chunk
