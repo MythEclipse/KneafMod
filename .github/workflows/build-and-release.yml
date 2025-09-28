@@ -18,11 +18,10 @@ jobs:
 
     - name: Increment version tag
       id: tag
-      uses: anothrNick/github-tag-action@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: rickstaa/action-create-tag@v1
       with:
-        default_bump: patch
+        tag: v${{ github.run_number }}
+        message: "Release ${{ github.run_number }}"
 
     - name: Set up JDK 21
       uses: actions/setup-java@v4
