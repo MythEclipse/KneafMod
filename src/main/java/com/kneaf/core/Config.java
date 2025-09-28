@@ -7,8 +7,8 @@ import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.common.ModConfigSpec;
 import net.neoforged.neoforge.common.ModConfigSpec.ConfigValue;
 
-// An example config class. This is not required, but it's a good idea to have one to keep your config organized.
-// Demonstrates how to use Neo's config APIs
+// Configuration class for KneafCore mod.
+// Handles performance-related settings and mod configuration.
 public class Config {
     private Config() {}
 

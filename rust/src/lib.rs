@@ -6,6 +6,7 @@ mod item;
 mod mob;
 mod block;
 mod spatial;
+mod chunk;
 
 pub use shared::*;
 pub use entity::*;
@@ -13,6 +14,7 @@ pub use item::*;
 pub use mob::*;
 pub use block::*;
 pub use spatial::*;
+pub use chunk::*;
 
 use jni::{JNIEnv, objects::JClass, sys::jstring};
 use sysinfo::System;

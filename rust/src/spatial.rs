@@ -185,8 +185,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
 
     pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) {
         if let Some(_old_pos) = self.entity_positions.insert(entity.clone(), pos) {
-            // Remove from old position - in a real implementation, we'd need to remove from quadtree
-            // For simplicity, we'll rebuild the quadtree periodically
+            // For simplicity, we'll rebuild the quadtree periodically instead of removing individual entries
         }
         self.quadtree.insert(entity, pos, 0);
     }

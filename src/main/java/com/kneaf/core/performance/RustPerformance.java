@@ -73,6 +73,9 @@ public class RustPerformance {
     private static native String processMobAiNative(String jsonInput);
     private static native String processBlockEntitiesNative(String jsonInput);
     private static native String getMemoryStatsNative();
+    private static native int preGenerateNearbyChunksNative(int centerX, int centerZ, int radius);
+    private static native boolean isChunkGeneratedNative(int x, int z);
+    private static native long getGeneratedChunkCountNative();
 
     public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
         try {
@@ -271,6 +274,33 @@ public class RustPerformance {
     public static void startValenceServer() {
         // Method removed - Valence integration is no longer supported
         KneafCore.LOGGER.info("Valence integration has been removed");
+    }
+
+    public static int preGenerateNearbyChunks(int centerX, int centerZ, int radius) {
+        try {
+            return preGenerateNearbyChunksNative(centerX, centerZ, radius);
+        } catch (Exception e) {
+            KneafCore.LOGGER.error("Error calling Rust for chunk generation: {}", e.getMessage(), e);
+            return 0;
+        }
+    }
+
+    public static boolean isChunkGenerated(int x, int z) {
+        try {
+            return isChunkGeneratedNative(x, z);
+        } catch (Exception e) {
+            KneafCore.LOGGER.error("Error calling Rust for chunk check: {}", e.getMessage(), e);
+            return false;
+        }
+    }
+
+    public static long getGeneratedChunkCount() {
+        try {
+            return getGeneratedChunkCountNative();
+        } catch (Exception e) {
+            KneafCore.LOGGER.error("Error calling Rust for chunk count: {}", e.getMessage(), e);
+            return 0;
+        }
     }
 
     public static double getCurrentTPS() { return currentTPS; }
