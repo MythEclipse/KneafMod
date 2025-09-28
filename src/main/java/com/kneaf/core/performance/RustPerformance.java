@@ -18,9 +18,92 @@ import com.kneaf.core.data.ItemEntityData;
 import com.kneaf.core.data.MobData;
 import com.kneaf.core.data.BlockEntityData;
 import com.kneaf.core.data.PlayerData;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class RustPerformance {
     private RustPerformance() {}
+
+    // Async processing executor
+    private static final ExecutorService asyncExecutor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r);
+        t.setName("Kneaf-Async-Processor");
+        t.setDaemon(true);
+        return t;
+    });
+
+    // Connection Pooling (for future database interactions)
+    private static final ConcurrentLinkedQueue<Connection> connectionPool = new ConcurrentLinkedQueue<>();
+    private static final int MAX_CONNECTIONS = 10;
+    private static volatile boolean connectionPoolInitialized = false;
+
+    public static Connection acquireConnection() throws SQLException {
+        if (!connectionPoolInitialized) {
+            initializeConnectionPool();
+        }
+
+        Connection conn = connectionPool.poll();
+        if (conn != null) {
+            try {
+                if (!conn.isClosed()) {
+                    return conn;
+                }
+            } catch (SQLException e) {
+                // Connection is invalid, continue to create new one
+            }
+        }
+
+        // Create new connection if pool is empty or invalid
+        return createNewConnection();
+    }
+
+    public static void releaseConnection(Connection conn) {
+        if (conn != null && connectionPool.size() < MAX_CONNECTIONS) {
+            try {
+                if (!conn.isClosed()) {
+                    if (!conn.getAutoCommit()) {
+                        conn.rollback();
+                    }
+                    connectionPool.offer(conn);
+                    return;
+                }
+            } catch (SQLException e) {
+                KneafCore.LOGGER.warn("Failed to release connection: {}", e.getMessage());
+            }
+        }
+
+        // Close invalid or excess connections
+        if (conn != null) {
+            try {
+                conn.close();
+            } catch (SQLException e) {
+                // Ignore
+            }
+        }
+    }
+
+    private static synchronized void initializeConnectionPool() {
+        if (connectionPoolInitialized) return;
+
+        try {
+            for (int i = 0; i < 5; i++) { // Start with 5 connections
+                connectionPool.offer(createNewConnection());
+            }
+            connectionPoolInitialized = true;
+            KneafCore.LOGGER.info("Database connection pool initialized");
+        } catch (Exception e) {
+            KneafCore.LOGGER.warn("Failed to initialize connection pool: {}", e.getMessage());
+        }
+    }
+
+    private static Connection createNewConnection() throws SQLException {
+        // Placeholder for database connection
+        throw new SQLException("Database connection not configured yet");
+    }
 
     private static long tickCount = 0;
     // Metrics
@@ -306,6 +389,11 @@ public class RustPerformance {
             KneafCore.LOGGER.error("Error getting CPU stats from Rust: {}", e.getMessage(), e);
             return "{\"error\": \"Failed to get CPU stats\"}";
         }
+    }
+
+    // Async Chunk Loading
+    public static CompletableFuture<Integer> preGenerateNearbyChunksAsync(int centerX, int centerZ, int radius) {
+        return CompletableFuture.supplyAsync(() -> preGenerateNearbyChunks(centerX, centerZ, radius), asyncExecutor);
     }
 
     public static void startValenceServer() {

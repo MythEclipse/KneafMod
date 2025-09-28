@@ -19,6 +19,10 @@ The library achieves performance gains through:
 3. **Parallel Block Processing**: Block entity updates are parallelized
 4. **SIMD Distance Calculations**: Vectorized operations for distance computations
 5. **Spatial Indexing**: Quadtree structure for fast spatial queries
+6. **Entity Grouping**: Entities grouped by type for optimized processing
+7. **Async Chunk Loading**: Pre-load chunks asynchronously to reduce lag
+8. **Connection Pooling**: Framework ready for future database integrations
+9. **Memory Pooling**: Object reuse to minimize garbage collection pressure
 
 ## Usage
 
@@ -61,6 +65,30 @@ tpsAlertThreshold = 15.0
 ## Commands
 
 - `/rustperf status`: Shows current TPS, CPU usage, and memory statistics
+
+## Async Operations
+
+The mod supports asynchronous operations for better performance:
+
+```java
+// Async chunk pre-generation
+CompletableFuture<Integer> future = RustPerformance.preGenerateNearbyChunksAsync(x, z, radius);
+future.thenAccept(chunksGenerated -> {
+    // Handle result
+});
+```
+
+## Connection Pooling
+
+Framework for database connections (ready for future use):
+
+```java
+try (Connection conn = RustPerformance.acquireConnection()) {
+    // Use connection
+} catch (SQLException e) {
+    // Handle error
+}
+```
 
 ## Building
 
