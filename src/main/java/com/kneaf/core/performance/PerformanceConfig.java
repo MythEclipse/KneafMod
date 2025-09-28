@@ -38,7 +38,8 @@ public final class PerformanceConfig {
         this.maxLogBytes = b.maxLogBytes;
         this.adaptiveThreadPool = b.adaptiveThreadPool;
         this.maxThreadPoolSize = b.maxThreadPoolSize;
-        this.excludedEntityTypes = b.excludedEntityTypes;
+        // Defensively copy the array to prevent external mutation after construction
+        this.excludedEntityTypes = b.excludedEntityTypes == null ? new String[0] : b.excludedEntityTypes.clone();
     }
 
     /**
@@ -67,7 +68,7 @@ public final class PerformanceConfig {
         public Builder maxLogBytes(long v) { this.maxLogBytes = v; return this; }
         public Builder adaptiveThreadPool(boolean v) { this.adaptiveThreadPool = v; return this; }
         public Builder maxThreadPoolSize(int v) { this.maxThreadPoolSize = v; return this; }
-        public Builder excludedEntityTypes(String[] v) { this.excludedEntityTypes = v; return this; }
+    public Builder excludedEntityTypes(String[] v) { this.excludedEntityTypes = v == null ? new String[0] : v.clone(); return this; }
 
         public PerformanceConfig build() {
             // Apply same defensive constraints as before and build a config using this Builder
