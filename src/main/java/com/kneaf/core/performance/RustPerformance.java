@@ -108,17 +108,19 @@ public class RustPerformance {
             input.put("entityConfig", config);
             
             String jsonInput = gson.toJson(input);
-            KneafCore.LOGGER.info("Sending JSON to Rust: {}", jsonInput);
             String jsonResult = processEntitiesNative(jsonInput);
             if (jsonResult != null) {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
-                JsonArray entitiesToTick = result.getAsJsonArray("entities_to_tick");
+                JsonArray entitiesToTick = result.getAsJsonArray("entitiesToTick");
                 List<Long> resultList = new ArrayList<>();
                 for (JsonElement e : entitiesToTick) {
                     resultList.add(e.getAsLong());
                 }
                 totalEntitiesProcessed += resultList.size();
                 return resultList;
+            } else {
+                KneafCore.LOGGER.warn("Rust processing returned null, returning empty list");
+                return new ArrayList<>();
             }
         } catch (Exception e) {
             KneafCore.LOGGER.error("Error calling Rust for entity processing: {}", e.getMessage(), e);

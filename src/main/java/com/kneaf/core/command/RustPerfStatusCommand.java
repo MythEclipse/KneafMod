@@ -20,26 +20,12 @@ public class RustPerfStatusCommand {
     private static int execute(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
 
-        // Get metrics from RustPerformance
+        // Get status from Rust and TPS
         double tps = RustPerformance.getCurrentTPS();
-        long entitiesProcessed = RustPerformance.getTotalEntitiesProcessed();
-        long mobsProcessed = RustPerformance.getTotalMobsProcessed();
-        long blocksProcessed = RustPerformance.getTotalBlocksProcessed();
-        long totalMerged = RustPerformance.getTotalMerged();
-        long totalDespawned = RustPerformance.getTotalDespawned();
         String memoryStats = RustPerformance.getMemoryStats();
 
         // Send message
-        String message = """
-            RustPerf Status:
-            Current TPS: %.2f
-            Entities Processed: %d
-            Mobs Processed: %d
-            Blocks Processed: %d
-            Total Merged Items: %d
-            Total Despawned Items: %d
-            Memory Stats: %s
-            """.formatted(tps, entitiesProcessed, mobsProcessed, blocksProcessed, totalMerged, totalDespawned, memoryStats);
+        String message = String.format("RustPerf Status: TPS: %.2f, Memory: %s", tps, memoryStats);
         source.sendSuccess(() -> Component.literal(message), false);
 
         return 1;
