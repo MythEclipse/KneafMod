@@ -354,33 +354,56 @@ public class PerformanceManager {
     }
 
     private static void logOptimizations(OptimizationResults results) {
-        if (tickCounter % 100 == 0 && hasOptimizations(results)) {
-            LOGGER.info("Entities to tick: {}", results.toTick().size());
-            LOGGER.info("Block entities to tick: {}", results.blockResult().size());
-            LOGGER.info("Item optimization: {} merged, {} despawned", results.itemResult().getMergedCount(), results.itemResult().getDespawnedCount());
-            LOGGER.info("Mob AI optimization: {} disabled, {} simplified", results.mobResult().getMobsToDisableAI().size(), results.mobResult().getMobsToSimplifyAI().size());
+        // Only log when there are meaningful changes applied to the world to avoid noisy output
+        if (tickCounter % 100 == 0 && hasMeaningfulOptimizations(results)) {
+            // Log only the meaningful fields
+            if (results.itemResult().getMergedCount() > 0 || results.itemResult().getDespawnedCount() > 0) {
+                LOGGER.info("Item optimization: {} merged, {} despawned", results.itemResult().getMergedCount(), results.itemResult().getDespawnedCount());
+            }
+            if (!results.itemResult().getItemsToRemove().isEmpty()) {
+                LOGGER.info("Items removed: {}", results.itemResult().getItemsToRemove().size());
+            }
+            if (!results.mobResult().getMobsToDisableAI().isEmpty() || !results.mobResult().getMobsToSimplifyAI().isEmpty()) {
+                LOGGER.info("Mob AI optimization: {} disabled, {} simplified", results.mobResult().getMobsToDisableAI().size(), results.mobResult().getMobsToSimplifyAI().size());
+            }
+            if (!results.blockResult().isEmpty()) {
+                LOGGER.info("Block entities to tick (reduced): {}", results.blockResult().size());
+            }
         }
 
-        // Also write a compact metrics line to the performance log periodically
-        if (tickCounter % CONFIG.getLogIntervalTicks() == 0) {
+        // Also write a compact metrics line to the performance log periodically, but only when meaningful changes occurred
+        if (tickCounter % CONFIG.getLogIntervalTicks() == 0 && hasMeaningfulOptimizations(results)) {
             double avg = getRollingAvgTPS();
-            String summary = String.format("avgTps=%.2f entitiesToTick=%d blockEntities=%d itemsMerged=%d itemsDespawned=%d mobsDisabled=%d mobsSimplified=%d itemsRemoved=%d",
+            String summary = String.format("avgTps=%.2f itemsMerged=%d itemsDespawned=%d mobsDisabled=%d mobsSimplified=%d itemsRemoved=%d blockEntities=%d",
                     avg,
-                    results.toTick().size(),
-                    results.blockResult().size(),
                     results.itemResult().getMergedCount(),
                     results.itemResult().getDespawnedCount(),
                     results.mobResult().getMobsToDisableAI().size(),
                     results.mobResult().getMobsToSimplifyAI().size(),
-                    results.itemResult().getItemsToRemove().size());
+                    results.itemResult().getItemsToRemove().size(),
+                    results.blockResult().size());
             PerformanceMetricsLogger.logOptimizations(summary);
         }
     }
 
-    private static boolean hasOptimizations(OptimizationResults results) {
-        return !results.toTick().isEmpty() || results.itemResult().getMergedCount() > 0 || results.itemResult().getDespawnedCount() > 0 ||
-               !results.mobResult().getMobsToDisableAI().isEmpty() || !results.mobResult().getMobsToSimplifyAI().isEmpty() || !results.blockResult().isEmpty();
+    /**
+     * Return true only if optimizations include changes that actually mutate the world or remove entities.
+     */
+    private static boolean hasMeaningfulOptimizations(OptimizationResults results) {
+        if (results == null) return false;
+        if (results.itemResult() != null) {
+            if (results.itemResult().getMergedCount() > 0) return true;
+            if (results.itemResult().getDespawnedCount() > 0) return true;
+            if (!results.itemResult().getItemsToRemove().isEmpty()) return true;
+        }
+        if (results.mobResult() != null) {
+            if (!results.mobResult().getMobsToDisableAI().isEmpty()) return true;
+            if (!results.mobResult().getMobsToSimplifyAI().isEmpty()) return true;
+        }
+            return results.blockResult() != null && !results.blockResult().isEmpty();
     }
+
+    
 
     private static void removeItems(MinecraftServer server, RustPerformance.ItemProcessResult itemResult) {
         for (ServerLevel level : server.getAllLevels()) {

@@ -32,7 +32,9 @@ public class PerformanceCommand {
     private static int status(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         double tps = RustPerformance.getCurrentTPS();
-        String msg = String.format("Kneaf Performance - enabled=%s TPS=%.2f log=run/logs/kneaf-performance.log", PerformanceManager.isEnabled(), tps);
+        String cpu = RustPerformance.getCpuStats();
+        String mem = RustPerformance.getMemoryStats();
+        String msg = String.format("Kneaf Performance - enabled=%s TPS=%.2f CPU=%s MEM=%s log=run/logs/kneaf-performance.log", PerformanceManager.isEnabled(), tps, cpu, mem);
         source.sendSuccess(() -> Component.literal(msg), false);
         return 1;
     }

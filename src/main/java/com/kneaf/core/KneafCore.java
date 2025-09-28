@@ -22,7 +22,6 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
 import com.kneaf.core.compatibility.ModCompatibility;
-import com.kneaf.core.command.RustPerfStatusCommand;
 import com.kneaf.core.performance.PerformanceManager;
 
 /**
@@ -84,7 +83,7 @@ public class KneafCore {
     // Register commands
     @SubscribeEvent
     private void registerCommands(RegisterCommandsEvent event) {
-        RustPerfStatusCommand.register(event.getDispatcher());
+        // Consolidated commands: expose all performance related commands under `kneaf` namespace.
         com.kneaf.core.command.PerformanceCommand.register(event.getDispatcher());
     }
 
