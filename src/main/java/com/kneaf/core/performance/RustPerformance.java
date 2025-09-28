@@ -101,8 +101,9 @@ public class RustPerformance {
     }
 
     private static Connection createNewConnection() throws SQLException {
-        // Placeholder for database connection
-        throw new SQLException("Database connection not configured yet");
+        // TODO: Implement database connection creation if/when needed.
+        // This placeholder intentionally throws so callers become aware that DB is not configured.
+        throw new SQLException("Database connection not configured yet. This is a placeholder - implement createNewConnection() or remove DB usage.");
     }
 
     private static long tickCount = 0;
@@ -195,6 +196,10 @@ public class RustPerformance {
     public static native void freeFloatBufferNative(java.nio.ByteBuffer buf);
     // New: allocate and return both buffer + shape
     public static native NativeFloatBufferAllocation generateFloatBufferWithShapeNative(long rows, long cols);
+
+    // Worker metrics (exposed from native worker)
+    public static native int nativeGetWorkerQueueDepth();
+    public static native double nativeGetWorkerAvgProcessingMs();
 
     public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
         try {

@@ -16,7 +16,7 @@ pub use block::*;
 pub use spatial::*;
 pub use chunk::*;
 
-use jni::{JNIEnv, objects::{JClass, JString}, sys::jstring};
+use jni::{JNIEnv, objects::{JClass, JString, JObject, JByteArray}, sys::jstring};
 use sysinfo::System;
 use mimalloc::MiMalloc;
 use ndarray::Array2;
@@ -27,7 +27,12 @@ use blake3::Hasher;
 use log::error;
 use std::sync::Once;
 use jni::objects::JByteBuffer;
-use jni::sys::{jlong, jobject};
+use jni::sys::{jlong, jobject, jint, jbyteArray, jdouble};
+use crossbeam_channel::{unbounded, Sender, Receiver, TryRecvError};
+use std::thread;
+use serde_json;
+use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+use std::time::Instant;
 // std::slice is used via fully-qualified path where needed
 
 #[global_allocator]
@@ -397,4 +402,204 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_generateFloatB
             std::ptr::null_mut()
         }
     }
+}
+
+// --- Minimal worker implementation for JNI bridge (MVP) ---
+struct Worker {
+    tx: Sender<Vec<u8>>,
+    rx: Receiver<Vec<u8>>, // results channel
+}
+
+// Simple global metrics for the single-thread worker MVP
+static WORKER_QUEUE_DEPTH: AtomicUsize = AtomicUsize::new(0);
+static WORKER_PROCESSED_COUNT: AtomicU64 = AtomicU64::new(0);
+static WORKER_TOTAL_PROCESSING_NS: AtomicU64 = AtomicU64::new(0);
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeCreateWorker(_env: JNIEnv, _class: JClass, _concurrency: jint) -> jlong {
+    ensure_logging();
+    // For simplicity, single thread worker that echoes payload -> result
+    let (task_tx, task_rx) = unbounded::<Vec<u8>>();
+    let (res_tx, res_rx) = unbounded::<Vec<u8>>();
+
+    // spawn a thread that processes tasks
+    thread::spawn(move || {
+        while let Ok(payload) = task_rx.recv() {
+            // decrement queue depth measured at push time
+            WORKER_QUEUE_DEPTH.fetch_sub(1, Ordering::SeqCst);
+            let start = Instant::now();
+            // extract task_id if present (first 8 bytes), otherwise 0
+            let task_id: u64 = if payload.len() >= 8 {
+                let mut id_b = [0u8;8];
+                id_b.copy_from_slice(&payload[0..8]);
+                u64::from_le_bytes(id_b)
+            } else { 0u64 };
+
+            // Wrap processing so panics are captured and returned as error envelopes
+            let out = std::panic::catch_unwind(|| -> Result<Vec<u8>, String> {
+                // Expect payload to be the binary TaskEnvelope: [u64 id][u8 type][u32 len][payload]
+                if payload.len() < 13 {
+                    return Err("invalid envelope: too short".to_string());
+                }
+
+                // copy task id bytes (we already have task_id numeric form)
+                let mut id_bytes = [0u8;8];
+                id_bytes.copy_from_slice(&payload[0..8]);
+
+                // get payload length and slice
+                let payload_len = u32::from_le_bytes([payload[9], payload[10], payload[11], payload[12]]) as usize;
+                if payload_len > 0 && payload.len() < 13 + payload_len {
+                    return Err("invalid envelope: payload truncated".to_string());
+                }
+
+                let body = if payload_len > 0 { &payload[13..13+payload_len] } else { &[] };
+
+                // taskType at byte 8
+                let task_type = payload[8];
+
+                match task_type {
+                    1 => {
+                        // echo behavior (preserve existing tests)
+                        let mut v = Vec::with_capacity(13 + body.len());
+                        v.extend_from_slice(&id_bytes);
+                        v.push(0u8); // status = ok
+                        v.extend_from_slice(&(body.len() as u32).to_le_bytes());
+                        v.extend_from_slice(body);
+                        Ok(v)
+                    }
+                    2 => {
+                        // heavy CPU job: parse body as UTF-8 decimal n, compute sum of squares 0..n-1 in parallel
+                        let s = match std::str::from_utf8(body) { Ok(x) => x.trim(), Err(_) => return Err("invalid utf8 for job payload".to_string()) };
+                        let n: usize = match s.parse() { Ok(x) => x, Err(_) => return Err("invalid integer payload for job".to_string()) };
+
+                        // Use rayon parallel iterator to compute sum of squares
+                        let sum: u128 = (0..n).into_par_iter().map(|i| {
+                            let v = i as u128;
+                            v * v
+                        }).reduce(|| 0u128, |a, b| a + b);
+
+                        let res_json = serde_json::json!({"task":"heavy","n": n, "sum": sum.to_string()});
+                        let body_out = match serde_json::to_vec(&res_json) { Ok(b) => b, Err(e) => return Err(format!("serialize error: {}", e)) };
+
+                        let mut v = Vec::with_capacity(13 + body_out.len());
+                        v.extend_from_slice(&id_bytes);
+                        v.push(0u8);
+                        v.extend_from_slice(&(body_out.len() as u32).to_le_bytes());
+                        v.extend_from_slice(&body_out);
+                        Ok(v)
+                    }
+                    0xFF => {
+                        // deliberate panic trigger for testing
+                        panic!("explicit panic requested");
+                    }
+                    _ => {
+                        // unknown type: echo as default
+                        let mut v = Vec::with_capacity(13 + body.len());
+                        v.extend_from_slice(&id_bytes);
+                        v.push(0u8); // status = ok
+                        v.extend_from_slice(&(body.len() as u32).to_le_bytes());
+                        v.extend_from_slice(body);
+                        Ok(v)
+                    }
+                }
+            });
+
+            let result = match out {
+                Ok(Ok(v)) => v,
+                Ok(Err(err_msg)) => {
+                    // processing returned an expected error; encode message in payload
+                    let msg_bytes = err_msg.into_bytes();
+                    let mut v = Vec::with_capacity(13 + msg_bytes.len());
+                    v.extend_from_slice(&task_id.to_le_bytes());
+                    v.push(1u8); // status = error
+                    v.extend_from_slice(&(msg_bytes.len() as u32).to_le_bytes());
+                    v.extend_from_slice(&msg_bytes);
+                    v
+                }
+                Err(_) => {
+                    // panic occurred, return error envelope with a short panic message
+                    let msg = b"panic in native worker".to_vec();
+                    let mut v = Vec::with_capacity(13 + msg.len());
+                    v.extend_from_slice(&task_id.to_le_bytes());
+                    v.push(1u8);
+                    v.extend_from_slice(&(msg.len() as u32).to_le_bytes());
+                    v.extend_from_slice(&msg);
+                    v
+                }
+            };
+
+            let elapsed = start.elapsed().as_nanos() as u64;
+            WORKER_PROCESSED_COUNT.fetch_add(1, Ordering::SeqCst);
+            WORKER_TOTAL_PROCESSING_NS.fetch_add(elapsed, Ordering::SeqCst);
+            let _ = res_tx.send(result);
+        }
+    });
+
+    let w = Worker { tx: task_tx, rx: res_rx };
+    Box::into_raw(Box::new(w)) as jlong
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativePushTask(env: JNIEnv, _class: JClass, handle: jlong, payload: jbyteArray) {
+    ensure_logging();
+    if handle == 0 { return; }
+    let wptr = handle as *mut Worker;
+    if wptr.is_null() { return; }
+    let worker = unsafe { &mut *wptr };
+
+    // Convert raw jbyteArray into a JObject then JByteArray wrapper and then to Vec<u8>
+    // Safety: payload is a valid local jbyteArray passed from JVM for this JNI call
+    let jobj = unsafe { JObject::from_raw(payload as jobject) };
+    let j_arr = JByteArray::from(jobj);
+    let bytes = match env.convert_byte_array(j_arr) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let _ = worker.tx.send(bytes);
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativePollResult(env: JNIEnv, _class: JClass, handle: jlong) -> jbyteArray {
+    ensure_logging();
+    if handle == 0 { return std::ptr::null_mut(); }
+    let wptr = handle as *mut Worker;
+    if wptr.is_null() { return std::ptr::null_mut(); }
+    let worker = unsafe { &mut *wptr };
+
+    match worker.rx.try_recv() {
+        Ok(res) => {
+            match env.byte_array_from_slice(&res) {
+                Ok(ja) => ja.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
+        }
+        Err(TryRecvError::Empty) => std::ptr::null_mut(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeDestroyWorker(_env: JNIEnv, _class: JClass, handle: jlong) {
+    if handle == 0 { return; }
+    unsafe {
+        let _boxed: Box<Worker> = Box::from_raw(handle as *mut Worker);
+        // drop will close channels and the processing thread will exit when task_rx is closed
+    }
+}
+
+// Expose simple metrics to Java
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_nativeGetWorkerQueueDepth(_env: JNIEnv, _class: JClass) -> jint {
+    WORKER_QUEUE_DEPTH.load(Ordering::SeqCst) as jint
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_nativeGetWorkerAvgProcessingMs(_env: JNIEnv, _class: JClass) -> jdouble {
+    let count = WORKER_PROCESSED_COUNT.load(Ordering::SeqCst) as u64;
+    if count == 0 {
+        return 0.0;
+    }
+    let total_ns = WORKER_TOTAL_PROCESSING_NS.load(Ordering::SeqCst) as u128;
+    let avg_ns = total_ns / (count as u128);
+    (avg_ns as f64) / 1_000_000.0
 }
