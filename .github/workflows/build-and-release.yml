@@ -19,7 +19,6 @@ jobs:
         fetch-depth: 0
 
     - name: Increment version tag
-      id: tag
       uses: rickstaa/action-create-tag@v1
       with:
         tag: v${{ github.run_number }}
@@ -46,7 +45,7 @@ jobs:
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ steps.tag.outputs.new_tag }}
+        tag_name: v${{ github.run_number }}
         files: KneafMod/build/libs/*.jar
         generate_release_notes: true
       env:
