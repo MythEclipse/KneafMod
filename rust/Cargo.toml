@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "rustperf"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 j4rs = "0.17"
@@ -19,3 +19,13 @@ lazy_static = "1.4"
 sysinfo = "0.30"
 rayon = "1.8"
 valence = { git = "https://github.com/valence-rs/valence" }
+bevy_reflect = "0.14"
+
+[dev-dependencies]
+criterion = "0.5"
+bevy_ecs = "0.14"
+bevy_reflect = "0.14"
+
+[[bench]]
+name = "performance_benchmarks"
+harness = false

@@ -21,7 +21,7 @@ pub struct BlockProcessResult {
     pub block_entities_to_tick: Vec<u64>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct BlockConfig {
     pub close_radius: f32,
     pub medium_radius: f32,

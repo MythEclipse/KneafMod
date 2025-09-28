@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct ExceptionsConfig {
     pub critical_entity_types: Vec<String>,
     pub critical_block_types: Vec<String>,

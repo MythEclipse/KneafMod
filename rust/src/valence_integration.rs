@@ -6,6 +6,7 @@ use serde::Deserialize;
 use std::fs;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use bevy_reflect::Reflect;
 
 // TOML configuration structure
 #[derive(Deserialize)]
@@ -112,7 +113,7 @@ impl ChunkCoord {
 #[derive(Clone, Debug)]
 pub struct ChunkData {
     pub coord: ChunkCoord,
-    pub entities: Vec<Entity>,
+    pub entities: Vec<(Entity, Vec3)>,
     pub blocks: Vec<Entity>,
     pub mobs: Vec<Entity>,
     pub last_accessed: u64,
@@ -141,19 +142,29 @@ pub struct ChunkManager {
     pub unload_distance: i32, // chunks beyond view_distance to unload
 }
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 #[component(storage = "Table")]
 pub struct DistanceCache {
     pub distances: Vec<f32>,
 }
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct Player;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct Block;
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct Mob;
+#[derive(Component, Reflect)]
+pub struct EntityType {
+    pub entity_type: String,
+    pub is_block_entity: bool,
+}
+
+#[derive(Component, Reflect)]
+pub struct BlockType {
+    pub block_type: String,
+}
 
 #[derive(Resource)]
 pub struct TickCounter(pub u64);
@@ -162,7 +173,7 @@ pub struct TickCounter(pub u64);
 #[derive(Clone, Debug)]
 pub struct QuadTree {
     pub bounds: Aabb,
-    pub entities: Vec<Entity>,
+    pub entities: Vec<(Entity, Vec3)>,
     pub children: Option<Box<[QuadTree; 4]>>,
     pub max_entities: usize,
     pub max_depth: usize,
@@ -185,12 +196,12 @@ impl QuadTree {
         }
 
         if self.children.is_none() && (self.entities.len() < self.max_entities || depth >= self.max_depth) {
-            self.entities.push(entity);
+            self.entities.push((entity, pos));
             return;
         }
 
         if self.children.is_none() {
-            self.subdivide();
+            self.subdivide(depth + 1);
         }
 
         if let Some(ref mut children) = self.children {
@@ -200,16 +211,24 @@ impl QuadTree {
         }
     }
 
-    fn subdivide(&mut self) {
+    fn subdivide(&mut self, depth: usize) {
         let half_size = self.bounds.half_size();
         let center = self.bounds.center();
 
-        self.children = Some(Box::new([
+        let mut children = [
             QuadTree::new(Aabb::from_center_size(center + Vec3::new(-half_size.x, 0.0, -half_size.z), half_size * 2.0), self.max_entities, self.max_depth),
             QuadTree::new(Aabb::from_center_size(center + Vec3::new(half_size.x, 0.0, -half_size.z), half_size * 2.0), self.max_entities, self.max_depth),
             QuadTree::new(Aabb::from_center_size(center + Vec3::new(-half_size.x, 0.0, half_size.z), half_size * 2.0), self.max_entities, self.max_depth),
             QuadTree::new(Aabb::from_center_size(center + Vec3::new(half_size.x, 0.0, half_size.z), half_size * 2.0), self.max_entities, self.max_depth),
-        ]));
+        ];
+
+        // Move existing entities to appropriate children
+        for (entity, pos) in self.entities.drain(..) {
+            let index = if pos.x > center.x { 1 } else { 0 } | if pos.z > center.z { 2 } else { 0 };
+            children[index].insert(entity, pos, depth + 1);
+        }
+
+        self.children = Some(Box::new(children));
     }
 
     pub fn query(&self, range: Aabb) -> Vec<Entity> {
@@ -223,8 +242,10 @@ impl QuadTree {
             return;
         }
 
-        for &entity in &self.entities {
-            result.push(entity);
+        for &(entity, pos) in &self.entities {
+            if range.contains(pos) {
+                result.push(entity);
+            }
         }
 
         if let Some(ref children) = self.children {
@@ -373,10 +394,10 @@ pub fn distance_based_entity_throttling(
     config: Res<PerformanceConfig>,
     tick_counter: Res<TickCounter>,
     player_query: Query<&Position, With<Player>>,
-    entity_query: Query<(Entity, &Position), Without<Player>>,
+    entity_query: Query<(Entity, &Position, Option<&EntityType>), Without<Player>>,
 ) {
     let entity_config = config.entity_config.read();
-    let _exceptions = config.exceptions.read();
+    let exceptions = config.exceptions.read();
 
     // Collect all player positions
     let player_positions: Vec<Vec3> = player_query.iter().map(|pos| pos.0.as_vec3()).collect();
@@ -385,9 +406,15 @@ pub fn distance_based_entity_throttling(
         return;
     }
 
-    for (entity, pos) in entity_query.iter() {
-        // Skip critical entities - placeholder for entity type check
-        // In real implementation, check entity type against exceptions.critical_entity_types
+    for (entity, pos, entity_type) in entity_query.iter() {
+        // Skip critical entities - always tick block entities and entities in exception list
+        if let Some(entity_type) = entity_type {
+            if entity_type.is_block_entity ||
+               exceptions.critical_entity_types.contains(&entity_type.entity_type) {
+                commands.entity(entity).insert(ShouldTick);
+                continue;
+            }
+        }
 
         let entity_pos = pos.0.as_vec3();
 
@@ -413,7 +440,7 @@ pub fn distance_based_entity_throttling(
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 #[component(storage = "Table")]
 pub struct ShouldTick;
 pub fn mob_ai_optimization(
@@ -462,7 +489,7 @@ pub fn mob_ai_optimization(
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct NoAi;
 
 pub fn distance_based_block_throttling(
@@ -470,10 +497,10 @@ pub fn distance_based_block_throttling(
     config: Res<PerformanceConfig>,
     tick_counter: Res<TickCounter>,
     player_query: Query<&Position, With<Player>>,
-    block_query: Query<(Entity, &Position), With<Block>>,
+    block_query: Query<(Entity, &Position, Option<&BlockType>), With<Block>>,
 ) {
     let block_config = config.block_config.read();
-    let _exceptions = config.exceptions.read();
+    let exceptions = config.exceptions.read();
 
     // Collect all player positions
     let player_positions: Vec<Vec3> = player_query.iter().map(|pos| pos.0.as_vec3()).collect();
@@ -482,9 +509,14 @@ pub fn distance_based_block_throttling(
         return;
     }
 
-    for (entity, pos) in block_query.iter() {
-        // Skip critical blocks - placeholder for block type check
-        // In real implementation, check block type against exceptions.critical_block_types
+    for (entity, pos, block_type) in block_query.iter() {
+        // Skip critical blocks - always tick blocks in exception list
+        if let Some(block_type) = block_type {
+            if exceptions.critical_block_types.contains(&block_type.block_type) {
+                commands.entity(entity).insert(ShouldTickBlock);
+                continue;
+            }
+        }
 
         let block_pos = pos.0.as_vec3();
 
@@ -509,9 +541,9 @@ pub fn distance_based_block_throttling(
         }
     }
 }
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct ShouldTickBlock;
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct ShouldTickAi;
 
 // Chunk management systems
@@ -519,9 +551,9 @@ pub fn update_chunk_manager(
     mut chunk_manager: ResMut<ChunkManager>,
     tick_counter: Res<TickCounter>,
     player_query: Query<&Position, With<Player>>,
-    entity_query: Query<(Entity, &Position), Without<Player>>,
-    block_query: Query<(Entity, &Position), With<Block>>,
-    mob_query: Query<(Entity, &Position), With<Mob>>,
+    _entity_query: Query<(Entity, &Position), Without<Player>>,
+    _block_query: Query<(Entity, &Position), With<Block>>,
+    _mob_query: Query<(Entity, &Position), With<Mob>>,
 ) {
     // Collect all player chunk coordinates
     let player_chunks: HashSet<ChunkCoord> = player_query
@@ -602,7 +634,7 @@ pub fn update_chunk_entity_grouping(
     for (entity, pos) in entity_query.iter() {
         let coord = ChunkCoord::from_world_pos(pos.0.as_vec3());
         if let Some(chunk) = chunk_manager.loaded_chunks.get_mut(&coord) {
-            chunk.entities.push(entity);
+            chunk.entities.push((entity, pos.0.as_vec3()));
         }
     }
 
@@ -648,7 +680,7 @@ pub fn chunk_based_entity_throttling(
         .map(|coord| (coord.x, coord.z))
         .collect();
 
-    for (chunk_coord, chunk_distances) in chunk_manager.loaded_chunks.iter()
+    for (chunk_coord, _chunk_distances) in chunk_manager.loaded_chunks.iter()
         .zip(calculate_chunk_distances_simd(&chunk_coords, (0, 0)).into_iter()) {
 
         // Find actual min distance to any player chunk
@@ -667,7 +699,7 @@ pub fn chunk_based_entity_throttling(
         };
 
         // Apply throttling to all entities in this chunk
-        for &entity in &chunk_coord.1.entities {
+        for &(entity, _pos) in &chunk_coord.1.entities {
             let period = (1.0 / rate) as u64;
             if period == 0 || (tick_counter.0 + entity.index() as u64) % period == 0 {
                 commands.entity(entity).insert(ShouldTick);

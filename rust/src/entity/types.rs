@@ -19,7 +19,7 @@ pub struct ProcessResult {
     pub entities_to_tick: Vec<u64>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Config {
     pub close_radius: f32,
     pub medium_radius: f32,
