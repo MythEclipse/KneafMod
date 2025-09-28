@@ -36,8 +36,11 @@ jobs:
     - name: Install Windows target for cross-compilation
       run: rustup target add x86_64-pc-windows-gnu
 
+    - name: Install cross for cross-compilation
+      run: cargo install cross
+
     - name: Build mod
-      run: cd KneafMod && ./gradlew build
+      run: ./gradlew build
 
     - name: Create Release
       uses: softprops/action-gh-release@v2

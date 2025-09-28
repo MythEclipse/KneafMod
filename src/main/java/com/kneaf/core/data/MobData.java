@@ -1,0 +1,3 @@
+package com.kneaf.core.data;
+
+public record MobData(long id, double distance, boolean isPassive, String entityType) {}

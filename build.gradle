@@ -185,34 +185,18 @@ tasks.withType(JavaCompile).configureEach {
 
 // Task to build Rust library for both platforms
 task buildRust {
-    doLast {
+    dependsOn tasks.register('buildRustNative', Exec) {
+        workingDir 'rust'
+        commandLine 'cargo', 'build', '--release'
+    }
+    dependsOn tasks.register('buildRustCross', Exec) {
+        workingDir 'rust'
         def os = System.getProperty('os.name').toLowerCase()
         if (os.contains('windows')) {
-            // Build for Windows (native) and Linux (cross)
-            exec {
-                workingDir 'rust'
-                commandLine 'cargo', 'build', '--release'
-            }
-            exec {
-                workingDir 'rust'
-                commandLine 'cargo', 'build', '--release', '--target', 'x86_64-unknown-linux-gnu'
-            }
+            // Use WSL to build for Linux
+            commandLine 'wsl', 'bash', '-c', 'source ~/.cargo/env && cargo build --release'
         } else if (os.contains('linux')) {
-            // Build for Linux (native) and Windows (cross)
-            exec {
-                workingDir 'rust'
-                commandLine 'cargo', 'build', '--release'
-            }
-            exec {
-                workingDir 'rust'
-                commandLine 'cargo', 'build', '--release', '--target', 'x86_64-pc-windows-gnu'
-            }
-        } else {
-            // For other OS (e.g., macOS), build native only
-            exec {
-                workingDir 'rust'
-                commandLine 'cargo', 'build', '--release'
-            }
+            commandLine 'cross', 'build', '--release', '--target', 'x86_64-pc-windows-gnu'
         }
     }
 }
@@ -222,18 +206,11 @@ task copyRustLib(type: Copy) {
     dependsOn buildRust
     def os = System.getProperty('os.name').toLowerCase()
     if (os.contains('windows')) {
-        from 'rust/target/release/'
-        from 'rust/target/x86_64-unknown-linux-gnu/release/'
-        include 'rustperf.dll'
-        include 'librustperf.so'
+        from 'rust/target/release/rustperf.dll'
+        from 'rust/target/release/librustperf.so'
     } else if (os.contains('linux')) {
-        from 'rust/target/release/'
-        from 'rust/target/x86_64-pc-windows-gnu/release/'
-        include 'librustperf.so'
-        include 'rustperf.dll'
-    } else {
-        from 'rust/target/release/'
-        include getRustLibName()
+        from 'rust/target/release/librustperf.so'
+        from 'rust/target/x86_64-pc-windows-gnu/release/rustperf.dll'
     }
     into 'src/main/resources/natives/'
 }
