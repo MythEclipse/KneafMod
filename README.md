@@ -38,6 +38,30 @@ RustPerformance.processMobs(mobs);
 RustPerformance.processBlocks(blocks);
 ```
 
+## Configuration
+
+The mod can be configured via `config/kneafcore-common.toml`:
+
+```toml
+[kneafcore.performance]
+enableRustOptimizations = true
+spatialMaxDepth = 8
+entityCloseRadius = 16.0
+entityMediumRadius = 32.0
+entityCloseRate = 1.0
+entityMediumRate = 0.5
+entityFarRate = 0.1
+useSpatialPartitioning = true
+itemMergeRadius = 1.0
+itemDespawnTime = 6000
+verboseLogging = false
+tpsAlertThreshold = 15.0
+```
+
+## Commands
+
+- `/rustperf status`: Shows current TPS, CPU usage, and memory statistics
+
 ## Building
 
 ```bash

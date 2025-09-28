@@ -40,6 +40,18 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getMemoryStats
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_freeStringNative(_env: JNIEnv, _class: JClass, _s: jstring) {
-    // jstring is managed by JVM, no need to free
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getCpuStatsNative(env: JNIEnv, _class: JClass) -> jstring {
+    let mut sys = System::new_all();
+    sys.refresh_cpu();
+
+    let cpu_usage = sys.global_cpu_info().cpu_usage();
+    let cpu_count = sys.cpus().len();
+
+    let stats = serde_json::json!({
+        "cpu_usage_percent": cpu_usage,
+        "cpu_count": cpu_count
+    });
+
+    let output = serde_json::to_string(&stats).unwrap();
+    env.new_string(&output).expect("Couldn't create java string!").into_raw()
 }

@@ -73,6 +73,7 @@ public class RustPerformance {
     private static native String processMobAiNative(String jsonInput);
     private static native String processBlockEntitiesNative(String jsonInput);
     private static native String getMemoryStatsNative();
+    private static native String getCpuStatsNative();
     private static native int preGenerateNearbyChunksNative(int centerX, int centerZ, int radius);
     private static native boolean isChunkGeneratedNative(int x, int z);
     private static native long getGeneratedChunkCountNative();
@@ -295,6 +296,15 @@ public class RustPerformance {
         } catch (Exception e) {
             KneafCore.LOGGER.error("Error getting memory stats from Rust: {}", e.getMessage(), e);
             return "{\"error\": \"Failed to get memory stats\"}";
+        }
+    }
+
+    public static String getCpuStats() {
+        try {
+            return getCpuStatsNative();
+        } catch (Exception e) {
+            KneafCore.LOGGER.error("Error getting CPU stats from Rust: {}", e.getMessage(), e);
+            return "{\"error\": \"Failed to get CPU stats\"}";
         }
     }
 

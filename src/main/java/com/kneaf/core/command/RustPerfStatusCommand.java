@@ -23,9 +23,10 @@ public class RustPerfStatusCommand {
         // Get status from Rust and TPS
         double tps = RustPerformance.getCurrentTPS();
         String memoryStats = RustPerformance.getMemoryStats();
+        String cpuStats = RustPerformance.getCpuStats();
 
         // Send message
-        String message = String.format("RustPerf Status: TPS: %.2f, Memory: %s", tps, memoryStats);
+        String message = String.format("RustPerf Status: TPS: %.2f, CPU: %s, Memory: %s", tps, cpuStats, memoryStats);
         source.sendSuccess(() -> Component.literal(message), false);
 
         return 1;

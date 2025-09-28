@@ -18,6 +18,21 @@ mod tests {
         assert_eq!(distances.len(), 3);
         assert!((distances[0] - 0.0).abs() < 1e-6); // Distance from (0,0,0) to (0,0,0)
         assert!((distances[1] - 5.0).abs() < 1e-6); // Distance from (0,0,0) to (3,4,0)
+
+    #[test]
+    fn test_calculate_distances_simd_basic() {
+        let positions = vec![
+            (0.0, 0.0, 0.0),
+            (3.0, 4.0, 0.0),
+            (6.0, 8.0, 0.0),
+        ];
+        let center = (0.0, 0.0, 0.0);
+
+        let distances = calculate_distances_simd(&positions, center);
+
+        assert_eq!(distances.len(), 3);
+        assert!((distances[0] - 0.0).abs() < 1e-6); // Distance from (0,0,0) to (0,0,0)
+        assert!((distances[1] - 5.0).abs() < 1e-6); // Distance from (0,0,0) to (3,4,0)
         assert!((distances[2] - 10.0).abs() < 1e-6); // Distance from (0,0,0) to (6,8,0)
     }
 
