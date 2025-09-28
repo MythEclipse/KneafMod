@@ -146,6 +146,16 @@ dependencies {
     // For more info:
     // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
     // http://www.gradle.org/docs/current/userguide/dependency_management.html
+    // Testing dependencies
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
+    testImplementation 'org.slf4j:slf4j-api:2.0.7'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
+}
+
+test {
+    useJUnitPlatform()
+    // Set java.library.path via provider to be configuration-cache friendly
+    systemProperty 'java.library.path', layout.buildDirectory.dir('generated/resources/natives').map { it.asFile.absolutePath }
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.

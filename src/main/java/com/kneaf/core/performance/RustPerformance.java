@@ -123,6 +123,17 @@ public class RustPerformance {
     private static volatile boolean nativeAvailable = false;
 
     static {
+        try {
+            // Attempt to load library normally; fallback handled elsewhere
+            System.loadLibrary("rustperf");
+            nativeAvailable = true;
+        } catch (UnsatisfiedLinkError e) {
+            KneafCore.LOGGER.info("rustperf native library not loaded via System.loadLibrary: {}", e.getMessage());
+            nativeAvailable = false;
+        }
+    }
+
+    static {
         KneafCore.LOGGER.info("Initializing RustPerformance native library");
         try {
             // Extract the native library from the JAR and load it
@@ -170,11 +181,20 @@ public class RustPerformance {
     private static native String processItemEntitiesNative(String jsonInput);
     private static native String processMobAiNative(String jsonInput);
     private static native String processBlockEntitiesNative(String jsonInput);
-    private static native String getMemoryStatsNative();
-    private static native String getCpuStatsNative();
+    // numeric utilities exposed from Rust
+    public static native String parallelSumNative(String arrJson);
+    public static native String matrixMultiplyNative(String aJson, String bJson);
+    public static native String getMemoryStatsNative();
+    public static native String getCpuStatsNative();
     private static native int preGenerateNearbyChunksNative(int centerX, int centerZ, int radius);
     private static native boolean isChunkGeneratedNative(int x, int z);
     private static native long getGeneratedChunkCountNative();
+    // New binary-native methods
+    public static native String blake3FromByteBuffer(java.nio.ByteBuffer buf);
+    public static native java.nio.ByteBuffer generateFloatBufferNative(long rows, long cols);
+    public static native void freeFloatBufferNative(java.nio.ByteBuffer buf);
+    // New: allocate and return both buffer + shape
+    public static native NativeFloatBufferAllocation generateFloatBufferWithShapeNative(long rows, long cols);
 
     public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
         try {
