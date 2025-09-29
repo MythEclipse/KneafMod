@@ -61,6 +61,40 @@ fn fix_flatbuffers_compatibility(file_path: &str) {
     fixed_content = fixed_content.replace(", A>", ">");
     fixed_content = fixed_content.replace("<'a, 'b, A>", "<'a, 'b>");
     fixed_content = fixed_content.replace("<'a, 'b, A,", "<'a, 'b,");
+    fixed_content = fixed_content.replace(", A: 'a>", ">");
+    fixed_content = fixed_content.replace(", A: 'a", "");
+
+    // Fix E0053: method `follow` has an incompatible type for trait (add unsafe)
+    // This was causing `unsafe unsafe fn`, so we'll replace the double unsafe.
+    fixed_content = fixed_content.replace("unsafe unsafe fn follow", "unsafe fn follow");
+    fixed_content = fixed_content.replace("fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {", "unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {");
+
+
+    // Fix E0133: call to unsafe function `flatbuffers::Table::<'a>::get` is unsafe and requires unsafe function or block
+    // This is a bit tricky as we need to wrap the call in an unsafe block.
+    // We'll look for lines containing `self._tab.get` and wrap them.
+    let lines: Vec<&str> = fixed_content.lines().collect();
+    let mut new_lines: Vec<String> = Vec::new();
+    for line in lines {
+            if line.contains("self._tab.get") && !line.trim_start().starts_with("unsafe {") {
+                let trimmed_line = line.trim_start();
+                let indent = line.len() - trimmed_line.len();
+                // Wrap the call in an unsafe block while preserving indentation
+                new_lines.push(format!("{}unsafe {{ {} }}", " ".repeat(indent), trimmed_line));
+        } else {
+            new_lines.push(line.to_string());
+        }
+    }
+    fixed_content = new_lines.join("\n");
+
+    // Fix E0451: fields `buf` and `loc` of struct `flatbuffers::Table` are private
+    fixed_content = fixed_content.replace(
+        "Self { _tab: flatbuffers::Table { buf, loc } }",
+        "Self { _tab: flatbuffers::Table::new(buf, loc) }"
+    );
+    // Collapse any accidental duplicated `unsafe` tokens introduced by earlier replacements
+    fixed_content = fixed_content.replace("unsafe unsafe fn follow", "unsafe fn follow");
+    fixed_content = fixed_content.replace("unsafe unsafe ", "unsafe ");
     
     std::fs::write(file_path, fixed_content)
         .expect(&format!("Failed to write fixed content to {}", file_path));

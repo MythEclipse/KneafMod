@@ -36,8 +36,8 @@ pub struct MobData<'a> {
 impl<'a> flatbuffers::Follow<'a> for MobData<'a> {
   type Inner = MobData<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -67,19 +67,19 @@ impl<'a> MobData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    self._tab.get::<u64>(MobData::VT_ID, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(MobData::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn entity_type(&self) -> Option<&'a str> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(MobData::VT_ENTITY_TYPE, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(MobData::VT_ENTITY_TYPE, None) }
   }
   #[inline]
   pub fn distance(&self) -> f32 {
-    self._tab.get::<f32>(MobData::VT_DISTANCE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(MobData::VT_DISTANCE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn is_passive(&self) -> bool {
-    self._tab.get::<bool>(MobData::VT_IS_PASSIVE, Some(false)).unwrap()
+    unsafe { self._tab.get::<bool>(MobData::VT_IS_PASSIVE, Some(false)).unwrap() }
   }
 }
 
@@ -172,8 +172,8 @@ pub struct MobInput<'a> {
 impl<'a> flatbuffers::Follow<'a> for MobInput<'a> {
   type Inner = MobInput<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -199,11 +199,11 @@ impl<'a> MobInput<'a> {
 
   #[inline]
   pub fn tick_count(&self) -> u64 {
-    self._tab.get::<u64>(MobInput::VT_TICK_COUNT, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(MobInput::VT_TICK_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn mobs(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MobData<'a>>>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MobData>>>>(MobInput::VT_MOBS, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MobData>>>>(MobInput::VT_MOBS, None) }
   }
 }
 
@@ -280,8 +280,8 @@ pub struct MobProcessResult<'a> {
 impl<'a> flatbuffers::Follow<'a> for MobProcessResult<'a> {
   type Inner = MobProcessResult<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -307,11 +307,11 @@ impl<'a> MobProcessResult<'a> {
 
   #[inline]
   pub fn mobs_to_disable_ai(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(MobProcessResult::VT_MOBS_TO_DISABLE_AI, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(MobProcessResult::VT_MOBS_TO_DISABLE_AI, None) }
   }
   #[inline]
   pub fn mobs_to_simplify_ai(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(MobProcessResult::VT_MOBS_TO_SIMPLIFY_AI, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(MobProcessResult::VT_MOBS_TO_SIMPLIFY_AI, None) }
   }
 }
 
@@ -388,8 +388,8 @@ pub struct AiConfig<'a> {
 impl<'a> flatbuffers::Follow<'a> for AiConfig<'a> {
   type Inner = AiConfig<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -417,15 +417,15 @@ impl<'a> AiConfig<'a> {
 
   #[inline]
   pub fn passive_disable_distance(&self) -> f32 {
-    self._tab.get::<f32>(AiConfig::VT_PASSIVE_DISABLE_DISTANCE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(AiConfig::VT_PASSIVE_DISABLE_DISTANCE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn hostile_simplify_distance(&self) -> f32 {
-    self._tab.get::<f32>(AiConfig::VT_HOSTILE_SIMPLIFY_DISTANCE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(AiConfig::VT_HOSTILE_SIMPLIFY_DISTANCE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn ai_tick_rate_far(&self) -> f32 {
-    self._tab.get::<f32>(AiConfig::VT_AI_TICK_RATE_FAR, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(AiConfig::VT_AI_TICK_RATE_FAR, Some(0.0)).unwrap() }
   }
 }
 

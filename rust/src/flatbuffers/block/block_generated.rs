@@ -3,17 +3,6 @@
 
 // @generated
 
-#[allow(
-  unused_imports,
-  dead_code,
-  unused_variables,
-  unused_mut,
-  unused_doc_comments,
-  non_camel_case_types,
-  mismatched_lifetime_syntaxes,
-  clippy::all
-)]
-
 use core::mem;
 use core::cmp::Ordering;
 
@@ -61,11 +50,11 @@ impl<'a> BlockEntityData<'a> {
   pub const VT_Z: flatbuffers::VOffsetT = 14;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     BlockEntityData { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args BlockEntityDataArgs<'args>
   ) -> flatbuffers::WIPOffset<BlockEntityData<'bldr>> {
@@ -82,45 +71,27 @@ impl<'a> BlockEntityData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(BlockEntityData::VT_ID, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(BlockEntityData::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn block_type(&self) -> Option<&'a str> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(BlockEntityData::VT_BLOCK_TYPE, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(BlockEntityData::VT_BLOCK_TYPE, None) }
   }
   #[inline]
   pub fn distance(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(BlockEntityData::VT_DISTANCE, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(BlockEntityData::VT_DISTANCE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn x(&self) -> i32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<i32>(BlockEntityData::VT_X, Some(0)).unwrap()}
+    unsafe { self._tab.get::<i32>(BlockEntityData::VT_X, Some(0)).unwrap() }
   }
   #[inline]
   pub fn y(&self) -> i32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<i32>(BlockEntityData::VT_Y, Some(0)).unwrap()}
+    unsafe { self._tab.get::<i32>(BlockEntityData::VT_Y, Some(0)).unwrap() }
   }
   #[inline]
   pub fn z(&self) -> i32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<i32>(BlockEntityData::VT_Z, Some(0)).unwrap()}
+    unsafe { self._tab.get::<i32>(BlockEntityData::VT_Z, Some(0)).unwrap() }
   }
 }
 
@@ -239,11 +210,11 @@ impl<'a> BlockInput<'a> {
   pub const VT_BLOCK_ENTITIES: flatbuffers::VOffsetT = 6;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     BlockInput { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args BlockInputArgs<'args>
   ) -> flatbuffers::WIPOffset<BlockInput<'bldr>> {
@@ -256,17 +227,11 @@ impl<'a> BlockInput<'a> {
 
   #[inline]
   pub fn tick_count(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(BlockInput::VT_TICK_COUNT, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(BlockInput::VT_TICK_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn block_entities(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<BlockEntityData<'a>>>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<BlockEntityData>>>>(BlockInput::VT_BLOCK_ENTITIES, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<BlockEntityData>>>>(BlockInput::VT_BLOCK_ENTITIES, None) }
   }
 }
 
@@ -352,11 +317,11 @@ impl<'a> BlockProcessResult<'a> {
   pub const VT_BLOCK_ENTITIES_TO_TICK: flatbuffers::VOffsetT = 4;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     BlockProcessResult { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args BlockProcessResultArgs<'args>
   ) -> flatbuffers::WIPOffset<BlockProcessResult<'bldr>> {
@@ -368,10 +333,7 @@ impl<'a> BlockProcessResult<'a> {
 
   #[inline]
   pub fn block_entities_to_tick(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(BlockProcessResult::VT_BLOCK_ENTITIES_TO_TICK, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(BlockProcessResult::VT_BLOCK_ENTITIES_TO_TICK, None) }
   }
 }
 
@@ -453,11 +415,11 @@ impl<'a> BlockConfig<'a> {
   pub const VT_FAR_RATE: flatbuffers::VOffsetT = 12;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     BlockConfig { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args BlockConfigArgs
   ) -> flatbuffers::WIPOffset<BlockConfig<'bldr>> {
@@ -473,38 +435,23 @@ impl<'a> BlockConfig<'a> {
 
   #[inline]
   pub fn close_radius(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(BlockConfig::VT_CLOSE_RADIUS, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_CLOSE_RADIUS, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn medium_radius(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(BlockConfig::VT_MEDIUM_RADIUS, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_MEDIUM_RADIUS, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn close_rate(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(BlockConfig::VT_CLOSE_RATE, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_CLOSE_RATE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn medium_rate(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(BlockConfig::VT_MEDIUM_RATE, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_MEDIUM_RATE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn far_rate(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(BlockConfig::VT_FAR_RATE, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_FAR_RATE, Some(0.0)).unwrap() }
   }
 }
 
@@ -596,6 +543,18 @@ impl core::fmt::Debug for BlockConfig<'_> {
   }
 }
 #[inline]
+#[deprecated(since="2.0.0", note="Deprecated in favor of `root_as...` methods.")]
+pub fn get_root_as_block_input<'a>(buf: &'a [u8]) -> BlockInput<'a> {
+  unsafe { flatbuffers::root_unchecked::<BlockInput<'a>>(buf) }
+}
+
+#[inline]
+#[deprecated(since="2.0.0", note="Deprecated in favor of `root_as...` methods.")]
+pub fn get_size_prefixed_root_as_block_input<'a>(buf: &'a [u8]) -> BlockInput<'a> {
+  unsafe { flatbuffers::size_prefixed_root_unchecked::<BlockInput<'a>>(buf) }
+}
+
+#[inline]
 /// Verifies that a buffer of bytes contains a `BlockInput`
 /// and returns it.
 /// Note that verification is still experimental and may not
@@ -668,4 +627,3 @@ pub fn finish_size_prefixed_block_input_buffer<'a, 'b>(fbb: &'b mut flatbuffers:
 }
 }  // pub mod block
 }  // pub mod kneaf
-

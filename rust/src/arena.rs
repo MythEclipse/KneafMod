@@ -55,7 +55,9 @@ impl BumpArena {
         unsafe {
             let ptr = alloc(layout);
             if ptr.is_null() {
-                panic!("Failed to allocate memory for bump arena");
+                // Use the global allocation error handler which is the canonical
+                // way to respond to allocation failures in low-level allocators.
+                std::alloc::handle_alloc_error(layout);
             }
             chunk.ptr = NonNull::new(ptr).unwrap();
             chunk.current = ptr;

@@ -20,7 +20,9 @@ pub mod flatbuffers;
 pub mod logging;
 pub mod memory_pool;
 pub mod performance_monitoring;
+pub mod simd;
 pub mod chunk;
+pub mod spatial;
 pub mod parallelism;
 pub mod types;
 
@@ -31,3 +33,7 @@ fn ensure_logging() {
         crate::performance_monitoring::init_performance_monitoring();
     });
 }
+
+// Re-export commonly used performance helpers at crate root so tests and Java JNI
+// bindings can import them as `rustperf::calculate_distances_simd` etc.
+pub use crate::spatial::{calculate_distances_simd, calculate_chunk_distances_simd};

@@ -47,6 +47,14 @@ public final class PerformanceConfig {
     private final double cpuLoadThreshold;
     private final int threadPoolKeepAliveSeconds;
 
+    // Distance & processing optimizations
+    private final int distanceCalculationInterval;
+    private final boolean distanceApproximationEnabled;
+    private final int distanceCacheSize;
+    private final int itemProcessingIntervalMultiplier;
+    private final int spatialGridUpdateInterval;
+    private final boolean incrementalSpatialUpdates;
+
     // Use a Builder to avoid long constructor parameter lists (satisfies java:S107)
     private PerformanceConfig(Builder b) {
         this.enabled = b.enabled;
@@ -78,6 +86,13 @@ public final class PerformanceConfig {
         this.cpuAwareThreadSizing = b.cpuAwareThreadSizing;
         this.cpuLoadThreshold = b.cpuLoadThreshold;
         this.threadPoolKeepAliveSeconds = b.threadPoolKeepAliveSeconds;
+    // Distance & processing optimizations
+    this.distanceCalculationInterval = b.distanceCalculationInterval;
+    this.distanceApproximationEnabled = b.distanceApproximationEnabled;
+    this.distanceCacheSize = b.distanceCacheSize;
+    this.itemProcessingIntervalMultiplier = b.itemProcessingIntervalMultiplier;
+    this.spatialGridUpdateInterval = b.spatialGridUpdateInterval;
+    this.incrementalSpatialUpdates = b.incrementalSpatialUpdates;
         
         // Validate configuration consistency
         validateConfiguration();
@@ -135,6 +150,13 @@ public final class PerformanceConfig {
         private boolean cpuAwareThreadSizing;
         private double cpuLoadThreshold;
         private int threadPoolKeepAliveSeconds;
+    // Distance & processing optimizations
+    private int distanceCalculationInterval;
+    private boolean distanceApproximationEnabled;
+    private int distanceCacheSize;
+    private int itemProcessingIntervalMultiplier;
+    private int spatialGridUpdateInterval;
+    private boolean incrementalSpatialUpdates;
 
         public Builder enabled(boolean v) { this.enabled = v; return this; }
         public Builder threadPoolSize(int v) { this.threadPoolSize = v; return this; }
@@ -165,6 +187,14 @@ public final class PerformanceConfig {
     public Builder cpuLoadThreshold(double v) { this.cpuLoadThreshold = v; return this; }
     public Builder threadPoolKeepAliveSeconds(int v) { this.threadPoolKeepAliveSeconds = v; return this; }
 
+    // Distance & processing optimization setters
+    public Builder distanceCalculationInterval(int v) { this.distanceCalculationInterval = v; return this; }
+    public Builder distanceApproximationEnabled(boolean v) { this.distanceApproximationEnabled = v; return this; }
+    public Builder distanceCacheSize(int v) { this.distanceCacheSize = v; return this; }
+    public Builder itemProcessingIntervalMultiplier(int v) { this.itemProcessingIntervalMultiplier = v; return this; }
+    public Builder spatialGridUpdateInterval(int v) { this.spatialGridUpdateInterval = v; return this; }
+    public Builder incrementalSpatialUpdates(boolean v) { this.incrementalSpatialUpdates = v; return this; }
+
         public PerformanceConfig build() {
             // Apply same defensive constraints as before and build a config using this Builder
             boolean vEnabled = this.enabled;
@@ -183,8 +213,16 @@ public final class PerformanceConfig {
             long vSlowTickThresholdMs = Math.max(1L, this.slowTickThresholdMs);
             int vProfilingSampleRate = Math.max(1, this.profilingSampleRate);
 
-            Builder validated = new Builder();
-            validated.enabled(vEnabled)
+                // Distance & processing validation/defaulting
+                int vDistanceCalculationInterval = Math.max(1, this.distanceCalculationInterval);
+                boolean vDistanceApproximationEnabled = this.distanceApproximationEnabled;
+                int vDistanceCacheSize = Math.max(100, this.distanceCacheSize);
+                int vItemProcessingIntervalMultiplier = Math.max(1, this.itemProcessingIntervalMultiplier);
+                int vSpatialGridUpdateInterval = Math.max(1, this.spatialGridUpdateInterval);
+                boolean vIncrementalSpatialUpdates = this.incrementalSpatialUpdates;
+
+        Builder validated = new Builder();
+        validated.enabled(vEnabled)
                     .threadPoolSize(vThreadPoolSize)
                     .logIntervalTicks(vLogIntervalTicks)
                     .scanIntervalTicks(vScanIntervalTicks)
@@ -199,6 +237,13 @@ public final class PerformanceConfig {
             .profilingEnabled(vProfilingEnabled)
             .slowTickThresholdMs(vSlowTickThresholdMs)
             .profilingSampleRate(vProfilingSampleRate);
+        // Apply distance & processing validated values
+        validated.distanceCalculationInterval(vDistanceCalculationInterval)
+            .distanceApproximationEnabled(vDistanceApproximationEnabled)
+            .distanceCacheSize(vDistanceCacheSize)
+            .itemProcessingIntervalMultiplier(vItemProcessingIntervalMultiplier)
+            .spatialGridUpdateInterval(vSpatialGridUpdateInterval)
+            .incrementalSpatialUpdates(vIncrementalSpatialUpdates);
             
             // Advanced parallelism configuration validation
             int vMinThreadPoolSize = Math.max(1, this.minThreadPoolSize);
@@ -247,57 +292,29 @@ public final class PerformanceConfig {
             this.slowTickThresholdMs = 50L;
             this.profilingSampleRate = 100; // 1% sampling rate (1 out of 100 ticks)
             
-            // Advanced parallelism defaults
-            this.minThreadPoolSize = 2;
-            this.dynamicThreadScaling = true;
-            this.threadScaleUpThreshold = 0.8;
-            this.threadScaleDownThreshold = 0.3;
-            this.threadScaleUpDelayTicks = 100;
-            this.threadScaleDownDelayTicks = 200;
-            this.workStealingEnabled = true;
-            this.workStealingQueueSize = 100;
-            // Advanced parallelism configuration validation
-            int vMinThreadPoolSize = Math.max(1, this.minThreadPoolSize);
-            boolean vDynamicThreadScaling = this.dynamicThreadScaling;
-            double vThreadScaleUpThreshold = Math.max(0.1, Math.min(1.0, this.threadScaleUpThreshold));
-            double vThreadScaleDownThreshold = Math.max(0.1, Math.min(1.0, this.threadScaleDownThreshold));
-            int vThreadScaleUpDelayTicks = Math.max(1, this.threadScaleUpDelayTicks);
-            int vThreadScaleDownDelayTicks = Math.max(1, this.threadScaleDownDelayTicks);
-            boolean vWorkStealingEnabled = this.workStealingEnabled;
-            int vWorkStealingQueueSize = Math.max(1, this.workStealingQueueSize);
-            boolean vCpuAwareThreadSizing = this.cpuAwareThreadSizing;
-            double vCpuLoadThreshold = Math.max(0.1, Math.min(1.0, this.cpuLoadThreshold));
-            int vThreadPoolKeepAliveSeconds = Math.max(1, this.threadPoolKeepAliveSeconds);
-            
-            // Distance calculation optimization
-            int vDistanceCalculationInterval = Math.max(1, this.distanceCalculationInterval);
-            boolean vDistanceApproximationEnabled = this.distanceApproximationEnabled;
-            int vDistanceCacheSize = Math.max(100, this.distanceCacheSize);
-            
-            // Item processing optimization
-            int vItemProcessingIntervalMultiplier = Math.max(1, this.itemProcessingIntervalMultiplier);
-            
-            // Spatial grid optimization
-            int vSpatialGridUpdateInterval = Math.max(1, this.spatialGridUpdateInterval);
-            boolean vIncrementalSpatialUpdates = this.incrementalSpatialUpdates;
-            
-            validated.minThreadPoolSize(vMinThreadPoolSize)
-                    .dynamicThreadScaling(vDynamicThreadScaling)
-                    .threadScaleUpThreshold(vThreadScaleUpThreshold)
-                    .threadScaleDownThreshold(vThreadScaleDownThreshold)
-                    .threadScaleUpDelayTicks(vThreadScaleUpDelayTicks)
-                    .threadScaleDownDelayTicks(vThreadScaleDownDelayTicks)
-                    .workStealingEnabled(vWorkStealingEnabled)
-                    .workStealingQueueSize(vWorkStealingQueueSize)
-                    .cpuAwareThreadSizing(vCpuAwareThreadSizing)
-                    .cpuLoadThreshold(vCpuLoadThreshold)
-                    .threadPoolKeepAliveSeconds(vThreadPoolKeepAliveSeconds)
-                    .distanceCalculationInterval(vDistanceCalculationInterval)
-                    .distanceApproximationEnabled(vDistanceApproximationEnabled)
-                    .distanceCacheSize(vDistanceCacheSize)
-                    .itemProcessingIntervalMultiplier(vItemProcessingIntervalMultiplier)
-                    .spatialGridUpdateInterval(vSpatialGridUpdateInterval)
-                    .incrementalSpatialUpdates(vIncrementalSpatialUpdates);
+        // Advanced parallelism defaults
+        this.minThreadPoolSize = 2;
+        this.dynamicThreadScaling = true;
+        this.threadScaleUpThreshold = 0.8;
+        this.threadScaleDownThreshold = 0.3;
+        this.threadScaleUpDelayTicks = 100;
+        this.threadScaleDownDelayTicks = 200;
+        this.workStealingEnabled = true;
+        this.workStealingQueueSize = 100;
+        // Advanced parallelism configuration validation will be applied in build()
+        int vThreadPoolKeepAliveSeconds = Math.max(1, this.threadPoolKeepAliveSeconds);
+
+        // Distance calculation optimization defaults
+        this.distanceCalculationInterval = 1;
+        this.distanceApproximationEnabled = true;
+        this.distanceCacheSize = 100;
+
+        // Item processing optimization defaults
+        this.itemProcessingIntervalMultiplier = 1;
+
+        // Spatial grid optimization defaults
+        this.spatialGridUpdateInterval = 1;
+        this.incrementalSpatialUpdates = true;
         }
     }
 

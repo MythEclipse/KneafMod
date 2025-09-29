@@ -36,8 +36,8 @@ pub struct EntityData<'a> {
 impl<'a> flatbuffers::Follow<'a> for EntityData<'a> {
   type Inner = EntityData<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -73,31 +73,31 @@ impl<'a> EntityData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    self._tab.get::<u64>(EntityData::VT_ID, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(EntityData::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn entity_type(&self) -> Option<&'a str> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(EntityData::VT_ENTITY_TYPE, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(EntityData::VT_ENTITY_TYPE, None) }
   }
   #[inline]
   pub fn x(&self) -> f32 {
-    self._tab.get::<f32>(EntityData::VT_X, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(EntityData::VT_X, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn y(&self) -> f32 {
-    self._tab.get::<f32>(EntityData::VT_Y, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(EntityData::VT_Y, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn z(&self) -> f32 {
-    self._tab.get::<f32>(EntityData::VT_Z, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(EntityData::VT_Z, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn distance(&self) -> f32 {
-    self._tab.get::<f32>(EntityData::VT_DISTANCE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(EntityData::VT_DISTANCE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn is_block_entity(&self) -> bool {
-    self._tab.get::<bool>(EntityData::VT_IS_BLOCK_ENTITY, Some(false)).unwrap()
+    unsafe { self._tab.get::<bool>(EntityData::VT_IS_BLOCK_ENTITY, Some(false)).unwrap() }
   }
 }
 
@@ -214,8 +214,8 @@ pub struct PlayerData<'a> {
 impl<'a> flatbuffers::Follow<'a> for PlayerData<'a> {
   type Inner = PlayerData<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -245,19 +245,19 @@ impl<'a> PlayerData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    self._tab.get::<u64>(PlayerData::VT_ID, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(PlayerData::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn x(&self) -> f32 {
-    self._tab.get::<f32>(PlayerData::VT_X, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(PlayerData::VT_X, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn y(&self) -> f32 {
-    self._tab.get::<f32>(PlayerData::VT_Y, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(PlayerData::VT_Y, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn z(&self) -> f32 {
-    self._tab.get::<f32>(PlayerData::VT_Z, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(PlayerData::VT_Z, Some(0.0)).unwrap() }
   }
 }
 
@@ -350,8 +350,8 @@ pub struct EntityConfig<'a> {
 impl<'a> flatbuffers::Follow<'a> for EntityConfig<'a> {
   type Inner = EntityConfig<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -383,23 +383,23 @@ impl<'a> EntityConfig<'a> {
 
   #[inline]
   pub fn close_radius(&self) -> f32 {
-    self._tab.get::<f32>(EntityConfig::VT_CLOSE_RADIUS, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_CLOSE_RADIUS, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn medium_radius(&self) -> f32 {
-    self._tab.get::<f32>(EntityConfig::VT_MEDIUM_RADIUS, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_MEDIUM_RADIUS, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn close_rate(&self) -> f32 {
-    self._tab.get::<f32>(EntityConfig::VT_CLOSE_RATE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_CLOSE_RATE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn medium_rate(&self) -> f32 {
-    self._tab.get::<f32>(EntityConfig::VT_MEDIUM_RATE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_MEDIUM_RATE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn far_rate(&self) -> f32 {
-    self._tab.get::<f32>(EntityConfig::VT_FAR_RATE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_FAR_RATE, Some(0.0)).unwrap() }
   }
 }
 
@@ -500,8 +500,8 @@ pub struct EntityInput<'a> {
 impl<'a> flatbuffers::Follow<'a> for EntityInput<'a> {
   type Inner = EntityInput<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -531,19 +531,19 @@ impl<'a> EntityInput<'a> {
 
   #[inline]
   pub fn tick_count(&self) -> u64 {
-    self._tab.get::<u64>(EntityInput::VT_TICK_COUNT, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(EntityInput::VT_TICK_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn entities(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<EntityData<'a>>>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<EntityData>>>>(EntityInput::VT_ENTITIES, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<EntityData>>>>(EntityInput::VT_ENTITIES, None) }
   }
   #[inline]
   pub fn players(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PlayerData<'a>>>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PlayerData>>>>(EntityInput::VT_PLAYERS, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PlayerData>>>>(EntityInput::VT_PLAYERS, None) }
   }
   #[inline]
   pub fn entity_config(&self) -> Option<EntityConfig<'a>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<EntityConfig>>(EntityInput::VT_ENTITY_CONFIG, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<EntityConfig>>(EntityInput::VT_ENTITY_CONFIG, None) }
   }
 }
 
@@ -636,8 +636,8 @@ pub struct EntityProcessResult<'a> {
 impl<'a> flatbuffers::Follow<'a> for EntityProcessResult<'a> {
   type Inner = EntityProcessResult<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -661,7 +661,7 @@ impl<'a> EntityProcessResult<'a> {
 
   #[inline]
   pub fn entities_to_tick(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(EntityProcessResult::VT_ENTITIES_TO_TICK, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(EntityProcessResult::VT_ENTITIES_TO_TICK, None) }
   }
 }
 

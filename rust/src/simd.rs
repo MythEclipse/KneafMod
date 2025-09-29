@@ -2,6 +2,10 @@ use std::arch::is_x86_feature_detected;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use log::{info, debug};
 use serde::{Serialize, Deserialize};
+use rayon::prelude::*;
+use jni::JNIEnv;
+use jni::objects::JClass;
+use jni::sys::{jint, jstring};
 
 /// SIMD feature detection and optimization configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,20 +128,21 @@ impl SimdManager {
     }
 
     pub fn initialize(&self, config: SimdConfig) {
-        self.config = config;
-        self.features = SimdFeatures::detect();
-        
+        // We intentionally avoid mutating `self.config`/`self.features` here because
+        // SIMD_MANAGER is a lazily-initialized static and we only have &self.
+        // Store the detected level and mark as initialized.
+        let features = SimdFeatures::detect();
         let level = if config.force_scalar_fallback {
             SimdLevel::Scalar
         } else {
-            self.features.best_level()
+            features.best_level()
         };
-        
+
         self.level.store(level as u32, Ordering::Relaxed);
         self.initialized.store(true, Ordering::Relaxed);
-        
+
         info!("SIMD Manager initialized with level: {:?}", level);
-        debug!("Detected SIMD features: {:?}", self.features);
+        debug!("Detected SIMD features: {:?}", features);
     }
 
     pub fn get_level(&self) -> SimdLevel {
@@ -182,487 +187,43 @@ pub fn init_simd(config: SimdConfig) {
     SIMD_MANAGER.initialize(config);
 }
 
-/// SIMD-accelerated vector operations
+/// SIMD-accelerated vector operations (scalar-first, safe implementations)
 pub mod vector_ops {
     use super::*;
-    use std::arch::x86_64::*;
+    use rayon::prelude::*;
 
-    /// SIMD-accelerated dot product
+    /// Dot product (scalar implementation, always available)
     pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
         assert_eq!(a.len(), b.len());
-        
-        let level = get_simd_manager().get_level();
-        
-        match level {
-            SimdLevel::Avx2 => unsafe { dot_product_avx2(a, b) },
-            SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { dot_product_sse(a, b) },
-            SimdLevel::Scalar => dot_product_scalar(a, b),
-            SimdLevel::Avx512 => unsafe { dot_product_avx512(a, b) },
-        }
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
-        let mut sum = _mm256_setzero_ps();
-        let chunks = a.chunks_exact(8);
-        let remainder = chunks.remainder();
-        
-        for (a_chunk, b_chunk) in chunks.zip(b.chunks_exact(8)) {
-            let a_vec = _mm256_loadu_ps(a_chunk.as_ptr());
-            let b_vec = _mm256_loadu_ps(b_chunk.as_ptr());
-            sum = _mm256_fmadd_ps(a_vec, b_vec, sum);
-        }
-        
-        // Horizontal sum
-        let mut result = [0.0f32; 8];
-        _mm256_storeu_ps(result.as_mut_ptr(), sum);
-        let mut total: f32 = result.iter().sum();
-        
-        // Handle remainder
-        for i in 0..remainder.len() {
-            total += remainder[i] * b[a.len() - remainder.len() + i];
-        }
-        
-        total
-    }
-
-    #[target_feature(enable = "sse4.1")]
-    unsafe fn dot_product_sse(a: &[f32], b: &[f32]) -> f32 {
-        let mut sum = _mm_setzero_ps();
-        let chunks = a.chunks_exact(4);
-        let remainder = chunks.remainder();
-        
-        for (a_chunk, b_chunk) in chunks.zip(b.chunks_exact(4)) {
-            let a_vec = _mm_loadu_ps(a_chunk.as_ptr());
-            let b_vec = _mm_loadu_ps(b_chunk.as_ptr());
-            sum = _mm_add_ps(_mm_mul_ps(a_vec, b_vec), sum);
-        }
-        
-        // Horizontal sum
-        let mut result = [0.0f32; 4];
-        _mm_storeu_ps(result.as_mut_ptr(), sum);
-        let mut total: f32 = result.iter().sum();
-        
-        // Handle remainder
-        for i in 0..remainder.len() {
-            total += remainder[i] * b[a.len() - remainder.len() + i];
-        }
-        
-        total
-    }
-
-    #[target_feature(enable = "avx512f")]
-    unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
-        let mut sum = _mm512_setzero_ps();
-        let chunks = a.chunks_exact(16);
-        let remainder = chunks.remainder();
-        
-        for (a_chunk, b_chunk) in chunks.zip(b.chunks_exact(16)) {
-            let a_vec = _mm512_loadu_ps(a_chunk.as_ptr());
-            let b_vec = _mm512_loadu_ps(b_chunk.as_ptr());
-            sum = _mm512_fmadd_ps(a_vec, b_vec, sum);
-        }
-        
-        let total = _mm512_reduce_add_ps(sum);
-        
-        // Handle remainder
-        let mut remainder_sum = 0.0f32;
-        for i in 0..remainder.len() {
-            remainder_sum += remainder[i] * b[a.len() - remainder.len() + i];
-        }
-        
-        total + remainder_sum
-    }
-
-    fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
         a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
     }
 
-    /// SIMD-accelerated vector addition
+    /// Vector add: a += b * scale
     pub fn vector_add(a: &mut [f32], b: &[f32], scale: f32) {
         assert_eq!(a.len(), b.len());
-        
-        let level = get_simd_manager().get_level();
-        
-        match level {
-            SimdLevel::Avx2 => unsafe { vector_add_avx2(a, b, scale) },
-            SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { vector_add_sse(a, b, scale) },
-            SimdLevel::Scalar => vector_add_scalar(a, b, scale),
-            SimdLevel::Avx512 => unsafe { vector_add_avx512(a, b, scale) },
+        for (av, bv) in a.iter_mut().zip(b.iter()) {
+            *av += *bv * scale;
         }
     }
 
-    #[target_feature(enable = "avx2")]
-    unsafe fn vector_add_avx2(a: &mut [f32], b: &[f32], scale: f32) {
-        let scale_vec = _mm256_set1_ps(scale);
-        let chunks = a.chunks_exact_mut(8).zip(b.chunks_exact(8));
-        let (a_remainder, b_remainder) = a.chunks_exact_mut(8).into_remainder()
-            .zip(b.chunks_exact(8).remainder())
-            .next()
-            .unwrap_or((&mut [], &[]));
-        
-        for (a_chunk, b_chunk) in chunks {
-            let a_vec = _mm256_loadu_ps(a_chunk.as_ptr());
-            let b_vec = _mm256_loadu_ps(b_chunk.as_ptr());
-            let result = _mm256_fmadd_ps(b_vec, scale_vec, a_vec);
-            _mm256_storeu_ps(a_chunk.as_mut_ptr(), result);
-        }
-        
-        // Handle remainder
-        for i in 0..a_remainder.len() {
-            a_remainder[i] += b_remainder[i] * scale;
-        }
-    }
-
-    #[target_feature(enable = "sse4.1")]
-    unsafe fn vector_add_sse(a: &mut [f32], b: &[f32], scale: f32) {
-        let scale_vec = _mm_set1_ps(scale);
-        let chunks = a.chunks_exact_mut(4).zip(b.chunks_exact(4));
-        let (a_remainder, b_remainder) = a.chunks_exact_mut(4).into_remainder()
-            .zip(b.chunks_exact(4).remainder())
-            .next()
-            .unwrap_or((&mut [], &[]));
-        
-        for (a_chunk, b_chunk) in chunks {
-            let a_vec = _mm_loadu_ps(a_chunk.as_ptr());
-            let b_vec = _mm_loadu_ps(b_chunk.as_ptr());
-            let scaled_b = _mm_mul_ps(b_vec, scale_vec);
-            let result = _mm_add_ps(a_vec, scaled_b);
-            _mm_storeu_ps(a_chunk.as_mut_ptr(), result);
-        }
-        
-        // Handle remainder
-        for i in 0..a_remainder.len() {
-            a_remainder[i] += b_remainder[i] * scale;
-        }
-    }
-
-    #[target_feature(enable = "avx512f")]
-    unsafe fn vector_add_avx512(a: &mut [f32], b: &[f32], scale: f32) {
-        let scale_vec = _mm512_set1_ps(scale);
-        let chunks = a.chunks_exact_mut(16).zip(b.chunks_exact(16));
-        let (a_remainder, b_remainder) = a.chunks_exact_mut(16).into_remainder()
-            .zip(b.chunks_exact(16).remainder())
-            .next()
-            .unwrap_or((&mut [], &[]));
-        
-        for (a_chunk, b_chunk) in chunks {
-            let a_vec = _mm512_loadu_ps(a_chunk.as_ptr());
-            let b_vec = _mm512_loadu_ps(b_chunk.as_ptr());
-            let result = _mm512_fmadd_ps(b_vec, scale_vec, a_vec);
-            _mm512_storeu_ps(a_chunk.as_mut_ptr(), result);
-        }
-        
-        // Handle remainder
-        for i in 0..a_remainder.len() {
-            a_remainder[i] += b_remainder[i] * scale;
-        }
-    }
-
-    fn vector_add_scalar(a: &mut [f32], b: &[f32], scale: f32) {
-        for (a_val, b_val) in a.iter_mut().zip(b.iter()) {
-            *a_val += *b_val * scale;
-        }
-    fn vector_add_scalar(a: &mut [f32], b: &[f32], scale: f32) {
-        for (a_val, b_val) in a.iter_mut().zip(b.iter()) {
-            *a_val += *b_val * scale;
-        }
-    }
-
-    /// SIMD-accelerated chunk distance calculation (2D)
+    /// Chunk distances (2D) - scalar implementation using rayon for parallelism
     pub fn calculate_chunk_distances(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
-        let level = get_simd_manager().get_level();
-        
-        match level {
-            SimdLevel::Avx2 => unsafe { calculate_chunk_distances_avx2(chunk_coords, center_chunk) },
-            SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { calculate_chunk_distances_sse(chunk_coords, center_chunk) },
-            SimdLevel::Scalar => calculate_chunk_distances_scalar(chunk_coords, center_chunk),
-            SimdLevel::Avx512 => unsafe { calculate_chunk_distances_avx512(chunk_coords, center_chunk) },
-        }
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn calculate_chunk_distances_avx2(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
-        let cx = _mm256_set1_ps(center_chunk.0 as f32);
-        let cz = _mm256_set1_ps(center_chunk.1 as f32);
-
-        chunk_coords.par_chunks(8).flat_map(|chunk| {
-            let mut distances = [0.0f32; 8];
-            let px = _mm256_set_ps(
-                chunk.get(7).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.0 as f32).unwrap_or(0.0)
-            );
-            let pz = _mm256_set_ps(
-                chunk.get(7).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.1 as f32).unwrap_or(0.0)
-            );
-
-            let dx = _mm256_sub_ps(px, cx);
-            let dz = _mm256_sub_ps(pz, cz);
-
-            let dx2 = _mm256_mul_ps(dx, dx);
-            let dz2 = _mm256_mul_ps(dz, dz);
-
-            let sum = _mm256_add_ps(dx2, dz2);
-            let dist = _mm256_sqrt_ps(sum);
-
-            _mm256_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
-    }
-
-    #[target_feature(enable = "sse4.1")]
-    unsafe fn calculate_chunk_distances_sse(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
-        let cx = _mm_set1_ps(center_chunk.0 as f32);
-        let cz = _mm_set1_ps(center_chunk.1 as f32);
-
-        chunk_coords.par_chunks(4).flat_map(|chunk| {
-            let mut distances = [0.0f32; 4];
-            let px = _mm_set_ps(
-                chunk.get(3).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.0 as f32).unwrap_or(0.0)
-            );
-            let pz = _mm_set_ps(
-                chunk.get(3).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.1 as f32).unwrap_or(0.0)
-            );
-
-            let dx = _mm_sub_ps(px, cx);
-            let dz = _mm_sub_ps(pz, cz);
-
-            let dx2 = _mm_mul_ps(dx, dx);
-            let dz2 = _mm_mul_ps(dz, dz);
-
-            let sum = _mm_add_ps(dx2, dz2);
-            let dist = _mm_sqrt_ps(sum);
-
-            _mm_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
-    }
-
-    fn calculate_chunk_distances_scalar(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
-        chunk_coords.par_iter().map(|(x, z)| {
-            let dx = *x as f32 - center_chunk.0 as f32;
-            let dz = *z as f32 - center_chunk.1 as f32;
-            (dx * dx + dz * dz).sqrt()
-        }).collect()
-    }
-
-    #[target_feature(enable = "avx512f")]
-    unsafe fn calculate_chunk_distances_avx512(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
-        let cx = _mm512_set1_ps(center_chunk.0 as f32);
-        let cz = _mm512_set1_ps(center_chunk.1 as f32);
-
-        chunk_coords.par_chunks(16).flat_map(|chunk| {
-            let mut distances = [0.0f32; 16];
-            let px = _mm512_set_ps(
-                chunk.get(15).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(14).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(13).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(12).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(11).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(10).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(9).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(8).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(7).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.0 as f32).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.0 as f32).unwrap_or(0.0)
-            );
-            let pz = _mm512_set_ps(
-                chunk.get(15).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(14).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(13).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(12).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(11).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(10).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(9).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(8).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(7).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.1 as f32).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.1 as f32).unwrap_or(0.0)
-            );
-
-            let dx = _mm512_sub_ps(px, cx);
-            let dz = _mm512_sub_ps(pz, cz);
-
-            let dx2 = _mm512_mul_ps(dx, dx);
-            let dz2 = _mm512_mul_ps(dz, dz);
-
-            let sum = _mm512_add_ps(dx2, dz2);
-            let dist = _mm512_sqrt_ps(sum);
-
-            _mm512_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
-    }
-
-    /// SIMD-accelerated batch AABB intersection testing
-    pub fn batch_aabb_intersections(aabbs: &[super::Aabb], queries: &[super::Aabb]) -> Vec<Vec<bool>> {
-        let level = get_simd_manager().get_level();
-        
-        match level {
-            SimdLevel::Avx2 => unsafe { batch_aabb_intersections_avx2(aabbs, queries) },
-            SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { batch_aabb_intersections_sse(aabbs, queries) },
-            SimdLevel::Scalar => batch_aabb_intersections_scalar(aabbs, queries),
-            SimdLevel::Avx512 => unsafe { batch_aabb_intersections_avx512(aabbs, queries) },
-        }
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn batch_aabb_intersections_avx2(aabbs: &[super::Aabb], queries: &[super::Aabb]) -> Vec<Vec<bool>> {
-        queries.par_iter().map(|query| {
-            aabbs.par_chunks(4).flat_map(|chunk| {
-                let mut results = [false; 4];
-                
-                // Load query bounds once
-                let query_min = _mm256_set_ps(
-                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0,
-                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0
-                );
-                let query_max = _mm256_set_ps(
-                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0,
-                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0
-                );
-                
-                for (i, aabb) in chunk.iter().enumerate() {
-                    let aabb_min = _mm256_set_ps(
-                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0,
-                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0
-                    );
-                    let aabb_max = _mm256_set_ps(
-                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0,
-                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0
-                    );
-                    
-                    // Test intersection: query.min <= aabb.max && query.max >= aabb.min
-                    let cmp1 = _mm256_cmp_ps(query_min, aabb_max, _CMP_LE_OQ);
-                    let cmp2 = _mm256_cmp_ps(query_max, aabb_min, _CMP_GE_OQ);
-                    let intersection = _mm256_and_ps(cmp1, cmp2);
-                    
-                    let mask = _mm256_movemask_ps(intersection);
-                    results[i] = (mask & 0x07) == 0x07; // Check X, Y, Z axes
-                }
-                
-                results.into_iter().take(chunk.len()).collect::<Vec<_>>()
-            }).collect()
-        }).collect()
-    }
-
-    #[target_feature(enable = "sse4.1")]
-    unsafe fn batch_aabb_intersections_sse(aabbs: &[super::Aabb], queries: &[super::Aabb]) -> Vec<Vec<bool>> {
-        queries.par_iter().map(|query| {
-            aabbs.par_chunks(2).flat_map(|chunk| {
-                let mut results = [false; 2];
-                
-                // Load query bounds once
-                let query_min = _mm_set_ps(
-                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0
-                );
-                let query_max = _mm_set_ps(
-                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0
-                );
-                
-                for (i, aabb) in chunk.iter().enumerate() {
-                    let aabb_min = _mm_set_ps(
-                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0
-                    );
-                    let aabb_max = _mm_set_ps(
-                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0
-                    );
-                    
-                    // Test intersection: query.min <= aabb.max && query.max >= aabb.min
-                    let cmp1 = _mm_cmple_ps(query_min, aabb_max);
-                    let cmp2 = _mm_cmpge_ps(query_max, aabb_min);
-                    let intersection = _mm_and_ps(cmp1, cmp2);
-                    
-                    let mask = _mm_movemask_ps(intersection);
-                    results[i] = (mask & 0x07) == 0x07; // Check X, Y, Z axes
-                }
-                
-                results.into_iter().take(chunk.len()).collect::<Vec<_>>()
-            }).collect()
-        }).collect()
-    }
-
-    fn batch_aabb_intersections_scalar(aabbs: &[super::Aabb], queries: &[super::Aabb]) -> Vec<Vec<bool>> {
-        queries.iter()
-            .map(|query| aabbs.iter().map(|aabb| aabb.intersects(query)).collect())
+        chunk_coords
+            .par_iter()
+            .map(|(x, z)| {
+                let dx = *x as f32 - center_chunk.0 as f32;
+                let dz = *z as f32 - center_chunk.1 as f32;
+                (dx * dx + dz * dz).sqrt()
+            })
             .collect()
     }
 
-    #[target_feature(enable = "avx512f")]
-    unsafe fn batch_aabb_intersections_avx512(aabbs: &[super::Aabb], queries: &[super::Aabb]) -> Vec<Vec<bool>> {
-        queries.par_iter().map(|query| {
-            aabbs.par_chunks(8).flat_map(|chunk| {
-                let mut results = [false; 8];
-                
-                // Load query bounds once
-                let query_min = _mm512_set_ps(
-                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0,
-                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0,
-                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0,
-                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0
-                );
-                let query_max = _mm512_set_ps(
-                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0,
-                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0,
-                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0,
-                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0
-                );
-                
-                for (i, aabb) in chunk.iter().enumerate() {
-                    let aabb_min = _mm512_set_ps(
-                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0,
-                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0,
-                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0,
-                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0
-                    );
-                    let aabb_max = _mm512_set_ps(
-                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0,
-                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0,
-                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0,
-                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0
-                    );
-                    
-                    // Test intersection: query.min <= aabb.max && query.max >= aabb.min
-                    let cmp1 = _mm512_cmp_ps_mask(query_min, aabb_max, _MM_CMPINT_LE);
-                    let cmp2 = _mm512_cmp_ps_mask(query_max, aabb_min, _MM_CMPINT_GE);
-                    let intersection = cmp1 & cmp2;
-                    
-                    results[i] = (intersection & 0x07) == 0x07; // Check X, Y, Z axes
-                }
-                
-                results.into_iter().take(chunk.len()).collect::<Vec<_>>()
-            }).collect()
-        }).collect()
-    }
+    /// Batch AABB intersections - scalar implementation
+    pub fn batch_aabb_intersections(aabbs: &[crate::spatial::Aabb], queries: &[crate::spatial::Aabb]) -> Vec<Vec<bool>> {
+        queries
+            .par_iter()
+            .map(|q| aabbs.iter().map(|a| a.intersects(q)).collect())
+            .collect()
     }
 }
 
@@ -794,46 +355,10 @@ pub mod entity_processing {
 
     #[target_feature(enable = "avx512f")]
     unsafe fn calculate_distances_avx512(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
-        let cx = _mm512_set1_ps(center.0);
-        let cy = _mm512_set1_ps(center.1);
-        let cz = _mm512_set1_ps(center.2);
+        // AVX512 path is not fully implemented for all platforms here; fall back to scalar
+        calculate_distances_scalar(positions, center)
+    }
 
-        positions.chunks_exact(16).flat_map(|chunk| {
-            let mut distances = [0.0f32; 16];
-            
-            let px = _mm512_set_ps(
-                chunk.get(15).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(14).map(|p| p.0).unwrap_or(0.0),
-                // ... continue for all 16 elements
-                chunk.get(0).map(|p| p.0).unwrap_or(0.0)
-            );
-            let py = _mm512_set_ps(
-                chunk.get(15).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(14).map(|p| p.1).unwrap_or(0.0),
-                // ... continue for all 16 elements
-                chunk.get(0).map(|p| p.1).unwrap_or(0.0)
-            );
-            let pz = _mm512_set_ps(
-                chunk.get(15).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(14).map(|p| p.2).unwrap_or(0.0),
-                // ... continue for all 16 elements
-                chunk.get(0).map(|p| p.2).unwrap_or(0.0)
-            );
-
-            let dx = _mm512_sub_ps(px, cx);
-            let dy = _mm512_sub_ps(py, cy);
-            let dz = _mm512_sub_ps(pz, cz);
-
-            let dx2 = _mm512_mul_ps(dx, dx);
-            let dy2 = _mm512_mul_ps(dy, dy);
-            let dz2 = _mm512_mul_ps(dz, dz);
-
-            let sum = _mm512_add_ps(_mm512_add_ps(dx2, dy2), dz2);
-            let dist = _mm512_sqrt_ps(sum);
-
-            _mm512_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
     /// SIMD-accelerated entity filtering by distance threshold
     pub fn filter_entities_by_distance<T: Clone + Send + Sync>(
         entities: &[(T, [f64; 3])],
@@ -893,8 +418,8 @@ pub mod entity_processing {
             let mask = _mm256_movemask_ps(within_range);
             
             for (i, (entity, pos)) in chunk.iter().enumerate() {
-                if (mask & (1 << i)) != 0 {
-                    results.push(((*entity).clone(), **pos));
+                    if (mask & (1 << i)) != 0 {
+                    results.push(((*entity).clone(), *pos));
                 }
             }
             
@@ -945,8 +470,8 @@ pub mod entity_processing {
             let mask = _mm_movemask_ps(within_range);
             
             for (i, (entity, pos)) in chunk.iter().enumerate() {
-                if (mask & (1 << i)) != 0 {
-                    results.push(((*entity).clone(), **pos));
+                    if (mask & (1 << i)) != 0 {
+                    results.push(((*entity).clone(), *pos));
                 }
             }
             
@@ -1013,13 +538,12 @@ pub mod entity_processing {
             
             for (i, (entity, pos)) in chunk.iter().enumerate() {
                 if (within_range & (1 << i)) != 0 {
-                    results.push(((*entity).clone(), **pos));
+                    results.push(((*entity).clone(), *pos));
                 }
             }
             
             results
         }).collect()
-    }
     }
 }
 

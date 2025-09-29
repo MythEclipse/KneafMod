@@ -3,17 +3,6 @@
 
 // @generated
 
-#[allow(
-  unused_imports,
-  dead_code,
-  unused_variables,
-  unused_mut,
-  unused_doc_comments,
-  non_camel_case_types,
-  mismatched_lifetime_syntaxes,
-  clippy::all
-)]
-
 use core::mem;
 use core::cmp::Ordering;
 
@@ -62,11 +51,11 @@ impl<'a> EntityData<'a> {
   pub const VT_IS_BLOCK_ENTITY: flatbuffers::VOffsetT = 16;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     EntityData { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args EntityDataArgs<'args>
   ) -> flatbuffers::WIPOffset<EntityData<'bldr>> {
@@ -84,52 +73,31 @@ impl<'a> EntityData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(EntityData::VT_ID, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(EntityData::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn entity_type(&self) -> Option<&'a str> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(EntityData::VT_ENTITY_TYPE, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(EntityData::VT_ENTITY_TYPE, None) }
   }
   #[inline]
   pub fn x(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(EntityData::VT_X, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(EntityData::VT_X, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn y(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(EntityData::VT_Y, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(EntityData::VT_Y, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn z(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(EntityData::VT_Z, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(EntityData::VT_Z, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn distance(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(EntityData::VT_DISTANCE, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(EntityData::VT_DISTANCE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn is_block_entity(&self) -> bool {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<bool>(EntityData::VT_IS_BLOCK_ENTITY, Some(false)).unwrap()}
+    unsafe { self._tab.get::<bool>(EntityData::VT_IS_BLOCK_ENTITY, Some(false)).unwrap() }
   }
 }
 
@@ -258,11 +226,11 @@ impl<'a> PlayerData<'a> {
   pub const VT_Z: flatbuffers::VOffsetT = 10;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     PlayerData { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args PlayerDataArgs
   ) -> flatbuffers::WIPOffset<PlayerData<'bldr>> {
@@ -277,31 +245,19 @@ impl<'a> PlayerData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(PlayerData::VT_ID, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(PlayerData::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn x(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(PlayerData::VT_X, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(PlayerData::VT_X, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn y(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(PlayerData::VT_Y, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(PlayerData::VT_Y, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn z(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(PlayerData::VT_Z, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(PlayerData::VT_Z, Some(0.0)).unwrap() }
   }
 }
 
@@ -407,11 +363,11 @@ impl<'a> EntityConfig<'a> {
   pub const VT_FAR_RATE: flatbuffers::VOffsetT = 12;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     EntityConfig { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args EntityConfigArgs
   ) -> flatbuffers::WIPOffset<EntityConfig<'bldr>> {
@@ -427,38 +383,23 @@ impl<'a> EntityConfig<'a> {
 
   #[inline]
   pub fn close_radius(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(EntityConfig::VT_CLOSE_RADIUS, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_CLOSE_RADIUS, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn medium_radius(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(EntityConfig::VT_MEDIUM_RADIUS, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_MEDIUM_RADIUS, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn close_rate(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(EntityConfig::VT_CLOSE_RATE, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_CLOSE_RATE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn medium_rate(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(EntityConfig::VT_MEDIUM_RATE, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_MEDIUM_RATE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn far_rate(&self) -> f32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<f32>(EntityConfig::VT_FAR_RATE, Some(0.0)).unwrap()}
+    unsafe { self._tab.get::<f32>(EntityConfig::VT_FAR_RATE, Some(0.0)).unwrap() }
   }
 }
 
@@ -571,11 +512,11 @@ impl<'a> EntityInput<'a> {
   pub const VT_ENTITY_CONFIG: flatbuffers::VOffsetT = 10;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     EntityInput { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args EntityInputArgs<'args>
   ) -> flatbuffers::WIPOffset<EntityInput<'bldr>> {
@@ -590,31 +531,19 @@ impl<'a> EntityInput<'a> {
 
   #[inline]
   pub fn tick_count(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(EntityInput::VT_TICK_COUNT, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(EntityInput::VT_TICK_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn entities(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<EntityData<'a>>>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<EntityData>>>>(EntityInput::VT_ENTITIES, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<EntityData>>>>(EntityInput::VT_ENTITIES, None) }
   }
   #[inline]
   pub fn players(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PlayerData<'a>>>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PlayerData>>>>(EntityInput::VT_PLAYERS, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PlayerData>>>>(EntityInput::VT_PLAYERS, None) }
   }
   #[inline]
   pub fn entity_config(&self) -> Option<EntityConfig<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<EntityConfig>>(EntityInput::VT_ENTITY_CONFIG, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<EntityConfig>>(EntityInput::VT_ENTITY_CONFIG, None) }
   }
 }
 
@@ -716,11 +645,11 @@ impl<'a> EntityProcessResult<'a> {
   pub const VT_ENTITIES_TO_TICK: flatbuffers::VOffsetT = 4;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     EntityProcessResult { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args EntityProcessResultArgs<'args>
   ) -> flatbuffers::WIPOffset<EntityProcessResult<'bldr>> {
@@ -732,10 +661,7 @@ impl<'a> EntityProcessResult<'a> {
 
   #[inline]
   pub fn entities_to_tick(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(EntityProcessResult::VT_ENTITIES_TO_TICK, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(EntityProcessResult::VT_ENTITIES_TO_TICK, None) }
   }
 }
 
@@ -794,6 +720,18 @@ impl core::fmt::Debug for EntityProcessResult<'_> {
       ds.finish()
   }
 }
+#[inline]
+#[deprecated(since="2.0.0", note="Deprecated in favor of `root_as...` methods.")]
+pub fn get_root_as_entity_input<'a>(buf: &'a [u8]) -> EntityInput<'a> {
+  unsafe { flatbuffers::root_unchecked::<EntityInput<'a>>(buf) }
+}
+
+#[inline]
+#[deprecated(since="2.0.0", note="Deprecated in favor of `root_as...` methods.")]
+pub fn get_size_prefixed_root_as_entity_input<'a>(buf: &'a [u8]) -> EntityInput<'a> {
+  unsafe { flatbuffers::size_prefixed_root_unchecked::<EntityInput<'a>>(buf) }
+}
+
 #[inline]
 /// Verifies that a buffer of bytes contains a `EntityInput`
 /// and returns it.
@@ -867,4 +805,3 @@ pub fn finish_size_prefixed_entity_input_buffer<'a, 'b>(fbb: &'b mut flatbuffers
 }
 }  // pub mod entity
 }  // pub mod kneaf
-

@@ -36,8 +36,8 @@ pub struct BlockEntityData<'a> {
 impl<'a> flatbuffers::Follow<'a> for BlockEntityData<'a> {
   type Inner = BlockEntityData<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -71,27 +71,27 @@ impl<'a> BlockEntityData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    self._tab.get::<u64>(BlockEntityData::VT_ID, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(BlockEntityData::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn block_type(&self) -> Option<&'a str> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(BlockEntityData::VT_BLOCK_TYPE, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(BlockEntityData::VT_BLOCK_TYPE, None) }
   }
   #[inline]
   pub fn distance(&self) -> f32 {
-    self._tab.get::<f32>(BlockEntityData::VT_DISTANCE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(BlockEntityData::VT_DISTANCE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn x(&self) -> i32 {
-    self._tab.get::<i32>(BlockEntityData::VT_X, Some(0)).unwrap()
+    unsafe { self._tab.get::<i32>(BlockEntityData::VT_X, Some(0)).unwrap() }
   }
   #[inline]
   pub fn y(&self) -> i32 {
-    self._tab.get::<i32>(BlockEntityData::VT_Y, Some(0)).unwrap()
+    unsafe { self._tab.get::<i32>(BlockEntityData::VT_Y, Some(0)).unwrap() }
   }
   #[inline]
   pub fn z(&self) -> i32 {
-    self._tab.get::<i32>(BlockEntityData::VT_Z, Some(0)).unwrap()
+    unsafe { self._tab.get::<i32>(BlockEntityData::VT_Z, Some(0)).unwrap() }
   }
 }
 
@@ -200,8 +200,8 @@ pub struct BlockInput<'a> {
 impl<'a> flatbuffers::Follow<'a> for BlockInput<'a> {
   type Inner = BlockInput<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -227,11 +227,11 @@ impl<'a> BlockInput<'a> {
 
   #[inline]
   pub fn tick_count(&self) -> u64 {
-    self._tab.get::<u64>(BlockInput::VT_TICK_COUNT, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(BlockInput::VT_TICK_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn block_entities(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<BlockEntityData<'a>>>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<BlockEntityData>>>>(BlockInput::VT_BLOCK_ENTITIES, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<BlockEntityData>>>>(BlockInput::VT_BLOCK_ENTITIES, None) }
   }
 }
 
@@ -309,7 +309,7 @@ impl<'a> flatbuffers::Follow<'a> for BlockProcessResult<'a> {
   type Inner = BlockProcessResult<'a>;
   #[inline]
   fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -333,7 +333,7 @@ impl<'a> BlockProcessResult<'a> {
 
   #[inline]
   pub fn block_entities_to_tick(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(BlockProcessResult::VT_BLOCK_ENTITIES_TO_TICK, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(BlockProcessResult::VT_BLOCK_ENTITIES_TO_TICK, None) }
   }
 }
 
@@ -403,7 +403,7 @@ impl<'a> flatbuffers::Follow<'a> for BlockConfig<'a> {
   type Inner = BlockConfig<'a>;
   #[inline]
   fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -435,23 +435,23 @@ impl<'a> BlockConfig<'a> {
 
   #[inline]
   pub fn close_radius(&self) -> f32 {
-    self._tab.get::<f32>(BlockConfig::VT_CLOSE_RADIUS, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_CLOSE_RADIUS, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn medium_radius(&self) -> f32 {
-    self._tab.get::<f32>(BlockConfig::VT_MEDIUM_RADIUS, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_MEDIUM_RADIUS, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn close_rate(&self) -> f32 {
-    self._tab.get::<f32>(BlockConfig::VT_CLOSE_RATE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_CLOSE_RATE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn medium_rate(&self) -> f32 {
-    self._tab.get::<f32>(BlockConfig::VT_MEDIUM_RATE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_MEDIUM_RATE, Some(0.0)).unwrap() }
   }
   #[inline]
   pub fn far_rate(&self) -> f32 {
-    self._tab.get::<f32>(BlockConfig::VT_FAR_RATE, Some(0.0)).unwrap()
+    unsafe { self._tab.get::<f32>(BlockConfig::VT_FAR_RATE, Some(0.0)).unwrap() }
   }
 }
 

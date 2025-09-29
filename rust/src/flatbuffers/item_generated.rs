@@ -36,8 +36,8 @@ pub struct ItemEntityData<'a> {
 impl<'a> flatbuffers::Follow<'a> for ItemEntityData<'a> {
   type Inner = ItemEntityData<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -71,27 +71,27 @@ impl<'a> ItemEntityData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    self._tab.get::<u64>(ItemEntityData::VT_ID, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(ItemEntityData::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn item_type(&self) -> Option<&'a str> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ItemEntityData::VT_ITEM_TYPE, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ItemEntityData::VT_ITEM_TYPE, None) }
   }
   #[inline]
   pub fn count(&self) -> u32 {
-    self._tab.get::<u32>(ItemEntityData::VT_COUNT, Some(0)).unwrap()
+    unsafe { self._tab.get::<u32>(ItemEntityData::VT_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn age_seconds(&self) -> u32 {
-    self._tab.get::<u32>(ItemEntityData::VT_AGE_SECONDS, Some(0)).unwrap()
+    unsafe { self._tab.get::<u32>(ItemEntityData::VT_AGE_SECONDS, Some(0)).unwrap() }
   }
   #[inline]
   pub fn chunk_x(&self) -> i32 {
-    self._tab.get::<i32>(ItemEntityData::VT_CHUNK_X, Some(0)).unwrap()
+    unsafe { self._tab.get::<i32>(ItemEntityData::VT_CHUNK_X, Some(0)).unwrap() }
   }
   #[inline]
   pub fn chunk_z(&self) -> i32 {
-    self._tab.get::<i32>(ItemEntityData::VT_CHUNK_Z, Some(0)).unwrap()
+    unsafe { self._tab.get::<i32>(ItemEntityData::VT_CHUNK_Z, Some(0)).unwrap() }
   }
 }
 
@@ -200,8 +200,8 @@ pub struct ItemInput<'a> {
 impl<'a> flatbuffers::Follow<'a> for ItemInput<'a> {
   type Inner = ItemInput<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -225,7 +225,7 @@ impl<'a> ItemInput<'a> {
 
   #[inline]
   pub fn items(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemEntityData<'a>>>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemEntityData>>>>(ItemInput::VT_ITEMS, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemEntityData>>>>(ItemInput::VT_ITEMS, None) }
   }
 }
 
@@ -294,8 +294,8 @@ pub struct ItemUpdate<'a> {
 impl<'a> flatbuffers::Follow<'a> for ItemUpdate<'a> {
   type Inner = ItemUpdate<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -321,11 +321,11 @@ impl<'a> ItemUpdate<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    self._tab.get::<u64>(ItemUpdate::VT_ID, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(ItemUpdate::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn new_count(&self) -> u32 {
-    self._tab.get::<u32>(ItemUpdate::VT_NEW_COUNT, Some(0)).unwrap()
+    unsafe { self._tab.get::<u32>(ItemUpdate::VT_NEW_COUNT, Some(0)).unwrap() }
   }
 }
 
@@ -402,8 +402,8 @@ pub struct ItemProcessResult<'a> {
 impl<'a> flatbuffers::Follow<'a> for ItemProcessResult<'a> {
   type Inner = ItemProcessResult<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -433,19 +433,19 @@ impl<'a> ItemProcessResult<'a> {
 
   #[inline]
   pub fn items_to_remove(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(ItemProcessResult::VT_ITEMS_TO_REMOVE, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(ItemProcessResult::VT_ITEMS_TO_REMOVE, None) }
   }
   #[inline]
   pub fn merged_count(&self) -> u64 {
-    self._tab.get::<u64>(ItemProcessResult::VT_MERGED_COUNT, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(ItemProcessResult::VT_MERGED_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn despawned_count(&self) -> u64 {
-    self._tab.get::<u64>(ItemProcessResult::VT_DESPAWNED_COUNT, Some(0)).unwrap()
+    unsafe { self._tab.get::<u64>(ItemProcessResult::VT_DESPAWNED_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn item_updates(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemUpdate<'a>>>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemUpdate>>>>(ItemProcessResult::VT_ITEM_UPDATES, None)
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemUpdate>>>>(ItemProcessResult::VT_ITEM_UPDATES, None) }
   }
 }
 
@@ -538,8 +538,8 @@ pub struct ItemConfig<'a> {
 impl<'a> flatbuffers::Follow<'a> for ItemConfig<'a> {
   type Inner = ItemConfig<'a>;
   #[inline]
-  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table { buf, loc } }
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
@@ -567,15 +567,15 @@ impl<'a> ItemConfig<'a> {
 
   #[inline]
   pub fn merge_enabled(&self) -> bool {
-    self._tab.get::<bool>(ItemConfig::VT_MERGE_ENABLED, Some(false)).unwrap()
+    unsafe { self._tab.get::<bool>(ItemConfig::VT_MERGE_ENABLED, Some(false)).unwrap() }
   }
   #[inline]
   pub fn max_items_per_chunk(&self) -> u32 {
-    self._tab.get::<u32>(ItemConfig::VT_MAX_ITEMS_PER_CHUNK, Some(0)).unwrap()
+    unsafe { self._tab.get::<u32>(ItemConfig::VT_MAX_ITEMS_PER_CHUNK, Some(0)).unwrap() }
   }
   #[inline]
   pub fn despawn_time_seconds(&self) -> u32 {
-    self._tab.get::<u32>(ItemConfig::VT_DESPAWN_TIME_SECONDS, Some(0)).unwrap()
+    unsafe { self._tab.get::<u32>(ItemConfig::VT_DESPAWN_TIME_SECONDS, Some(0)).unwrap() }
   }
 }
 

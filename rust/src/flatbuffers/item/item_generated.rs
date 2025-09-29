@@ -3,17 +3,6 @@
 
 // @generated
 
-#[allow(
-  unused_imports,
-  dead_code,
-  unused_variables,
-  unused_mut,
-  unused_doc_comments,
-  non_camel_case_types,
-  mismatched_lifetime_syntaxes,
-  clippy::all
-)]
-
 use core::mem;
 use core::cmp::Ordering;
 
@@ -61,11 +50,11 @@ impl<'a> ItemEntityData<'a> {
   pub const VT_CHUNK_Z: flatbuffers::VOffsetT = 14;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     ItemEntityData { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args ItemEntityDataArgs<'args>
   ) -> flatbuffers::WIPOffset<ItemEntityData<'bldr>> {
@@ -82,45 +71,27 @@ impl<'a> ItemEntityData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(ItemEntityData::VT_ID, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(ItemEntityData::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn item_type(&self) -> Option<&'a str> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ItemEntityData::VT_ITEM_TYPE, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ItemEntityData::VT_ITEM_TYPE, None) }
   }
   #[inline]
   pub fn count(&self) -> u32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u32>(ItemEntityData::VT_COUNT, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u32>(ItemEntityData::VT_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn age_seconds(&self) -> u32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u32>(ItemEntityData::VT_AGE_SECONDS, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u32>(ItemEntityData::VT_AGE_SECONDS, Some(0)).unwrap() }
   }
   #[inline]
   pub fn chunk_x(&self) -> i32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<i32>(ItemEntityData::VT_CHUNK_X, Some(0)).unwrap()}
+    unsafe { self._tab.get::<i32>(ItemEntityData::VT_CHUNK_X, Some(0)).unwrap() }
   }
   #[inline]
   pub fn chunk_z(&self) -> i32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<i32>(ItemEntityData::VT_CHUNK_Z, Some(0)).unwrap()}
+    unsafe { self._tab.get::<i32>(ItemEntityData::VT_CHUNK_Z, Some(0)).unwrap() }
   }
 }
 
@@ -238,11 +209,11 @@ impl<'a> ItemInput<'a> {
   pub const VT_ITEMS: flatbuffers::VOffsetT = 4;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     ItemInput { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args ItemInputArgs<'args>
   ) -> flatbuffers::WIPOffset<ItemInput<'bldr>> {
@@ -254,10 +225,7 @@ impl<'a> ItemInput<'a> {
 
   #[inline]
   pub fn items(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemEntityData<'a>>>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemEntityData>>>>(ItemInput::VT_ITEMS, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemEntityData>>>>(ItemInput::VT_ITEMS, None) }
   }
 }
 
@@ -336,11 +304,11 @@ impl<'a> ItemUpdate<'a> {
   pub const VT_NEW_COUNT: flatbuffers::VOffsetT = 6;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     ItemUpdate { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args ItemUpdateArgs
   ) -> flatbuffers::WIPOffset<ItemUpdate<'bldr>> {
@@ -353,17 +321,11 @@ impl<'a> ItemUpdate<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(ItemUpdate::VT_ID, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(ItemUpdate::VT_ID, Some(0)).unwrap() }
   }
   #[inline]
   pub fn new_count(&self) -> u32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u32>(ItemUpdate::VT_NEW_COUNT, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u32>(ItemUpdate::VT_NEW_COUNT, Some(0)).unwrap() }
   }
 }
 
@@ -452,11 +414,11 @@ impl<'a> ItemProcessResult<'a> {
   pub const VT_ITEM_UPDATES: flatbuffers::VOffsetT = 10;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     ItemProcessResult { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args ItemProcessResultArgs<'args>
   ) -> flatbuffers::WIPOffset<ItemProcessResult<'bldr>> {
@@ -471,31 +433,19 @@ impl<'a> ItemProcessResult<'a> {
 
   #[inline]
   pub fn items_to_remove(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(ItemProcessResult::VT_ITEMS_TO_REMOVE, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(ItemProcessResult::VT_ITEMS_TO_REMOVE, None) }
   }
   #[inline]
   pub fn merged_count(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(ItemProcessResult::VT_MERGED_COUNT, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(ItemProcessResult::VT_MERGED_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn despawned_count(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(ItemProcessResult::VT_DESPAWNED_COUNT, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(ItemProcessResult::VT_DESPAWNED_COUNT, Some(0)).unwrap() }
   }
   #[inline]
   pub fn item_updates(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemUpdate<'a>>>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemUpdate>>>>(ItemProcessResult::VT_ITEM_UPDATES, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ItemUpdate>>>>(ItemProcessResult::VT_ITEM_UPDATES, None) }
   }
 }
 
@@ -599,11 +549,11 @@ impl<'a> ItemConfig<'a> {
   pub const VT_DESPAWN_TIME_SECONDS: flatbuffers::VOffsetT = 8;
 
   #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     ItemConfig { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args ItemConfigArgs
   ) -> flatbuffers::WIPOffset<ItemConfig<'bldr>> {
@@ -617,24 +567,15 @@ impl<'a> ItemConfig<'a> {
 
   #[inline]
   pub fn merge_enabled(&self) -> bool {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<bool>(ItemConfig::VT_MERGE_ENABLED, Some(false)).unwrap()}
+    unsafe { self._tab.get::<bool>(ItemConfig::VT_MERGE_ENABLED, Some(false)).unwrap() }
   }
   #[inline]
   pub fn max_items_per_chunk(&self) -> u32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u32>(ItemConfig::VT_MAX_ITEMS_PER_CHUNK, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u32>(ItemConfig::VT_MAX_ITEMS_PER_CHUNK, Some(0)).unwrap() }
   }
   #[inline]
   pub fn despawn_time_seconds(&self) -> u32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u32>(ItemConfig::VT_DESPAWN_TIME_SECONDS, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u32>(ItemConfig::VT_DESPAWN_TIME_SECONDS, Some(0)).unwrap() }
   }
 }
 
@@ -710,6 +651,18 @@ impl core::fmt::Debug for ItemConfig<'_> {
   }
 }
 #[inline]
+#[deprecated(since="2.0.0", note="Deprecated in favor of `root_as...` methods.")]
+pub fn get_root_as_item_input<'a>(buf: &'a [u8]) -> ItemInput<'a> {
+  unsafe { flatbuffers::root_unchecked::<ItemInput<'a>>(buf) }
+}
+
+#[inline]
+#[deprecated(since="2.0.0", note="Deprecated in favor of `root_as...` methods.")]
+pub fn get_size_prefixed_root_as_item_input<'a>(buf: &'a [u8]) -> ItemInput<'a> {
+  unsafe { flatbuffers::size_prefixed_root_unchecked::<ItemInput<'a>>(buf) }
+}
+
+#[inline]
 /// Verifies that a buffer of bytes contains a `ItemInput`
 /// and returns it.
 /// Note that verification is still experimental and may not
@@ -782,4 +735,3 @@ pub fn finish_size_prefixed_item_input_buffer<'a, 'b>(fbb: &'b mut flatbuffers::
 }
 }  // pub mod item
 }  // pub mod kneaf
-
