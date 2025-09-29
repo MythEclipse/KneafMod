@@ -39,6 +39,11 @@ jobs:
     - name: Install cross for cross-compilation
       run: cargo install cross
 
+    - name: Install FlatBuffers compiler
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y flatbuffers-compiler
+
     - name: Build mod
       run: ./gradlew build
 

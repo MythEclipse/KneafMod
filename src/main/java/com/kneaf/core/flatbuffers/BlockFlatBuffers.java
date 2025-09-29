@@ -10,6 +10,10 @@ import java.nio.ByteOrder;
  */
 public class BlockFlatBuffers {
     
+    private BlockFlatBuffers() {
+        // Utility class
+    }
+    
     public static ByteBuffer serializeBlockInput(long tickCount, java.util.List<com.kneaf.core.data.BlockEntityData> blocks) {
         // Estimate buffer size based on input list to minimize reallocations
         // Base size + estimated size per block + string overhead
@@ -109,19 +113,21 @@ public class BlockFlatBuffers {
     
     // BlockProcessResult methods
     public static class BlockProcessResult extends Table {
-        public static BlockProcessResult getRootAsBlockProcessResult(ByteBuffer _bb) { return getRootAsBlockProcessResult(_bb, new BlockProcessResult()); }
-        public static BlockProcessResult getRootAsBlockProcessResult(ByteBuffer _bb, BlockProcessResult obj) { _bb.order(ByteOrder.LITTLE_ENDIAN); return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb)); }
-        public void __init(int _i, ByteBuffer _bb) { __reset(_i, _bb); }
-        public BlockProcessResult __assign(int _i, ByteBuffer _bb) { __init(_i, _bb); return this; }
+        public static BlockProcessResult getRootAsBlockProcessResult(ByteBuffer buffer) { return getRootAsBlockProcessResult(buffer, new BlockProcessResult()); }
+        public static BlockProcessResult getRootAsBlockProcessResult(ByteBuffer buffer, BlockProcessResult obj) { buffer.order(ByteOrder.LITTLE_ENDIAN); return (obj.assign(buffer.getInt(buffer.position()) + buffer.position(), buffer)); }
+        public void init(int index, ByteBuffer buffer) { __reset(index, buffer); }
+        public BlockProcessResult assign(int index, ByteBuffer buffer) { init(index, buffer); return this; }
         
         public BlockUpdate updatedBlocks(int j) { return updatedBlocks(new BlockUpdate(), j); }
-        public BlockUpdate updatedBlocks(BlockUpdate obj, int j) { int o = __offset(4); return o != 0 ? obj.__assign(__indirect(__vector(o) + j * 4), bb) : null; }
+        public BlockUpdate updatedBlocks(BlockUpdate obj, int j) { int o = __offset(4); return o != 0 ? obj.assign(__indirect(__vector(o) + j * 4), bb) : null; }
         public int updatedBlocksLength() { int o = __offset(4); return o != 0 ? __vector_len(o) : 0; }
         
         public static class BlockUpdate extends Table {
-            public BlockUpdate() { }
-            public BlockUpdate __assign(int _i, ByteBuffer _bb) { __init(_i, _bb); return this; }
-            public void __init(int _i, ByteBuffer _bb) { __reset(_i, _bb); }
+            public BlockUpdate() {
+                // Empty constructor for FlatBuffers
+            }
+            public BlockUpdate assign(int index, ByteBuffer buffer) { init(index, buffer); return this; }
+            public void init(int index, ByteBuffer buffer) { __reset(index, buffer); }
             public long id() { int o = __offset(4); return o != 0 ? bb.getLong(o + bb_pos) : 0; }
             public float distance() { int o = __offset(6); return o != 0 ? bb.getFloat(o + bb_pos) : 0; }
             public int x() { int o = __offset(8); return o != 0 ? bb.getInt(o + bb_pos) : 0; }

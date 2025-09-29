@@ -10,6 +10,10 @@ import java.nio.ByteOrder;
  */
 public class EntityFlatBuffers {
     
+    private EntityFlatBuffers() {
+        // Utility class
+    }
+    
     public static ByteBuffer serializeEntityInput(long tickCount, java.util.List<com.kneaf.core.data.EntityData> entities,
                                                  java.util.List<com.kneaf.core.data.PlayerData> players) {
         // Estimate buffer size based on input lists to minimize reallocations
@@ -24,10 +28,7 @@ public class EntityFlatBuffers {
         int[] entityOffsets = new int[entities.size()];
         for (int i = 0; i < entities.size(); i++) {
             com.kneaf.core.data.EntityData entity = entities.get(i);
-            int entityTypeOffset = builder.createString(entity.entityType());
-            entityOffsets[i] = createEntityData(builder, entity.id(), entityTypeOffset,
-                                              (float) entity.x(), (float) entity.y(), (float) entity.z(),
-                                              (float) entity.distance(), entity.isBlockEntity());
+            entityOffsets[i] = createEntityData(builder, entity);
         }
         int entitiesOffset = builder.createVectorOfTables(entityOffsets);
         
@@ -66,16 +67,16 @@ public class EntityFlatBuffers {
     }
     
     // EntityData methods
-    public static int createEntityData(FlatBufferBuilder builder, long id, int entityType,
-                                     float x, float y, float z, float distance, boolean isBlockEntity) {
+    public static int createEntityData(FlatBufferBuilder builder, com.kneaf.core.data.EntityData entity) {
+        int entityTypeOffset = builder.createString(entity.entityType());
         startEntityData(builder);
-        addId(builder, id);
-        addEntityType(builder, entityType);
-        addX(builder, x);
-        addY(builder, y);
-        addZ(builder, z);
-        addDistance(builder, distance);
-        addIsBlockEntity(builder, isBlockEntity);
+        addId(builder, entity.id());
+        addEntityType(builder, entityTypeOffset);
+        addX(builder, (float) entity.x());
+        addY(builder, (float) entity.y());
+        addZ(builder, (float) entity.z());
+        addDistance(builder, (float) entity.distance());
+        addIsBlockEntity(builder, entity.isBlockEntity());
         return endEntityData(builder);
     }
     
@@ -136,14 +137,14 @@ public class EntityFlatBuffers {
     
     // EntityProcessResult methods
     public static class EntityProcessResult extends Table {
-        public static EntityProcessResult getRootAsEntityProcessResult(ByteBuffer _bb) { return getRootAsEntityProcessResult(_bb, new EntityProcessResult()); }
-        public static EntityProcessResult getRootAsEntityProcessResult(ByteBuffer _bb, EntityProcessResult obj) { _bb.order(ByteOrder.LITTLE_ENDIAN); return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb)); }
-        public void __init(int _i, ByteBuffer _bb) { __reset(_i, _bb); }
-        public EntityProcessResult __assign(int _i, ByteBuffer _bb) { __init(_i, _bb); return this; }
+        public static EntityProcessResult getRootAsEntityProcessResult(ByteBuffer buffer) { return getRootAsEntityProcessResult(buffer, new EntityProcessResult()); }
+        public static EntityProcessResult getRootAsEntityProcessResult(ByteBuffer buffer, EntityProcessResult obj) { buffer.order(ByteOrder.LITTLE_ENDIAN); return (obj.assign(buffer.getInt(buffer.position()) + buffer.position(), buffer)); }
+        public void init(int index, ByteBuffer buffer) { __reset(index, buffer); }
+        public EntityProcessResult assign(int index, ByteBuffer buffer) { init(index, buffer); return this; }
         
         public long entitiesToTick(int j) { int o = __offset(4); return o != 0 ? bb.getLong(__vector(o) + j * 8) : 0; }
         public int entitiesToTickLength() { int o = __offset(4); return o != 0 ? __vector_len(o) : 0; }
         public ByteBuffer entitiesToTickAsByteBuffer() { return __vector_as_bytebuffer(4, 8); }
-        public ByteBuffer entitiesToTickInByteBuffer(ByteBuffer _bb) { return __vector_in_bytebuffer(_bb, 4, 8); }
+        public ByteBuffer entitiesToTickInByteBuffer(ByteBuffer buffer) { return __vector_in_bytebuffer(buffer, 4, 8); }
     }
 }

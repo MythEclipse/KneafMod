@@ -10,6 +10,10 @@ import java.nio.ByteOrder;
  */
 public class ItemFlatBuffers {
     
+    private ItemFlatBuffers() {
+        // Utility class
+    }
+    
     public static ByteBuffer serializeItemInput(long tickCount, java.util.List<com.kneaf.core.data.ItemEntityData> items) {
         // Estimate buffer size based on input list to minimize reallocations
         // Base size + estimated size per item + string overhead
@@ -128,19 +132,21 @@ public class ItemFlatBuffers {
     
     // ItemProcessResult methods
     public static class ItemProcessResult extends Table {
-        public static ItemProcessResult getRootAsItemProcessResult(ByteBuffer _bb) { return getRootAsItemProcessResult(_bb, new ItemProcessResult()); }
-        public static ItemProcessResult getRootAsItemProcessResult(ByteBuffer _bb, ItemProcessResult obj) { _bb.order(ByteOrder.LITTLE_ENDIAN); return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb)); }
-        public void __init(int _i, ByteBuffer _bb) { __reset(_i, _bb); }
-        public ItemProcessResult __assign(int _i, ByteBuffer _bb) { __init(_i, _bb); return this; }
+        public static ItemProcessResult getRootAsItemProcessResult(ByteBuffer buffer) { return getRootAsItemProcessResult(buffer, new ItemProcessResult()); }
+        public static ItemProcessResult getRootAsItemProcessResult(ByteBuffer buffer, ItemProcessResult obj) { buffer.order(ByteOrder.LITTLE_ENDIAN); return (obj.assign(buffer.getInt(buffer.position()) + buffer.position(), buffer)); }
+        public void init(int index, ByteBuffer buffer) { __reset(index, buffer); }
+        public ItemProcessResult assign(int index, ByteBuffer buffer) { init(index, buffer); return this; }
         
         public ItemUpdate updatedItems(int j) { return updatedItems(new ItemUpdate(), j); }
-        public ItemUpdate updatedItems(ItemUpdate obj, int j) { int o = __offset(4); return o != 0 ? obj.__assign(__indirect(__vector(o) + j * 4), bb) : null; }
+        public ItemUpdate updatedItems(ItemUpdate obj, int j) { int o = __offset(4); return o != 0 ? obj.assign(__indirect(__vector(o) + j * 4), bb) : null; }
         public int updatedItemsLength() { int o = __offset(4); return o != 0 ? __vector_len(o) : 0; }
         
         public static class ItemUpdate extends Table {
-            public ItemUpdate() { }
-            public ItemUpdate __assign(int _i, ByteBuffer _bb) { __init(_i, _bb); return this; }
-            public void __init(int _i, ByteBuffer _bb) { __reset(_i, _bb); }
+            public ItemUpdate() {
+                // Empty constructor for FlatBuffers
+            }
+            public ItemUpdate assign(int index, ByteBuffer buffer) { init(index, buffer); return this; }
+            public void init(int index, ByteBuffer buffer) { __reset(index, buffer); }
             public long id() { int o = __offset(4); return o != 0 ? bb.getLong(o + bb_pos) : 0; }
             public int chunkX() { int o = __offset(6); return o != 0 ? bb.getInt(o + bb_pos) : 0; }
             public int chunkZ() { int o = __offset(8); return o != 0 ? bb.getInt(o + bb_pos) : 0; }

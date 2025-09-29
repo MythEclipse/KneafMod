@@ -4,16 +4,18 @@ import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.bus.api.EventPriority;
-import net.neoforged.fml.common.EventBusSubscriber;
-import org.slf4j.Logger;
+import java.util.concurrent.atomic.AtomicReference;
 import com.mojang.logging.LogUtils;
 
 import java.util.List;
 import java.util.ArrayList;
     
 import java.util.zip.Deflater;
+
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.bus.api.EventPriority;
+import org.slf4j.Logger;
 
 /**
  * Optimizes network packets for better server performance.
@@ -24,20 +26,21 @@ public class NetworkOptimizer {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     // Executor for async packet processing. Lazily initialized to avoid heavy work during class loading.
-    private static volatile java.util.concurrent.ScheduledExecutorService networkExecutor = null;
+    private static final AtomicReference<java.util.concurrent.ScheduledExecutorService> networkExecutor = new AtomicReference<>();
 
     private static java.util.concurrent.ScheduledExecutorService getNetworkExecutor() {
-        java.util.concurrent.ScheduledExecutorService exec = networkExecutor;
+        java.util.concurrent.ScheduledExecutorService exec = networkExecutor.get();
         if (exec == null) {
             synchronized (NetworkOptimizer.class) {
-                exec = networkExecutor;
+                exec = networkExecutor.get();
                 if (exec == null) {
                     int pool = PerformanceConfig.load().getNetworkExecutorPoolSize();
-                    networkExecutor = exec = java.util.concurrent.Executors.newScheduledThreadPool(Math.max(1, pool));
+                    exec = java.util.concurrent.Executors.newScheduledThreadPool(Math.max(1, pool));
+                    networkExecutor.set(exec);
                     // add a shutdown hook to ensure we don't leak threads in environments that load/unload mods
                     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                         try {
-                            java.util.concurrent.ScheduledExecutorService e = networkExecutor;
+                            java.util.concurrent.ScheduledExecutorService e = networkExecutor.get();
                             if (e != null) {
                                 e.shutdownNow();
                             }

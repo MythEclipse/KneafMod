@@ -248,14 +248,14 @@ public final class PerformanceConfig {
             // Advanced parallelism configuration validation
             int vMinThreadPoolSize = Math.max(1, this.minThreadPoolSize);
             boolean vDynamicThreadScaling = this.dynamicThreadScaling;
-            double vThreadScaleUpThreshold = Math.max(0.1, Math.min(1.0, this.threadScaleUpThreshold));
-            double vThreadScaleDownThreshold = Math.max(0.1, Math.min(1.0, this.threadScaleDownThreshold));
+            double vThreadScaleUpThreshold = Math.clamp(0.1, this.threadScaleUpThreshold, 1.0);
+            double vThreadScaleDownThreshold = Math.clamp(0.1, this.threadScaleDownThreshold, 1.0);
             int vThreadScaleUpDelayTicks = Math.max(1, this.threadScaleUpDelayTicks);
             int vThreadScaleDownDelayTicks = Math.max(1, this.threadScaleDownDelayTicks);
             boolean vWorkStealingEnabled = this.workStealingEnabled;
             int vWorkStealingQueueSize = Math.max(1, this.workStealingQueueSize);
             boolean vCpuAwareThreadSizing = this.cpuAwareThreadSizing;
-            double vCpuLoadThreshold = Math.max(0.1, Math.min(1.0, this.cpuLoadThreshold));
+            double vCpuLoadThreshold = Math.clamp(0.1, this.cpuLoadThreshold, 1.0);
             int vThreadPoolKeepAliveSeconds = Math.max(1, this.threadPoolKeepAliveSeconds);
             
             validated.minThreadPoolSize(vMinThreadPoolSize)
@@ -302,7 +302,6 @@ public final class PerformanceConfig {
         this.workStealingEnabled = true;
         this.workStealingQueueSize = 100;
         // Advanced parallelism configuration validation will be applied in build()
-        int vThreadPoolKeepAliveSeconds = Math.max(1, this.threadPoolKeepAliveSeconds);
 
         // Distance calculation optimization defaults
         this.distanceCalculationInterval = 1;

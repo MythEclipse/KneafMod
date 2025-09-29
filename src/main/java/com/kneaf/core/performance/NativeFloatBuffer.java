@@ -39,12 +39,10 @@ public final class NativeFloatBuffer implements AutoCloseable {
     private static final class PooledBuffer {
         final ByteBuffer buffer;
         final int bucketIndex;
-        final int byteCapacity;
         
-        PooledBuffer(ByteBuffer buffer, int bucketIndex, int byteCapacity) {
+        PooledBuffer(ByteBuffer buffer, int bucketIndex) {
             this.buffer = buffer;
             this.bucketIndex = bucketIndex;
-            this.byteCapacity = byteCapacity;
         }
     }
 
@@ -56,7 +54,9 @@ public final class NativeFloatBuffer implements AutoCloseable {
     private final int byteCapacity;
     private final Cleaner.Cleanable cleanable;
     private volatile boolean closed = false;
+    @SuppressWarnings("unused")
     private final boolean isPooled;
+    @SuppressWarnings("unused")
     private final int bucketIndex;
 
     private static final class State implements Runnable {
@@ -70,17 +70,49 @@ public final class NativeFloatBuffer implements AutoCloseable {
             this.bucketIndex = bucketIndex;
         }
         
+        private void returnToPool() {
+            // Ensure bucket exists
+            bufferPools.computeIfAbsent(bucketIndex, k -> new ConcurrentLinkedQueue<>());
+            poolSizes.computeIfAbsent(bucketIndex, k -> new AtomicInteger(0));
+            
+            int currentSize = poolSizes.get(bucketIndex).get();
+            if (currentSize < MAX_POOL_SIZE_PER_BUCKET) {
+                PooledBuffer pooled = new PooledBuffer(buf, bucketIndex);
+                bufferPools.get(bucketIndex).offer(pooled);
+                poolSizes.get(bucketIndex).incrementAndGet();
+            } else {
+                // Pool is full, free the buffer
+                freeBuffer();
+            }
+            
+            // Periodic cleanup
+            long now = System.currentTimeMillis();
+            long lastCleanup = lastCleanupTime.get();
+            
+            if (now - lastCleanup > CLEANUP_INTERVAL_MS && lastCleanupTime.compareAndSet(lastCleanup, now)) {
+                performCleanup();
+            }
+        }
+        
+        private void freeBuffer() {
+            try {
+                RustPerformance.freeFloatBufferNative(buf);
+                totalFrees.incrementAndGet();
+            } catch (Exception e) {
+                System.err.println("Error freeing native buffer: " + e.getMessage());
+            }
+        }
+        
         @Override
         public void run() {
             try {
                 if (buf != null) {
                     if (isPooled && bucketIndex >= 0) {
                         // Return to pool instead of freeing
-                        returnToPool(buf, bucketIndex);
+                        returnToPool();
                     } else {
                         // Free non-pooled buffer
-                        RustPerformance.freeFloatBufferNative(buf);
-                        totalFrees.incrementAndGet();
+                        freeBuffer();
                     }
                 }
             } catch (Exception t) {
@@ -103,11 +135,6 @@ public final class NativeFloatBuffer implements AutoCloseable {
         this.cleanable = CLEANER.register(this, new State(this.buf, isPooled, bucketIndex));
         this.isPooled = isPooled;
         this.bucketIndex = bucketIndex;
-    }
-
-    // Convenience constructor for non-pooled buffers (backward compatibility)
-    private NativeFloatBuffer(ByteBuffer buf, long rows, long cols) {
-        this(buf, rows, cols, false, -1);
     }
 
     /**
@@ -158,79 +185,20 @@ public final class NativeFloatBuffer implements AutoCloseable {
     }
 
     /**
-     * Return buffer to pool
-     */
-    private static void returnToPool(ByteBuffer buffer, int bucketIndex) {
-        if (buffer == null || bucketIndex < 0) return;
-        
-        // Ensure bucket exists
-        bufferPools.computeIfAbsent(bucketIndex, k -> new ConcurrentLinkedQueue<>());
-        poolSizes.computeIfAbsent(bucketIndex, k -> new AtomicInteger(0));
-        
-        int currentSize = poolSizes.get(bucketIndex).get();
-        if (currentSize < MAX_POOL_SIZE_PER_BUCKET) {
-            PooledBuffer pooled = new PooledBuffer(buffer, bucketIndex, buffer.capacity());
-            bufferPools.get(bucketIndex).offer(pooled);
-            poolSizes.get(bucketIndex).incrementAndGet();
-        } else {
-            // Pool is full, free the buffer
-            try {
-                RustPerformance.freeFloatBufferNative(buffer);
-                totalFrees.incrementAndGet();
-            } catch (Exception e) {
-                System.err.println("Error freeing native buffer: " + e.getMessage());
-            }
-        }
-        
-        // Periodic cleanup
-        maybeCleanup();
-    }
-
-    /**
-     * Perform periodic cleanup of old buffers
-     */
-    private static void maybeCleanup() {
-        long now = System.currentTimeMillis();
-        long lastCleanup = lastCleanupTime.get();
-        
-        if (now - lastCleanup > CLEANUP_INTERVAL_MS && lastCleanupTime.compareAndSet(lastCleanup, now)) {
-            performCleanup();
-        }
-    }
-
-    /**
      * Clean up excess buffers from pools
      */
     private static void performCleanup() {
         List<Integer> emptyBuckets = new ArrayList<>();
         
-        for (Integer bucketIndex : bufferPools.keySet()) {
-            ConcurrentLinkedQueue<PooledBuffer> pool = bufferPools.get(bucketIndex);
+        for (var entry : bufferPools.entrySet()) {
+            int bucketIndex = entry.getKey();
+            ConcurrentLinkedQueue<PooledBuffer> pool = entry.getValue();
             AtomicInteger size = poolSizes.get(bucketIndex);
             
             if (pool != null && size != null) {
-                // Keep only half the maximum size
-                int targetSize = MAX_POOL_SIZE_PER_BUCKET / 2;
-                int currentSize = size.get();
-                
-                while (currentSize > targetSize) {
-                    PooledBuffer pooled = pool.poll();
-                    if (pooled != null) {
-                        try {
-                            RustPerformance.freeFloatBufferNative(pooled.buffer);
-                            totalFrees.incrementAndGet();
-                            size.decrementAndGet();
-                            currentSize--;
-                        } catch (Exception e) {
-                            System.err.println("Error freeing native buffer during cleanup: " + e.getMessage());
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                
+                int remaining = cleanupBucket(pool, size);
                 // Mark empty buckets for removal
-                if (currentSize == 0) {
+                if (remaining == 0) {
                     emptyBuckets.add(bucketIndex);
                 }
             }
@@ -241,6 +209,28 @@ public final class NativeFloatBuffer implements AutoCloseable {
             bufferPools.remove(bucketIndex);
             poolSizes.remove(bucketIndex);
         }
+    }
+
+    private static int cleanupBucket(ConcurrentLinkedQueue<PooledBuffer> pool, AtomicInteger size) {
+        int targetSize = MAX_POOL_SIZE_PER_BUCKET / 2;
+        int currentSize = size.get();
+        
+        while (currentSize > targetSize) {
+            PooledBuffer pooled = pool.poll();
+            if (pooled != null) {
+                try {
+                    RustPerformance.freeFloatBufferNative(pooled.buffer);
+                    totalFrees.incrementAndGet();
+                    size.decrementAndGet();
+                    currentSize--;
+                } catch (Exception e) {
+                    System.err.println("Error freeing native buffer during cleanup: " + e.getMessage());
+                }
+            } else {
+                break;
+            }
+        }
+        return currentSize;
     }
 
     /**
@@ -449,8 +439,8 @@ public final class NativeFloatBuffer implements AutoCloseable {
      * Clear all pools and free all buffers
      */
     public static void clearPools() {
-        for (Integer bucketIndex : bufferPools.keySet()) {
-            ConcurrentLinkedQueue<PooledBuffer> pool = bufferPools.get(bucketIndex);
+        for (var entry : bufferPools.entrySet()) {
+            ConcurrentLinkedQueue<PooledBuffer> pool = entry.getValue();
             if (pool != null) {
                 PooledBuffer pooled;
                 while ((pooled = pool.poll()) != null) {

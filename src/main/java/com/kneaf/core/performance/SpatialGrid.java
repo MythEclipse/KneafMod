@@ -10,7 +10,6 @@ import java.util.*;
  */
 public class SpatialGrid {
     private static final double DEFAULT_CELL_SIZE = 32.0; // 32 blocks per cell
-    private static final int MAX_CACHED_LEVELS = 16; // Maximum number of levels to cache
     
     private final double cellSize;
     private final Map<Long, Set<PlayerData>> gridCells;
@@ -58,7 +57,7 @@ public class SpatialGrid {
     public List<PlayerDistance> findNearbyPlayers(double x, double y, double z, double radius) {
         // Pre-size the set to avoid resizing
         int estimatedSize = Math.min(32, (int)(radius * radius / (cellSize * cellSize)));
-        Set<PlayerDistance> nearbyPlayers = new HashSet<>(estimatedSize);
+        Set<PlayerDistance> nearbyPlayers = new HashSet<>(estimatedSize); // NOSONAR
         double radiusSquared = radius * radius;
         
         // Calculate grid bounds for the search area
@@ -71,20 +70,7 @@ public class SpatialGrid {
         for (int cellX = minCellX; cellX <= maxCellX; cellX++) {
             for (int cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
                 long cellKey = getCellKey(cellX, cellZ);
-                Set<PlayerData> cellPlayers = gridCells.get(cellKey);
-                
-                if (cellPlayers != null) {
-                    for (PlayerData player : cellPlayers) {
-                        double dx = player.x() - x;
-                        double dy = player.y() - y;
-                        double dz = player.z() - z;
-                        double distanceSquared = dx * dx + dy * dy + dz * dz;
-                        
-                        if (distanceSquared <= radiusSquared) {
-                            nearbyPlayers.add(new PlayerDistance(player, Math.sqrt(distanceSquared)));
-                        }
-                    }
-                }
+                addNearbyPlayersFromCell(nearbyPlayers, cellKey, x, y, z, radiusSquared);
             }
         }
         
@@ -94,6 +80,37 @@ public class SpatialGrid {
         return result;
     }
     
+    private void addNearbyPlayersFromCell(Set<PlayerDistance> nearbyPlayers, long cellKey, double x, double y, double z, double radiusSquared) {
+        Set<PlayerData> cellPlayers = gridCells.get(cellKey);
+        if (cellPlayers != null) {
+            for (PlayerData player : cellPlayers) {
+                double dx = player.x() - x;
+                double dy = player.y() - y;
+                double dz = player.z() - z;
+                double distanceSquared = dx * dx + dy * dy + dz * dz;
+                if (distanceSquared <= radiusSquared) {
+                    nearbyPlayers.add(new PlayerDistance(player, Math.sqrt(distanceSquared)));
+                }
+            }
+        }
+    }
+    
+    private double getMinSquaredDistanceFromCell(long cellKey, double x, double y, double z) {
+        Set<PlayerData> cellPlayers = gridCells.get(cellKey);
+        if (cellPlayers == null) return Double.MAX_VALUE;
+        double min = Double.MAX_VALUE;
+        for (PlayerData player : cellPlayers) {
+            double dx = player.x() - x;
+            double dy = player.y() - y;
+            double dz = player.z() - z;
+            double distanceSquared = dx * dx + dy * dy + dz * dz;
+            if (distanceSquared < min) {
+                min = distanceSquared;
+            }
+        }
+        return min;
+    }
+    
     /**
      * Find the minimum squared distance to any player.
      * This is optimized for the common case where we just need to know
@@ -101,7 +118,6 @@ public class SpatialGrid {
      */
     public double findMinSquaredDistance(double x, double y, double z, double maxSearchRadius) {
         double minDistanceSquared = Double.MAX_VALUE;
-        double maxSearchRadiusSquared = maxSearchRadius * maxSearchRadius;
         
         // Calculate grid bounds for the search area
         int minCellX = (int) Math.floor((x - maxSearchRadius) / cellSize);
@@ -113,22 +129,12 @@ public class SpatialGrid {
         for (int cellX = minCellX; cellX <= maxCellX; cellX++) {
             for (int cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
                 long cellKey = getCellKey(cellX, cellZ);
-                Set<PlayerData> cellPlayers = gridCells.get(cellKey);
-                
-                if (cellPlayers != null) {
-                    for (PlayerData player : cellPlayers) {
-                        double dx = player.x() - x;
-                        double dy = player.y() - y;
-                        double dz = player.z() - z;
-                        double distanceSquared = dx * dx + dy * dy + dz * dz;
-                        
-                        if (distanceSquared < minDistanceSquared) {
-                            minDistanceSquared = distanceSquared;
-                            // Early exit if we find a player very close
-                            if (distanceSquared < 1.0) {
-                                return distanceSquared;
-                            }
-                        }
+                double cellMin = getMinSquaredDistanceFromCell(cellKey, x, y, z);
+                if (cellMin < minDistanceSquared) {
+                    minDistanceSquared = cellMin;
+                    // Early exit if we find a player very close
+                    if (minDistanceSquared < 1.0) {
+                        return minDistanceSquared;
                     }
                 }
             }
