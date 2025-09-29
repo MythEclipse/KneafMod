@@ -1,6 +1,7 @@
 use super::types::*;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use serde_json;
 
 pub fn process_entities(input: Input) -> ProcessResult {
     // Group entities by type for more efficient processing
@@ -25,4 +26,15 @@ pub fn process_entities(input: Input) -> ProcessResult {
 /// Batch process multiple entity collections in parallel
 pub fn process_entities_batch(inputs: Vec<Input>) -> Vec<ProcessResult> {
     inputs.into_par_iter().map(|input| process_entities(input)).collect()
+}
+
+/// Process entities from JSON input and return JSON result
+pub fn process_entities_json(json_input: &str) -> Result<String, String> {
+    let input: Input = serde_json::from_str(json_input)
+        .map_err(|e| format!("Failed to parse JSON input: {}", e))?;
+    
+    let result = process_entities(input);
+    
+    serde_json::to_string(&result)
+        .map_err(|e| format!("Failed to serialize result to JSON: {}", e))
 }

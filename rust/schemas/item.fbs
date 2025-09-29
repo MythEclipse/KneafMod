@@ -1,0 +1,34 @@
+namespace kneaf.item;
+
+table ItemEntityData {
+  id:ulong;
+  item_type:string;
+  count:uint;
+  age_seconds:uint;
+  chunk_x:int;
+  chunk_z:int;
+}
+
+table ItemInput {
+  items:[ItemEntityData];
+}
+
+table ItemUpdate {
+  id:ulong;
+  new_count:uint;
+}
+
+table ItemProcessResult {
+  items_to_remove:[ulong];
+  merged_count:ulong;
+  despawned_count:ulong;
+  item_updates:[ItemUpdate];
+}
+
+table ItemConfig {
+  merge_enabled:bool;
+  max_items_per_chunk:uint;
+  despawn_time_seconds:uint;
+}
+
+root_type ItemInput;

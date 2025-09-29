@@ -379,3 +379,14 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
 
     ItemProcessResult { items_to_remove: items_to_remove_vec, merged_count: local_merged, despawned_count: local_despawned, item_updates }
 }
+
+/// Process item entities from JSON input and return JSON result
+pub fn process_item_entities_json(json_input: &str) -> Result<String, String> {
+    let input: ItemInput = serde_json::from_str(json_input)
+        .map_err(|e| format!("Failed to parse JSON input: {}", e))?;
+    
+    let result = process_item_entities(input);
+    
+    serde_json::to_string(&result)
+        .map_err(|e| format!("Failed to serialize result to JSON: {}", e))
+}

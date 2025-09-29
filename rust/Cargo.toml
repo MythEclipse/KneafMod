@@ -30,5 +30,6 @@ log = "0.4"
 env_logger = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 num_cpus = "1.16"
+flatbuffers = "23.5.26"
 
 [dev-dependencies]

@@ -1,0 +1,29 @@
+namespace kneaf.block;
+
+table BlockEntityData {
+  id:ulong;
+  block_type:string;
+  distance:float;
+  x:int;
+  y:int;
+  z:int;
+}
+
+table BlockInput {
+  tick_count:ulong;
+  block_entities:[BlockEntityData];
+}
+
+table BlockProcessResult {
+  block_entities_to_tick:[ulong];
+}
+
+table BlockConfig {
+  close_radius:float;
+  medium_radius:float;
+  close_rate:float;
+  medium_rate:float;
+  far_rate:float;
+}
+
+root_type BlockInput;

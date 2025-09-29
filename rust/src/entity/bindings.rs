@@ -1,12 +1,56 @@
-use super::types::*;
-use super::processing::*;
-use jni::{JNIEnv, objects::{JClass, JString}, sys::jstring};
+use jni::JNIEnv;
+use jni::objects::{JClass, JString, JByteBuffer};
+use jni::sys::jbyteArray;
+use crate::entity::processing::{process_entities, process_entities_json};
+use crate::flatbuffers::conversions::{deserialize_entity_input, serialize_entity_result};
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_processEntitiesNative(mut env: JNIEnv, _class: JClass, json_input: JString) -> jstring {
-    let input: String = env.get_string(&json_input).expect("Couldn't get java string!").into();
-    let input: Input = serde_json::from_str(&input).expect("Failed to parse input JSON");
-    let result = process_entities(input);
-    let output = serde_json::to_string(&result).unwrap();
-    env.new_string(&output).expect("Couldn't create java string!").into_raw()
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEntitiesNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    json_input: JString,
+) -> jbyteArray {
+    let input_str: String = env.get_string(&json_input).unwrap().into();
+    
+    match process_entities_json(&input_str) {
+        Ok(result_json) => {
+            env.byte_array_from_slice(result_json.as_bytes()).unwrap().into_raw()
+        }
+        Err(e) => {
+            let error_msg = format!("{{\"error\":\"{}\"}}", e);
+            env.byte_array_from_slice(error_msg.as_bytes()).unwrap().into_raw()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEntitiesBinaryNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    input_buffer: JByteBuffer,
+) -> jbyteArray {
+    // Get direct access to the ByteBuffer data
+    let data = match env.get_direct_buffer_address(&input_buffer) {
+        Ok(data) => data,
+        Err(_) => {
+            let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
+            return env.byte_array_from_slice(error_msg).unwrap().into_raw();
+        }
+    };
+
+    let capacity = match env.get_direct_buffer_capacity(&input_buffer) {
+        Ok(capacity) => capacity,
+        Err(_) => {
+            let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
+            return env.byte_array_from_slice(error_msg).unwrap().into_raw();
+        }
+    };
+
+    let slice = unsafe {
+        std::slice::from_raw_parts(data, capacity)
+    };
+
+    // For now, return error as binary protocol is not fully implemented
+    let error_msg = b"{\"error\":\"Binary protocol not fully implemented\"}";
+    env.byte_array_from_slice(error_msg).unwrap().into_raw()
 }

@@ -7,6 +7,7 @@ mod mob;
 mod block;
 mod spatial;
 mod chunk;
+mod flatbuffers;
 
 pub use shared::*;
 pub use entity::*;

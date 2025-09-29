@@ -125,6 +125,8 @@ dependencies {
     // j4rs for Rust FFI
     implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'io.github.astonbitecode:j4rs:0.17.0'
+    // FlatBuffers for binary protocol
+    implementation 'com.google.flatbuffers:flatbuffers-java:23.5.26'
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // compileOnly "mezz.jei:jei-${mc_version}-common-api:${jei_version}"

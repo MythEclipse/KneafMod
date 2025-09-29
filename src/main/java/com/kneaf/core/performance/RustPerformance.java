@@ -177,11 +177,17 @@ public class RustPerformance {
         }
     }
 
-    // Native methods
+    // Native methods - JSON (legacy)
     private static native String processEntitiesNative(String jsonInput);
     private static native String processItemEntitiesNative(String jsonInput);
     private static native String processMobAiNative(String jsonInput);
     private static native String processBlockEntitiesNative(String jsonInput);
+    
+    // Native methods - Binary FlatBuffers (new)
+    private static native java.nio.ByteBuffer processEntitiesBinaryNative(java.nio.ByteBuffer input);
+    private static native java.nio.ByteBuffer processItemEntitiesBinaryNative(java.nio.ByteBuffer input);
+    private static native java.nio.ByteBuffer processMobAiBinaryNative(java.nio.ByteBuffer input);
+    private static native java.nio.ByteBuffer processBlockEntitiesBinaryNative(java.nio.ByteBuffer input);
     // numeric utilities exposed from Rust
     public static native String parallelSumNative(String arrJson);
     public static native String matrixMultiplyNative(String aJson, String bJson);
@@ -203,6 +209,29 @@ public class RustPerformance {
 
     public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
         try {
+            // Use binary protocol if available, fallback to JSON
+            if (nativeAvailable) {
+                try {
+                    // Serialize to FlatBuffers binary format
+                    java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.EntityFlatBuffers.serializeEntityInput(
+                        tickCount++, entities, players);
+                    
+                    // Call binary native method
+                    java.nio.ByteBuffer resultBuffer = processEntitiesBinaryNative(inputBuffer);
+                    
+                    if (resultBuffer != null) {
+                        // Deserialize result
+                        List<Long> resultList = com.kneaf.core.flatbuffers.EntityFlatBuffers.deserializeEntityProcessResult(resultBuffer);
+                        totalEntitiesProcessed += resultList.size();
+                        return resultList;
+                    }
+                } catch (Exception binaryEx) {
+                    KneafCore.LOGGER.debug("Binary protocol failed, falling back to JSON: {}", binaryEx.getMessage());
+                    // Fall through to JSON fallback
+                }
+            }
+            
+            // JSON fallback
             Map<String, Object> input = new HashMap<>();
             input.put(TICK_COUNT_KEY, tickCount++);
             input.put("entities", entities);
@@ -259,6 +288,44 @@ public class RustPerformance {
 
     public static ItemProcessResult processItemEntities(List<ItemEntityData> items) {
         try {
+            // Use binary protocol if available, fallback to JSON
+            if (nativeAvailable) {
+                try {
+                    // Serialize to FlatBuffers binary format
+                    java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.ItemFlatBuffers.serializeItemInput(
+                        tickCount, items);
+                    
+                    // Call binary native method
+                    java.nio.ByteBuffer resultBuffer = processItemEntitiesBinaryNative(inputBuffer);
+                    
+                    if (resultBuffer != null) {
+                        // Deserialize result
+                        List<com.kneaf.core.data.ItemEntityData> updatedItems =
+                            com.kneaf.core.flatbuffers.ItemFlatBuffers.deserializeItemProcessResult(resultBuffer);
+                        
+                        // Convert to ItemProcessResult format
+                        List<Long> removeList = new ArrayList<>();
+                        List<ItemUpdate> updates = new ArrayList<>();
+                        
+                        for (com.kneaf.core.data.ItemEntityData item : updatedItems) {
+                            if (item.count() == 0) {
+                                removeList.add(item.id());
+                            } else {
+                                updates.add(new ItemUpdate(item.id(), item.count()));
+                            }
+                        }
+                        
+                        totalMerged += updates.size();
+                        totalDespawned += removeList.size();
+                        return new ItemProcessResult(removeList, updates.size(), removeList.size(), updates);
+                    }
+                } catch (Exception binaryEx) {
+                    KneafCore.LOGGER.debug("Binary protocol failed, falling back to JSON: {}", binaryEx.getMessage());
+                    // Fall through to JSON fallback
+                }
+            }
+            
+            // JSON fallback
             Map<String, Object> input = new HashMap<>();
             input.put("items", items);
             String jsonInput = gson.toJson(input);
@@ -293,6 +360,37 @@ public class RustPerformance {
 
     public static MobProcessResult processMobAI(List<MobData> mobs) {
         try {
+            // Use binary protocol if available, fallback to JSON
+            if (nativeAvailable) {
+                try {
+                    // Serialize to FlatBuffers binary format
+                    java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.MobFlatBuffers.serializeMobInput(
+                        tickCount, mobs);
+                    
+                    // Call binary native method
+                    java.nio.ByteBuffer resultBuffer = processMobAiBinaryNative(inputBuffer);
+                    
+                    if (resultBuffer != null) {
+                        // Deserialize result
+                        List<com.kneaf.core.data.MobData> updatedMobs =
+                            com.kneaf.core.flatbuffers.MobFlatBuffers.deserializeMobProcessResult(resultBuffer);
+                        
+                        // For now, assume all returned mobs need AI simplification
+                        List<Long> simplifyList = new ArrayList<>();
+                        for (com.kneaf.core.data.MobData mob : updatedMobs) {
+                            simplifyList.add(mob.id());
+                        }
+                        
+                        totalMobsProcessed += mobs.size();
+                        return new MobProcessResult(new ArrayList<>(), simplifyList);
+                    }
+                } catch (Exception binaryEx) {
+                    KneafCore.LOGGER.debug("Binary protocol failed, falling back to JSON: {}", binaryEx.getMessage());
+                    // Fall through to JSON fallback
+                }
+            }
+            
+            // JSON fallback
             Map<String, Object> input = new HashMap<>();
             input.put(TICK_COUNT_KEY, tickCount);
             input.put("mobs", mobs);
@@ -322,6 +420,33 @@ public class RustPerformance {
 
     public static List<Long> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
         try {
+            // Use binary protocol if available, fallback to JSON
+            if (nativeAvailable) {
+                try {
+                    // Serialize to FlatBuffers binary format
+                    java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.BlockFlatBuffers.serializeBlockInput(
+                        tickCount++, blockEntities);
+                    
+                    // Call binary native method
+                    java.nio.ByteBuffer resultBuffer = processBlockEntitiesBinaryNative(inputBuffer);
+                    
+                    if (resultBuffer != null) {
+                        // Deserialize result - for now, return all block entities as the binary protocol
+                        // doesn't return a specific list of entities to tick
+                        List<Long> resultList = new ArrayList<>();
+                        for (BlockEntityData block : blockEntities) {
+                            resultList.add(block.id());
+                        }
+                        totalBlocksProcessed += resultList.size();
+                        return resultList;
+                    }
+                } catch (Exception binaryEx) {
+                    KneafCore.LOGGER.debug("Binary protocol failed, falling back to JSON: {}", binaryEx.getMessage());
+                    // Fall through to JSON fallback
+                }
+            }
+            
+            // JSON fallback
             Map<String, Object> input = new HashMap<>();
             input.put(TICK_COUNT_KEY, tickCount++);
             input.put("block_entities", blockEntities);
