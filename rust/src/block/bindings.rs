@@ -10,16 +10,29 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
     _class: JClass,
     json_input: JString,
 ) -> jbyteArray {
-    let input_str: String = env.get_string(&json_input).unwrap().into();
-    
+    // Helper to create a jbyteArray containing a JSON error message. If creation fails, return null.
+    fn make_error(env: &JNIEnv, msg: &str) -> jbyteArray {
+        let err_bytes = msg.as_bytes();
+        match env.byte_array_from_slice(err_bytes) {
+            Ok(arr) => arr.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+
+    let input_str = match env.get_string(&json_input) {
+        Ok(s) => match s.to_str() {
+            Ok(st) => st.to_owned(),
+            Err(e) => return make_error(&env, &format!("{{\"error\":\"Invalid UTF-8 input: {}\"}}", e)),
+        },
+        Err(e) => return make_error(&env, &format!("{{\"error\":\"Failed to read input string: {}\"}}", e)),
+    };
+
     match crate::block::processing::process_block_entities_json(&input_str) {
-        Ok(result_json) => {
-            env.byte_array_from_slice(result_json.as_bytes()).unwrap().into_raw()
-        }
-        Err(e) => {
-            let error_msg = format!("{{\"error\":\"{}\"}}", e);
-            env.byte_array_from_slice(error_msg.as_bytes()).unwrap().into_raw()
-        }
+        Ok(result_json) => match env.byte_array_from_slice(result_json.as_bytes()) {
+            Ok(arr) => arr.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(e) => make_error(&env, &format!("{{\"error\":\"{}\"}}", e)),
     }
 }
 
@@ -34,7 +47,10 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
         Ok(data) => data,
         Err(_) => {
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            return env.byte_array_from_slice(error_msg).unwrap().into_raw();
+            return match env.byte_array_from_slice(error_msg) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            };
         }
     };
 
@@ -42,7 +58,10 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
         Ok(capacity) => capacity,
         Err(_) => {
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            return env.byte_array_from_slice(error_msg).unwrap().into_raw();
+            return match env.byte_array_from_slice(error_msg) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            };
         }
     };
 
@@ -52,5 +71,8 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
 
     // For now, return error as binary protocol is not fully implemented
     let error_msg = b"{\"error\":\"Binary protocol not fully implemented\"}";
-    env.byte_array_from_slice(error_msg).unwrap().into_raw()
+    match env.byte_array_from_slice(error_msg) {
+        Ok(arr) => arr.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
