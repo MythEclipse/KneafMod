@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.kneaf.core.data.EntityData;
 import com.kneaf.core.data.ItemEntityData;
@@ -49,8 +50,10 @@ public class PerformanceManager {
 
     private static synchronized ExecutorService getExecutor() {
         if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
+            // give threads unique names to make debugging easier
+            AtomicInteger threadIndex = new AtomicInteger(0);
             ThreadFactory factory = r -> {
-                Thread t = new Thread(r, "kneaf-perf-worker");
+                Thread t = new Thread(r, "kneaf-perf-worker-" + threadIndex.getAndIncrement());
                 t.setDaemon(true);
                 return t;
             };
@@ -193,42 +196,52 @@ public class PerformanceManager {
         int maxEntities = CONFIG.getMaxEntitiesToCollect();
         double distanceCutoff = CONFIG.getEntityDistanceCutoff();
         for (ServerLevel level : server.getAllLevels()) {
-            collectEntitiesFromLevel(level, entities, items, mobs, maxEntities, distanceCutoff);
-            // Block entity collection skipped for performance - can be added if needed
-            collectPlayersFromLevel(level, players);
+            // Precompute player positions once per level and pass into entity collection to avoid duplicate work
+            List<PlayerData> levelPlayers = new ArrayList<>();
+            for (ServerPlayer p : level.players()) {
+                levelPlayers.add(new PlayerData(p.getId(), p.getX(), p.getY(), p.getZ()));
+            }
+            collectEntitiesFromLevel(level, entities, items, mobs, maxEntities, distanceCutoff, levelPlayers);
+            // collect into global players list used by Rust processing
+            players.addAll(levelPlayers);
             if (entities.size() >= maxEntities) break; // global cap
         }
         return new EntityDataCollection(entities, items, mobs, blockEntities, players);
     }
 
-    private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, int maxEntities, double distanceCutoff) {
-        // Cache distances for this level pass to avoid repeated player distance calculations
-        Map<Integer, Double> distanceCache = new HashMap<>();
+    private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, int maxEntities, double distanceCutoff, List<PlayerData> players) {
         String[] excluded = CONFIG.getExcludedEntityTypes();
-
-        // Precompute player positions once per level to speed up distance checks
-        List<PlayerData> players = new ArrayList<>();
-        for (ServerPlayer p : level.players()) {
-            players.add(new PlayerData(p.getId(), p.getX(), p.getY(), p.getZ()));
-        }
+        double cutoffSq = distanceCutoff * distanceCutoff;
 
         for (Entity entity : level.getEntities().getAll()) {
             // If we've reached the maximum, stop scanning further entities in this level
             if (entities.size() >= maxEntities) break;
 
             String typeStr = entity.getType().toString();
-            double distance = distanceCache.computeIfAbsent(entity.getId(), id -> calculateDistanceToNearestPlayer(entity, players));
 
-            // single combined skip condition implemented as a guarded block to avoid multiple continue/break
-            if (!(distance > distanceCutoff || isExcludedType(typeStr, excluded))) {
+            // compute squared distance to nearest player to avoid a sqrt unless needed
+            double minSq = Double.MAX_VALUE;
+            for (PlayerData p : players) {
+                double dx = entity.getX() - p.x();
+                double dy = entity.getY() - p.y();
+                double dz = entity.getZ() - p.z();
+                double sq = dx*dx + dy*dy + dz*dz;
+                if (sq < minSq) minSq = sq;
+            }
+
+            boolean withinCutoff = minSq <= cutoffSq;
+            boolean excludedType = isExcludedType(typeStr, excluded);
+
+            if (withinCutoff && !excludedType) {
+                double distance = Math.sqrt(minSq);
                 boolean isBlockEntity = false; // Regular entities are not block entities
                 entities.add(new EntityData(entity.getId(), entity.getX(), entity.getY(), entity.getZ(), distance, isBlockEntity, typeStr));
 
                 if (entity instanceof ItemEntity itemEntity) {
                     collectItemEntity(entity, itemEntity, items);
                 } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
-                    // pass the already-computed distance to avoid recalculation
-                    collectMobEntity(entity, mob, mobs, distance);
+                    // pass the already-computed distance and type string to avoid recalculation
+                    collectMobEntity(entity, mob, mobs, distance, typeStr);
                 }
             }
         }
@@ -252,19 +265,14 @@ public class PerformanceManager {
         items.add(new ItemEntityData(entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
     }
 
-    private static void collectMobEntity(Entity entity, net.minecraft.world.entity.Mob mob, List<MobData> mobs, double distance) {
+    private static void collectMobEntity(Entity entity, net.minecraft.world.entity.Mob mob, List<MobData> mobs, double distance, String typeStr) {
         // Use the precomputed distance from caller to avoid an extra player iteration
         boolean isPassive = !(mob instanceof net.minecraft.world.entity.monster.Monster);
-        mobs.add(new MobData(entity.getId(), distance, isPassive, entity.getType().toString()));
+        mobs.add(new MobData(entity.getId(), distance, isPassive, typeStr));
     }
 
 
 
-    private static void collectPlayersFromLevel(ServerLevel level, List<PlayerData> players) {
-        for (ServerPlayer player : level.players()) {
-            players.add(new PlayerData(player.getId(), player.getX(), player.getY(), player.getZ()));
-        }
-    }
 
     /**
      * Consolidate collected item entity data by chunk X/Z and item type to reduce the number
@@ -273,10 +281,15 @@ public class PerformanceManager {
      */
     private static List<ItemEntityData> consolidateItemEntities(List<ItemEntityData> items) {
         if (items == null || items.isEmpty()) return items;
-        Map<String, ItemEntityData> agg = HashMap.newHashMap(Math.max(16, items.size()));
+    int cap = Math.max(16, items.size());
+    Map<String, ItemEntityData> agg = HashMap.newHashMap(cap);
+        StringBuilder sb = new StringBuilder(64);
         for (ItemEntityData it : items) {
-            // compact string key avoids per-item Key object allocation and relies on String interning of small strings
-            String k = it.chunkX() + ":" + it.chunkZ() + ":" + (it.itemType() == null ? "" : it.itemType());
+            // reuse StringBuilder to reduce per-item String allocations
+            sb.setLength(0);
+            sb.append(it.chunkX()).append(':').append(it.chunkZ()).append(':');
+            if (it.itemType() != null) sb.append(it.itemType());
+            String k = sb.toString();
             ItemEntityData cur = agg.get(k);
             if (cur == null) {
                 agg.put(k, it);
@@ -306,14 +319,10 @@ public class PerformanceManager {
 
     private static void applyItemUpdates(MinecraftServer server, RustPerformance.ItemProcessResult itemResult) {
         if (itemResult == null || itemResult.getItemUpdates() == null) return;
-        // Build a map of entity id -> Entity per level to reduce repeated lookups
+        // Use direct lookups by id to avoid allocating a map of every entity each tick
         for (ServerLevel level : server.getAllLevels()) {
-            java.util.Map<Integer, Entity> entityMap = new java.util.HashMap<>();
-            for (Entity e : level.getEntities().getAll()) {
-                entityMap.put(e.getId(), e);
-            }
             for (var update : itemResult.getItemUpdates()) {
-                Entity entity = entityMap.get((int) update.getId());
+                Entity entity = level.getEntity((int) update.getId());
                 if (entity instanceof ItemEntity itemEntity) {
                     itemEntity.getItem().setCount(update.getNewCount());
                 }
@@ -324,18 +333,14 @@ public class PerformanceManager {
     private static void applyMobOptimizations(MinecraftServer server, RustPerformance.MobProcessResult mobResult) {
         if (mobResult == null) return;
         for (ServerLevel level : server.getAllLevels()) {
-            java.util.Map<Integer, Entity> entityMap = new java.util.HashMap<>();
-            for (Entity e : level.getEntities().getAll()) {
-                entityMap.put(e.getId(), e);
-            }
             for (Long id : mobResult.getMobsToDisableAI()) {
-                Entity entity = entityMap.get(id.intValue());
+                Entity entity = level.getEntity(id.intValue());
                 if (entity instanceof net.minecraft.world.entity.Mob mob) {
                     mob.setNoAi(true);
                 }
             }
             for (Long id : mobResult.getMobsToSimplifyAI()) {
-                Entity entity = entityMap.get(id.intValue());
+                Entity entity = level.getEntity(id.intValue());
                 if (entity instanceof net.minecraft.world.entity.Mob) {
                     LOGGER.debug("Simplifying AI for mob {}", id);
                 }
@@ -344,36 +349,60 @@ public class PerformanceManager {
     }
 
     private static void logOptimizations(OptimizationResults results) {
-        // Only log when there are meaningful changes applied to the world to avoid noisy output
+        // Human-readable logs for meaningful changes (less frequent)
         if (tickCounter % 100 == 0 && hasMeaningfulOptimizations(results)) {
-            // Log only the meaningful fields
-            if (results.itemResult().getMergedCount() > 0 || results.itemResult().getDespawnedCount() > 0) {
-                LOGGER.info("Item optimization: {} merged, {} despawned", results.itemResult().getMergedCount(), results.itemResult().getDespawnedCount());
+            logReadableOptimizations(results);
+        }
+
+        // Compact metrics line periodically
+        if (tickCounter % CONFIG.getLogIntervalTicks() == 0 && hasMeaningfulOptimizations(results)) {
+            String summary = buildOptimizationSummary(results);
+            PerformanceMetricsLogger.logOptimizations(summary);
+        }
+    }
+
+    private static void logReadableOptimizations(OptimizationResults results) {
+        if (results == null) return;
+        if (results.itemResult() != null) {
+            long merged = results.itemResult().getMergedCount();
+            long despawned = results.itemResult().getDespawnedCount();
+            if (merged > 0 || despawned > 0) {
+                LOGGER.info("Item optimization: {} merged, {} despawned", merged, despawned);
             }
             if (!results.itemResult().getItemsToRemove().isEmpty()) {
                 LOGGER.info("Items removed: {}", results.itemResult().getItemsToRemove().size());
             }
-            if (!results.mobResult().getMobsToDisableAI().isEmpty() || !results.mobResult().getMobsToSimplifyAI().isEmpty()) {
-                LOGGER.info("Mob AI optimization: {} disabled, {} simplified", results.mobResult().getMobsToDisableAI().size(), results.mobResult().getMobsToSimplifyAI().size());
-            }
-            if (!results.blockResult().isEmpty()) {
-                LOGGER.info("Block entities to tick (reduced): {}", results.blockResult().size());
+        }
+
+        if (results.mobResult() != null) {
+            int disabled = results.mobResult().getMobsToDisableAI().size();
+            int simplified = results.mobResult().getMobsToSimplifyAI().size();
+            if (disabled > 0 || simplified > 0) {
+                LOGGER.info("Mob AI optimization: {} disabled, {} simplified", disabled, simplified);
             }
         }
 
-        // Also write a compact metrics line to the performance log periodically, but only when meaningful changes occurred
-        if (tickCounter % CONFIG.getLogIntervalTicks() == 0 && hasMeaningfulOptimizations(results)) {
-            double avg = getRollingAvgTPS();
-            String summary = String.format("avgTps=%.2f itemsMerged=%d itemsDespawned=%d mobsDisabled=%d mobsSimplified=%d itemsRemoved=%d blockEntities=%d",
-                    avg,
-                    results.itemResult().getMergedCount(),
-                    results.itemResult().getDespawnedCount(),
-                    results.mobResult().getMobsToDisableAI().size(),
-                    results.mobResult().getMobsToSimplifyAI().size(),
-                    results.itemResult().getItemsToRemove().size(),
-                    results.blockResult().size());
-            PerformanceMetricsLogger.logOptimizations(summary);
+        if (results.blockResult() != null && !results.blockResult().isEmpty()) {
+            LOGGER.info("Block entities to tick (reduced): {}", results.blockResult().size());
         }
+    }
+
+    private static String buildOptimizationSummary(OptimizationResults results) {
+        double avg = getRollingAvgTPS();
+        long itemsMerged = results.itemResult() == null ? 0L : results.itemResult().getMergedCount();
+        long itemsDespawned = results.itemResult() == null ? 0L : results.itemResult().getDespawnedCount();
+        int mobsDisabled = results.mobResult() == null ? 0 : results.mobResult().getMobsToDisableAI().size();
+        int mobsSimplified = results.mobResult() == null ? 0 : results.mobResult().getMobsToSimplifyAI().size();
+        int itemsRemoved = results.itemResult() == null ? 0 : results.itemResult().getItemsToRemove().size();
+        int blockEntities = results.blockResult() == null ? 0 : results.blockResult().size();
+        return String.format("avgTps=%.2f itemsMerged=%d itemsDespawned=%d mobsDisabled=%d mobsSimplified=%d itemsRemoved=%d blockEntities=%d",
+                avg,
+                itemsMerged,
+                itemsDespawned,
+                mobsDisabled,
+                mobsSimplified,
+                itemsRemoved,
+                blockEntities);
     }
 
     /**
@@ -407,18 +436,7 @@ public class PerformanceManager {
     }
 
 
-    // Overload that accepts a precomputed list of PlayerData to avoid iterating server player collections repeatedly
-    private static double calculateDistanceToNearestPlayer(Entity entity, List<PlayerData> players) {
-        double minDist = Double.MAX_VALUE;
-        for (PlayerData p : players) {
-            double dx = entity.getX() - p.x();
-            double dy = entity.getY() - p.y();
-            double dz = entity.getZ() - p.z();
-            double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-            if (dist < minDist) minDist = dist;
-        }
-        return minDist == Double.MAX_VALUE ? Double.MAX_VALUE : minDist;
-    }
+    
 
 
     private record OptimizationResults(List<Long> toTick, List<Long> blockResult, RustPerformance.ItemProcessResult itemResult, RustPerformance.MobProcessResult mobResult) {}
