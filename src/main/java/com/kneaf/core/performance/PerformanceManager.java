@@ -227,7 +227,8 @@ public class PerformanceManager {
                 if (entity instanceof ItemEntity itemEntity) {
                     collectItemEntity(entity, itemEntity, items);
                 } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
-                    collectMobEntity(entity, mob, level, mobs);
+                    // pass the already-computed distance to avoid recalculation
+                    collectMobEntity(entity, mob, mobs, distance);
                 }
             }
         }
@@ -251,8 +252,8 @@ public class PerformanceManager {
         items.add(new ItemEntityData(entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
     }
 
-    private static void collectMobEntity(Entity entity, net.minecraft.world.entity.Mob mob, ServerLevel level, List<MobData> mobs) {
-        double distance = calculateDistanceToNearestPlayer(entity, level);
+    private static void collectMobEntity(Entity entity, net.minecraft.world.entity.Mob mob, List<MobData> mobs, double distance) {
+        // Use the precomputed distance from caller to avoid an extra player iteration
         boolean isPassive = !(mob instanceof net.minecraft.world.entity.monster.Monster);
         mobs.add(new MobData(entity.getId(), distance, isPassive, entity.getType().toString()));
     }
@@ -272,32 +273,10 @@ public class PerformanceManager {
      */
     private static List<ItemEntityData> consolidateItemEntities(List<ItemEntityData> items) {
         if (items == null || items.isEmpty()) return items;
-        class Key {
-            final int cx, cz;
-            final String type;
-
-            Key(int cx, int cz, String t) {
-                this.cx = cx;
-                this.cz = cz;
-                this.type = t;
-            }
-
-            @Override
-            public int hashCode() {
-                return (cx * 31 + cz) * 31 + (type == null ? 0 : type.hashCode());
-            }
-
-            @Override
-            public boolean equals(Object o) {
-                if (this == o) return true;
-                if (!(o instanceof Key)) return false;
-                Key k = (Key) o;
-                return k.cx == cx && k.cz == cz && (type == null ? k.type == null : type.equals(k.type));
-            }
-        }
-        Map<Key, ItemEntityData> agg = new HashMap<>();
+        Map<String, ItemEntityData> agg = HashMap.newHashMap(Math.max(16, items.size()));
         for (ItemEntityData it : items) {
-            Key k = new Key(it.chunkX(), it.chunkZ(), it.itemType());
+            // compact string key avoids per-item Key object allocation and relies on String interning of small strings
+            String k = it.chunkX() + ":" + it.chunkZ() + ":" + (it.itemType() == null ? "" : it.itemType());
             ItemEntityData cur = agg.get(k);
             if (cur == null) {
                 agg.put(k, it);
@@ -305,7 +284,7 @@ public class PerformanceManager {
                 // sum counts and keep smallest age to represent the merged group
                 int newCount = cur.count() + it.count();
                 int newAge = Math.min(cur.ageSeconds(), it.ageSeconds());
-                agg.put(k, new ItemEntityData(-1, k.cx, k.cz, k.type, newCount, newAge));
+                agg.put(k, new ItemEntityData(-1, it.chunkX(), it.chunkZ(), it.itemType(), newCount, newAge));
             }
         }
         return new ArrayList<>(agg.values());
@@ -427,14 +406,6 @@ public class PerformanceManager {
         }
     }
 
-    private static double calculateDistanceToNearestPlayer(Entity entity, ServerLevel level) {
-        double minDist = Double.MAX_VALUE;
-        for (ServerPlayer player : level.players()) {
-            double dist = entity.distanceTo(player);
-            if (dist < minDist) minDist = dist;
-        }
-        return minDist;
-    }
 
     // Overload that accepts a precomputed list of PlayerData to avoid iterating server player collections repeatedly
     private static double calculateDistanceToNearestPlayer(Entity entity, List<PlayerData> players) {

@@ -114,18 +114,22 @@ public final class NativeFloatBuffer implements AutoCloseable {
     public java.nio.FloatBuffer colBuffer(int col) {
         checkOpen();
         if (col < 0 || col >= cols) throw new IndexOutOfBoundsException("col out of range");
-        java.nio.FloatBuffer out = java.nio.FloatBuffer.allocate((int)rows);
-        for (int r = 0; r < rows; r++) {
-            out.put(getFloatAt(r, col));
+        // Bulk copy column into a new non-direct FloatBuffer to minimize per-element Java calls
+        int rCount = (int) rows;
+        float[] tmp = new float[rCount];
+        int base = col; // starting index into row-major float array
+        int c = (int) cols;
+        for (int r = 0; r < rCount; r++) {
+            tmp[r] = view.get(base + r * c);
         }
-        out.flip();
-        return out;
+        return java.nio.FloatBuffer.wrap(tmp);
     }
 
     /** Fill the entire buffer with a value. */
     public void fill(float value) {
         checkOpen();
-        for (int i = 0; i < view.capacity(); i++) view.put(i, value);
+        int cap = view.capacity();
+        for (int i = 0; i < cap; i++) view.put(i, value);
     }
 
     /** Copy the contents into another NativeFloatBuffer (must match shape). */
