@@ -122,7 +122,7 @@ impl JniBatchProcessor {
         loop {
             // Try to get operations from queue
             {
-                let mut queue_guard = queue.lock().unwrap();
+                let mut queue_guard = queue.lock().expect("JNI batch queue mutex poisoned");
                 while batch.len() < config.max_batch_size {
                     if let Some(op) = queue_guard.pop_front() {
                         batch.push(op);
@@ -273,7 +273,7 @@ impl JniBatchProcessor {
             return Err("Queue is full".to_string());
         }
 
-        let mut queue = self.request_queue.lock().unwrap();
+    let mut queue = self.request_queue.lock().expect("JNI batch queue mutex poisoned");
         queue.push_back(operation);
         self.metrics.queue_depth.fetch_add(1, Ordering::SeqCst);
         self.metrics.total_operations.fetch_add(1, Ordering::SeqCst);
@@ -327,7 +327,7 @@ lazy_static::lazy_static! {
 
 /// Initialize the global JNI batch processor
 pub fn init_jni_batch_processor(config: JniBatchConfig) -> Result<(), String> {
-    let mut processor_guard = JNI_BATCH_PROCESSOR.write().unwrap();
+    let mut processor_guard = JNI_BATCH_PROCESSOR.write().expect("JNI_BATCH_PROCESSOR RwLock poisoned");
     
     if processor_guard.is_some() {
         return Err("JNI batch processor already initialized".to_string());
@@ -342,7 +342,7 @@ pub fn init_jni_batch_processor(config: JniBatchConfig) -> Result<(), String> {
 
 /// Get the global JNI batch processor
 pub fn get_jni_batch_processor() -> Option<Arc<JniBatchProcessor>> {
-    JNI_BATCH_PROCESSOR.read().unwrap().clone()
+    JNI_BATCH_PROCESSOR.read().expect("JNI_BATCH_PROCESSOR RwLock poisoned").clone()
 }
 
 /// Convenience function to submit an entity processing operation

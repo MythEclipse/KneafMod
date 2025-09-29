@@ -156,7 +156,7 @@ impl ArenaPool {
 
     /// Get an arena from the pool (create if necessary)
     pub fn get_arena(&self) -> Arc<BumpArena> {
-        let mut arenas = self.arenas.lock().unwrap();
+    let mut arenas = self.arenas.lock().expect("ArenaPool arenas mutex poisoned");
         
         // Try to reuse an existing arena
         if let Some(arena) = arenas.pop() {
@@ -174,7 +174,7 @@ impl ArenaPool {
 
     /// Return an arena to the pool
     pub fn return_arena(&self, arena: Arc<BumpArena>) {
-        let mut arenas = self.arenas.lock().unwrap();
+    let mut arenas = self.arenas.lock().expect("ArenaPool arenas mutex poisoned");
         if arenas.len() < self.max_arenas {
             arenas.push(arena);
         }
@@ -182,7 +182,7 @@ impl ArenaPool {
 
     /// Get combined statistics for all arenas
     pub fn stats(&self) -> ArenaPoolStats {
-        let arenas = self.arenas.lock().unwrap();
+    let arenas = self.arenas.lock().expect("ArenaPool arenas mutex poisoned");
         let mut total_allocated = 0;
         let mut total_used = 0;
         let arena_count = arenas.len();

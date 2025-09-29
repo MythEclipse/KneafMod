@@ -36,7 +36,7 @@ impl<T> WorkStealingScheduler<T> {
                     loop {
                         // Try to get a task
                         let task = {
-                            let mut tasks_guard = tasks.lock().unwrap();
+                            let mut tasks_guard = tasks.lock().expect("WorkStealingScheduler tasks mutex poisoned");
                             tasks_guard.pop_front()
                         };
                         
@@ -55,7 +55,7 @@ impl<T> WorkStealingScheduler<T> {
                     
                     // Add local results to shared results
                     if !local_results.is_empty() {
-                        let mut results_guard = results.lock().unwrap();
+                        let mut results_guard = results.lock().expect("WorkStealingScheduler results mutex poisoned");
                         results_guard.extend(local_results);
                     }
                 })
@@ -69,7 +69,7 @@ impl<T> WorkStealingScheduler<T> {
 
         // Extract results by locking the mutex and moving the vector out
         let final_results = Arc::clone(&results);
-        let mut locked = final_results.lock().unwrap();
+    let mut locked = final_results.lock().expect("WorkStealingScheduler final_results mutex poisoned");
         let mut out = Vec::new();
         std::mem::swap(&mut out, &mut *locked);
         out
