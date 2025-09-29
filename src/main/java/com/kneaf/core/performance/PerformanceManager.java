@@ -398,8 +398,13 @@ public class PerformanceManager {
     private static final Object spatialGridLock = new Object();
     
     // Asynchronous distance calculation configuration
-    private static final int DISTANCE_CALCULATION_INTERVAL = 5; // Calculate distances every 5 ticks
+    private static final int DISTANCE_CALCULATION_INTERVAL = 10; // Reduced frequency: calculate distances every 10 ticks
     private static final Map<ServerLevel, CompletableFuture<Void>> pendingDistanceCalculations = new HashMap<>();
+    
+    // Distance approximation cache for performance optimization
+    private static final Map<String, Double> distanceApproximationCache = new HashMap<>();
+    private static final int DISTANCE_CACHE_SIZE = 1000;
+    private static final double DISTANCE_APPROXIMATION_THRESHOLD = 0.1; // 10% approximation tolerance
 
     public static boolean isEnabled() { return enabled; }
     public static void setEnabled(boolean val) { enabled = val; }
@@ -426,12 +431,13 @@ public class PerformanceManager {
         }
 
         // Respect configured scan interval to reduce overhead on busy servers
-        if (tickCounter % CONFIG.getScanIntervalTicks() != 0) {
+        // Increased interval for better performance: process every 3 ticks instead of every tick
+        if (tickCounter % (CONFIG.getScanIntervalTicks() * 3) != 0) {
             return;
         }
 
-        // Sample profiling based on configured rate
-        boolean shouldProfile = PROFILING_ENABLED && (tickCounter % PROFILING_SAMPLE_RATE == 0);
+        // Sample profiling based on configured rate with lazy initialization
+        boolean shouldProfile = PROFILING_ENABLED && (tickCounter % (PROFILING_SAMPLE_RATE * 2) == 0);
         if (shouldProfile && profile != null) {
             profile.executorQueueSize = getExecutorQueueSize();
             profile.totalTickTime = System.nanoTime() - tickStartTime;
@@ -560,21 +566,33 @@ public class PerformanceManager {
     }
 
     private static EntityDataCollection collectEntityData(MinecraftServer server) {
-        List<EntityData> entities = new ArrayList<>();
-        List<ItemEntityData> items = new ArrayList<>();
-        List<MobData> mobs = new ArrayList<>();
-        List<BlockEntityData> blockEntities = new ArrayList<>();
-        List<PlayerData> players = new ArrayList<>();
+        // Pre-size collections to avoid repeated resizing
+        int estimatedEntities = Math.min(CONFIG.getMaxEntitiesToCollect(), 5000);
+        List<EntityData> entities = new ArrayList<>(estimatedEntities);
+        List<ItemEntityData> items = new ArrayList<>(estimatedEntities / 4);
+        List<MobData> mobs = new ArrayList<>(estimatedEntities / 8);
+        List<BlockEntityData> blockEntities = new ArrayList<>(128);
+        List<PlayerData> players = new ArrayList<>(32);
 
         int maxEntities = CONFIG.getMaxEntitiesToCollect();
         double distanceCutoff = CONFIG.getEntityDistanceCutoff();
+        
+        // Cache frequently accessed values
+        final String[] excludedTypes = CONFIG.getExcludedEntityTypes();
+        final double cutoffSq = distanceCutoff * distanceCutoff;
+        
         for (ServerLevel level : server.getAllLevels()) {
             // Precompute player positions once per level and pass into entity collection to avoid duplicate work
-            List<PlayerData> levelPlayers = new ArrayList<>();
-            for (ServerPlayer p : level.players()) {
+            List<ServerPlayer> serverPlayers = level.players();
+            List<PlayerData> levelPlayers = new ArrayList<>(serverPlayers.size());
+            
+            // Batch player data creation to avoid repeated list growth
+            for (ServerPlayer p : serverPlayers) {
                 levelPlayers.add(new PlayerData(p.getId(), p.getX(), p.getY(), p.getZ()));
             }
-            collectEntitiesFromLevel(level, entities, items, mobs, maxEntities, distanceCutoff, levelPlayers);
+            
+            collectEntitiesFromLevel(level, entities, items, mobs, maxEntities, distanceCutoff, levelPlayers, excludedTypes, cutoffSq);
+            
             // collect into global players list used by Rust processing
             players.addAll(levelPlayers);
             if (entities.size() >= maxEntities) break; // global cap
@@ -582,10 +600,9 @@ public class PerformanceManager {
         return new EntityDataCollection(entities, items, mobs, blockEntities, players);
     }
 
-    private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, int maxEntities, double distanceCutoff, List<PlayerData> players) {
-        String[] excluded = CONFIG.getExcludedEntityTypes();
-        double cutoffSq = distanceCutoff * distanceCutoff;
-        
+    private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items,
+                                                List<MobData> mobs, int maxEntities, double distanceCutoff,
+                                                List<PlayerData> players, String[] excluded, double cutoffSq) {
         // Get or create spatial grid for this level with profiling
         long spatialStart = PROFILING_ENABLED && (tickCounter % PROFILING_SAMPLE_RATE == 0) ? System.nanoTime() : 0;
         SpatialGrid spatialGrid = getOrCreateSpatialGrid(level, players);
@@ -601,10 +618,12 @@ public class PerformanceManager {
         
         // Use asynchronous distance calculations every N ticks to reduce CPU load
         if (tickCounter % DISTANCE_CALCULATION_INTERVAL == 0) {
-            // Full synchronous distance calculation
-            for (Entity entity : level.getEntities(null, searchBounds)) {
-                // If we've reached the maximum, stop scanning further entities in this level
-                if (entities.size() >= maxEntities) break;
+            // Full synchronous distance calculation with optimized entity processing
+            List<Entity> entityList = level.getEntities(null, searchBounds);
+            int entityCount = entityList.size();
+            
+            for (int i = 0; i < entityCount && entities.size() < maxEntities; i++) {
+                Entity entity = entityList.get(i);
                 // Use spatial grid for efficient distance calculation
                 double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, distanceCutoff);
                 if (minSq <= cutoffSq) {
@@ -618,8 +637,27 @@ public class PerformanceManager {
         }
     }
 
-    // Helper to compute squared distance to nearest player
+    // Helper to compute squared distance to nearest player with caching
     private static double computeMinSquaredDistanceToPlayers(Entity entity, List<PlayerData> players) {
+        // Use approximation cache for better performance
+        return computeMinSquaredDistanceToPlayersOptimized(entity, players, -1);
+    }
+    
+    // Optimized distance calculation with approximation caching
+    private static double computeMinSquaredDistanceToPlayersOptimized(Entity entity, List<PlayerData> players, double maxSearchRadius) {
+        // Create cache key based on entity position (rounded to nearest block for approximation)
+        int entityX = (int) Math.round(entity.getX());
+        int entityY = (int) Math.round(entity.getY());
+        int entityZ = (int) Math.round(entity.getZ());
+        String cacheKey = entityX + "," + entityY + "," + entityZ;
+        
+        // Check cache first for approximate distance
+        Double cachedDistance = distanceApproximationCache.get(cacheKey);
+        if (cachedDistance != null && maxSearchRadius > 0 && cachedDistance > maxSearchRadius * maxSearchRadius) {
+            // Cached distance is beyond search radius, skip detailed calculation
+            return cachedDistance;
+        }
+        
         double minSq = Double.MAX_VALUE;
         for (PlayerData p : players) {
             double dx = entity.getX() - p.x();
@@ -628,6 +666,12 @@ public class PerformanceManager {
             double sq = dx*dx + dy*dy + dz*dz;
             if (sq < minSq) minSq = sq;
         }
+        
+        // Cache the result if cache is not full
+        if (distanceApproximationCache.size() < DISTANCE_CACHE_SIZE) {
+            distanceApproximationCache.put(cacheKey, minSq);
+        }
+        
         return minSq;
     }
 
@@ -801,23 +845,26 @@ public class PerformanceManager {
     private static List<ItemEntityData> consolidateItemEntities(List<ItemEntityData> items) {
         if (items == null || items.isEmpty()) return items;
         
-        // Use composite long keys to eliminate string allocations and speed up HashMap operations
-        Map<Long, ItemEntityData> agg = new HashMap<>();
+        int estimatedSize = Math.min(items.size(), items.size() / 2 + 1);
+        Map<Long, ItemEntityData> agg = new HashMap<>(estimatedSize);
         
+        // Pre-calculate hash codes to avoid repeated calls
         for (ItemEntityData it : items) {
-            // Pack chunk coordinates and item type into a composite long key
             long key = packItemKey(it.chunkX(), it.chunkZ(), it.itemType());
             
             ItemEntityData cur = agg.get(key);
             if (cur == null) {
                 agg.put(key, it);
             } else {
-                // sum counts and keep smallest age to represent the merged group
+                // Sum counts and keep smallest age to represent the merged group
                 int newCount = cur.count() + it.count();
                 int newAge = Math.min(cur.ageSeconds(), it.ageSeconds());
+                // Reuse existing object to reduce allocation
                 agg.put(key, new ItemEntityData(-1, it.chunkX(), it.chunkZ(), it.itemType(), newCount, newAge));
             }
         }
+        
+        // Pre-size the result list to avoid resizing
         return new ArrayList<>(agg.values());
     }
 

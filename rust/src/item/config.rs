@@ -34,6 +34,7 @@ pub struct ProfilingConfig {
     pub enabled: bool,
     pub slow_operation_threshold_ms: u64,
     pub log_detailed_timing: bool,
+    pub sampling_rate: f32,
 }
 
 impl Default for ProfilingConfig {
@@ -42,6 +43,7 @@ impl Default for ProfilingConfig {
             enabled: true,
             slow_operation_threshold_ms: 10,
             log_detailed_timing: true,
+            sampling_rate: 0.1, // 10% sampling to reduce overhead
         }
     }
 }

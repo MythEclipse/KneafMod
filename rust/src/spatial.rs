@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use glam::Vec3;
 use bevy_ecs::prelude::Entity;
 use rayon::prelude::*;
+use crate::simd::{get_simd_manager, vector_ops, entity_processing};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -457,68 +458,12 @@ pub struct ChunkData {
     pub is_loaded: bool,
 }
 
-// SIMD-accelerated distance calculation using std::simd for better portability
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use std::arch::x86_64::*;
-
+/// SIMD-accelerated distance calculation using the SIMD manager
 pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
-    #[cfg(target_feature = "avx2")]
-    {
-        let cx = _mm256_set1_ps(center.0);
-        let cy = _mm256_set1_ps(center.1);
-        let cz = _mm256_set1_ps(center.2);
-
-        positions.par_chunks(8).flat_map(|chunk| {
-            let mut distances = [0.0f32; 8];
-            let px = _mm256_set_ps(chunk.get(7).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(6).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(5).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(4).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(3).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(2).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(1).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(0).map(|p| p.0).unwrap_or(0.0));
-            let py = _mm256_set_ps(chunk.get(7).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(6).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(5).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(4).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(3).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(2).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(1).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(0).map(|p| p.1).unwrap_or(0.0));
-            let pz = _mm256_set_ps(chunk.get(7).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(6).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(5).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(4).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(3).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(2).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(1).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(0).map(|p| p.2).unwrap_or(0.0));
-
-            let dx = _mm256_sub_ps(px, cx);
-            let dy = _mm256_sub_ps(py, cy);
-            let dz = _mm256_sub_ps(pz, cz);
-
-            let dx2 = _mm256_mul_ps(dx, dx);
-            let dy2 = _mm256_mul_ps(dy, dy);
-            let dz2 = _mm256_mul_ps(dz, dz);
-
-            let sum = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
-            let dist = _mm256_sqrt_ps(sum);
-
-            _mm256_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
-    }
-    #[cfg(not(target_feature = "avx2"))]
-    {
-        positions.par_iter().map(|(x, y, z)| {
-            let dx = x - center.0;
-            let dy = y - center.1;
-            let dz = z - center.2;
-            (dx * dx + dy * dy + dz * dz).sqrt()
-        }).collect()
-    }
+    entity_processing::calculate_entity_distances(
+        &positions.iter().map(|(x, y, z)| (*x, *y, *z)).collect::<Vec<_>>(),
+        center
+    )
 }
 
 /// SIMD-accelerated distance calculation using std::simd for better portability
@@ -579,176 +524,27 @@ pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: 
     }
 }
 
-/// SIMD-accelerated entity filtering with distance threshold
+/// SIMD-accelerated entity filtering with distance threshold using SIMD manager
 pub fn filter_entities_by_distance_simd<T: Clone + Send + Sync>(
     entities: &[(T, [f64; 3])],
     center: [f64; 3],
     max_distance: f64,
 ) -> Vec<(T, [f64; 3])> {
-    #[cfg(target_feature = "avx2")]
-    {
-        use std::arch::x86_64::*;
-        
-        let center_x = _mm256_set1_ps(center[0] as f32);
-        let center_y = _mm256_set1_ps(center[1] as f32);
-        let center_z = _mm256_set1_ps(center[2] as f32);
-        let max_dist_sq = _mm256_set1_ps((max_distance * max_distance) as f32);
-        
-        let entities_vec: Vec<_> = entities.iter().collect();
-        
-        entities_vec.par_chunks(8).flat_map(|chunk| {
-            let mut results = Vec::new();
-            
-            // Extract positions for SIMD processing
-            let mut positions_x = [0.0f32; 8];
-            let mut positions_y = [0.0f32; 8];
-            let mut positions_z = [0.0f32; 8];
-            
-            for (i, (_, pos)) in chunk.iter().enumerate() {
-                positions_x[i] = pos[0] as f32;
-                positions_y[i] = pos[1] as f32;
-                positions_z[i] = pos[2] as f32;
-            }
-            
-            let px = _mm256_loadu_ps(positions_x.as_ptr());
-            let py = _mm256_loadu_ps(positions_y.as_ptr());
-            let pz = _mm256_loadu_ps(positions_z.as_ptr());
-            
-            let dx = _mm256_sub_ps(px, center_x);
-            let dy = _mm256_sub_ps(py, center_y);
-            let dz = _mm256_sub_ps(pz, center_z);
-            
-            let dx2 = _mm256_mul_ps(dx, dx);
-            let dy2 = _mm256_mul_ps(dy, dy);
-            let dz2 = _mm256_mul_ps(dz, dz);
-            
-            let dist_sq = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
-            let within_range = _mm256_cmp_ps(dist_sq, max_dist_sq, _CMP_LE_OQ);
-            
-            let mask = _mm256_movemask_ps(within_range);
-            
-            for (i, (entity, pos)) in chunk.iter().enumerate() {
-                if (mask & (1 << i)) != 0 {
-                    results.push(((*entity).clone(), **pos));
-                }
-            }
-            
-            results
-        }).collect()
-    }
-    #[cfg(not(target_feature = "avx2"))]
-    {
-        entities.par_iter()
-            .filter(|(_, pos)| {
-                let dx = pos[0] - center[0];
-                let dy = pos[1] - center[1];
-                let dz = pos[2] - center[2];
-                let dist_sq = dx * dx + dy * dy + dz * dz;
-                dist_sq <= max_distance * max_distance
-            })
-            .map(|(entity, pos)| (entity.clone(), *pos))
-            .collect()
-    }
+    entity_processing::filter_entities_by_distance(
+        entities,
+        center,
+        max_distance
+    )
 }
 
-// SIMD-accelerated chunk distance calculation (2D, ignoring Y)
+/// SIMD-accelerated chunk distance calculation (2D, ignoring Y) using SIMD manager
 pub fn calculate_chunk_distances_simd(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
-    #[cfg(target_feature = "avx2")]
-    {
-        let cx = _mm256_set1_ps(center_chunk.0 as f32);
-        let cz = _mm256_set1_ps(center_chunk.1 as f32);
-
-        chunk_coords.par_chunks(8).flat_map(|chunk| {
-            let mut distances = [0.0f32; 8];
-            let px = _mm256_set_ps(chunk.get(7).map(|p| p.0 as f32).unwrap_or(0.0),
-                                     chunk.get(6).map(|p| p.0 as f32).unwrap_or(0.0),
-                                     chunk.get(5).map(|p| p.0 as f32).unwrap_or(0.0),
-                                     chunk.get(4).map(|p| p.0 as f32).unwrap_or(0.0),
-                                     chunk.get(3).map(|p| p.0 as f32).unwrap_or(0.0),
-                                     chunk.get(2).map(|p| p.0 as f32).unwrap_or(0.0),
-                                     chunk.get(1).map(|p| p.0 as f32).unwrap_or(0.0),
-                                     chunk.get(0).map(|p| p.0 as f32).unwrap_or(0.0));
-            let pz = _mm256_set_ps(chunk.get(7).map(|p| p.1 as f32).unwrap_or(0.0),
-                                     chunk.get(6).map(|p| p.1 as f32).unwrap_or(0.0),
-                                     chunk.get(5).map(|p| p.1 as f32).unwrap_or(0.0),
-                                     chunk.get(4).map(|p| p.1 as f32).unwrap_or(0.0),
-                                     chunk.get(3).map(|p| p.1 as f32).unwrap_or(0.0),
-                                     chunk.get(2).map(|p| p.1 as f32).unwrap_or(0.0),
-                                     chunk.get(1).map(|p| p.1 as f32).unwrap_or(0.0),
-                                     chunk.get(0).map(|p| p.1 as f32).unwrap_or(0.0));
-
-            let dx = _mm256_sub_ps(px, cx);
-            let dz = _mm256_sub_ps(pz, cz);
-
-            let dx2 = _mm256_mul_ps(dx, dx);
-            let dz2 = _mm256_mul_ps(dz, dz);
-
-            let sum = _mm256_add_ps(dx2, dz2);
-            let dist = _mm256_sqrt_ps(sum);
-
-            _mm256_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
-    }
-    #[cfg(not(target_feature = "avx2"))]
-    {
-        chunk_coords.par_iter().map(|(x, z)| {
-            let dx = *x as f32 - center_chunk.0 as f32;
-            let dz = *z as f32 - center_chunk.1 as f32;
-            (dx * dx + dz * dz).sqrt()
-        }).collect()
-    }
+    vector_ops::calculate_chunk_distances(chunk_coords, center_chunk)
 }
 
-/// SIMD-accelerated AABB intersection batch processing
+/// SIMD-accelerated AABB intersection batch processing using SIMD manager
 pub fn batch_aabb_intersections(aabbs: &[Aabb], queries: &[Aabb]) -> Vec<Vec<bool>> {
-    #[cfg(target_feature = "avx2")]
-    {
-        use std::arch::x86_64::*;
-        
-        queries.par_iter().map(|query| {
-            aabbs.par_chunks(4).flat_map(|chunk| {
-                let mut results = [false; 4];
-                
-                // Load query bounds once
-                let query_min = _mm256_set_ps(
-                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0,
-                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0
-                );
-                let query_max = _mm256_set_ps(
-                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0,
-                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0
-                );
-                
-                for (i, aabb) in chunk.iter().enumerate() {
-                    let aabb_min = _mm256_set_ps(
-                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0,
-                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0
-                    );
-                    let aabb_max = _mm256_set_ps(
-                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0,
-                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0
-                    );
-                    
-                    // Test intersection: query.min <= aabb.max && query.max >= aabb.min
-                    let cmp1 = _mm256_cmp_ps(query_min, aabb_max, _CMP_LE_OQ);
-                    let cmp2 = _mm256_cmp_ps(query_max, aabb_min, _CMP_GE_OQ);
-                    let intersection = _mm256_and_ps(cmp1, cmp2);
-                    
-                    let mask = _mm256_movemask_ps(intersection);
-                    results[i] = (mask & 0x07) == 0x07; // Check X, Y, Z axes
-                }
-                
-                results.into_iter().take(chunk.len()).collect::<Vec<_>>()
-            }).collect()
-        }).collect()
-    }
-    #[cfg(not(target_feature = "avx2"))]
-    {
-        queries.iter()
-            .map(|query| aabbs.iter().map(|aabb| aabb.intersects(query)).collect())
-            .collect()
-    }
+    vector_ops::batch_aabb_intersections(aabbs, queries)
 }
 
 /// SIMD-accelerated QuadTree query with multiple bounds

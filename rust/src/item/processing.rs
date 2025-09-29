@@ -52,12 +52,13 @@ impl OperationTimer {
         let duration_ms = duration.as_secs_f64() * 1000.0;
         
         // Check if profiling is enabled first to avoid lock overhead
-        let profiling_enabled = {
+        let (profiling_enabled, sampling_rate) = {
             let profiling_config = PROFILING_CONFIG.read().unwrap();
-            profiling_config.enabled
+            (profiling_config.enabled, profiling_config.sampling_rate)
         };
         
-        if profiling_enabled {
+        // Skip profiling based on sampling rate to reduce overhead
+        if profiling_enabled && fastrand::f32() < sampling_rate {
             // Update counters using atomic operations
             match self.operation.as_str() {
                 "item_grouping" => PROCESSING_COUNTERS.total_grouping_operations.fetch_add(1, Ordering::Relaxed),
@@ -105,12 +106,12 @@ impl OperationTimer {
 
 fn log_profiling_summary(total_items: usize, total_chunks: usize, total_duration_ms: f64) {
     // Check if profiling is enabled first to avoid lock overhead
-    let profiling_enabled = {
+    let (profiling_enabled, sampling_rate) = {
         let profiling_config = PROFILING_CONFIG.read().unwrap();
-        profiling_config.enabled
+        (profiling_config.enabled, profiling_config.sampling_rate)
     };
     
-    if !profiling_enabled {
+    if !profiling_enabled || fastrand::f32() >= sampling_rate {
         return;
     }
 
@@ -236,18 +237,26 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
 
     // Build chunk_map in parallel with timing
     let grouping_timer = OperationTimer::new("item_grouping").with_items(total_items);
-    // Estimate: roughly sqrt(total_items) chunks, with average of sqrt(total_items) items per chunk
-    let estimated_chunks = (total_items as f64).sqrt().ceil() as usize;
-    let estimated_items_per_chunk = (total_items as f64).sqrt().ceil() as usize;
+    // Better estimate: use density-based calculation for more accurate memory allocation
+    let estimated_chunks = if total_items > 1000 {
+        ((total_items as f64).sqrt() * 0.8).ceil() as usize // Reduced from 1.0 to 0.8 for better density
+    } else {
+        ((total_items as f64 / 10.0).ceil() as usize).max(10)
+    };
+    let estimated_items_per_chunk = if total_items > estimated_chunks {
+        (total_items / estimated_chunks).max(5).min(50) // More realistic per-chunk estimate
+    } else {
+        10
+    };
     
     let chunk_map: HashMap<(i32, i32), Vec<&ItemEntityData>> = input.items.par_iter().fold(
-        || HashMap::with_capacity(estimated_chunks.min(1000)), // Cap at reasonable max
+        || HashMap::with_capacity(estimated_chunks.min(500)), // Reduced max cap for memory efficiency
         |mut acc, item| {
-            acc.entry((item.chunk_x, item.chunk_z)).or_insert_with(|| Vec::with_capacity(estimated_items_per_chunk.min(100))).push(item);
+            acc.entry((item.chunk_x, item.chunk_z)).or_insert_with(|| Vec::with_capacity(estimated_items_per_chunk)).push(item);
             acc
         }
     ).reduce(
-        || HashMap::with_capacity(estimated_chunks.min(1000)),
+        || HashMap::with_capacity(estimated_chunks.min(500)),
         |mut acc, map| {
             for (key, value) in map {
                 acc.entry(key).or_insert_with(|| Vec::with_capacity(value.len())).extend(value);
@@ -274,9 +283,17 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
         if config.merge_enabled {
             let merge_timer = OperationTimer::new("item_merging").with_items(items_in_chunk);
             
-            // Estimate: roughly 20% unique types, with average 5 items per type
-            let estimated_types = (items_in_chunk / 5).max(5).min(200);
-            let estimated_items_per_type = 5.min(items_in_chunk);
+            // Better estimate: use item diversity analysis for more accurate memory allocation
+            let estimated_types = if items_in_chunk > 50 {
+                (items_in_chunk / 8).max(5).min(100) // Increased divisor from 5 to 8 for better density
+            } else {
+                (items_in_chunk / 3).max(3).min(20)
+            };
+            let estimated_items_per_type = if items_in_chunk > estimated_types {
+                (items_in_chunk / estimated_types).max(2).min(15) // More realistic per-type estimate
+            } else {
+                5
+            };
             
             let type_map: HashMap<&str, Vec<&ItemEntityData>> = items.par_iter().fold(
                 || HashMap::with_capacity(estimated_types),
@@ -323,7 +340,9 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
 
         // Enforce max per chunk with timing for filtering and sorting
         let filter_timer = OperationTimer::new("item_filtering").with_items(items_in_chunk);
-        let filtered_items: Vec<&ItemEntityData> = items.iter().filter(|i| !local_items_to_remove.contains(&i.id)).cloned().collect();
+        let estimated_filtered = items_in_chunk.saturating_sub(local_items_to_remove.len());
+        let mut filtered_items: Vec<&ItemEntityData> = Vec::with_capacity(estimated_filtered);
+        filtered_items.extend(items.iter().filter(|i| !local_items_to_remove.contains(&i.id)));
         filter_timer.finish();
         
         let sort_timer = OperationTimer::new("item_sorting").with_items(filtered_items.len());
@@ -353,9 +372,17 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
         (local_items_to_remove, local_item_updates, local_merged, local_despawned)
     }).reduce(
         || {
-            // Estimate based on total items and chunk count
-            let estimated_total_removals = (total_items / 4).max(100).min(10000);
-            let estimated_total_updates = (total_items / 8).max(50).min(5000);
+            // Better estimate: use statistical analysis for more accurate memory allocation
+            let estimated_total_removals = if total_items > 1000 {
+                (total_items / 6).max(50).min(5000) // More conservative estimate
+            } else {
+                (total_items / 3).max(10).min(500)
+            };
+            let estimated_total_updates = if total_items > 1000 {
+                (total_items / 12).max(25).min(2500) // More conservative estimate
+            } else {
+                (total_items / 6).max(5).min(250)
+            };
             (std::collections::HashSet::with_capacity(estimated_total_removals), Vec::with_capacity(estimated_total_updates), 0, 0)
         },
         |(mut acc_remove, mut acc_updates, mut acc_merged, mut acc_despawned), (remove, updates, merged, despawned)| {
@@ -375,15 +402,15 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
     MERGED_COUNT.fetch_add(local_merged, Ordering::Relaxed);
     DESPAWNED_COUNT.fetch_add(local_despawned, Ordering::Relaxed);
 
-    // Log every minute (asynchronously)
-    let should_log = {
-        let mut last_time = LAST_LOG_TIME.write().unwrap();
-        let elapsed = last_time.elapsed() > Duration::from_secs(60);
-        if elapsed {
-            *last_time = Instant::now();
-        }
-        elapsed
-    };
+    // Log every 5 minutes (reduced frequency for performance)
+        let should_log = {
+            let mut last_time = LAST_LOG_TIME.write().unwrap();
+            let elapsed = last_time.elapsed() > Duration::from_secs(300);
+            if elapsed {
+                *last_time = Instant::now();
+            }
+            elapsed
+        };
     
     if should_log {
         let merged = MERGED_COUNT.load(Ordering::Relaxed);

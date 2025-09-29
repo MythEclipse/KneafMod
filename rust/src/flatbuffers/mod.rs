@@ -1,69 +1,23 @@
-pub mod conversions;
-
-// Re-export the FlatBuffers generated types
 pub mod entity {
-    // Stub types for FlatBuffers compatibility
-    pub struct EntityData<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct PlayerData<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct Config<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct EntityInput<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct EntityProcessResult<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
+    include!("entity/entity_generated.rs");
 }
 
 pub mod item {
-    pub struct ItemEntityData<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct ItemInput<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct ItemProcessResult<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
+    include!("item/item_generated.rs");
 }
 
 pub mod mob {
-    pub struct MobData<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct MobInput<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct MobProcessResult<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
+    include!("mob/mob_generated.rs");
 }
 
 pub mod block {
-    pub struct BlockEntityData<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct BlockInput<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
-    
-    pub struct BlockProcessResult<'a> {
-        pub _phantom: std::marker::PhantomData<&'a ()>,
-    }
+    include!("block/block_generated.rs");
 }
 
-// Re-export flatbuffers types
+pub mod conversions;
+
+// Re-export the FlatBuffers generated types for convenience
+pub use self::entity::kneaf::*;
+pub use self::item::kneaf::*;
+pub use self::mob::kneaf::*;
+pub use self::block::kneaf::*;

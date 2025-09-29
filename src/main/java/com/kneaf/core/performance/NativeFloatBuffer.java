@@ -345,11 +345,30 @@ public final class NativeFloatBuffer implements AutoCloseable {
         return java.nio.FloatBuffer.wrap(tmp);
     }
 
-    /** Fill the entire buffer with a value. */
+    /** Fill the entire buffer with a value. Optimized version using bulk operations. */
     public void fill(float value) {
         checkOpen();
         int cap = view.capacity();
-        for (int i = 0; i < cap; i++) view.put(i, value);
+        
+        // Use bulk fill for better performance on large buffers
+        if (cap > 1000) {
+            // Fill in chunks to leverage CPU cache
+            int chunkSize = Math.min(cap, 10000);
+            float[] chunk = new float[chunkSize];
+            java.util.Arrays.fill(chunk, value);
+            
+            for (int i = 0; i < cap; i += chunkSize) {
+                int remaining = Math.min(chunkSize, cap - i);
+                view.position(i);
+                view.put(chunk, 0, remaining);
+            }
+            view.position(0); // Reset position
+        } else {
+            // Direct fill for smaller buffers
+            for (int i = 0; i < cap; i++) {
+                view.put(i, value);
+            }
+        }
     }
 
     /** Copy the contents into another NativeFloatBuffer (must match shape). */

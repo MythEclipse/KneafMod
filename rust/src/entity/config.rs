@@ -1,4 +1,5 @@
 use std::sync::RwLock;
+use crate::types::Aabb;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -9,7 +10,7 @@ pub struct Config {
     pub medium_rate: f32,
     pub far_rate: f64,
     pub use_spatial_partitioning: bool,
-    pub world_bounds: crate::Aabb,
+    pub world_bounds: Aabb,
     pub quadtree_max_entities: usize,
     pub quadtree_max_depth: usize,
 }
@@ -22,7 +23,7 @@ lazy_static::lazy_static! {
         medium_rate: 0.5,
         far_rate: 0.1,
         use_spatial_partitioning: true,
-        world_bounds: crate::Aabb::new(-10000.0, -64.0, -10000.0, 10000.0, 320.0, 10000.0),
+    world_bounds: Aabb::new(-10000.0, -64.0, -10000.0, 10000.0, 320.0, 10000.0),
         quadtree_max_entities: 16,
         quadtree_max_depth: 8,
     });

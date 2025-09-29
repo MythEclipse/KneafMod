@@ -56,7 +56,9 @@ public class SpatialGrid {
      * Returns players sorted by distance (closest first).
      */
     public List<PlayerDistance> findNearbyPlayers(double x, double y, double z, double radius) {
-        Set<PlayerDistance> nearbyPlayers = new HashSet<>();
+        // Pre-size the set to avoid resizing
+        int estimatedSize = Math.min(32, (int)(radius * radius / (cellSize * cellSize)));
+        Set<PlayerDistance> nearbyPlayers = new HashSet<>(estimatedSize);
         double radiusSquared = radius * radius;
         
         // Calculate grid bounds for the search area
@@ -148,6 +150,25 @@ public class SpatialGrid {
      */
     public int getPlayerCount() {
         return playerPositionCache.size();
+    }
+    
+    /**
+     * Check if a player position has changed significantly and should be updated.
+     * This supports incremental updates for better performance.
+     */
+    public boolean shouldUpdatePlayer(PlayerData player) {
+        PlayerData cachedPlayer = playerPositionCache.get(player.id());
+        if (cachedPlayer == null) {
+            return true; // Player not in cache, needs update
+        }
+        
+        // Check if position has changed significantly (more than 1 block)
+        double dx = player.x() - cachedPlayer.x();
+        double dy = player.y() - cachedPlayer.y();
+        double dz = player.z() - cachedPlayer.z();
+        double distanceSquared = dx * dx + dy * dy + dz * dz;
+        
+        return distanceSquared > 1.0; // Update if moved more than 1 block
     }
     
     /**

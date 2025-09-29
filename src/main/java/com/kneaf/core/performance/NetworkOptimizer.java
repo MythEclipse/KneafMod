@@ -53,7 +53,7 @@ public class NetworkOptimizer {
 
     // Packet batching
     private static final List<Packet<?>> packetBatch = new ArrayList<>();
-    private static final int BATCH_SIZE = 10; // Send batch every 10 packets
+    private static final int BATCH_SIZE = 25; // Increased batch size for better throughput (was 10)
 
     // Compression: use thread-local Deflater to be thread-safe
     private static final ThreadLocal<Deflater> DEFLATER_LOCAL = ThreadLocal.withInitial(() -> new Deflater(Deflater.BEST_SPEED));
@@ -97,6 +97,9 @@ public class NetworkOptimizer {
             if (packetBatch.size() >= BATCH_SIZE) {
                 // schedule immediate execution on executor instead of submit to allow delayed rate-limited tasks
                 getNetworkExecutor().execute(NetworkOptimizer::sendBatchedPackets);
+            } else if (packetBatch.size() >= BATCH_SIZE / 2) {
+                // Schedule batch processing for half-full batches to prevent excessive delays
+                getNetworkExecutor().schedule(NetworkOptimizer::sendBatchedPackets, 10, java.util.concurrent.TimeUnit.MILLISECONDS);
             }
         }
     }

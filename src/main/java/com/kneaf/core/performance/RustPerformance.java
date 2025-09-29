@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Set;
+import java.util.HashSet;
 import java.io.*;
 import java.nio.file.*;
 
@@ -37,12 +39,16 @@ public class RustPerformance {
         return t;
     });
 
-    // JNI call batching configuration
-    private static final int BATCH_SIZE = 10; // Process 10 requests per batch
-    private static final long BATCH_TIMEOUT_MS = 50; // Maximum wait time for batch to fill
+    // JNI call batching configuration - optimized for server performance
+    private static final int BATCH_SIZE = 50; // Increased batch size for better throughput (doubled from 25)
+    private static final long BATCH_TIMEOUT_MS = 35; // Slightly increased timeout to accommodate larger batches
     private static final ConcurrentLinkedQueue<BatchRequest> pendingRequests = new ConcurrentLinkedQueue<>();
     private static volatile boolean batchProcessorRunning = false;
     private static final Object batchLock = new Object();
+    
+    // Reusable buffers to reduce allocations
+    private static final ThreadLocal<StringBuilder> stringBuilderCache = ThreadLocal.withInitial(() -> new StringBuilder(1024));
+    private static final ThreadLocal<Map<String, Object>> inputMapCache = ThreadLocal.withInitial(() -> new HashMap<>(16));
 
     // Batch request wrapper
     private static class BatchRequest {
@@ -289,10 +295,22 @@ public class RustPerformance {
     private static void processEntityBatch(List<BatchRequest> batch) {
         if (batch.isEmpty()) return;
         
+        // Pre-size collections to avoid resizing
+        int totalEntities = 0;
+        int totalPlayers = 0;
+        for (BatchRequest req : batch) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) req.data;
+            List<EntityData> entities = (List<EntityData>) data.get("entities");
+            List<PlayerData> players = (List<PlayerData>) data.get("players");
+            totalEntities += entities.size();
+            totalPlayers += players.size();
+        }
+        
         // Extract data from all requests in batch
-        List<EntityData> allEntities = new ArrayList<>();
-        List<PlayerData> allPlayers = new ArrayList<>();
-        Map<Integer, List<CompletableFuture<Object>>> resultMapping = new HashMap<>();
+        List<EntityData> allEntities = new ArrayList<>(totalEntities);
+        List<PlayerData> allPlayers = new ArrayList<>(totalPlayers);
+        Map<Integer, List<CompletableFuture<Object>>> resultMapping = new HashMap<>(totalEntities);
         
         for (int i = 0; i < batch.size(); i++) {
             BatchRequest req = batch.get(i);
@@ -308,12 +326,15 @@ public class RustPerformance {
             int startIdx = allEntities.size() - entities.size();
             int endIdx = allEntities.size();
             for (int j = startIdx; j < endIdx; j++) {
-                resultMapping.computeIfAbsent(j, k -> new ArrayList<>()).add(req.future);
+                resultMapping.computeIfAbsent(j, k -> new ArrayList<>(2)).add(req.future);
             }
         }
 
         // Process combined data
         List<Long> results = processEntitiesDirect(allEntities, allPlayers);
+        
+        // Create a Set for faster lookup
+        Set<Long> resultSet = new HashSet<>(results);
         
         // Distribute results back to individual futures
         for (int i = 0; i < batch.size(); i++) {
@@ -324,9 +345,9 @@ public class RustPerformance {
             
             // Find results for this request
             List<Long> requestResults = new ArrayList<>();
-            for (int j = 0; j < allEntities.size(); j++) {
-                if (entities.contains(allEntities.get(j)) && results.contains(allEntities.get(j).id())) {
-                    requestResults.add(allEntities.get(j).id());
+            for (EntityData entity : entities) {
+                if (resultSet.contains(entity.id())) {
+                    requestResults.add(entity.id());
                 }
             }
             

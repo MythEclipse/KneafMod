@@ -1193,6 +1193,7 @@ dependencies = [
  "crossbeam-channel",
  "dashmap",
  "env_logger",
+ "fastrand",
  "flatbuffers",
  "glam",
  "j4rs",

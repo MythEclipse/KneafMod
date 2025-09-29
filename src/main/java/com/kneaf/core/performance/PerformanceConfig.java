@@ -78,6 +78,29 @@ public final class PerformanceConfig {
         this.cpuAwareThreadSizing = b.cpuAwareThreadSizing;
         this.cpuLoadThreshold = b.cpuLoadThreshold;
         this.threadPoolKeepAliveSeconds = b.threadPoolKeepAliveSeconds;
+        
+        // Validate configuration consistency
+        validateConfiguration();
+    }
+    
+    /**
+     * Validate configuration parameters for consistency and performance.
+     */
+    private void validateConfiguration() {
+        if (minThreadPoolSize > maxThreadPoolSize) {
+            throw new IllegalArgumentException("minThreadPoolSize (" + minThreadPoolSize +
+                                             ") cannot be greater than maxThreadPoolSize (" + maxThreadPoolSize + ")");
+        }
+        if (threadScaleUpThreshold <= threadScaleDownThreshold) {
+            throw new IllegalArgumentException("threadScaleUpThreshold (" + threadScaleUpThreshold +
+                                             ") must be greater than threadScaleDownThreshold (" + threadScaleDownThreshold + ")");
+        }
+        if (scanIntervalTicks < 1 || scanIntervalTicks > 100) {
+            throw new IllegalArgumentException("scanIntervalTicks must be between 1 and 100, got: " + scanIntervalTicks);
+        }
+        if (tpsThresholdForAsync < 10.0 || tpsThresholdForAsync > 20.0) {
+            throw new IllegalArgumentException("tpsThresholdForAsync must be between 10.0 and 20.0, got: " + tpsThresholdForAsync);
+        }
     }
 
     /**
@@ -233,9 +256,48 @@ public final class PerformanceConfig {
             this.threadScaleDownDelayTicks = 200;
             this.workStealingEnabled = true;
             this.workStealingQueueSize = 100;
-            this.cpuAwareThreadSizing = true;
-            this.cpuLoadThreshold = 0.7;
-            this.threadPoolKeepAliveSeconds = 60;
+            // Advanced parallelism configuration validation
+            int vMinThreadPoolSize = Math.max(1, this.minThreadPoolSize);
+            boolean vDynamicThreadScaling = this.dynamicThreadScaling;
+            double vThreadScaleUpThreshold = Math.max(0.1, Math.min(1.0, this.threadScaleUpThreshold));
+            double vThreadScaleDownThreshold = Math.max(0.1, Math.min(1.0, this.threadScaleDownThreshold));
+            int vThreadScaleUpDelayTicks = Math.max(1, this.threadScaleUpDelayTicks);
+            int vThreadScaleDownDelayTicks = Math.max(1, this.threadScaleDownDelayTicks);
+            boolean vWorkStealingEnabled = this.workStealingEnabled;
+            int vWorkStealingQueueSize = Math.max(1, this.workStealingQueueSize);
+            boolean vCpuAwareThreadSizing = this.cpuAwareThreadSizing;
+            double vCpuLoadThreshold = Math.max(0.1, Math.min(1.0, this.cpuLoadThreshold));
+            int vThreadPoolKeepAliveSeconds = Math.max(1, this.threadPoolKeepAliveSeconds);
+            
+            // Distance calculation optimization
+            int vDistanceCalculationInterval = Math.max(1, this.distanceCalculationInterval);
+            boolean vDistanceApproximationEnabled = this.distanceApproximationEnabled;
+            int vDistanceCacheSize = Math.max(100, this.distanceCacheSize);
+            
+            // Item processing optimization
+            int vItemProcessingIntervalMultiplier = Math.max(1, this.itemProcessingIntervalMultiplier);
+            
+            // Spatial grid optimization
+            int vSpatialGridUpdateInterval = Math.max(1, this.spatialGridUpdateInterval);
+            boolean vIncrementalSpatialUpdates = this.incrementalSpatialUpdates;
+            
+            validated.minThreadPoolSize(vMinThreadPoolSize)
+                    .dynamicThreadScaling(vDynamicThreadScaling)
+                    .threadScaleUpThreshold(vThreadScaleUpThreshold)
+                    .threadScaleDownThreshold(vThreadScaleDownThreshold)
+                    .threadScaleUpDelayTicks(vThreadScaleUpDelayTicks)
+                    .threadScaleDownDelayTicks(vThreadScaleDownDelayTicks)
+                    .workStealingEnabled(vWorkStealingEnabled)
+                    .workStealingQueueSize(vWorkStealingQueueSize)
+                    .cpuAwareThreadSizing(vCpuAwareThreadSizing)
+                    .cpuLoadThreshold(vCpuLoadThreshold)
+                    .threadPoolKeepAliveSeconds(vThreadPoolKeepAliveSeconds)
+                    .distanceCalculationInterval(vDistanceCalculationInterval)
+                    .distanceApproximationEnabled(vDistanceApproximationEnabled)
+                    .distanceCacheSize(vDistanceCacheSize)
+                    .itemProcessingIntervalMultiplier(vItemProcessingIntervalMultiplier)
+                    .spatialGridUpdateInterval(vSpatialGridUpdateInterval)
+                    .incrementalSpatialUpdates(vIncrementalSpatialUpdates);
         }
     }
 
@@ -267,6 +329,18 @@ public final class PerformanceConfig {
     public boolean isCpuAwareThreadSizing() { return cpuAwareThreadSizing; }
     public double getCpuLoadThreshold() { return cpuLoadThreshold; }
     public int getThreadPoolKeepAliveSeconds() { return threadPoolKeepAliveSeconds; }
+    
+    // Distance calculation optimization getters
+    public int getDistanceCalculationInterval() { return distanceCalculationInterval; }
+    public boolean isDistanceApproximationEnabled() { return distanceApproximationEnabled; }
+    public int getDistanceCacheSize() { return distanceCacheSize; }
+    
+    // Item processing optimization getters
+    public int getItemProcessingIntervalMultiplier() { return itemProcessingIntervalMultiplier; }
+    
+    // Spatial grid optimization getters
+    public int getSpatialGridUpdateInterval() { return spatialGridUpdateInterval; }
+    public boolean isIncrementalSpatialUpdates() { return incrementalSpatialUpdates; }
 
     public static PerformanceConfig load() {
         Properties props = new Properties();
