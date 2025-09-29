@@ -1,5 +1,6 @@
 use super::types::*;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -66,27 +67,27 @@ impl Default for ThreadPoolMetrics {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProcessingCounters {
-    pub total_items_processed: u64,
-    pub total_chunks_processed: u64,
-    pub total_grouping_operations: u64,
-    pub total_merge_operations: u64,
-    pub total_filter_operations: u64,
-    pub total_sort_operations: u64,
-    pub total_despawn_operations: u64,
+    pub total_items_processed: AtomicU64,
+    pub total_chunks_processed: AtomicU64,
+    pub total_grouping_operations: AtomicU64,
+    pub total_merge_operations: AtomicU64,
+    pub total_filter_operations: AtomicU64,
+    pub total_sort_operations: AtomicU64,
+    pub total_despawn_operations: AtomicU64,
 }
 
 impl Default for ProcessingCounters {
     fn default() -> Self {
         Self {
-            total_items_processed: 0,
-            total_chunks_processed: 0,
-            total_grouping_operations: 0,
-            total_merge_operations: 0,
-            total_filter_operations: 0,
-            total_sort_operations: 0,
-            total_despawn_operations: 0,
+            total_items_processed: AtomicU64::new(0),
+            total_chunks_processed: AtomicU64::new(0),
+            total_grouping_operations: AtomicU64::new(0),
+            total_merge_operations: AtomicU64::new(0),
+            total_filter_operations: AtomicU64::new(0),
+            total_sort_operations: AtomicU64::new(0),
+            total_despawn_operations: AtomicU64::new(0),
         }
     }
 }
@@ -97,11 +98,11 @@ lazy_static::lazy_static! {
         max_items_per_chunk: 100,
         despawn_time_seconds: 300,
     });
-    pub static ref MERGED_COUNT: RwLock<u64> = RwLock::new(0);
-    pub static ref DESPAWNED_COUNT: RwLock<u64> = RwLock::new(0);
+    pub static ref MERGED_COUNT: AtomicU64 = AtomicU64::new(0);
+    pub static ref DESPAWNED_COUNT: AtomicU64 = AtomicU64::new(0);
     pub static ref LAST_LOG_TIME: RwLock<Instant> = RwLock::new(Instant::now());
     pub static ref PROFILING_CONFIG: RwLock<ProfilingConfig> = RwLock::new(ProfilingConfig::default());
-    pub static ref PROCESSING_COUNTERS: RwLock<ProcessingCounters> = RwLock::new(ProcessingCounters::default());
+    pub static ref PROCESSING_COUNTERS: ProcessingCounters = ProcessingCounters::default();
     pub static ref THREAD_POOL_CONFIG: RwLock<ThreadPoolConfig> = RwLock::new(ThreadPoolConfig::default());
     pub static ref THREAD_POOL_METRICS: RwLock<ThreadPoolMetrics> = RwLock::new(ThreadPoolMetrics::default());
 }

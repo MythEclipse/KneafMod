@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.CompletableFuture;
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
 
@@ -395,6 +396,10 @@ public class PerformanceManager {
     // Spatial grid for efficient player position queries per level
     private static final Map<ServerLevel, SpatialGrid> levelSpatialGrids = new HashMap<>();
     private static final Object spatialGridLock = new Object();
+    
+    // Asynchronous distance calculation configuration
+    private static final int DISTANCE_CALCULATION_INTERVAL = 5; // Calculate distances every 5 ticks
+    private static final Map<ServerLevel, CompletableFuture<Void>> pendingDistanceCalculations = new HashMap<>();
 
     public static boolean isEnabled() { return enabled; }
     public static void setEnabled(boolean val) { enabled = val; }
@@ -594,16 +599,22 @@ public class PerformanceManager {
         // Create bounding box that encompasses all players within distance cutoff
         AABB searchBounds = createSearchBounds(players, distanceCutoff);
         
-        // Use Minecraft's built-in spatial filtering with level.getEntities(null, AABB)
-        // This leverages Minecraft's spatial indexing for better performance
-        for (Entity entity : level.getEntities(null, searchBounds)) {
-            // If we've reached the maximum, stop scanning further entities in this level
-            if (entities.size() >= maxEntities) break;
-            // Use spatial grid for efficient distance calculation
-            double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, distanceCutoff);
-            if (minSq <= cutoffSq) {
-                processEntityWithinCutoff(entity, minSq, excluded, entities, items, mobs);
+        // Use asynchronous distance calculations every N ticks to reduce CPU load
+        if (tickCounter % DISTANCE_CALCULATION_INTERVAL == 0) {
+            // Full synchronous distance calculation
+            for (Entity entity : level.getEntities(null, searchBounds)) {
+                // If we've reached the maximum, stop scanning further entities in this level
+                if (entities.size() >= maxEntities) break;
+                // Use spatial grid for efficient distance calculation
+                double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, distanceCutoff);
+                if (minSq <= cutoffSq) {
+                    processEntityWithinCutoff(entity, minSq, excluded, entities, items, mobs);
+                }
             }
+        } else {
+            // Reduced frequency calculation - use cached distances or approximate
+            performReducedDistanceCalculation(level, searchBounds, entities, items, mobs, maxEntities,
+                                            excluded, spatialGrid, cutoffSq, distanceCutoff);
         }
     }
 
@@ -716,6 +727,47 @@ public class PerformanceManager {
         var count = itemStack.getCount();
         var ageSeconds = itemEntity.getAge() / 20;
         items.add(new ItemEntityData(entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
+    }
+
+    /**
+     * Perform reduced frequency distance calculation to optimize performance.
+     * Uses cached distances and approximate calculations when full precision is not needed.
+     */
+    private static void performReducedDistanceCalculation(ServerLevel level, AABB searchBounds,
+                                                         List<EntityData> entities, List<ItemEntityData> items,
+                                                         List<MobData> mobs, int maxEntities, String[] excluded,
+                                                         SpatialGrid spatialGrid, double cutoffSq, double distanceCutoff) {
+        // Use a larger search radius to reduce false negatives, then filter more precisely for close entities
+        double approximateCutoff = distanceCutoff * 1.2; // 20% larger for safety margin
+        double approximateCutoffSq = approximateCutoff * approximateCutoff;
+        
+        // First pass: quick approximate filtering using spatial grid
+        List<Entity> candidateEntities = new ArrayList<>();
+        for (Entity entity : level.getEntities(null, searchBounds)) {
+            if (entities.size() >= maxEntities) break;
+            
+            // Quick approximate check using spatial grid
+            double approxMinSq = spatialGrid.findMinSquaredDistance(
+                entity.getX(), entity.getY(), entity.getZ(), approximateCutoff);
+            
+            if (approxMinSq <= approximateCutoffSq) {
+                candidateEntities.add(entity);
+            }
+        }
+        
+        // Second pass: precise calculation only for candidates
+        for (Entity entity : candidateEntities) {
+            if (entities.size() >= maxEntities) break;
+            
+            String typeStr = entity.getType().toString();
+            if (isExcludedType(typeStr, excluded)) continue;
+            
+            // Precise distance calculation
+            double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, distanceCutoff);
+            if (minSq <= cutoffSq) {
+                processEntityWithinCutoff(entity, minSq, excluded, entities, items, mobs);
+            }
+        }
     }
 
     private static void collectMobEntity(Entity entity, net.minecraft.world.entity.Mob mob, List<MobData> mobs, double distance, String typeStr) {

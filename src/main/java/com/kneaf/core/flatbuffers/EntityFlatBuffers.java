@@ -10,17 +10,23 @@ import java.nio.ByteOrder;
  */
 public class EntityFlatBuffers {
     
-    public static ByteBuffer serializeEntityInput(long tickCount, java.util.List<com.kneaf.core.data.EntityData> entities, 
+    public static ByteBuffer serializeEntityInput(long tickCount, java.util.List<com.kneaf.core.data.EntityData> entities,
                                                  java.util.List<com.kneaf.core.data.PlayerData> players) {
-        FlatBufferBuilder builder = new FlatBufferBuilder(1024);
+        // Estimate buffer size based on input lists to minimize reallocations
+        // Base size + estimated size per entity/player + string overhead
+        int estimatedSize = 1024 +
+                           entities.size() * 64 +  // ~64 bytes per entity (id, 3 floats, bool, string ref)
+                           players.size() * 32 +   // ~32 bytes per player (id, 3 floats)
+                           (entities.size() + players.size()) * 16; // string overhead estimate
+        FlatBufferBuilder builder = new FlatBufferBuilder(estimatedSize);
         
         // Serialize entities
         int[] entityOffsets = new int[entities.size()];
         for (int i = 0; i < entities.size(); i++) {
             com.kneaf.core.data.EntityData entity = entities.get(i);
             int entityTypeOffset = builder.createString(entity.entityType());
-            entityOffsets[i] = createEntityData(builder, entity.id(), entityTypeOffset, 
-                                              entity.x(), entity.y(), entity.z(), 
+            entityOffsets[i] = createEntityData(builder, entity.id(), entityTypeOffset,
+                                              (float) entity.x(), (float) entity.y(), (float) entity.z(),
                                               (float) entity.distance(), entity.isBlockEntity());
         }
         int entitiesOffset = builder.createVectorOfTables(entityOffsets);
@@ -29,7 +35,7 @@ public class EntityFlatBuffers {
         int[] playerOffsets = new int[players.size()];
         for (int i = 0; i < players.size(); i++) {
             com.kneaf.core.data.PlayerData player = players.get(i);
-            playerOffsets[i] = createPlayerData(builder, player.id(), player.x(), player.y(), player.z());
+            playerOffsets[i] = createPlayerData(builder, player.id(), (float) player.x(), (float) player.y(), (float) player.z());
         }
         int playersOffset = builder.createVectorOfTables(playerOffsets);
         
@@ -60,8 +66,8 @@ public class EntityFlatBuffers {
     }
     
     // EntityData methods
-    public static int createEntityData(FlatBufferBuilder builder, long id, int entityType, 
-                                     double x, double y, double z, float distance, boolean isBlockEntity) {
+    public static int createEntityData(FlatBufferBuilder builder, long id, int entityType,
+                                     float x, float y, float z, float distance, boolean isBlockEntity) {
         startEntityData(builder);
         addId(builder, id);
         addEntityType(builder, entityType);
@@ -76,15 +82,15 @@ public class EntityFlatBuffers {
     public static void startEntityData(FlatBufferBuilder builder) { builder.startTable(6); }
     public static void addId(FlatBufferBuilder builder, long id) { builder.addLong(0, id, 0); }
     public static void addEntityType(FlatBufferBuilder builder, int entityType) { builder.addOffset(1, entityType, 0); }
-    public static void addX(FlatBufferBuilder builder, double x) { builder.addDouble(2, x, 0); }
-    public static void addY(FlatBufferBuilder builder, double y) { builder.addDouble(3, y, 0); }
-    public static void addZ(FlatBufferBuilder builder, double z) { builder.addDouble(4, z, 0); }
+    public static void addX(FlatBufferBuilder builder, float x) { builder.addFloat(2, x, 0); }
+    public static void addY(FlatBufferBuilder builder, float y) { builder.addFloat(3, y, 0); }
+    public static void addZ(FlatBufferBuilder builder, float z) { builder.addFloat(4, z, 0); }
     public static void addDistance(FlatBufferBuilder builder, float distance) { builder.addFloat(5, distance, 0); }
     public static void addIsBlockEntity(FlatBufferBuilder builder, boolean isBlockEntity) { builder.addBoolean(6, isBlockEntity, false); }
     public static int endEntityData(FlatBufferBuilder builder) { return builder.endTable(); }
     
     // PlayerData methods
-    public static int createPlayerData(FlatBufferBuilder builder, long id, double x, double y, double z) {
+    public static int createPlayerData(FlatBufferBuilder builder, long id, float x, float y, float z) {
         startPlayerData(builder);
         addPlayerId(builder, id);
         addPlayerX(builder, x);
@@ -95,9 +101,9 @@ public class EntityFlatBuffers {
     
     public static void startPlayerData(FlatBufferBuilder builder) { builder.startTable(4); }
     public static void addPlayerId(FlatBufferBuilder builder, long id) { builder.addLong(0, id, 0); }
-    public static void addPlayerX(FlatBufferBuilder builder, double x) { builder.addDouble(1, x, 0); }
-    public static void addPlayerY(FlatBufferBuilder builder, double y) { builder.addDouble(2, y, 0); }
-    public static void addPlayerZ(FlatBufferBuilder builder, double z) { builder.addDouble(3, z, 0); }
+    public static void addPlayerX(FlatBufferBuilder builder, float x) { builder.addFloat(1, x, 0); }
+    public static void addPlayerY(FlatBufferBuilder builder, float y) { builder.addFloat(2, y, 0); }
+    public static void addPlayerZ(FlatBufferBuilder builder, float z) { builder.addFloat(3, z, 0); }
     public static int endPlayerData(FlatBufferBuilder builder) { return builder.endTable(); }
     
     // EntityConfig methods

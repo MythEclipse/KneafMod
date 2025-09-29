@@ -11,14 +11,19 @@ import java.nio.ByteOrder;
 public class BlockFlatBuffers {
     
     public static ByteBuffer serializeBlockInput(long tickCount, java.util.List<com.kneaf.core.data.BlockEntityData> blocks) {
-        FlatBufferBuilder builder = new FlatBufferBuilder(1024);
+        // Estimate buffer size based on input list to minimize reallocations
+        // Base size + estimated size per block + string overhead
+        int estimatedSize = 1024 +
+                           blocks.size() * 40 +   // ~40 bytes per block (id, float, 3 ints, string ref)
+                           blocks.size() * 16;    // string overhead estimate
+        FlatBufferBuilder builder = new FlatBufferBuilder(estimatedSize);
         
         // Serialize blocks
         int[] blockOffsets = new int[blocks.size()];
         for (int i = 0; i < blocks.size(); i++) {
             com.kneaf.core.data.BlockEntityData block = blocks.get(i);
             int blockTypeOffset = builder.createString(block.blockType());
-            blockOffsets[i] = createBlockEntityData(builder, block.id(), block.distance(), blockTypeOffset,
+            blockOffsets[i] = createBlockEntityData(builder, block.id(), (float) block.distance(), blockTypeOffset,
                                                   block.x(), block.y(), block.z());
         }
         int blocksOffset = builder.createVectorOfTables(blockOffsets);
@@ -56,7 +61,7 @@ public class BlockFlatBuffers {
     }
     
     // BlockEntityData methods
-    public static int createBlockEntityData(FlatBufferBuilder builder, long id, double distance, int blockType,
+    public static int createBlockEntityData(FlatBufferBuilder builder, long id, float distance, int blockType,
                                           int x, int y, int z) {
         startBlockEntityData(builder);
         addBlockId(builder, id);
@@ -70,7 +75,7 @@ public class BlockFlatBuffers {
     
     public static void startBlockEntityData(FlatBufferBuilder builder) { builder.startTable(5); }
     public static void addBlockId(FlatBufferBuilder builder, long id) { builder.addLong(0, id, 0); }
-    public static void addDistance(FlatBufferBuilder builder, double distance) { builder.addDouble(1, distance, 0); }
+    public static void addDistance(FlatBufferBuilder builder, float distance) { builder.addFloat(1, distance, 0); }
     public static void addBlockType(FlatBufferBuilder builder, int blockType) { builder.addOffset(2, blockType, 0); }
     public static void addBlockX(FlatBufferBuilder builder, int x) { builder.addInt(3, x, 0); }
     public static void addBlockY(FlatBufferBuilder builder, int y) { builder.addInt(4, y, 0); }
@@ -118,7 +123,7 @@ public class BlockFlatBuffers {
             public BlockUpdate __assign(int _i, ByteBuffer _bb) { __init(_i, _bb); return this; }
             public void __init(int _i, ByteBuffer _bb) { __reset(_i, _bb); }
             public long id() { int o = __offset(4); return o != 0 ? bb.getLong(o + bb_pos) : 0; }
-            public double distance() { int o = __offset(6); return o != 0 ? bb.getDouble(o + bb_pos) : 0; }
+            public float distance() { int o = __offset(6); return o != 0 ? bb.getFloat(o + bb_pos) : 0; }
             public int x() { int o = __offset(8); return o != 0 ? bb.getInt(o + bb_pos) : 0; }
             public int y() { int o = __offset(10); return o != 0 ? bb.getInt(o + bb_pos) : 0; }
             public int z() { int o = __offset(12); return o != 0 ? bb.getInt(o + bb_pos) : 0; }

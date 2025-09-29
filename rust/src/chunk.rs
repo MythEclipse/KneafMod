@@ -22,36 +22,43 @@ impl ChunkGenerator {
 
     /// Pre-generates nearby chunks asynchronously
     pub fn pre_generate_nearby_chunks(&self, center_x: i32, center_z: i32, radius: i32) -> Vec<ChunkPos> {
-        let mut chunks_to_generate = Vec::new();
+        // Use direct iteration with early exit for already generated chunks
+        let mut results: Vec<ChunkPos> = Vec::new();
 
-        // Collect chunks to generate
-        for dx in -radius..=radius {
-            for dz in -radius..=radius {
-                if dx == 0 && dz == 0 {
-                    continue; // Skip center
-                }
-                let pos = ChunkPos {
-                    x: center_x + dx,
-                    z: center_z + dz,
-                };
-                chunks_to_generate.push(pos);
-            }
-        }
+        // Process chunks in parallel with direct filtering
+        let chunk_positions: Vec<ChunkPos> = (-radius..=radius)
+            .flat_map(|dx| {
+                (-radius..=radius)
+                    .filter_map(move |dz| {
+                        if dx == 0 && dz == 0 {
+                            None // Skip center
+                        } else {
+                            Some(ChunkPos {
+                                x: center_x + dx,
+                                z: center_z + dz,
+                            })
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
 
-        // Filter out already generated chunks in parallel
-        chunks_to_generate.retain(|pos| !self.generated_chunks.contains(pos));
-
-        // Parallel processing of chunk generation with priority calculation
-        let results: Vec<ChunkPos> = chunks_to_generate
-            .par_iter()
+        // Filter and process in parallel with early exit for already generated chunks
+        let new_chunks: Vec<ChunkPos> = chunk_positions
+            .into_par_iter()
             .filter_map(|pos| {
+                // Early exit: skip if already generated
+                if self.generated_chunks.contains(&pos) {
+                    return None;
+                }
+
                 // Calculate priority based on distance from center (closer chunks have higher priority)
                 let distance = ((pos.x - center_x) as f64).hypot((pos.z - center_z) as f64);
                 let priority = (radius as f64 - distance).max(0.0) as u32;
 
                 // Apply complex generation logic: only generate if priority > 0 and some random condition
                 if priority > 0 && (pos.x.abs() + pos.z.abs()) % 3 != 0 {
-                    Some(pos.clone())
+                    Some(pos)
                 } else {
                     None
                 }
@@ -59,11 +66,11 @@ impl ChunkGenerator {
             .collect();
 
         // Mark as generated using atomic operations
-        for pos in &results {
+        for pos in &new_chunks {
             self.generated_chunks.insert(pos.clone());
         }
 
-        results
+        new_chunks
     }
 
     /// Checks if a chunk is already generated

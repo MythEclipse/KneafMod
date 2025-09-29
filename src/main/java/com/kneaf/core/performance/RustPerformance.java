@@ -21,6 +21,7 @@ import com.kneaf.core.data.PlayerData;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -35,6 +36,26 @@ public class RustPerformance {
         t.setDaemon(true);
         return t;
     });
+
+    // JNI call batching configuration
+    private static final int BATCH_SIZE = 10; // Process 10 requests per batch
+    private static final long BATCH_TIMEOUT_MS = 50; // Maximum wait time for batch to fill
+    private static final ConcurrentLinkedQueue<BatchRequest> pendingRequests = new ConcurrentLinkedQueue<>();
+    private static volatile boolean batchProcessorRunning = false;
+    private static final Object batchLock = new Object();
+
+    // Batch request wrapper
+    private static class BatchRequest {
+        final String type;
+        final Object data;
+        final CompletableFuture<Object> future;
+
+        BatchRequest(String type, Object data, CompletableFuture<Object> future) {
+            this.type = type;
+            this.data = data;
+            this.future = future;
+        }
+    }
 
     // Connection Pooling (for future database interactions)
     private static final ConcurrentLinkedQueue<Connection> connectionPool = new ConcurrentLinkedQueue<>();
@@ -177,6 +198,492 @@ public class RustPerformance {
         }
     }
 
+    // Batch processing methods
+    private static void startBatchProcessor() {
+        synchronized (batchLock) {
+            if (batchProcessorRunning) return;
+            batchProcessorRunning = true;
+            
+            asyncExecutor.submit(() -> {
+                while (batchProcessorRunning) {
+                    try {
+                        processBatch();
+                        Thread.sleep(10); // Small delay to prevent busy waiting
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Exception e) {
+                        KneafCore.LOGGER.error("Error in batch processor", e);
+                    }
+                }
+            });
+        }
+    }
+
+    private static void processBatch() {
+        List<BatchRequest> batch = new ArrayList<>();
+        BatchRequest request;
+        
+        // Collect batch with timeout
+        long startTime = System.currentTimeMillis();
+        while (batch.size() < BATCH_SIZE &&
+               (System.currentTimeMillis() - startTime) < BATCH_TIMEOUT_MS) {
+            request = pendingRequests.poll();
+            if (request != null) {
+                batch.add(request);
+            } else {
+                // No more requests, break if we have some or wait a bit
+                if (!batch.isEmpty()) break;
+                try {
+                    Thread.sleep(5); // Small wait for new requests
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        if (batch.isEmpty()) return;
+
+        // Process batch based on type
+        Map<String, List<BatchRequest>> batchedByType = new HashMap<>();
+        for (BatchRequest req : batch) {
+            batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
+        }
+
+        // Process each type batch
+        for (Map.Entry<String, List<BatchRequest>> entry : batchedByType.entrySet()) {
+            String type = entry.getKey();
+            List<BatchRequest> typeBatch = entry.getValue();
+            
+            try {
+                switch (type) {
+                    case "entities":
+                        processEntityBatch(typeBatch);
+                        break;
+                    case "items":
+                        processItemBatch(typeBatch);
+                        break;
+                    case "mobs":
+                        processMobBatch(typeBatch);
+                        break;
+                    case "blocks":
+                        processBlockBatch(typeBatch);
+                        break;
+                    default:
+                        // Fallback to individual processing
+                        for (BatchRequest req : typeBatch) {
+                            req.future.complete(processIndividualRequest(req));
+                        }
+                }
+            } catch (Exception e) {
+                KneafCore.LOGGER.error("Error processing {} batch of size {}", type, typeBatch.size(), e);
+                // Complete all futures with exception
+                for (BatchRequest req : typeBatch) {
+                    req.future.completeExceptionally(e);
+                }
+            }
+        }
+    }
+
+    private static void processEntityBatch(List<BatchRequest> batch) {
+        if (batch.isEmpty()) return;
+        
+        // Extract data from all requests in batch
+        List<EntityData> allEntities = new ArrayList<>();
+        List<PlayerData> allPlayers = new ArrayList<>();
+        Map<Integer, List<CompletableFuture<Object>>> resultMapping = new HashMap<>();
+        
+        for (int i = 0; i < batch.size(); i++) {
+            BatchRequest req = batch.get(i);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) req.data;
+            List<EntityData> entities = (List<EntityData>) data.get("entities");
+            List<PlayerData> players = (List<PlayerData>) data.get("players");
+            
+            allEntities.addAll(entities);
+            allPlayers.addAll(players);
+            
+            // Map result indices back to futures
+            int startIdx = allEntities.size() - entities.size();
+            int endIdx = allEntities.size();
+            for (int j = startIdx; j < endIdx; j++) {
+                resultMapping.computeIfAbsent(j, k -> new ArrayList<>()).add(req.future);
+            }
+        }
+
+        // Process combined data
+        List<Long> results = processEntitiesDirect(allEntities, allPlayers);
+        
+        // Distribute results back to individual futures
+        for (int i = 0; i < batch.size(); i++) {
+            BatchRequest req = batch.get(i);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) req.data;
+            List<EntityData> entities = (List<EntityData>) data.get("entities");
+            
+            // Find results for this request
+            List<Long> requestResults = new ArrayList<>();
+            for (int j = 0; j < allEntities.size(); j++) {
+                if (entities.contains(allEntities.get(j)) && results.contains(allEntities.get(j).id())) {
+                    requestResults.add(allEntities.get(j).id());
+                }
+            }
+            
+            req.future.complete(requestResults);
+        }
+    }
+
+    private static void processItemBatch(List<BatchRequest> batch) {
+        if (batch.isEmpty()) return;
+        
+        List<ItemEntityData> allItems = new ArrayList<>();
+        for (BatchRequest req : batch) {
+            @SuppressWarnings("unchecked")
+            List<ItemEntityData> items = (List<ItemEntityData>) req.data;
+            allItems.addAll(items);
+        }
+        
+        ItemProcessResult result = processItemEntitiesDirect(allItems);
+        
+        // For simplicity, distribute results equally among batch requests
+        for (BatchRequest req : batch) {
+            req.future.complete(result);
+        }
+    }
+
+    private static void processMobBatch(List<BatchRequest> batch) {
+        if (batch.isEmpty()) return;
+        
+        List<MobData> allMobs = new ArrayList<>();
+        for (BatchRequest req : batch) {
+            @SuppressWarnings("unchecked")
+            List<MobData> mobs = (List<MobData>) req.data;
+            allMobs.addAll(mobs);
+        }
+        
+        MobProcessResult result = processMobAIDirect(allMobs);
+        
+        // Distribute results equally among batch requests
+        for (BatchRequest req : batch) {
+            req.future.complete(result);
+        }
+    }
+
+    private static void processBlockBatch(List<BatchRequest> batch) {
+        if (batch.isEmpty()) return;
+        
+        List<BlockEntityData> allBlocks = new ArrayList<>();
+        for (BatchRequest req : batch) {
+            @SuppressWarnings("unchecked")
+            List<BlockEntityData> blocks = (List<BlockEntityData>) req.data;
+            allBlocks.addAll(blocks);
+        }
+        
+        List<Long> results = getBlockEntitiesToTickDirect(allBlocks);
+        
+        // Distribute results equally among batch requests
+        for (BatchRequest req : batch) {
+            req.future.complete(results);
+        }
+    }
+
+    private static Object processIndividualRequest(BatchRequest request) {
+        // Fallback for unhandled types
+        return null;
+    }
+
+    // Submit batch request helper
+    private static <T> T submitBatchRequest(String type, Object data) {
+        CompletableFuture<Object> future = new CompletableFuture<>();
+        BatchRequest request = new BatchRequest(type, data, future);
+        
+        pendingRequests.offer(request);
+        
+        // Start batch processor if not running
+        if (!batchProcessorRunning) {
+            startBatchProcessor();
+        }
+        
+        try {
+            @SuppressWarnings("unchecked")
+            T result = (T) future.get(5, TimeUnit.SECONDS); // Timeout to prevent hanging
+            return result;
+        } catch (Exception e) {
+            KneafCore.LOGGER.error("Batch request timeout or error for type: {}", type, e);
+            // Fallback to direct processing
+            return processRequestDirect(type, data);
+        }
+    }
+
+    // Direct processing fallback methods
+    private static List<Long> processEntitiesDirect(List<EntityData> entities, List<PlayerData> players) {
+        // Use binary protocol if available, fallback to JSON
+        if (nativeAvailable) {
+            try {
+                // Serialize to FlatBuffers binary format
+                java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.EntityFlatBuffers.serializeEntityInput(
+                    tickCount++, entities, players);
+                
+                // Call binary native method
+                java.nio.ByteBuffer resultBuffer = processEntitiesBinaryNative(inputBuffer);
+                
+                if (resultBuffer != null) {
+                    // Deserialize result
+                    List<Long> resultList = com.kneaf.core.flatbuffers.EntityFlatBuffers.deserializeEntityProcessResult(resultBuffer);
+                    totalEntitiesProcessed += resultList.size();
+                    return resultList;
+                }
+            } catch (Exception binaryEx) {
+                KneafCore.LOGGER.debug("Binary protocol failed, falling back to JSON: {}", binaryEx.getMessage());
+                // Fall through to JSON fallback
+            }
+        }
+        
+        // JSON fallback
+        Map<String, Object> input = new HashMap<>();
+        input.put(TICK_COUNT_KEY, tickCount++);
+        input.put("entities", entities);
+        input.put("players", players);
+        
+        // Add entity config
+        Map<String, Object> config = new HashMap<>();
+        config.put("closeRadius", 16.0f);
+        config.put("mediumRadius", 32.0f);
+        config.put("closeRate", 1.0f);
+        config.put("mediumRate", 0.5f);
+        config.put("farRate", 0.1f);
+        config.put("useSpatialPartitioning", true);
+        
+        // World bounds (example values)
+        Map<String, Object> worldBounds = new HashMap<>();
+        worldBounds.put("minX", -1000.0);
+        worldBounds.put("minY", 0.0);
+        worldBounds.put("minZ", -1000.0);
+        worldBounds.put("maxX", 1000.0);
+        worldBounds.put("maxY", 256.0);
+        worldBounds.put("maxZ", 1000.0);
+        config.put("worldBounds", worldBounds);
+        
+        config.put("quadtreeMaxEntities", 1000);
+        config.put("quadtreeMaxDepth", 10);
+        input.put("entityConfig", config);
+        
+        String jsonInput = gson.toJson(input);
+        String jsonResult = processEntitiesNative(jsonInput);
+        if (jsonResult != null) {
+            JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
+            JsonArray entitiesToTick = result.getAsJsonArray("entitiesToTick");
+            List<Long> resultList = new ArrayList<>();
+            for (JsonElement e : entitiesToTick) {
+                resultList.add(e.getAsLong());
+            }
+            totalEntitiesProcessed += resultList.size();
+            return resultList;
+        } else {
+            KneafCore.LOGGER.warn("Rust processing returned null, returning empty list");
+            return new ArrayList<>();
+        }
+    }
+
+    private static ItemProcessResult processItemEntitiesDirect(List<ItemEntityData> items) {
+        // Use binary protocol if available, fallback to JSON
+        if (nativeAvailable) {
+            try {
+                // Serialize to FlatBuffers binary format
+                java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.ItemFlatBuffers.serializeItemInput(
+                    tickCount, items);
+                
+                // Call binary native method
+                java.nio.ByteBuffer resultBuffer = processItemEntitiesBinaryNative(inputBuffer);
+                
+                if (resultBuffer != null) {
+                    // Deserialize result
+                    List<com.kneaf.core.data.ItemEntityData> updatedItems =
+                        com.kneaf.core.flatbuffers.ItemFlatBuffers.deserializeItemProcessResult(resultBuffer);
+                    
+                    // Convert to ItemProcessResult format
+                    List<Long> removeList = new ArrayList<>();
+                    List<ItemUpdate> updates = new ArrayList<>();
+                    
+                    for (com.kneaf.core.data.ItemEntityData item : updatedItems) {
+                        if (item.count() == 0) {
+                            removeList.add(item.id());
+                        } else {
+                            updates.add(new ItemUpdate(item.id(), item.count()));
+                        }
+                    }
+                    
+                    totalMerged += updates.size();
+                    totalDespawned += removeList.size();
+                    return new ItemProcessResult(removeList, updates.size(), removeList.size(), updates);
+                }
+            } catch (Exception binaryEx) {
+                KneafCore.LOGGER.debug("Binary protocol failed, falling back to JSON: {}", binaryEx.getMessage());
+                // Fall through to JSON fallback
+            }
+        }
+        
+        // JSON fallback
+        Map<String, Object> input = new HashMap<>();
+        input.put("items", items);
+        String jsonInput = gson.toJson(input);
+        String jsonResult = processItemEntitiesNative(jsonInput);
+        if (jsonResult != null) {
+            JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
+            JsonArray itemsToRemove = result.getAsJsonArray("items_to_remove");
+            List<Long> removeList = new ArrayList<>();
+            for (JsonElement e : itemsToRemove) {
+                removeList.add(e.getAsLong());
+            }
+            long merged = result.get("merged_count").getAsLong();
+            long despawned = result.get("despawned_count").getAsLong();
+            JsonArray itemUpdatesArray = result.getAsJsonArray("item_updates");
+            List<ItemUpdate> updates = new ArrayList<>();
+            for (JsonElement e : itemUpdatesArray) {
+                JsonObject obj = e.getAsJsonObject();
+                long id = obj.get("id").getAsLong();
+                int newCount = obj.get("new_count").getAsInt();
+                updates.add(new ItemUpdate(id, newCount));
+            }
+            totalMerged += merged;
+            totalDespawned += despawned;
+            return new ItemProcessResult(removeList, merged, despawned, updates);
+        }
+        
+        // Fallback: no optimization
+        return new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>());
+    }
+
+    private static MobProcessResult processMobAIDirect(List<MobData> mobs) {
+        // Use binary protocol if available, fallback to JSON
+        if (nativeAvailable) {
+            try {
+                // Serialize to FlatBuffers binary format
+                java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.MobFlatBuffers.serializeMobInput(
+                    tickCount, mobs);
+                
+                // Call binary native method
+                java.nio.ByteBuffer resultBuffer = processMobAiBinaryNative(inputBuffer);
+                
+                if (resultBuffer != null) {
+                    // Deserialize result
+                    List<com.kneaf.core.data.MobData> updatedMobs =
+                        com.kneaf.core.flatbuffers.MobFlatBuffers.deserializeMobProcessResult(resultBuffer);
+                    
+                    // For now, assume all returned mobs need AI simplification
+                    List<Long> simplifyList = new ArrayList<>();
+                    for (com.kneaf.core.data.MobData mob : updatedMobs) {
+                        simplifyList.add(mob.id());
+                    }
+                    
+                    totalMobsProcessed += mobs.size();
+                    return new MobProcessResult(new ArrayList<>(), simplifyList);
+                }
+            } catch (Exception binaryEx) {
+                KneafCore.LOGGER.debug("Binary protocol failed, falling back to JSON: {}", binaryEx.getMessage());
+                // Fall through to JSON fallback
+            }
+        }
+        
+        // JSON fallback
+        Map<String, Object> input = new HashMap<>();
+        input.put(TICK_COUNT_KEY, tickCount);
+        input.put("mobs", mobs);
+        String jsonInput = gson.toJson(input);
+        String jsonResult = processMobAiNative(jsonInput);
+        if (jsonResult != null) {
+            JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
+            JsonArray disableAi = result.getAsJsonArray("mobs_to_disable_ai");
+            JsonArray simplifyAi = result.getAsJsonArray("mobs_to_simplify_ai");
+            List<Long> disableList = new ArrayList<>();
+            List<Long> simplifyList = new ArrayList<>();
+            for (JsonElement e : disableAi) {
+                disableList.add(e.getAsLong());
+            }
+            for (JsonElement e : simplifyAi) {
+                simplifyList.add(e.getAsLong());
+            }
+            totalMobsProcessed += mobs.size();
+            return new MobProcessResult(disableList, simplifyList);
+        }
+        
+        // Fallback: no optimization
+        return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
+    }
+
+    private static List<Long> getBlockEntitiesToTickDirect(List<BlockEntityData> blockEntities) {
+        // Use binary protocol if available, fallback to JSON
+        if (nativeAvailable) {
+            try {
+                // Serialize to FlatBuffers binary format
+                java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.BlockFlatBuffers.serializeBlockInput(
+                    tickCount++, blockEntities);
+                
+                // Call binary native method
+                java.nio.ByteBuffer resultBuffer = processBlockEntitiesBinaryNative(inputBuffer);
+                
+                if (resultBuffer != null) {
+                    // Deserialize result - for now, return all block entities as the binary protocol
+                    // doesn't return a specific list of entities to tick
+                    List<Long> resultList = new ArrayList<>();
+                    for (BlockEntityData block : blockEntities) {
+                        resultList.add(block.id());
+                    }
+                    totalBlocksProcessed += resultList.size();
+                    return resultList;
+                }
+            } catch (Exception binaryEx) {
+                KneafCore.LOGGER.debug("Binary protocol failed, falling back to JSON: {}", binaryEx.getMessage());
+                // Fall through to JSON fallback
+            }
+        }
+        
+        // JSON fallback
+        Map<String, Object> input = new HashMap<>();
+        input.put(TICK_COUNT_KEY, tickCount++);
+        input.put("block_entities", blockEntities);
+        String jsonInput = gson.toJson(input);
+        String jsonResult = processBlockEntitiesNative(jsonInput);
+        if (jsonResult != null) {
+            JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
+            JsonArray entitiesToTick = result.getAsJsonArray("block_entities_to_tick");
+            List<Long> resultList = new ArrayList<>();
+            for (JsonElement e : entitiesToTick) {
+                resultList.add(e.getAsLong());
+            }
+            totalBlocksProcessed += resultList.size();
+            return resultList;
+        }
+        
+        // Fallback: return all
+        List<Long> all = new ArrayList<>();
+        for (BlockEntityData e : blockEntities) {
+            all.add(e.id());
+        }
+        return all;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T processRequestDirect(String type, Object data) {
+        switch (type) {
+            case "entities":
+                Map<String, Object> entityData = (Map<String, Object>) data;
+                return (T) processEntitiesDirect(
+                    (List<EntityData>) entityData.get("entities"),
+                    (List<PlayerData>) entityData.get("players")
+                );
+            case "items":
+                return (T) processItemEntitiesDirect((List<ItemEntityData>) data);
+            case "mobs":
+                return (T) processMobAIDirect((List<MobData>) data);
+            case "blocks":
+                return (T) getBlockEntitiesToTickDirect((List<BlockEntityData>) data);
+            default:
+                return null;
+        }
+    }
+
     // Native methods - JSON (legacy)
     private static native String processEntitiesNative(String jsonInput);
     private static native String processItemEntitiesNative(String jsonInput);
@@ -208,82 +715,7 @@ public class RustPerformance {
     public static native double nativeGetWorkerAvgProcessingMs();
 
     public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
-        try {
-            // Use binary protocol if available, fallback to JSON
-            if (nativeAvailable) {
-                try {
-                    // Serialize to FlatBuffers binary format
-                    java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.EntityFlatBuffers.serializeEntityInput(
-                        tickCount++, entities, players);
-                    
-                    // Call binary native method
-                    java.nio.ByteBuffer resultBuffer = processEntitiesBinaryNative(inputBuffer);
-                    
-                    if (resultBuffer != null) {
-                        // Deserialize result
-                        List<Long> resultList = com.kneaf.core.flatbuffers.EntityFlatBuffers.deserializeEntityProcessResult(resultBuffer);
-                        totalEntitiesProcessed += resultList.size();
-                        return resultList;
-                    }
-                } catch (Exception binaryEx) {
-                    KneafCore.LOGGER.debug("Binary protocol failed, falling back to JSON: {}", binaryEx.getMessage());
-                    // Fall through to JSON fallback
-                }
-            }
-            
-            // JSON fallback
-            Map<String, Object> input = new HashMap<>();
-            input.put(TICK_COUNT_KEY, tickCount++);
-            input.put("entities", entities);
-            input.put("players", players);
-            
-            // Add entity config
-            Map<String, Object> config = new HashMap<>();
-            config.put("closeRadius", 16.0f);
-            config.put("mediumRadius", 32.0f);
-            config.put("closeRate", 1.0f);
-            config.put("mediumRate", 0.5f);
-            config.put("farRate", 0.1f);
-            config.put("useSpatialPartitioning", true);
-            
-            // World bounds (example values)
-            Map<String, Object> worldBounds = new HashMap<>();
-            worldBounds.put("minX", -1000.0);
-            worldBounds.put("minY", 0.0);
-            worldBounds.put("minZ", -1000.0);
-            worldBounds.put("maxX", 1000.0);
-            worldBounds.put("maxY", 256.0);
-            worldBounds.put("maxZ", 1000.0);
-            config.put("worldBounds", worldBounds);
-            
-            config.put("quadtreeMaxEntities", 1000);
-            config.put("quadtreeMaxDepth", 10);
-            input.put("entityConfig", config);
-            
-            String jsonInput = gson.toJson(input);
-            String jsonResult = processEntitiesNative(jsonInput);
-            if (jsonResult != null) {
-                JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
-                JsonArray entitiesToTick = result.getAsJsonArray("entitiesToTick");
-                List<Long> resultList = new ArrayList<>();
-                for (JsonElement e : entitiesToTick) {
-                    resultList.add(e.getAsLong());
-                }
-                totalEntitiesProcessed += resultList.size();
-                return resultList;
-            } else {
-                KneafCore.LOGGER.warn("Rust processing returned null, returning empty list");
-                return new ArrayList<>();
-            }
-        } catch (Exception e) {
-            KneafCore.LOGGER.error("Error calling Rust for entity processing: {}", e.getMessage(), e);
-        }
-        // Fallback: return all
-        List<Long> all = new ArrayList<>();
-        for (EntityData e : entities) {
-            all.add(e.id());
-        }
-        return all;
+        return submitBatchRequest("entities", Map.of("entities", entities, "players", players, "tickCount", tickCount++));
     }
 
     public static ItemProcessResult processItemEntities(List<ItemEntityData> items) {

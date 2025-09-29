@@ -4,8 +4,10 @@ use std::collections::HashMap;
 use serde_json;
 
 pub fn process_entities(input: Input) -> ProcessResult {
-    // Group entities by type for more efficient processing
-    let mut entities_by_type: HashMap<String, Vec<&EntityData>> = HashMap::new();
+    // Pre-size HashMap with estimated capacity based on input size
+    // Estimate: roughly 10-20% unique entity types
+    let estimated_types = (input.entities.len() / 10).max(5).min(100);
+    let mut entities_by_type: HashMap<String, Vec<&EntityData>> = HashMap::with_capacity(estimated_types);
 
     for entity in &input.entities {
         entities_by_type.entry(entity.entity_type.clone())

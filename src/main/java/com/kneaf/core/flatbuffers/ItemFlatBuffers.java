@@ -11,7 +11,12 @@ import java.nio.ByteOrder;
 public class ItemFlatBuffers {
     
     public static ByteBuffer serializeItemInput(long tickCount, java.util.List<com.kneaf.core.data.ItemEntityData> items) {
-        FlatBufferBuilder builder = new FlatBufferBuilder(1024);
+        // Estimate buffer size based on input list to minimize reallocations
+        // Base size + estimated size per item + string overhead
+        int estimatedSize = 1024 +
+                           items.size() * 48 +   // ~48 bytes per item (id, 2 ints, 2 uints, string ref)
+                           items.size() * 16;    // string overhead estimate
+        FlatBufferBuilder builder = new FlatBufferBuilder(estimatedSize);
         
         // Serialize items
         int[] itemOffsets = new int[items.size()];

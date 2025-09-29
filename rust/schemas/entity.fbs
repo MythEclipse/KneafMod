@@ -3,18 +3,18 @@ namespace kneaf.entity;
 table EntityData {
   id:ulong;
   entity_type:string;
-  x:double;
-  y:double;
-  z:double;
+  x:float;
+  y:float;
+  z:float;
   distance:float;
   is_block_entity:bool;
 }
 
 table PlayerData {
   id:ulong;
-  x:double;
-  y:double;
-  z:double;
+  x:float;
+  y:float;
+  z:float;
 }
 
 table EntityConfig {

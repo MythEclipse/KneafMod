@@ -6,6 +6,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::{Duration, Instant};
 use std::sync::mpsc::{channel, Sender};
+use std::sync::atomic::Ordering;
 use std::thread;
 use rayon::prelude::*;
 use serde::{Serialize, Deserialize};
@@ -50,23 +51,32 @@ impl OperationTimer {
         let duration = self.start.elapsed();
         let duration_ms = duration.as_secs_f64() * 1000.0;
         
-        let profiling_config = PROFILING_CONFIG.read().unwrap();
-        if profiling_config.enabled {
-            // Update counters
-            let mut counters = PROCESSING_COUNTERS.write().unwrap();
+        // Check if profiling is enabled first to avoid lock overhead
+        let profiling_enabled = {
+            let profiling_config = PROFILING_CONFIG.read().unwrap();
+            profiling_config.enabled
+        };
+        
+        if profiling_enabled {
+            // Update counters using atomic operations
             match self.operation.as_str() {
-                "item_grouping" => counters.total_grouping_operations += 1,
-                "item_merging" => counters.total_merge_operations += 1,
-                "item_filtering" => counters.total_filter_operations += 1,
-                "item_sorting" => counters.total_sort_operations += 1,
-                "item_despawning" => counters.total_despawn_operations += 1,
-                _ => {}
-            }
-            counters.total_items_processed += self.items_processed as u64;
-            counters.total_chunks_processed += self.chunks_processed as u64;
+                "item_grouping" => PROCESSING_COUNTERS.total_grouping_operations.fetch_add(1, Ordering::Relaxed),
+                "item_merging" => PROCESSING_COUNTERS.total_merge_operations.fetch_add(1, Ordering::Relaxed),
+                "item_filtering" => PROCESSING_COUNTERS.total_filter_operations.fetch_add(1, Ordering::Relaxed),
+                "item_sorting" => PROCESSING_COUNTERS.total_sort_operations.fetch_add(1, Ordering::Relaxed),
+                "item_despawning" => PROCESSING_COUNTERS.total_despawn_operations.fetch_add(1, Ordering::Relaxed),
+                _ => 0,
+            };
+            PROCESSING_COUNTERS.total_items_processed.fetch_add(self.items_processed as u64, Ordering::Relaxed);
+            PROCESSING_COUNTERS.total_chunks_processed.fetch_add(self.chunks_processed as u64, Ordering::Relaxed);
 
-            // Log slow operations
-            if duration_ms > profiling_config.slow_operation_threshold_ms as f64 {
+            // Check slow operation threshold
+            let (slow_threshold, log_detailed) = {
+                let profiling_config = PROFILING_CONFIG.read().unwrap();
+                (profiling_config.slow_operation_threshold_ms as f64, profiling_config.log_detailed_timing)
+            };
+            
+            if duration_ms > slow_threshold && log_detailed {
                 let profiling_data = ProfilingData {
                     operation: self.operation.clone(),
                     duration_ms,
@@ -75,18 +85,16 @@ impl OperationTimer {
                     timestamp: chrono::Utc::now().to_rfc3339(),
                 };
 
-                if profiling_config.log_detailed_timing {
-                    let log_msg = format!(
-                        "[SLOW_OPERATION] {} took {:.2}ms (items: {}, chunks: {})\n",
-                        profiling_data.operation,
-                        profiling_data.duration_ms,
-                        profiling_data.items_processed,
-                        profiling_data.chunks_processed
-                    );
-                    
-                    if let Err(e) = LOG_SENDER.send(log_msg) {
-                        eprintln!("Failed to send profiling log to background thread: {}", e);
-                    }
+                let log_msg = format!(
+                    "[SLOW_OPERATION] {} took {:.2}ms (items: {}, chunks: {})\n",
+                    profiling_data.operation,
+                    profiling_data.duration_ms,
+                    profiling_data.items_processed,
+                    profiling_data.chunks_processed
+                );
+                
+                if let Err(e) = LOG_SENDER.send(log_msg) {
+                    eprintln!("Failed to send profiling log to background thread: {}", e);
                 }
             }
         }
@@ -96,22 +104,33 @@ impl OperationTimer {
 }
 
 fn log_profiling_summary(total_items: usize, total_chunks: usize, total_duration_ms: f64) {
-    let profiling_config = PROFILING_CONFIG.read().unwrap();
-    if !profiling_config.enabled {
+    // Check if profiling is enabled first to avoid lock overhead
+    let profiling_enabled = {
+        let profiling_config = PROFILING_CONFIG.read().unwrap();
+        profiling_config.enabled
+    };
+    
+    if !profiling_enabled {
         return;
     }
 
-    let counters = PROCESSING_COUNTERS.read().unwrap();
+    // Read atomic counters
+    let grouping_ops = PROCESSING_COUNTERS.total_grouping_operations.load(Ordering::Relaxed);
+    let merge_ops = PROCESSING_COUNTERS.total_merge_operations.load(Ordering::Relaxed);
+    let filter_ops = PROCESSING_COUNTERS.total_filter_operations.load(Ordering::Relaxed);
+    let sort_ops = PROCESSING_COUNTERS.total_sort_operations.load(Ordering::Relaxed);
+    let despawn_ops = PROCESSING_COUNTERS.total_despawn_operations.load(Ordering::Relaxed);
+    
     let summary = format!(
         "[PROFILING_SUMMARY] Processed {} items in {} chunks (total: {:.2}ms). Operations: grouping={}, merging={}, filtering={}, sorting={}, despawning={}\n",
         total_items,
         total_chunks,
         total_duration_ms,
-        counters.total_grouping_operations,
-        counters.total_merge_operations,
-        counters.total_filter_operations,
-        counters.total_sort_operations,
-        counters.total_despawn_operations
+        grouping_ops,
+        merge_ops,
+        filter_ops,
+        sort_ops,
+        despawn_ops
     );
     
     if let Err(e) = LOG_SENDER.send(summary) {
@@ -352,15 +371,23 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
     let mut items_to_remove_vec: Vec<u64> = Vec::with_capacity(items_to_remove.len());
     items_to_remove_vec.extend(items_to_remove.into_iter());
 
-    // Update global counters
-    *MERGED_COUNT.write().unwrap() += local_merged;
-    *DESPAWNED_COUNT.write().unwrap() += local_despawned;
+    // Update global counters using atomic operations
+    MERGED_COUNT.fetch_add(local_merged, Ordering::Relaxed);
+    DESPAWNED_COUNT.fetch_add(local_despawned, Ordering::Relaxed);
 
     // Log every minute (asynchronously)
-    let mut last_time = LAST_LOG_TIME.write().unwrap();
-    if last_time.elapsed() > Duration::from_secs(60) {
-        let merged = *MERGED_COUNT.read().unwrap();
-        let despawned = *DESPAWNED_COUNT.read().unwrap();
+    let should_log = {
+        let mut last_time = LAST_LOG_TIME.write().unwrap();
+        let elapsed = last_time.elapsed() > Duration::from_secs(60);
+        if elapsed {
+            *last_time = Instant::now();
+        }
+        elapsed
+    };
+    
+    if should_log {
+        let merged = MERGED_COUNT.load(Ordering::Relaxed);
+        let despawned = DESPAWNED_COUNT.load(Ordering::Relaxed);
         let log_msg = format!("Item optimization: {} merged, {} despawned\n", merged, despawned);
         
         // Send log message to background thread
@@ -368,9 +395,9 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
             eprintln!("Failed to send log to background thread: {}", e);
         }
         
-        *last_time = Instant::now();
-        *MERGED_COUNT.write().unwrap() = 0;
-        *DESPAWNED_COUNT.write().unwrap() = 0;
+        // Reset counters
+        MERGED_COUNT.store(0, Ordering::Relaxed);
+        DESPAWNED_COUNT.store(0, Ordering::Relaxed);
     }
 
     // Log profiling summary

@@ -222,7 +222,7 @@ public final class PerformanceConfig {
             // Default profiling settings
             this.profilingEnabled = true;
             this.slowTickThresholdMs = 50L;
-            this.profilingSampleRate = 1;
+            this.profilingSampleRate = 100; // 1% sampling rate (1 out of 100 ticks)
             
             // Advanced parallelism defaults
             this.minThreadPoolSize = 2;
