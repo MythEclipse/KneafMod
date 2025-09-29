@@ -73,6 +73,128 @@ impl Aabb {
         self.min_y <= other.max_y && self.max_y >= other.min_y &&
         self.min_z <= other.max_z && self.max_z >= other.min_z
     }
+
+    /// SIMD-accelerated AABB intersection test for multiple AABBs
+    pub fn intersects_simd_batch(&self, others: &[Aabb]) -> Vec<bool> {
+        #[cfg(target_feature = "avx2")]
+        {
+            use std::arch::x86_64::*;
+            
+            let self_min = _mm256_set_ps(
+                self.min_x as f32, self.min_y as f32, self.min_z as f32, 0.0,
+                self.min_x as f32, self.min_y as f32, self.min_z as f32, 0.0
+            );
+            let self_max = _mm256_set_ps(
+                self.max_x as f32, self.max_y as f32, self.max_z as f32, 0.0,
+                self.max_x as f32, self.max_y as f32, self.max_z as f32, 0.0
+            );
+
+            others.par_chunks(2).flat_map(|chunk| {
+                let mut results = [false; 2];
+                
+                for (i, aabb) in chunk.iter().enumerate() {
+                    let other_min = _mm256_set_ps(
+                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0,
+                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0
+                    );
+                    let other_max = _mm256_set_ps(
+                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0,
+                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0
+                    );
+
+                    // Test: self.min <= other.max && self.max >= other.min
+                    let cmp1 = _mm256_cmp_ps(self_min, other_max, _CMP_LE_OQ);
+                    let cmp2 = _mm256_cmp_ps(self_max, other_min, _CMP_GE_OQ);
+                    let intersection = _mm256_and_ps(cmp1, cmp2);
+                    
+                    // Extract results for each axis
+                    let mask = _mm256_movemask_ps(intersection);
+                    results[i] = (mask & 0x07) == 0x07; // Check X, Y, Z axes
+                }
+                
+                results.into_iter().take(chunk.len()).collect::<Vec<_>>()
+            }).collect()
+        }
+        #[cfg(not(target_feature = "avx2"))]
+        {
+            others.par_iter().map(|other| self.intersects(other)).collect()
+        }
+    }
+
+    /// SIMD-accelerated bounds check for multiple points
+    pub fn contains_points_simd(&self, points: &[(f64, f64, f64)]) -> Vec<bool> {
+        #[cfg(target_feature = "avx2")]
+        {
+            use std::arch::x86_64::*;
+            
+            let min_x = _mm256_set1_ps(self.min_x as f32);
+            let min_y = _mm256_set1_ps(self.min_y as f32);
+            let min_z = _mm256_set1_ps(self.min_z as f32);
+            let max_x = _mm256_set1_ps(self.max_x as f32);
+            let max_y = _mm256_set1_ps(self.max_y as f32);
+            let max_z = _mm256_set1_ps(self.max_z as f32);
+
+            points.par_chunks(8).flat_map(|chunk| {
+                let mut results = [false; 8];
+                
+                let px = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.0 as f32).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.0 as f32).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.0 as f32).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.0 as f32).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.0 as f32).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.0 as f32).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.0 as f32).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.0 as f32).unwrap_or(0.0)
+                );
+                let py = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.1 as f32).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.1 as f32).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.1 as f32).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.1 as f32).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.1 as f32).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.1 as f32).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.1 as f32).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.1 as f32).unwrap_or(0.0)
+                );
+                let pz = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.2 as f32).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.2 as f32).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.2 as f32).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.2 as f32).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.2 as f32).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.2 as f32).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.2 as f32).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.2 as f32).unwrap_or(0.0)
+                );
+
+                // Check min <= point <= max for each axis
+                let cmp_x1 = _mm256_cmp_ps(min_x, px, _CMP_LE_OQ);
+                let cmp_x2 = _mm256_cmp_ps(px, max_x, _CMP_LE_OQ);
+                let cmp_y1 = _mm256_cmp_ps(min_y, py, _CMP_LE_OQ);
+                let cmp_y2 = _mm256_cmp_ps(py, max_y, _CMP_LE_OQ);
+                let cmp_z1 = _mm256_cmp_ps(min_z, pz, _CMP_LE_OQ);
+                let cmp_z2 = _mm256_cmp_ps(pz, max_z, _CMP_LE_OQ);
+
+                let inside_x = _mm256_and_ps(cmp_x1, cmp_x2);
+                let inside_y = _mm256_and_ps(cmp_y1, cmp_y2);
+                let inside_z = _mm256_and_ps(cmp_z1, cmp_z2);
+                let inside = _mm256_and_ps(_mm256_and_ps(inside_x, inside_y), inside_z);
+
+                let mask = _mm256_movemask_ps(inside);
+                
+                for i in 0..chunk.len() {
+                    results[i] = (mask & (1 << i)) != 0;
+                }
+
+                results.into_iter().take(chunk.len()).collect::<Vec<_>>()
+            }).collect()
+        }
+        #[cfg(not(target_feature = "avx2"))]
+        {
+            points.par_iter().map(|(x, y, z)| self.contains(*x, *y, *z)).collect()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -111,25 +233,105 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
 
     pub fn query(&self, query_bounds: &Aabb) -> Vec<&(T, [f64; 3])> {
         let mut results = Vec::new();
-        self.query_recursive(query_bounds, &mut results);
+        let mut stack = Vec::new();
+        
+        // Start with the root node
+        stack.push(self);
+        
+        while let Some(current_node) = stack.pop() {
+            // Skip if this node's bounds don't intersect with query bounds
+            if !current_node.bounds.intersects(query_bounds) {
+                continue;
+            }
+            
+            // SIMD-accelerated entity filtering for better performance
+            if current_node.entities.len() >= 8 {
+                // Extract positions for SIMD processing
+                let positions: Vec<(f64, f64, f64)> = current_node.entities
+                    .iter()
+                    .map(|(_, pos)| (pos[0], pos[1], pos[2]))
+                    .collect();
+                
+                let contained = query_bounds.contains_points_simd(&positions);
+                
+                for (i, (_entity, _)) in current_node.entities.iter().enumerate() {
+                    if contained[i] {
+                        results.push(&current_node.entities[i]);
+                    }
+                }
+            } else {
+                // Fallback to scalar processing for small batches
+                for entity in &current_node.entities {
+                    if query_bounds.contains(entity.1[0], entity.1[1], entity.1[2]) {
+                        results.push(entity);
+                    }
+                }
+            }
+            
+            // Add children to stack for processing
+            if let Some(ref children) = current_node.children {
+                for child in children.iter() {
+                    stack.push(child);
+                }
+            }
+        }
+        
         results
     }
 
-    fn query_recursive<'a>(&'a self, query_bounds: &Aabb, results: &mut Vec<&'a (T, [f64; 3])>) {
-        if !self.bounds.intersects(query_bounds) {
-            return;
-        }
-
-        for entity in &self.entities {
-            if query_bounds.contains(entity.1[0], entity.1[1], entity.1[2]) {
-                results.push(entity);
+    /// SIMD-optimized query with vectorized bounds checking and entity filtering
+    pub fn query_simd(&self, query_bounds: &Aabb) -> Vec<&(T, [f64; 3])> {
+        #[cfg(target_feature = "avx2")]
+        {
+            let mut results = Vec::new();
+            let mut stack = Vec::new();
+            
+            // Start with the root node
+            stack.push(self);
+            
+            while let Some(current_node) = stack.pop() {
+                // SIMD-accelerated bounds intersection check
+                if !current_node.bounds.intersects(query_bounds) {
+                    continue;
+                }
+                
+                // SIMD-accelerated entity filtering
+                if current_node.entities.len() >= 8 {
+                    let positions: Vec<(f64, f64, f64)> = current_node.entities
+                        .iter()
+                        .map(|(_, pos)| (pos[0], pos[1], pos[2]))
+                        .collect();
+                    
+                    let contained = query_bounds.contains_points_simd(&positions);
+                    
+                    for (i, is_contained) in contained.iter().enumerate() {
+                        if *is_contained {
+                            results.push(&current_node.entities[i]);
+                        }
+                    }
+                } else {
+                    // Scalar fallback for small batches
+                    for entity in &current_node.entities {
+                        if query_bounds.contains(entity.1[0], entity.1[1], entity.1[2]) {
+                            results.push(entity);
+                        }
+                    }
+                }
+                
+                // Add children to stack for processing
+                if let Some(ref children) = current_node.children {
+                    for child in children.iter() {
+                        stack.push(child);
+                    }
+                }
             }
+            
+            results
         }
-
-        if let Some(ref children) = self.children {
-            for child in children.iter() {
-                child.query_recursive(query_bounds, results);
-            }
+        #[cfg(not(target_feature = "avx2"))]
+        {
+            // Fallback to standard query without SIMD
+            self.query(query_bounds)
         }
     }
 
@@ -255,7 +457,7 @@ pub struct ChunkData {
     pub is_loaded: bool,
 }
 
-// SIMD-accelerated distance calculation
+// SIMD-accelerated distance calculation using std::simd for better portability
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use std::arch::x86_64::*;
 
@@ -319,6 +521,136 @@ pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32
     }
 }
 
+/// SIMD-accelerated distance calculation using std::simd for better portability
+pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+    #[cfg(target_feature = "avx2")]
+    {
+        use std::arch::x86_64::*;
+        
+        let cx = _mm256_set1_ps(center.0);
+        let cy = _mm256_set1_ps(center.1);
+        let cz = _mm256_set1_ps(center.2);
+
+        positions.par_chunks(8).flat_map(|chunk| {
+            let mut distances = [0.0f32; 8];
+            let px = _mm256_set_ps(chunk.get(7).map(|p| p.0).unwrap_or(0.0),
+                                     chunk.get(6).map(|p| p.0).unwrap_or(0.0),
+                                     chunk.get(5).map(|p| p.0).unwrap_or(0.0),
+                                     chunk.get(4).map(|p| p.0).unwrap_or(0.0),
+                                     chunk.get(3).map(|p| p.0).unwrap_or(0.0),
+                                     chunk.get(2).map(|p| p.0).unwrap_or(0.0),
+                                     chunk.get(1).map(|p| p.0).unwrap_or(0.0),
+                                     chunk.get(0).map(|p| p.0).unwrap_or(0.0));
+            let py = _mm256_set_ps(chunk.get(7).map(|p| p.1).unwrap_or(0.0),
+                                     chunk.get(6).map(|p| p.1).unwrap_or(0.0),
+                                     chunk.get(5).map(|p| p.1).unwrap_or(0.0),
+                                     chunk.get(4).map(|p| p.1).unwrap_or(0.0),
+                                     chunk.get(3).map(|p| p.1).unwrap_or(0.0),
+                                     chunk.get(2).map(|p| p.1).unwrap_or(0.0),
+                                     chunk.get(1).map(|p| p.1).unwrap_or(0.0),
+                                     chunk.get(0).map(|p| p.1).unwrap_or(0.0));
+            let pz = _mm256_set_ps(chunk.get(7).map(|p| p.2).unwrap_or(0.0),
+                                     chunk.get(6).map(|p| p.2).unwrap_or(0.0),
+                                     chunk.get(5).map(|p| p.2).unwrap_or(0.0),
+                                     chunk.get(4).map(|p| p.2).unwrap_or(0.0),
+                                     chunk.get(3).map(|p| p.2).unwrap_or(0.0),
+                                     chunk.get(2).map(|p| p.2).unwrap_or(0.0),
+                                     chunk.get(1).map(|p| p.2).unwrap_or(0.0),
+                                     chunk.get(0).map(|p| p.2).unwrap_or(0.0));
+
+            let dx = _mm256_sub_ps(px, cx);
+            let dy = _mm256_sub_ps(py, cy);
+            let dz = _mm256_sub_ps(pz, cz);
+
+            let dx2 = _mm256_mul_ps(dx, dx);
+            let dy2 = _mm256_mul_ps(dy, dy);
+            let dz2 = _mm256_mul_ps(dz, dz);
+
+            let sum = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
+            let dist = _mm256_sqrt_ps(sum);
+
+            _mm256_storeu_ps(distances.as_mut_ptr(), dist);
+            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+        }).collect()
+    }
+    #[cfg(not(target_feature = "avx2"))]
+    {
+        calculate_distances_simd(positions, center)
+    }
+}
+
+/// SIMD-accelerated entity filtering with distance threshold
+pub fn filter_entities_by_distance_simd<T: Clone + Send + Sync>(
+    entities: &[(T, [f64; 3])],
+    center: [f64; 3],
+    max_distance: f64,
+) -> Vec<(T, [f64; 3])> {
+    #[cfg(target_feature = "avx2")]
+    {
+        use std::arch::x86_64::*;
+        
+        let center_x = _mm256_set1_ps(center[0] as f32);
+        let center_y = _mm256_set1_ps(center[1] as f32);
+        let center_z = _mm256_set1_ps(center[2] as f32);
+        let max_dist_sq = _mm256_set1_ps((max_distance * max_distance) as f32);
+        
+        let entities_vec: Vec<_> = entities.iter().collect();
+        
+        entities_vec.par_chunks(8).flat_map(|chunk| {
+            let mut results = Vec::new();
+            
+            // Extract positions for SIMD processing
+            let mut positions_x = [0.0f32; 8];
+            let mut positions_y = [0.0f32; 8];
+            let mut positions_z = [0.0f32; 8];
+            
+            for (i, (_, pos)) in chunk.iter().enumerate() {
+                positions_x[i] = pos[0] as f32;
+                positions_y[i] = pos[1] as f32;
+                positions_z[i] = pos[2] as f32;
+            }
+            
+            let px = _mm256_loadu_ps(positions_x.as_ptr());
+            let py = _mm256_loadu_ps(positions_y.as_ptr());
+            let pz = _mm256_loadu_ps(positions_z.as_ptr());
+            
+            let dx = _mm256_sub_ps(px, center_x);
+            let dy = _mm256_sub_ps(py, center_y);
+            let dz = _mm256_sub_ps(pz, center_z);
+            
+            let dx2 = _mm256_mul_ps(dx, dx);
+            let dy2 = _mm256_mul_ps(dy, dy);
+            let dz2 = _mm256_mul_ps(dz, dz);
+            
+            let dist_sq = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
+            let within_range = _mm256_cmp_ps(dist_sq, max_dist_sq, _CMP_LE_OQ);
+            
+            let mask = _mm256_movemask_ps(within_range);
+            
+            for (i, (entity, pos)) in chunk.iter().enumerate() {
+                if (mask & (1 << i)) != 0 {
+                    results.push(((*entity).clone(), **pos));
+                }
+            }
+            
+            results
+        }).collect()
+    }
+    #[cfg(not(target_feature = "avx2"))]
+    {
+        entities.par_iter()
+            .filter(|(_, pos)| {
+                let dx = pos[0] - center[0];
+                let dy = pos[1] - center[1];
+                let dz = pos[2] - center[2];
+                let dist_sq = dx * dx + dy * dy + dz * dz;
+                dist_sq <= max_distance * max_distance
+            })
+            .map(|(entity, pos)| (entity.clone(), *pos))
+            .collect()
+    }
+}
+
 // SIMD-accelerated chunk distance calculation (2D, ignoring Y)
 pub fn calculate_chunk_distances_simd(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
     #[cfg(target_feature = "avx2")]
@@ -365,5 +697,197 @@ pub fn calculate_chunk_distances_simd(chunk_coords: &[(i32, i32)], center_chunk:
             let dz = *z as f32 - center_chunk.1 as f32;
             (dx * dx + dz * dz).sqrt()
         }).collect()
+    }
+}
+
+/// SIMD-accelerated AABB intersection batch processing
+pub fn batch_aabb_intersections(aabbs: &[Aabb], queries: &[Aabb]) -> Vec<Vec<bool>> {
+    #[cfg(target_feature = "avx2")]
+    {
+        use std::arch::x86_64::*;
+        
+        queries.par_iter().map(|query| {
+            aabbs.par_chunks(4).flat_map(|chunk| {
+                let mut results = [false; 4];
+                
+                // Load query bounds once
+                let query_min = _mm256_set_ps(
+                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0,
+                    query.min_x as f32, query.min_y as f32, query.min_z as f32, 0.0
+                );
+                let query_max = _mm256_set_ps(
+                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0,
+                    query.max_x as f32, query.max_y as f32, query.max_z as f32, 0.0
+                );
+                
+                for (i, aabb) in chunk.iter().enumerate() {
+                    let aabb_min = _mm256_set_ps(
+                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0,
+                        aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0
+                    );
+                    let aabb_max = _mm256_set_ps(
+                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0,
+                        aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0
+                    );
+                    
+                    // Test intersection: query.min <= aabb.max && query.max >= aabb.min
+                    let cmp1 = _mm256_cmp_ps(query_min, aabb_max, _CMP_LE_OQ);
+                    let cmp2 = _mm256_cmp_ps(query_max, aabb_min, _CMP_GE_OQ);
+                    let intersection = _mm256_and_ps(cmp1, cmp2);
+                    
+                    let mask = _mm256_movemask_ps(intersection);
+                    results[i] = (mask & 0x07) == 0x07; // Check X, Y, Z axes
+                }
+                
+                results.into_iter().take(chunk.len()).collect::<Vec<_>>()
+            }).collect()
+        }).collect()
+    }
+    #[cfg(not(target_feature = "avx2"))]
+    {
+        queries.iter()
+            .map(|query| aabbs.iter().map(|aabb| aabb.intersects(query)).collect())
+            .collect()
+    }
+}
+
+/// SIMD-accelerated QuadTree query with multiple bounds
+pub fn batch_quadtree_queries<'a, T: Clone + PartialEq + Send + Sync>(
+    quadtree: &'a QuadTree<T>,
+    query_bounds: &'a [Aabb],
+) -> Vec<Vec<&'a (T, [f64; 3])>> {
+    query_bounds.par_iter().map(|bounds| quadtree.query_simd(bounds)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy_ecs::prelude::Entity;
+
+    #[test]
+    fn test_aabb_intersects_simd_batch() {
+        let aabb1 = Aabb::new(0.0, 0.0, 0.0, 10.0, 10.0, 10.0);
+        let test_aabbs = vec![
+            Aabb::new(5.0, 5.0, 5.0, 15.0, 15.0, 15.0), // intersects
+            Aabb::new(20.0, 20.0, 20.0, 30.0, 30.0, 30.0), // no intersection
+            Aabb::new(2.0, 2.0, 2.0, 8.0, 8.0, 8.0), // intersects
+            Aabb::new(-5.0, -5.0, -5.0, 5.0, 5.0, 5.0), // intersects
+        ];
+
+        let results = aabb1.intersects_simd_batch(&test_aabbs);
+        
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0], true);  // intersects
+        assert_eq!(results[1], false); // no intersection
+        assert_eq!(results[2], true);  // intersects
+        assert_eq!(results[3], true);  // intersects
+    }
+
+    #[test]
+    fn test_contains_points_simd() {
+        let aabb = Aabb::new(0.0, 0.0, 0.0, 10.0, 10.0, 10.0);
+        let points = vec![
+            (5.0, 5.0, 5.0),   // inside
+            (15.0, 15.0, 15.0), // outside
+            (0.0, 0.0, 0.0),   // on boundary (inside)
+            (10.0, 10.0, 10.0), // on boundary (inside)
+            (5.0, 15.0, 5.0),  // outside (y too high)
+        ];
+
+        let results = aabb.contains_points_simd(&points);
+        
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0], true);  // inside
+        assert_eq!(results[1], false); // outside
+        assert_eq!(results[2], true);  // on boundary
+        assert_eq!(results[3], true);  // on boundary
+        assert_eq!(results[4], false); // outside
+    }
+
+    #[test]
+    fn test_quadtree_query_simd() {
+        let bounds = Aabb::new(-100.0, -100.0, -100.0, 100.0, 100.0, 100.0);
+        let mut quadtree = QuadTree::new(bounds, 10, 5);
+        
+        // Insert some test entities
+        quadtree.insert(Entity::from_raw(1), [10.0, 10.0, 10.0], 0);
+        quadtree.insert(Entity::from_raw(2), [20.0, 20.0, 20.0], 0);
+        quadtree.insert(Entity::from_raw(3), [50.0, 50.0, 50.0], 0);
+        quadtree.insert(Entity::from_raw(4), [200.0, 200.0, 200.0], 0); // Outside query bounds
+        
+        let query_bounds = Aabb::new(0.0, 0.0, 0.0, 30.0, 30.0, 30.0);
+        let results = quadtree.query_simd(&query_bounds);
+        
+        assert_eq!(results.len(), 2); // Should find entities 1 and 2
+    }
+
+    #[test]
+    fn test_calculate_distances_simd() {
+        let positions = vec![
+            (0.0, 0.0, 0.0),
+            (3.0, 4.0, 0.0), // 5 units away (3-4-5 triangle)
+            (6.0, 8.0, 0.0), // 10 units away
+            (1.0, 1.0, 1.0),
+        ];
+        let center = (0.0, 0.0, 0.0);
+        
+        let distances = calculate_distances_simd(&positions, center);
+        
+        assert_eq!(distances.len(), 4);
+        assert!((distances[0] - 0.0).abs() < 0.001); // Distance to self
+        assert!((distances[1] - 5.0).abs() < 0.001); // 3-4-5 triangle
+        assert!((distances[2] - 10.0).abs() < 0.001); // Double the distance
+        assert!((distances[3] - 1.732).abs() < 0.01); // sqrt(3) ≈ 1.732
+    }
+
+    #[test]
+    fn test_filter_entities_by_distance_simd() {
+        let entities = vec![
+            (Entity::from_raw(1), [0.0, 0.0, 0.0]),
+            (Entity::from_raw(2), [3.0, 4.0, 0.0]), // 5 units away
+            (Entity::from_raw(3), [6.0, 8.0, 0.0]), // 10 units away
+            (Entity::from_raw(4), [20.0, 20.0, 20.0]), // Far away
+        ];
+        let center = [0.0, 0.0, 0.0];
+        let max_distance = 7.0; // Should include entities 1 and 2
+        
+        let results = filter_entities_by_distance_simd(&entities, center, max_distance);
+        
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, Entity::from_raw(1));
+        assert_eq!(results[1].0, Entity::from_raw(2));
+    }
+
+    #[test]
+    fn test_batch_aabb_intersections() {
+        let aabbs = vec![
+            Aabb::new(0.0, 0.0, 0.0, 10.0, 10.0, 10.0),
+            Aabb::new(5.0, 5.0, 5.0, 15.0, 15.0, 15.0),
+            Aabb::new(20.0, 20.0, 20.0, 30.0, 30.0, 30.0),
+            Aabb::new(-5.0, -5.0, -5.0, 5.0, 5.0, 5.0),
+        ];
+        
+        let queries = vec![
+            Aabb::new(2.0, 2.0, 2.0, 8.0, 8.0, 8.0), // intersects with 0, 1, 3
+            Aabb::new(25.0, 25.0, 25.0, 35.0, 35.0, 35.0), // intersects with 2
+        ];
+        
+        let results = batch_aabb_intersections(&aabbs, &queries);
+        
+        assert_eq!(results.len(), 2); // Two query results
+        assert_eq!(results[0].len(), 4); // Four AABBs tested against first query
+        assert_eq!(results[1].len(), 4); // Four AABBs tested against second query
+        
+        // First query should intersect with AABBs 0, 1, and 3
+        assert_eq!(results[0][0], true);  // AABB 0
+        assert_eq!(results[0][1], true);  // AABB 1
+        assert_eq!(results[0][2], false); // AABB 2
+        assert_eq!(results[0][3], true);  // AABB 3
+        
+        // Second query should only intersect with AABB 2
+        assert_eq!(results[1][0], false); // AABB 0
+        assert_eq!(results[1][1], false); // AABB 1
+        assert_eq!(results[1][2], true);  // AABB 2
+        assert_eq!(results[1][3], false); // AABB 3
     }
 }

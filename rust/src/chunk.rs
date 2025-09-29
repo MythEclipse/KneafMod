@@ -1,6 +1,5 @@
-use std::collections::HashSet;
+use dashmap::DashSet;
 use rayon::prelude::*;
-use std::sync::Mutex;
 
 /// Represents a chunk position
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -11,13 +10,13 @@ pub struct ChunkPos {
 
 /// Manages chunk generation optimization
 pub struct ChunkGenerator {
-    generated_chunks: Mutex<HashSet<ChunkPos>>,
+    generated_chunks: DashSet<ChunkPos>,
 }
 
 impl ChunkGenerator {
     pub fn new() -> Self {
         ChunkGenerator {
-            generated_chunks: Mutex::new(HashSet::new()),
+            generated_chunks: DashSet::new(),
         }
     }
 
@@ -39,9 +38,8 @@ impl ChunkGenerator {
             }
         }
 
-        // Filter out already generated chunks
-        let mut generated = self.generated_chunks.lock().unwrap();
-        chunks_to_generate.retain(|pos| !generated.contains(pos));
+        // Filter out already generated chunks in parallel
+        chunks_to_generate.retain(|pos| !self.generated_chunks.contains(pos));
 
         // Parallel processing of chunk generation with priority calculation
         let results: Vec<ChunkPos> = chunks_to_generate
@@ -60,9 +58,9 @@ impl ChunkGenerator {
             })
             .collect();
 
-        // Mark as generated
+        // Mark as generated using atomic operations
         for pos in &results {
-            generated.insert(pos.clone());
+            self.generated_chunks.insert(pos.clone());
         }
 
         results
@@ -70,13 +68,12 @@ impl ChunkGenerator {
 
     /// Checks if a chunk is already generated
     pub fn is_chunk_generated(&self, x: i32, z: i32) -> bool {
-        let generated = self.generated_chunks.lock().unwrap();
-        generated.contains(&ChunkPos { x, z })
+        self.generated_chunks.contains(&ChunkPos { x, z })
     }
 
     /// Gets the count of generated chunks
     pub fn generated_count(&self) -> usize {
-        self.generated_chunks.lock().unwrap().len()
+        self.generated_chunks.len()
     }
 }
 

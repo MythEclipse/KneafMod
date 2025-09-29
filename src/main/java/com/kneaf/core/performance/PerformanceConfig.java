@@ -30,6 +30,22 @@ public final class PerformanceConfig {
     private final int maxThreadPoolSize;
     private final String[] excludedEntityTypes;
     private final int networkExecutorPoolSize;
+    private final boolean profilingEnabled;
+    private final long slowTickThresholdMs;
+    private final int profilingSampleRate;
+    
+    // Advanced parallelism configuration
+    private final int minThreadPoolSize;
+    private final boolean dynamicThreadScaling;
+    private final double threadScaleUpThreshold;
+    private final double threadScaleDownThreshold;
+    private final int threadScaleUpDelayTicks;
+    private final int threadScaleDownDelayTicks;
+    private final boolean workStealingEnabled;
+    private final int workStealingQueueSize;
+    private final boolean cpuAwareThreadSizing;
+    private final double cpuLoadThreshold;
+    private final int threadPoolKeepAliveSeconds;
 
     // Use a Builder to avoid long constructor parameter lists (satisfies java:S107)
     private PerformanceConfig(Builder b) {
@@ -46,6 +62,22 @@ public final class PerformanceConfig {
         // Defensively copy the array to prevent external mutation after construction
         this.excludedEntityTypes = b.excludedEntityTypes == null ? new String[0] : b.excludedEntityTypes.clone();
         this.networkExecutorPoolSize = b.networkExecutorPoolSize;
+        this.profilingEnabled = b.profilingEnabled;
+        this.slowTickThresholdMs = b.slowTickThresholdMs;
+        this.profilingSampleRate = b.profilingSampleRate;
+        
+        // Advanced parallelism configuration
+        this.minThreadPoolSize = b.minThreadPoolSize;
+        this.dynamicThreadScaling = b.dynamicThreadScaling;
+        this.threadScaleUpThreshold = b.threadScaleUpThreshold;
+        this.threadScaleDownThreshold = b.threadScaleDownThreshold;
+        this.threadScaleUpDelayTicks = b.threadScaleUpDelayTicks;
+        this.threadScaleDownDelayTicks = b.threadScaleDownDelayTicks;
+        this.workStealingEnabled = b.workStealingEnabled;
+        this.workStealingQueueSize = b.workStealingQueueSize;
+        this.cpuAwareThreadSizing = b.cpuAwareThreadSizing;
+        this.cpuLoadThreshold = b.cpuLoadThreshold;
+        this.threadPoolKeepAliveSeconds = b.threadPoolKeepAliveSeconds;
     }
 
     /**
@@ -63,7 +95,23 @@ public final class PerformanceConfig {
         private boolean adaptiveThreadPool;
         private int maxThreadPoolSize;
         private String[] excludedEntityTypes;
-    private int networkExecutorPoolSize;
+        private int networkExecutorPoolSize;
+        private boolean profilingEnabled;
+        private long slowTickThresholdMs;
+        private int profilingSampleRate;
+        
+        // Advanced parallelism configuration
+        private int minThreadPoolSize;
+        private boolean dynamicThreadScaling;
+        private double threadScaleUpThreshold;
+        private double threadScaleDownThreshold;
+        private int threadScaleUpDelayTicks;
+        private int threadScaleDownDelayTicks;
+        private boolean workStealingEnabled;
+        private int workStealingQueueSize;
+        private boolean cpuAwareThreadSizing;
+        private double cpuLoadThreshold;
+        private int threadPoolKeepAliveSeconds;
 
         public Builder enabled(boolean v) { this.enabled = v; return this; }
         public Builder threadPoolSize(int v) { this.threadPoolSize = v; return this; }
@@ -77,6 +125,22 @@ public final class PerformanceConfig {
         public Builder maxThreadPoolSize(int v) { this.maxThreadPoolSize = v; return this; }
     public Builder excludedEntityTypes(String[] v) { this.excludedEntityTypes = v == null ? new String[0] : v.clone(); return this; }
     public Builder networkExecutorPoolSize(int v) { this.networkExecutorPoolSize = v; return this; }
+    public Builder profilingEnabled(boolean v) { this.profilingEnabled = v; return this; }
+    public Builder slowTickThresholdMs(long v) { this.slowTickThresholdMs = v; return this; }
+    public Builder profilingSampleRate(int v) { this.profilingSampleRate = v; return this; }
+    
+    // Advanced parallelism configuration
+    public Builder minThreadPoolSize(int v) { this.minThreadPoolSize = v; return this; }
+    public Builder dynamicThreadScaling(boolean v) { this.dynamicThreadScaling = v; return this; }
+    public Builder threadScaleUpThreshold(double v) { this.threadScaleUpThreshold = v; return this; }
+    public Builder threadScaleDownThreshold(double v) { this.threadScaleDownThreshold = v; return this; }
+    public Builder threadScaleUpDelayTicks(int v) { this.threadScaleUpDelayTicks = v; return this; }
+    public Builder threadScaleDownDelayTicks(int v) { this.threadScaleDownDelayTicks = v; return this; }
+    public Builder workStealingEnabled(boolean v) { this.workStealingEnabled = v; return this; }
+    public Builder workStealingQueueSize(int v) { this.workStealingQueueSize = v; return this; }
+    public Builder cpuAwareThreadSizing(boolean v) { this.cpuAwareThreadSizing = v; return this; }
+    public Builder cpuLoadThreshold(double v) { this.cpuLoadThreshold = v; return this; }
+    public Builder threadPoolKeepAliveSeconds(int v) { this.threadPoolKeepAliveSeconds = v; return this; }
 
         public PerformanceConfig build() {
             // Apply same defensive constraints as before and build a config using this Builder
@@ -92,6 +156,9 @@ public final class PerformanceConfig {
             int vMaxThreadPoolSize = Math.max(1, this.maxThreadPoolSize);
             String[] vExcludedEntityTypes = this.excludedEntityTypes == null ? new String[0] : this.excludedEntityTypes;
             int vNetworkExecutorPoolSize = Math.max(1, this.networkExecutorPoolSize);
+            boolean vProfilingEnabled = this.profilingEnabled;
+            long vSlowTickThresholdMs = Math.max(1L, this.slowTickThresholdMs);
+            int vProfilingSampleRate = Math.max(1, this.profilingSampleRate);
 
             Builder validated = new Builder();
             validated.enabled(vEnabled)
@@ -105,7 +172,35 @@ public final class PerformanceConfig {
                     .adaptiveThreadPool(vAdaptiveThreadPool)
                     .maxThreadPoolSize(vMaxThreadPoolSize)
             .excludedEntityTypes(vExcludedEntityTypes)
-            .networkExecutorPoolSize(vNetworkExecutorPoolSize);
+            .networkExecutorPoolSize(vNetworkExecutorPoolSize)
+            .profilingEnabled(vProfilingEnabled)
+            .slowTickThresholdMs(vSlowTickThresholdMs)
+            .profilingSampleRate(vProfilingSampleRate);
+            
+            // Advanced parallelism configuration validation
+            int vMinThreadPoolSize = Math.max(1, this.minThreadPoolSize);
+            boolean vDynamicThreadScaling = this.dynamicThreadScaling;
+            double vThreadScaleUpThreshold = Math.max(0.1, Math.min(1.0, this.threadScaleUpThreshold));
+            double vThreadScaleDownThreshold = Math.max(0.1, Math.min(1.0, this.threadScaleDownThreshold));
+            int vThreadScaleUpDelayTicks = Math.max(1, this.threadScaleUpDelayTicks);
+            int vThreadScaleDownDelayTicks = Math.max(1, this.threadScaleDownDelayTicks);
+            boolean vWorkStealingEnabled = this.workStealingEnabled;
+            int vWorkStealingQueueSize = Math.max(1, this.workStealingQueueSize);
+            boolean vCpuAwareThreadSizing = this.cpuAwareThreadSizing;
+            double vCpuLoadThreshold = Math.max(0.1, Math.min(1.0, this.cpuLoadThreshold));
+            int vThreadPoolKeepAliveSeconds = Math.max(1, this.threadPoolKeepAliveSeconds);
+            
+            validated.minThreadPoolSize(vMinThreadPoolSize)
+                    .dynamicThreadScaling(vDynamicThreadScaling)
+                    .threadScaleUpThreshold(vThreadScaleUpThreshold)
+                    .threadScaleDownThreshold(vThreadScaleDownThreshold)
+                    .threadScaleUpDelayTicks(vThreadScaleUpDelayTicks)
+                    .threadScaleDownDelayTicks(vThreadScaleDownDelayTicks)
+                    .workStealingEnabled(vWorkStealingEnabled)
+                    .workStealingQueueSize(vWorkStealingQueueSize)
+                    .cpuAwareThreadSizing(vCpuAwareThreadSizing)
+                    .cpuLoadThreshold(vCpuLoadThreshold)
+                    .threadPoolKeepAliveSeconds(vThreadPoolKeepAliveSeconds);
             return new PerformanceConfig(validated);
         }
 
@@ -124,6 +219,23 @@ public final class PerformanceConfig {
             this.excludedEntityTypes = new String[0];
             // Default network executor pool size: half of available processors (minimum 1)
             this.networkExecutorPoolSize = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
+            // Default profiling settings
+            this.profilingEnabled = true;
+            this.slowTickThresholdMs = 50L;
+            this.profilingSampleRate = 1;
+            
+            // Advanced parallelism defaults
+            this.minThreadPoolSize = 2;
+            this.dynamicThreadScaling = true;
+            this.threadScaleUpThreshold = 0.8;
+            this.threadScaleDownThreshold = 0.3;
+            this.threadScaleUpDelayTicks = 100;
+            this.threadScaleDownDelayTicks = 200;
+            this.workStealingEnabled = true;
+            this.workStealingQueueSize = 100;
+            this.cpuAwareThreadSizing = true;
+            this.cpuLoadThreshold = 0.7;
+            this.threadPoolKeepAliveSeconds = 60;
         }
     }
 
@@ -139,6 +251,22 @@ public final class PerformanceConfig {
     public int getMaxThreadPoolSize() { return maxThreadPoolSize; }
     public String[] getExcludedEntityTypes() { return excludedEntityTypes.clone(); }
     public int getNetworkExecutorPoolSize() { return networkExecutorPoolSize; }
+    public boolean isProfilingEnabled() { return profilingEnabled; }
+    public long getSlowTickThresholdMs() { return slowTickThresholdMs; }
+    public int getProfilingSampleRate() { return profilingSampleRate; }
+    
+    // Advanced parallelism getters
+    public int getMinThreadPoolSize() { return minThreadPoolSize; }
+    public boolean isDynamicThreadScaling() { return dynamicThreadScaling; }
+    public double getThreadScaleUpThreshold() { return threadScaleUpThreshold; }
+    public double getThreadScaleDownThreshold() { return threadScaleDownThreshold; }
+    public int getThreadScaleUpDelayTicks() { return threadScaleUpDelayTicks; }
+    public int getThreadScaleDownDelayTicks() { return threadScaleDownDelayTicks; }
+    public boolean isWorkStealingEnabled() { return workStealingEnabled; }
+    public int getWorkStealingQueueSize() { return workStealingQueueSize; }
+    public boolean isCpuAwareThreadSizing() { return cpuAwareThreadSizing; }
+    public double getCpuLoadThreshold() { return cpuLoadThreshold; }
+    public int getThreadPoolKeepAliveSeconds() { return threadPoolKeepAliveSeconds; }
 
     public static PerformanceConfig load() {
         Properties props = new Properties();
@@ -165,7 +293,10 @@ public final class PerformanceConfig {
         int maxThreadPoolSize = parseIntOrDefault(props.getProperty("maxThreadPoolSize"), Math.max(1, Runtime.getRuntime().availableProcessors() - 1));
         String excluded = props.getProperty("excludedEntityTypes", "");
         String[] excludedEntityTypes = excluded.isBlank() ? new String[0] : excluded.split("\\s*,\\s*");
-    int networkExecutorPoolSize = parseIntOrDefault(props.getProperty("networkExecutorPoolSize"), Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
+        int networkExecutorPoolSize = parseIntOrDefault(props.getProperty("networkExecutorPoolSize"), Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
+        boolean profilingEnabled = Boolean.parseBoolean(props.getProperty("profilingEnabled", "true"));
+        long slowTickThresholdMs = parseLongOrDefault(props.getProperty("slowTickThresholdMs"), 50L);
+        int profilingSampleRate = parseIntOrDefault(props.getProperty("profilingSampleRate"), 1);
 
     long maxLogBytes = parseLongOrDefault(props.getProperty("maxLogBytes"), 10L * 1024 * 1024); // 10MB default
 
@@ -182,7 +313,10 @@ public final class PerformanceConfig {
         .adaptiveThreadPool(adaptiveThreadPool)
         .maxThreadPoolSize(maxThreadPoolSize)
     .excludedEntityTypes(excludedEntityTypes)
-    .networkExecutorPoolSize(networkExecutorPoolSize);
+    .networkExecutorPoolSize(networkExecutorPoolSize)
+    .profilingEnabled(profilingEnabled)
+    .slowTickThresholdMs(slowTickThresholdMs)
+    .profilingSampleRate(profilingSampleRate);
 
     return b.build();
     }
@@ -216,6 +350,9 @@ public final class PerformanceConfig {
                 ", adaptiveThreadPool=" + adaptiveThreadPool +
                 ", maxThreadPoolSize=" + maxThreadPoolSize +
                 ", excludedEntityTypes=" + Arrays.toString(excludedEntityTypes) +
+                ", profilingEnabled=" + profilingEnabled +
+                ", slowTickThresholdMs=" + slowTickThresholdMs +
+                ", profilingSampleRate=" + profilingSampleRate +
                 '}';
     }
 }

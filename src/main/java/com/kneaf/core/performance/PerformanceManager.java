@@ -6,6 +6,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Entity.RemovalReason;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.phys.AABB;
 
 import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
@@ -14,11 +15,18 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.OperatingSystemMXBean;
 
 import com.kneaf.core.data.EntityData;
 import com.kneaf.core.data.ItemEntityData;
@@ -40,30 +48,187 @@ public class PerformanceManager {
     // Configuration (loaded from config/kneaf-performance.properties)
     private static final PerformanceConfig CONFIG = PerformanceConfig.load();
 
-    // Multithreading executor for server tasks - created lazily so we can respect config and JVM shutdown
-    private static ExecutorService serverTaskExecutor = null;
+    // Profiling configuration
+    private static final boolean PROFILING_ENABLED = CONFIG.isProfilingEnabled();
+    private static final long SLOW_TICK_THRESHOLD_MS = CONFIG.getSlowTickThresholdMs();
+    private static final int PROFILING_SAMPLE_RATE = CONFIG.getProfilingSampleRate();
+
+    // Advanced ThreadPoolExecutor with dynamic sizing and monitoring
+    private static ThreadPoolExecutor serverTaskExecutor = null;
+    private static final Object executorLock = new Object();
+    
+    // Executor monitoring and metrics
+    public static final class ExecutorMetrics {
+        long totalTasksSubmitted = 0;
+        long totalTasksCompleted = 0;
+        long totalTasksRejected = 0;
+        long currentQueueSize = 0;
+        double currentUtilization = 0.0;
+        int currentThreadCount = 0;
+        int peakThreadCount = 0;
+        long lastScaleUpTime = 0;
+        long lastScaleDownTime = 0;
+        int scaleUpCount = 0;
+        int scaleDownCount = 0;
+        
+        String toJson() {
+            return String.format(
+                "{\"totalTasksSubmitted\":%d,\"totalTasksCompleted\":%d,\"totalTasksRejected\":%d," +
+                "\"currentQueueSize\":%d,\"currentUtilization\":%.2f,\"currentThreadCount\":%d," +
+                "\"peakThreadCount\":%d,\"scaleUpCount\":%d,\"scaleDownCount\":%d}",
+                totalTasksSubmitted, totalTasksCompleted, totalTasksRejected,
+                currentQueueSize, currentUtilization, currentThreadCount,
+                peakThreadCount, scaleUpCount, scaleDownCount
+            );
+        }
+    }
+    
+    private static final ExecutorMetrics executorMetrics = new ExecutorMetrics();
 
     // Rolling TPS average to make decisions about whether to offload work
     private static final int TPS_WINDOW = 20;
     private static final double[] tpsWindow = new double[TPS_WINDOW];
     private static int tpsWindowIndex = 0;
 
-    private static synchronized ExecutorService getExecutor() {
-        if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
-            // give threads unique names to make debugging easier
-            AtomicInteger threadIndex = new AtomicInteger(0);
-            ThreadFactory factory = r -> {
-                Thread t = new Thread(r, "kneaf-perf-worker-" + threadIndex.getAndIncrement());
-                t.setDaemon(true);
-                return t;
-            };
-            int threads = CONFIG.getThreadPoolSize();
-            if (CONFIG.isAdaptiveThreadPool()) {
-                threads = clamp(Runtime.getRuntime().availableProcessors() - 1, 1, CONFIG.getMaxThreadPoolSize());
-            }
-            serverTaskExecutor = Executors.newFixedThreadPool(threads, factory);
+    // Dynamic async thresholding based on executor queue size
+    private static double currentTpsThreshold;
+    private static final double MIN_TPS_THRESHOLD = 15.0;
+    private static final double MAX_TPS_THRESHOLD = 19.5;
+    private static final int QUEUE_SIZE_HIGH_THRESHOLD = 10;
+    private static final int QUEUE_SIZE_LOW_THRESHOLD = 3;
+    private static final double THRESHOLD_ADJUSTMENT_RATE = 0.1;
+
+    // Profiling data structures
+    private static final class ProfileData {
+        long entityCollectionTime = 0;
+        long itemConsolidationTime = 0;
+        long optimizationProcessingTime = 0;
+        long optimizationApplicationTime = 0;
+        long spatialGridTime = 0;
+        long totalTickTime = 0;
+        int entitiesProcessed = 0;
+        int itemsProcessed = 0;
+        int executorQueueSize = 0;
+        
+        boolean isSlowTick() {
+            return totalTickTime > SLOW_TICK_THRESHOLD_MS * 1_000_000; // Convert ms to ns
         }
-        return serverTaskExecutor;
+        
+        String toJson() {
+            return String.format(
+                "{\"entityCollectionMs\":%.2f,\"itemConsolidationMs\":%.2f,\"optimizationProcessingMs\":%.2f,\"optimizationApplicationMs\":%.2f,\"spatialGridMs\":%.2f,\"totalTickMs\":%.2f,\"entitiesProcessed\":%d,\"itemsProcessed\":%d,\"executorQueueSize\":%d}",
+                entityCollectionTime / 1_000_000.0,
+                itemConsolidationTime / 1_000_000.0,
+                optimizationProcessingTime / 1_000_000.0,
+                optimizationApplicationTime / 1_000_000.0,
+                spatialGridTime / 1_000_000.0,
+                totalTickTime / 1_000_000.0,
+                entitiesProcessed,
+                itemsProcessed,
+                executorQueueSize
+            );
+        }
+    }
+    
+    private static final ThreadLocal<ProfileData> profileData = new ThreadLocal<ProfileData>() {
+        @Override
+        protected ProfileData initialValue() {
+            return new ProfileData();
+        }
+    };
+
+    private static ThreadPoolExecutor getExecutor() {
+        synchronized (executorLock) {
+            if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
+                createAdvancedThreadPool();
+            }
+            return serverTaskExecutor;
+        }
+    }
+    
+    private static void createAdvancedThreadPool() {
+        // give threads unique names to make debugging easier
+        AtomicInteger threadIndex = new AtomicInteger(0);
+        ThreadFactory factory = r -> {
+            Thread t = new Thread(r, "kneaf-perf-worker-" + threadIndex.getAndIncrement());
+            t.setDaemon(true);
+            return t;
+        };
+        
+        int coreThreads = CONFIG.getMinThreadPoolSize();
+        int maxThreads = CONFIG.getMaxThreadPoolSize();
+        
+        // CPU-aware sizing if enabled
+        if (CONFIG.isCpuAwareThreadSizing()) {
+            int availableProcessors = Runtime.getRuntime().availableProcessors();
+            double cpuLoad = getSystemCpuLoad();
+            
+            if (cpuLoad < CONFIG.getCpuLoadThreshold()) {
+                // CPU is not heavily loaded, can use more threads
+                maxThreads = Math.min(maxThreads, availableProcessors);
+            } else {
+                // CPU is heavily loaded, be conservative
+                maxThreads = Math.min(maxThreads, Math.max(1, availableProcessors / 2));
+            }
+            
+            coreThreads = Math.min(coreThreads, maxThreads);
+        }
+        
+        // Adaptive sizing based on available processors if enabled
+        if (CONFIG.isAdaptiveThreadPool()) {
+            int availableProcessors = Runtime.getRuntime().availableProcessors();
+            maxThreads = clamp(availableProcessors - 1, 1, maxThreads);
+            coreThreads = Math.min(coreThreads, maxThreads);
+        }
+        
+        // Create work-stealing queue if enabled
+        LinkedBlockingQueue<Runnable> workQueue;
+        if (CONFIG.isWorkStealingEnabled()) {
+            workQueue = new LinkedBlockingQueue<>(CONFIG.getWorkStealingQueueSize());
+        } else {
+            workQueue = new LinkedBlockingQueue<>();
+        }
+        
+        serverTaskExecutor = new ThreadPoolExecutor(
+            coreThreads,
+            maxThreads,
+            CONFIG.getThreadPoolKeepAliveSeconds(),
+            TimeUnit.SECONDS,
+            workQueue,
+            factory
+        );
+        
+        // Allow core threads to timeout if not needed
+        serverTaskExecutor.allowCoreThreadTimeOut(true);
+        
+        // Initialize metrics
+        executorMetrics.currentThreadCount = coreThreads;
+        executorMetrics.peakThreadCount = coreThreads;
+        
+        LOGGER.info("Created advanced ThreadPoolExecutor: core={}, max={}, workStealing={}, cpuAware={}",
+                   coreThreads, maxThreads, CONFIG.isWorkStealingEnabled(), CONFIG.isCpuAwareThreadSizing());
+        
+        // Initialize dynamic threshold with config value
+        currentTpsThreshold = CONFIG.getTpsThresholdForAsync();
+    }
+    
+    private static double getSystemCpuLoad() {
+        try {
+            OperatingSystemMXBean osBean = ManagementFactory.getOperatingSystemMXBean();
+            // Use system CPU load instead of process CPU load for broader availability
+            double systemLoad = osBean.getSystemLoadAverage();
+            if (systemLoad < 0) {
+                // Fallback: estimate based on available processors
+                int availableProcessors = osBean.getAvailableProcessors();
+                return Math.min(1.0, systemLoad / availableProcessors);
+            }
+            // Normalize system load to 0-1 range based on available processors
+            int availableProcessors = osBean.getAvailableProcessors();
+            return Math.min(1.0, systemLoad / availableProcessors);
+        } catch (Exception e) {
+            LOGGER.debug("Could not get CPU load, using default", e);
+            return 0.0;
+        }
     }
 
     private static int clamp(int v, int min, int max) {
@@ -72,23 +237,164 @@ public class PerformanceManager {
         return v;
     }
 
+    private static double clamp(double v, double min, double max) {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
+
     public static void shutdown() {
-        if (serverTaskExecutor != null) {
-            try {
-                serverTaskExecutor.shutdown();
-                serverTaskExecutor.awaitTermination(2, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } finally {
-                serverTaskExecutor = null;
+        synchronized (executorLock) {
+            if (serverTaskExecutor != null) {
+                try {
+                    LOGGER.info("Shutting down ThreadPoolExecutor. Metrics: {}", executorMetrics.toJson());
+                    serverTaskExecutor.shutdown();
+                    if (!serverTaskExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                        LOGGER.warn("ThreadPoolExecutor did not terminate gracefully, forcing shutdown");
+                        serverTaskExecutor.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    serverTaskExecutor.shutdownNow();
+                } finally {
+                    serverTaskExecutor = null;
+                }
             }
         }
+        
+        // Clean up spatial grids
+        synchronized (spatialGridLock) {
+            levelSpatialGrids.clear();
+        }
+    }
+    
+    /**
+     * Get current executor metrics for monitoring and debugging
+     */
+    public static String getExecutorMetrics() {
+        synchronized (executorLock) {
+            if (serverTaskExecutor == null) {
+                return "{\"status\":\"not_initialized\"}";
+            }
+            return executorMetrics.toJson();
+        }
+    }
+    
+    /**
+     * Get current executor status including pool configuration
+     */
+    public static String getExecutorStatus() {
+        synchronized (executorLock) {
+            if (serverTaskExecutor == null) {
+                return "Executor not initialized";
+            }
+            
+            return String.format("ThreadPoolExecutor[core=%d, max=%d, current=%d, active=%d, queue=%d, completed=%d]",
+                serverTaskExecutor.getCorePoolSize(),
+                serverTaskExecutor.getMaximumPoolSize(),
+                serverTaskExecutor.getPoolSize(),
+                serverTaskExecutor.getActiveCount(),
+                serverTaskExecutor.getQueue().size(),
+                serverTaskExecutor.getCompletedTaskCount());
+        }
+    }
+    
+    /**
+     * Validate executor health and configuration
+     */
+    public static boolean isExecutorHealthy() {
+        synchronized (executorLock) {
+            if (serverTaskExecutor == null || serverTaskExecutor.isShutdown() || serverTaskExecutor.isTerminated()) {
+                return false;
+            }
+            
+            // Check if queue is not excessively backed up
+            int queueSize = serverTaskExecutor.getQueue().size();
+            int maxQueueSize = CONFIG.isWorkStealingEnabled() ? CONFIG.getWorkStealingQueueSize() : 1000;
+            
+            if (queueSize > maxQueueSize * 0.9) {
+                LOGGER.warn("Executor queue is nearly full: {}/{}", queueSize, maxQueueSize);
+                return false;
+            }
+            
+            // Check if we're at maximum threads and still highly utilized
+            double utilization = getExecutorUtilization();
+            if (serverTaskExecutor.getPoolSize() >= serverTaskExecutor.getMaximumPoolSize() && utilization > 0.95) {
+                LOGGER.warn("Executor at max capacity with high utilization: {} threads, {:.2f} utilization",
+                           serverTaskExecutor.getPoolSize(), utilization);
+                return false;
+            }
+            
+            return true;
+        }
+    }
+
+    /**
+     * Get the current executor queue size for dynamic threshold adjustment.
+     * Returns 0 if executor is not available.
+     */
+    private static int getExecutorQueueSize() {
+        synchronized (executorLock) {
+            if (serverTaskExecutor == null) return 0;
+            return serverTaskExecutor.getQueue().size();
+        }
+    }
+    
+    /**
+     * Get executor utilization for dynamic scaling decisions
+     */
+    private static double getExecutorUtilization() {
+        synchronized (executorLock) {
+            if (serverTaskExecutor == null) return 0.0;
+            int activeThreads = serverTaskExecutor.getActiveCount();
+            int poolSize = Math.max(1, serverTaskExecutor.getPoolSize());
+            return (double) activeThreads / poolSize;
+        }
+    }
+    
+    /**
+     * Update executor metrics for monitoring
+     */
+    private static void updateExecutorMetrics() {
+        synchronized (executorLock) {
+            if (serverTaskExecutor == null) return;
+            
+            executorMetrics.currentQueueSize = serverTaskExecutor.getQueue().size();
+            executorMetrics.currentThreadCount = serverTaskExecutor.getPoolSize();
+            executorMetrics.peakThreadCount = Math.max(executorMetrics.peakThreadCount, executorMetrics.currentThreadCount);
+            executorMetrics.currentUtilization = getExecutorUtilization();
+        }
+    }
+
+    /**
+     * Adjust TPS threshold dynamically based on executor queue size.
+     * Lower threshold when queue grows to maintain responsiveness.
+     */
+    private static void adjustDynamicThreshold() {
+        int queueSize = getExecutorQueueSize();
+        int currentTick = tickCounter % TPS_WINDOW;
+        
+        // Adjust threshold based on queue pressure
+        if (queueSize > QUEUE_SIZE_HIGH_THRESHOLD) {
+            // High queue pressure - lower threshold to reduce async load
+            currentTpsThreshold = Math.max(MIN_TPS_THRESHOLD, currentTpsThreshold - THRESHOLD_ADJUSTMENT_RATE);
+        } else if (queueSize < QUEUE_SIZE_LOW_THRESHOLD && currentTick % 5 == 0) {
+            // Low queue pressure - gradually raise threshold (every 5 ticks to avoid oscillation)
+            currentTpsThreshold = Math.min(MAX_TPS_THRESHOLD, currentTpsThreshold + (THRESHOLD_ADJUSTMENT_RATE * 0.5));
+        }
+        
+        // Ensure threshold stays within config bounds
+        currentTpsThreshold = clamp(currentTpsThreshold, MIN_TPS_THRESHOLD, MAX_TPS_THRESHOLD);
     }
 
     private PerformanceManager() {}
 
     // Runtime toggle (initialized from config)
     private static volatile boolean enabled = CONFIG.isEnabled();
+
+    // Spatial grid for efficient player position queries per level
+    private static final Map<ServerLevel, SpatialGrid> levelSpatialGrids = new HashMap<>();
+    private static final Object spatialGridLock = new Object();
 
     public static boolean isEnabled() { return enabled; }
     public static void setEnabled(boolean val) { enabled = val; }
@@ -103,39 +409,84 @@ public class PerformanceManager {
         // Respect runtime toggle first (can be flipped without restarting)
         if (!enabled) return;
 
+        long tickStartTime = PROFILING_ENABLED ? System.nanoTime() : 0;
+        ProfileData profile = PROFILING_ENABLED ? profileData.get() : null;
+        
         updateTPS();
         tickCounter++;
+
+        // Adjust dynamic threshold based on executor metrics
+        if (tickCounter % 2 == 0) { // Adjust every 2 ticks for responsiveness
+            adjustDynamicThreshold();
+        }
 
         // Respect configured scan interval to reduce overhead on busy servers
         if (tickCounter % CONFIG.getScanIntervalTicks() != 0) {
             return;
         }
 
+        // Sample profiling based on configured rate
+        boolean shouldProfile = PROFILING_ENABLED && (tickCounter % PROFILING_SAMPLE_RATE == 0);
+        if (shouldProfile && profile != null) {
+            profile.executorQueueSize = getExecutorQueueSize();
+            profile.totalTickTime = System.nanoTime() - tickStartTime;
+        }
+
         // Collect data synchronously (cheap collection)
+        long entityCollectionStart = shouldProfile ? System.nanoTime() : 0;
         EntityDataCollection data = collectEntityData(server);
+        if (shouldProfile && profile != null) {
+            profile.entityCollectionTime = System.nanoTime() - entityCollectionStart;
+            profile.entitiesProcessed = data.entities().size();
+            profile.itemsProcessed = data.items().size();
+        }
 
         // Consolidate collected items (aggregation by chunk+type) to reduce downstream work
+        long consolidationStart = shouldProfile ? System.nanoTime() : 0;
         List<ItemEntityData> consolidated = consolidateItemEntities(data.items());
+        if (shouldProfile && profile != null) {
+            profile.itemConsolidationTime = System.nanoTime() - consolidationStart;
+        }
         data = new EntityDataCollection(data.entities(), consolidated, data.mobs(), data.blockEntities(), data.players());
 
-        // Decide whether to offload heavy processing based on rolling TPS and config
+        // Decide whether to offload heavy processing based on rolling TPS and dynamic threshold
         double avgTps = getRollingAvgTPS();
-        if (avgTps >= CONFIG.getTpsThresholdForAsync()) {
-            submitAsyncOptimizations(server, data);
+        if (avgTps >= currentTpsThreshold) {
+            submitAsyncOptimizations(server, data, shouldProfile);
         } else {
-            runSynchronousOptimizations(server, data);
+            runSynchronousOptimizations(server, data, shouldProfile);
+        }
+        
+        // Log slow ticks with detailed profiling
+        if (shouldProfile && profile != null && profile.isSlowTick()) {
+            logSlowTick(profile);
         }
     }
 
-    private static void submitAsyncOptimizations(MinecraftServer server, EntityDataCollection data) {
+    private static void submitAsyncOptimizations(MinecraftServer server, EntityDataCollection data, boolean shouldProfile) {
         try {
             getExecutor().submit(() -> {
                 try {
+                    long processingStart = shouldProfile ? System.nanoTime() : 0;
                     OptimizationResults results = processOptimizations(data);
+                    if (shouldProfile) {
+                        ProfileData profile = profileData.get();
+                        if (profile != null) {
+                            profile.optimizationProcessingTime = System.nanoTime() - processingStart;
+                        }
+                    }
+                    
                     // Schedule modifications back on server thread to stay thread-safe with Minecraft internals
                     server.execute(() -> {
                         try {
+                            long applicationStart = shouldProfile ? System.nanoTime() : 0;
                             applyOptimizations(server, results);
+                            if (shouldProfile) {
+                                ProfileData profile = profileData.get();
+                                if (profile != null) {
+                                    profile.optimizationApplicationTime = System.nanoTime() - applicationStart;
+                                }
+                            }
                             logOptimizations(results);
                             removeItems(server, results.itemResult());
                         } catch (Exception e) {
@@ -149,14 +500,30 @@ public class PerformanceManager {
         } catch (Exception e) {
             // Fallback to synchronous processing if executor rejects
             LOGGER.debug("Executor rejected task; running synchronously", e);
-            runSynchronousOptimizations(server, data);
+            runSynchronousOptimizations(server, data, shouldProfile);
         }
     }
 
-    private static void runSynchronousOptimizations(MinecraftServer server, EntityDataCollection data) {
+    private static void runSynchronousOptimizations(MinecraftServer server, EntityDataCollection data, boolean shouldProfile) {
         try {
+            long processingStart = shouldProfile ? System.nanoTime() : 0;
             OptimizationResults results = processOptimizations(data);
+            if (shouldProfile) {
+                ProfileData profile = profileData.get();
+                if (profile != null) {
+                    profile.optimizationProcessingTime = System.nanoTime() - processingStart;
+                }
+            }
+            
+            long applicationStart = shouldProfile ? System.nanoTime() : 0;
             applyOptimizations(server, results);
+            if (shouldProfile) {
+                ProfileData profile = profileData.get();
+                if (profile != null) {
+                    profile.optimizationApplicationTime = System.nanoTime() - applicationStart;
+                }
+            }
+            
             if (tickCounter % CONFIG.getLogIntervalTicks() == 0) logOptimizations(results);
             removeItems(server, results.itemResult());
         } catch (Exception ex) {
@@ -213,12 +580,27 @@ public class PerformanceManager {
     private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, int maxEntities, double distanceCutoff, List<PlayerData> players) {
         String[] excluded = CONFIG.getExcludedEntityTypes();
         double cutoffSq = distanceCutoff * distanceCutoff;
+        
+        // Get or create spatial grid for this level with profiling
+        long spatialStart = PROFILING_ENABLED && (tickCounter % PROFILING_SAMPLE_RATE == 0) ? System.nanoTime() : 0;
+        SpatialGrid spatialGrid = getOrCreateSpatialGrid(level, players);
+        if (PROFILING_ENABLED && (tickCounter % PROFILING_SAMPLE_RATE == 0)) {
+            ProfileData profile = profileData.get();
+            if (profile != null) {
+                profile.spatialGridTime += System.nanoTime() - spatialStart;
+            }
+        }
 
-        for (Entity entity : level.getEntities().getAll()) {
+        // Create bounding box that encompasses all players within distance cutoff
+        AABB searchBounds = createSearchBounds(players, distanceCutoff);
+        
+        // Use Minecraft's built-in spatial filtering with level.getEntities(null, AABB)
+        // This leverages Minecraft's spatial indexing for better performance
+        for (Entity entity : level.getEntities(null, searchBounds)) {
             // If we've reached the maximum, stop scanning further entities in this level
             if (entities.size() >= maxEntities) break;
-            // compute squared distance to nearest player and process if within cutoff
-            double minSq = computeMinSquaredDistanceToPlayers(entity, players);
+            // Use spatial grid for efficient distance calculation
+            double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, distanceCutoff);
             if (minSq <= cutoffSq) {
                 processEntityWithinCutoff(entity, minSq, excluded, entities, items, mobs);
             }
@@ -236,6 +618,71 @@ public class PerformanceManager {
             if (sq < minSq) minSq = sq;
         }
         return minSq;
+    }
+
+    // Optimized version using spatial grid - O(log M) instead of O(M)
+    private static double computeMinSquaredDistanceToPlayersOptimized(Entity entity, SpatialGrid spatialGrid, double maxSearchRadius) {
+        return spatialGrid.findMinSquaredDistance(entity.getX(), entity.getY(), entity.getZ(), maxSearchRadius);
+    }
+
+    // Create search bounds based on player positions and distance cutoff
+    private static AABB createSearchBounds(List<PlayerData> players, double distanceCutoff) {
+        if (players.isEmpty()) {
+            // If no players, return a minimal bounds that will return no entities
+            return new AABB(0, 0, 0, 0, 0, 0);
+        }
+        
+        double minX = Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE;
+        double minZ = Double.MAX_VALUE;
+        double maxX = Double.MIN_VALUE;
+        double maxY = Double.MIN_VALUE;
+        double maxZ = Double.MIN_VALUE;
+        
+        // Find bounds encompassing all players
+        for (PlayerData player : players) {
+            minX = Math.min(minX, player.x());
+            minY = Math.min(minY, player.y());
+            minZ = Math.min(minZ, player.z());
+            maxX = Math.max(maxX, player.x());
+            maxY = Math.max(maxY, player.y());
+            maxZ = Math.max(maxZ, player.z());
+        }
+        
+        // Expand bounds by distance cutoff
+        minX -= distanceCutoff;
+        minY -= distanceCutoff;
+        minZ -= distanceCutoff;
+        maxX += distanceCutoff;
+        maxY += distanceCutoff;
+        maxZ += distanceCutoff;
+        
+        return new AABB(minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
+    // Get or create spatial grid for a level, updating it with current player positions
+    private static SpatialGrid getOrCreateSpatialGrid(ServerLevel level, List<PlayerData> players) {
+        long startTime = PROFILING_ENABLED && (tickCounter % PROFILING_SAMPLE_RATE == 0) ? System.nanoTime() : 0;
+        
+        synchronized (spatialGridLock) {
+            SpatialGrid grid = levelSpatialGrids.get(level);
+            if (grid == null) {
+                // Create grid with cell size based on distance cutoff for optimal performance
+                double cellSize = Math.max(CONFIG.getEntityDistanceCutoff() / 4.0, 16.0);
+                grid = new SpatialGrid(cellSize);
+                levelSpatialGrids.put(level, grid);
+            }
+            
+            // Update grid with current player positions
+            grid.clear();
+            for (PlayerData player : players) {
+                grid.updatePlayer(player);
+            }
+            
+            return grid;
+        }
+        
+        // Note: spatial grid time will be recorded by the caller if profiling is enabled
     }
 
     // Helper to process an entity that is within distance cutoff
@@ -281,29 +728,42 @@ public class PerformanceManager {
 
 
     /**
+     * Pack chunk coordinates and item type hash into a composite long key.
+     * Format: [chunkX (21 bits)][chunkZ (21 bits)][itemTypeHash (22 bits)]
+     * This provides efficient HashMap operations without string allocations.
+     */
+    private static long packItemKey(int chunkX, int chunkZ, String itemType) {
+        // Use 21 bits for each coordinate (covers ±1 million chunks) and 22 bits for hash
+        long packedChunkX = ((long) chunkX) & 0x1FFFFF; // 21 bits
+        long packedChunkZ = ((long) chunkZ) & 0x1FFFFF; // 21 bits
+        long itemHash = itemType == null ? 0 : ((long) itemType.hashCode()) & 0x3FFFFF; // 22 bits
+        
+        return (packedChunkX << 43) | (packedChunkZ << 22) | itemHash;
+    }
+    
+    /**
      * Consolidate collected item entity data by chunk X/Z and item type to reduce the number
      * of items we hand to the downstream Rust processing. This only aggregates the collected
      * snapshot and does not modify world state directly, so it is safe and purely an optimization.
      */
     private static List<ItemEntityData> consolidateItemEntities(List<ItemEntityData> items) {
         if (items == null || items.isEmpty()) return items;
-    // capacity not specified to avoid static analysis suggestions; sizes here are small in practice
-    Map<String, ItemEntityData> agg = new HashMap<>();
-        StringBuilder sb = new StringBuilder(64);
+        
+        // Use composite long keys to eliminate string allocations and speed up HashMap operations
+        Map<Long, ItemEntityData> agg = new HashMap<>();
+        
         for (ItemEntityData it : items) {
-            // reuse StringBuilder to reduce per-item String allocations
-            sb.setLength(0);
-            sb.append(it.chunkX()).append(':').append(it.chunkZ()).append(':');
-            if (it.itemType() != null) sb.append(it.itemType());
-            String k = sb.toString();
-            ItemEntityData cur = agg.get(k);
+            // Pack chunk coordinates and item type into a composite long key
+            long key = packItemKey(it.chunkX(), it.chunkZ(), it.itemType());
+            
+            ItemEntityData cur = agg.get(key);
             if (cur == null) {
-                agg.put(k, it);
+                agg.put(key, it);
             } else {
                 // sum counts and keep smallest age to represent the merged group
                 int newCount = cur.count() + it.count();
                 int newAge = Math.min(cur.ageSeconds(), it.ageSeconds());
-                agg.put(k, new ItemEntityData(-1, it.chunkX(), it.chunkZ(), it.itemType(), newCount, newAge));
+                agg.put(key, new ItemEntityData(-1, it.chunkX(), it.chunkZ(), it.itemType(), newCount, newAge));
             }
         }
         return new ArrayList<>(agg.values());
@@ -327,11 +787,19 @@ public class PerformanceManager {
 
     private static void applyItemUpdates(MinecraftServer server, RustPerformance.ItemProcessResult itemResult) {
         if (itemResult == null || itemResult.getItemUpdates() == null) return;
-        // Use direct lookups by id to avoid allocating a map of every entity each tick
+        
+        // Batch entity lookup: create a map of entity IDs to updates for O(1) lookup
+        Map<Integer, RustPerformance.ItemUpdate> updateMap = new HashMap<>();
+        for (var update : itemResult.getItemUpdates()) {
+            updateMap.put((int) update.getId(), update);
+        }
+        
+        // Process all levels once - O(U + L) complexity
         for (ServerLevel level : server.getAllLevels()) {
-            for (var update : itemResult.getItemUpdates()) {
-                Entity entity = level.getEntity((int) update.getId());
+            for (Map.Entry<Integer, RustPerformance.ItemUpdate> entry : updateMap.entrySet()) {
+                Entity entity = level.getEntity(entry.getKey());
                 if (entity instanceof ItemEntity itemEntity) {
+                    RustPerformance.ItemUpdate update = entry.getValue();
                     itemEntity.getItem().setCount(update.getNewCount());
                 }
             }
@@ -340,15 +808,32 @@ public class PerformanceManager {
 
     private static void applyMobOptimizations(MinecraftServer server, RustPerformance.MobProcessResult mobResult) {
         if (mobResult == null) return;
+        
+        // Batch entity lookup for mobs to disable AI
+        Set<Integer> disableAiIds = new HashSet<>();
+        for (Long id : mobResult.getMobsToDisableAI()) {
+            disableAiIds.add(id.intValue());
+        }
+        
+        // Batch entity lookup for mobs to simplify AI
+        Set<Integer> simplifyAiIds = new HashSet<>();
+        for (Long id : mobResult.getMobsToSimplifyAI()) {
+            simplifyAiIds.add(id.intValue());
+        }
+        
+        // Process all levels once - O(U + L) complexity
         for (ServerLevel level : server.getAllLevels()) {
-            for (Long id : mobResult.getMobsToDisableAI()) {
-                Entity entity = level.getEntity(id.intValue());
+            // Process mobs to disable AI
+            for (Integer id : disableAiIds) {
+                Entity entity = level.getEntity(id);
                 if (entity instanceof net.minecraft.world.entity.Mob mob) {
                     mob.setNoAi(true);
                 }
             }
-            for (Long id : mobResult.getMobsToSimplifyAI()) {
-                Entity entity = level.getEntity(id.intValue());
+            
+            // Process mobs to simplify AI
+            for (Integer id : simplifyAiIds) {
+                Entity entity = level.getEntity(id);
                 if (entity instanceof net.minecraft.world.entity.Mob) {
                     LOGGER.debug("Simplifying AI for mob {}", id);
                 }
@@ -360,6 +845,11 @@ public class PerformanceManager {
         // Human-readable logs for meaningful changes (less frequent)
         if (tickCounter % 100 == 0 && hasMeaningfulOptimizations(results)) {
             logReadableOptimizations(results);
+        }
+
+        // Log spatial grid statistics periodically for performance monitoring
+        if (tickCounter % 1000 == 0) {
+            logSpatialGridStats();
         }
 
         // Compact metrics line periodically
@@ -395,6 +885,40 @@ public class PerformanceManager {
         }
     }
 
+    private static void logSpatialGridStats() {
+        synchronized (spatialGridLock) {
+            int totalLevels = levelSpatialGrids.size();
+            int totalPlayers = 0;
+            int totalCells = 0;
+            
+            for (SpatialGrid grid : levelSpatialGrids.values()) {
+                SpatialGrid.GridStats stats = grid.getStats();
+                totalPlayers += stats.totalPlayers();
+                totalCells += stats.totalCells();
+            }
+            
+            if (totalLevels > 0) {
+                LOGGER.debug("SpatialGrid stats: {} levels, {} players, {} cells, avg {:.2f} players/cell",
+                    totalLevels, totalPlayers, totalCells,
+                    totalCells > 0 ? (double) totalPlayers / totalCells : 0.0);
+            }
+        }
+    }
+
+    /**
+     * Log slow ticks with detailed timing breakdown in JSON format for structured logging.
+     */
+    private static void logSlowTick(ProfileData profile) {
+        if (profile == null) return;
+        
+        String jsonProfile = profile.toJson();
+        String message = String.format("SLOW_TICK: tick=%d avgTps=%.2f threshold=%.2f %s",
+            tickCounter, getRollingAvgTPS(), currentTpsThreshold, jsonProfile);
+        
+        LOGGER.warn(message);
+        PerformanceMetricsLogger.logLine("SLOW_TICK " + message);
+    }
+
     private static String buildOptimizationSummary(OptimizationResults results) {
         double avg = getRollingAvgTPS();
         long itemsMerged = results.itemResult() == null ? 0L : results.itemResult().getMergedCount();
@@ -403,8 +927,11 @@ public class PerformanceManager {
         int mobsSimplified = results.mobResult() == null ? 0 : results.mobResult().getMobsToSimplifyAI().size();
         int itemsRemoved = results.itemResult() == null ? 0 : results.itemResult().getItemsToRemove().size();
         int blockEntities = results.blockResult() == null ? 0 : results.blockResult().size();
-        return String.format("avgTps=%.2f itemsMerged=%d itemsDespawned=%d mobsDisabled=%d mobsSimplified=%d itemsRemoved=%d blockEntities=%d",
+        int queueSize = getExecutorQueueSize();
+        return String.format("avgTps=%.2f currentThreshold=%.2f queueSize=%d itemsMerged=%d itemsDespawned=%d mobsDisabled=%d mobsSimplified=%d itemsRemoved=%d blockEntities=%d",
                 avg,
+                currentTpsThreshold,
+                queueSize,
                 itemsMerged,
                 itemsDespawned,
                 mobsDisabled,
@@ -453,4 +980,9 @@ public class PerformanceManager {
 
 
     private record OptimizationResults(List<Long> toTick, List<Long> blockResult, RustPerformance.ItemProcessResult itemResult, RustPerformance.MobProcessResult mobResult) {}
+
+    // Static initializer to set initial threshold
+    static {
+        currentTpsThreshold = CONFIG.getTpsThresholdForAsync();
+    }
 }
