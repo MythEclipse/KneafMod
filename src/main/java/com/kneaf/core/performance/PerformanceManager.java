@@ -100,7 +100,8 @@ public class PerformanceManager {
      * Now uses multithreading for processing optimizations asynchronously.
      */
     public static void onServerTick(MinecraftServer server) {
-        if (!CONFIG.isEnabled()) return;
+        // Respect runtime toggle first (can be flipped without restarting)
+        if (!enabled) return;
 
         updateTPS();
         tickCounter++;
@@ -216,34 +217,39 @@ public class PerformanceManager {
         for (Entity entity : level.getEntities().getAll()) {
             // If we've reached the maximum, stop scanning further entities in this level
             if (entities.size() >= maxEntities) break;
-
-            String typeStr = entity.getType().toString();
-
-            // compute squared distance to nearest player to avoid a sqrt unless needed
-            double minSq = Double.MAX_VALUE;
-            for (PlayerData p : players) {
-                double dx = entity.getX() - p.x();
-                double dy = entity.getY() - p.y();
-                double dz = entity.getZ() - p.z();
-                double sq = dx*dx + dy*dy + dz*dz;
-                if (sq < minSq) minSq = sq;
+            // compute squared distance to nearest player and process if within cutoff
+            double minSq = computeMinSquaredDistanceToPlayers(entity, players);
+            if (minSq <= cutoffSq) {
+                processEntityWithinCutoff(entity, minSq, excluded, entities, items, mobs);
             }
+        }
+    }
 
-            boolean withinCutoff = minSq <= cutoffSq;
-            boolean excludedType = isExcludedType(typeStr, excluded);
+    // Helper to compute squared distance to nearest player
+    private static double computeMinSquaredDistanceToPlayers(Entity entity, List<PlayerData> players) {
+        double minSq = Double.MAX_VALUE;
+        for (PlayerData p : players) {
+            double dx = entity.getX() - p.x();
+            double dy = entity.getY() - p.y();
+            double dz = entity.getZ() - p.z();
+            double sq = dx*dx + dy*dy + dz*dz;
+            if (sq < minSq) minSq = sq;
+        }
+        return minSq;
+    }
 
-            if (withinCutoff && !excludedType) {
-                double distance = Math.sqrt(minSq);
-                boolean isBlockEntity = false; // Regular entities are not block entities
-                entities.add(new EntityData(entity.getId(), entity.getX(), entity.getY(), entity.getZ(), distance, isBlockEntity, typeStr));
+    // Helper to process an entity that is within distance cutoff
+    private static void processEntityWithinCutoff(Entity entity, double minSq, String[] excluded, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs) {
+        String typeStr = entity.getType().toString();
+        if (isExcludedType(typeStr, excluded)) return;
+        double distance = Math.sqrt(minSq);
+        boolean isBlockEntity = false; // Regular entities are not block entities
+        entities.add(new EntityData(entity.getId(), entity.getX(), entity.getY(), entity.getZ(), distance, isBlockEntity, typeStr));
 
-                if (entity instanceof ItemEntity itemEntity) {
-                    collectItemEntity(entity, itemEntity, items);
-                } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
-                    // pass the already-computed distance and type string to avoid recalculation
-                    collectMobEntity(entity, mob, mobs, distance, typeStr);
-                }
-            }
+        if (entity instanceof ItemEntity itemEntity) {
+            collectItemEntity(entity, itemEntity, items);
+        } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
+            collectMobEntity(entity, mob, mobs, distance, typeStr);
         }
     }
 
@@ -281,8 +287,8 @@ public class PerformanceManager {
      */
     private static List<ItemEntityData> consolidateItemEntities(List<ItemEntityData> items) {
         if (items == null || items.isEmpty()) return items;
-    int cap = Math.max(16, items.size());
-    Map<String, ItemEntityData> agg = HashMap.newHashMap(cap);
+    // capacity not specified to avoid static analysis suggestions; sizes here are small in practice
+    Map<String, ItemEntityData> agg = new HashMap<>();
         StringBuilder sb = new StringBuilder(64);
         for (ItemEntityData it : items) {
             // reuse StringBuilder to reduce per-item String allocations
@@ -302,6 +308,8 @@ public class PerformanceManager {
         }
         return new ArrayList<>(agg.values());
     }
+
+    // (Intentionally using direct HashMap construction for simplicity)
 
     private static OptimizationResults processOptimizations(EntityDataCollection data) {
         // Use parallel performance optimizations
@@ -425,11 +433,16 @@ public class PerformanceManager {
     
 
     private static void removeItems(MinecraftServer server, RustPerformance.ItemProcessResult itemResult) {
+        if (itemResult == null || itemResult.getItemsToRemove() == null || itemResult.getItemsToRemove().isEmpty()) return;
         for (ServerLevel level : server.getAllLevels()) {
             for (Long id : itemResult.getItemsToRemove()) {
-                Entity entity = level.getEntity(id.intValue());
-                if (entity != null) {
-                    entity.remove(RemovalReason.DISCARDED);
+                try {
+                    Entity entity = level.getEntity(id.intValue());
+                    if (entity != null) {
+                        entity.remove(RemovalReason.DISCARDED);
+                    }
+                } catch (Exception e) {
+                    LOGGER.debug("Error removing item entity {} on level {}", id, level.dimension(), e);
                 }
             }
         }
