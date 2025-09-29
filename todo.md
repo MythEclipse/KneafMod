@@ -1,4 +1,5 @@
-✅ To-Do List Berbasis Fitur (Versi Tanpa Freeze Entity)
+# ✅ To-Do List Berbasis Fitur (Versi Tanpa Freeze Entity)
+
 1. Core Chunk Storage Layer
 
  Fitur: Abstract ChunkSerializer untuk konversi LevelChunk ⇆ binary (NBT / MessagePack)
@@ -7,7 +8,7 @@
 
  Fitur: Checksum / Versioning untuk menjaga integritas data
 
-2. RAM Cache Management
+1. RAM Cache Management
 
  Fitur: ChunkCache Map (key → in-memory chunk) dengan kapasitas maksimum
 
@@ -15,7 +16,7 @@
 
  Fitur: Chunk State Tracker (Hot / Cold / Dirty / Serialized)
 
-3. Intercept Chunk Load & Unload (Hook ke NeoForge)
+1. Intercept Chunk Load & Unload (Hook ke NeoForge)
 
  Fitur: Override unload event → simpan ke DB, jangan langsung buang
 
@@ -23,13 +24,13 @@
 
  Fitur: Async Loader Thread Pool untuk hindari TPS drop
 
-4. Preloading & Prediction
+1. Preloading & Prediction
 
  Fitur: Predictive Chunk Loader saat pemain bergerak
 
  Fitur: Teleport Burst Handler untuk load paralel dalam jumlah besar
 
-5. Monitoring & Debugging
+1. Monitoring & Debugging
 
  Fitur: /chunkcache stats → tampilkan hit/miss, eviction count, DB latency
 
@@ -37,7 +38,7 @@
 
  Fitur: Config (YAML/TOML) → atur cache size, eviction mode, DB location
 
-6. Fail-Safe & Data Recovery
+1. Fail-Safe & Data Recovery
 
  Fitur: Auto Backup Snapshot database berkala
 

@@ -17,15 +17,13 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.Objects;
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.CompletableFuture;
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
 
@@ -131,12 +129,7 @@ public class PerformanceManager {
         }
     }
     
-    private static final ThreadLocal<ProfileData> profileData = new ThreadLocal<ProfileData>() {
-        @Override
-        protected ProfileData initialValue() {
-            return new ProfileData();
-        }
-    };
+    private static final ThreadLocal<ProfileData> profileData = ThreadLocal.withInitial(ProfileData::new);
 
     private static ThreadPoolExecutor getExecutor() {
         synchronized (executorLock) {
@@ -169,7 +162,7 @@ public class PerformanceManager {
                 maxThreads = Math.min(maxThreads, availableProcessors);
             } else {
                 // CPU is heavily loaded, be conservative
-                maxThreads = Math.min(maxThreads, Math.max(1, availableProcessors / 2));
+                maxThreads = Math.clamp(availableProcessors / 2, 1, maxThreads);
             }
             
             coreThreads = Math.min(coreThreads, maxThreads);
@@ -248,7 +241,9 @@ public class PerformanceManager {
         synchronized (executorLock) {
             if (serverTaskExecutor != null) {
                 try {
-                    LOGGER.info("Shutting down ThreadPoolExecutor. Metrics: {}", executorMetrics.toJson());
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Shutting down ThreadPoolExecutor. Metrics: {}", executorMetrics.toJson());
+                    }
                     serverTaskExecutor.shutdown();
                     if (!serverTaskExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                         LOGGER.warn("ThreadPoolExecutor did not terminate gracefully, forcing shutdown");
@@ -321,8 +316,10 @@ public class PerformanceManager {
             // Check if we're at maximum threads and still highly utilized
             double utilization = getExecutorUtilization();
             if (serverTaskExecutor.getPoolSize() >= serverTaskExecutor.getMaximumPoolSize() && utilization > 0.95) {
-                LOGGER.warn("Executor at max capacity with high utilization: {} threads, {:.2f} utilization",
-                           serverTaskExecutor.getPoolSize(), utilization);
+                if (LOGGER.isWarnEnabled()) {
+                    LOGGER.warn("Executor at max capacity with high utilization: {} threads, {} utilization",
+                               serverTaskExecutor.getPoolSize(), String.format("%.2f", utilization));
+                }
                 return false;
             }
             
@@ -353,20 +350,6 @@ public class PerformanceManager {
         }
     }
     
-    /**
-     * Update executor metrics for monitoring
-     */
-    private static void updateExecutorMetrics() {
-        synchronized (executorLock) {
-            if (serverTaskExecutor == null) return;
-            
-            executorMetrics.currentQueueSize = serverTaskExecutor.getQueue().size();
-            executorMetrics.currentThreadCount = serverTaskExecutor.getPoolSize();
-            executorMetrics.peakThreadCount = Math.max(executorMetrics.peakThreadCount, executorMetrics.currentThreadCount);
-            executorMetrics.currentUtilization = getExecutorUtilization();
-        }
-    }
-
     /**
      * Adjust TPS threshold dynamically based on executor queue size.
      * Lower threshold when queue grows to maintain responsiveness.
@@ -399,17 +382,49 @@ public class PerformanceManager {
     
     // Asynchronous distance calculation configuration
     private static final int DISTANCE_CALCULATION_INTERVAL = 10; // Reduced frequency: calculate distances every 10 ticks
-    private static final Map<ServerLevel, CompletableFuture<Void>> pendingDistanceCalculations = new HashMap<>();
-    
-    // Distance approximation cache for performance optimization
-    private static final Map<String, Double> distanceApproximationCache = new HashMap<>();
-    private static final int DISTANCE_CACHE_SIZE = 1000;
-    private static final double DISTANCE_APPROXIMATION_THRESHOLD = 0.1; // 10% approximation tolerance
 
     public static boolean isEnabled() { return enabled; }
     public static void setEnabled(boolean val) { enabled = val; }
 
     private record EntityDataCollection(List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, List<BlockEntityData> blockEntities, List<PlayerData> players) {}
+
+    private record EntityCollectionContext(List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs, int maxEntities, double distanceCutoff, List<PlayerData> players, String[] excluded, double cutoffSq) {
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            EntityCollectionContext that = (EntityCollectionContext) obj;
+            return maxEntities == that.maxEntities &&
+                   Double.compare(that.distanceCutoff, distanceCutoff) == 0 &&
+                   Double.compare(that.cutoffSq, cutoffSq) == 0 &&
+                   Objects.equals(entities, that.entities) &&
+                   Objects.equals(items, that.items) &&
+                   Objects.equals(mobs, that.mobs) &&
+                   Objects.equals(players, that.players) &&
+                   Arrays.equals(excluded, that.excluded);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = Objects.hash(entities, items, mobs, maxEntities, distanceCutoff, players, cutoffSq);
+            result = 31 * result + Arrays.hashCode(excluded);
+            return result;
+        }
+
+        @Override
+        public String toString() {
+            return "EntityCollectionContext{" +
+                   "entities=" + entities +
+                   ", items=" + items +
+                   ", mobs=" + mobs +
+                   ", maxEntities=" + maxEntities +
+                   ", distanceCutoff=" + distanceCutoff +
+                   ", players=" + players +
+                   ", excluded=" + Arrays.toString(excluded) +
+                   ", cutoffSq=" + cutoffSq +
+                   '}';
+        }
+    }
 
     /**
      * Called on every server tick to perform performance optimizations.
@@ -432,33 +447,17 @@ public class PerformanceManager {
 
         // Respect configured scan interval to reduce overhead on busy servers
         // Increased interval for better performance: process every 3 ticks instead of every tick
-        if (tickCounter % (CONFIG.getScanIntervalTicks() * 3) != 0) {
+        if (!shouldPerformScan()) {
+            if (PROFILING_ENABLED) profileData.remove();
             return;
         }
 
         // Sample profiling based on configured rate with lazy initialization
         boolean shouldProfile = PROFILING_ENABLED && (tickCounter % (PROFILING_SAMPLE_RATE * 2) == 0);
-        if (shouldProfile && profile != null) {
-            profile.executorQueueSize = getExecutorQueueSize();
-            profile.totalTickTime = System.nanoTime() - tickStartTime;
-        }
+        prepareProfiling(profile, shouldProfile, tickStartTime);
 
-        // Collect data synchronously (cheap collection)
-        long entityCollectionStart = shouldProfile ? System.nanoTime() : 0;
-        EntityDataCollection data = collectEntityData(server);
-        if (shouldProfile && profile != null) {
-            profile.entityCollectionTime = System.nanoTime() - entityCollectionStart;
-            profile.entitiesProcessed = data.entities().size();
-            profile.itemsProcessed = data.items().size();
-        }
-
-        // Consolidate collected items (aggregation by chunk+type) to reduce downstream work
-        long consolidationStart = shouldProfile ? System.nanoTime() : 0;
-        List<ItemEntityData> consolidated = consolidateItemEntities(data.items());
-        if (shouldProfile && profile != null) {
-            profile.itemConsolidationTime = System.nanoTime() - consolidationStart;
-        }
-        data = new EntityDataCollection(data.entities(), consolidated, data.mobs(), data.blockEntities(), data.players());
+        // Collect and consolidate data
+        EntityDataCollection data = collectAndConsolidate(server, shouldProfile, profile);
 
         // Decide whether to offload heavy processing based on rolling TPS and dynamic threshold
         double avgTps = getRollingAvgTPS();
@@ -472,46 +471,83 @@ public class PerformanceManager {
         if (shouldProfile && profile != null && profile.isSlowTick()) {
             logSlowTick(profile);
         }
+        
+        if (PROFILING_ENABLED) profileData.remove();
+    }
+
+    // Helper to determine whether we should run the full scan this tick
+    private static boolean shouldPerformScan() {
+        return tickCounter % (CONFIG.getScanIntervalTicks() * 3) == 0;
+    }
+
+    // Helper to initialize profiling values if needed
+    private static void prepareProfiling(ProfileData profile, boolean shouldProfile, long tickStartTime) {
+        if (shouldProfile && profile != null) {
+            profile.executorQueueSize = getExecutorQueueSize();
+            profile.totalTickTime = System.nanoTime() - tickStartTime;
+        }
+    }
+
+    // Helper to collect entity data and consolidate item entities while updating profiling data
+    private static EntityDataCollection collectAndConsolidate(MinecraftServer server, boolean shouldProfile, ProfileData profile) {
+        long entityCollectionStart = shouldProfile ? System.nanoTime() : 0;
+        EntityDataCollection data = collectEntityData(server);
+        if (shouldProfile && profile != null) {
+            profile.entityCollectionTime = System.nanoTime() - entityCollectionStart;
+            profile.entitiesProcessed = data.entities().size();
+            profile.itemsProcessed = data.items().size();
+        }
+
+        long consolidationStart = shouldProfile ? System.nanoTime() : 0;
+        List<ItemEntityData> consolidated = consolidateItemEntities(data.items());
+        if (shouldProfile && profile != null) {
+            profile.itemConsolidationTime = System.nanoTime() - consolidationStart;
+        }
+        return new EntityDataCollection(data.entities(), consolidated, data.mobs(), data.blockEntities(), data.players());
     }
 
     private static void submitAsyncOptimizations(MinecraftServer server, EntityDataCollection data, boolean shouldProfile) {
         try {
-            getExecutor().submit(() -> {
-                try {
-                    long processingStart = shouldProfile ? System.nanoTime() : 0;
-                    OptimizationResults results = processOptimizations(data);
-                    if (shouldProfile) {
-                        ProfileData profile = profileData.get();
-                        if (profile != null) {
-                            profile.optimizationProcessingTime = System.nanoTime() - processingStart;
-                        }
-                    }
-                    
-                    // Schedule modifications back on server thread to stay thread-safe with Minecraft internals
-                    server.execute(() -> {
-                        try {
-                            long applicationStart = shouldProfile ? System.nanoTime() : 0;
-                            applyOptimizations(server, results);
-                            if (shouldProfile) {
-                                ProfileData profile = profileData.get();
-                                if (profile != null) {
-                                    profile.optimizationApplicationTime = System.nanoTime() - applicationStart;
-                                }
-                            }
-                            logOptimizations(results);
-                            removeItems(server, results.itemResult());
-                        } catch (Exception e) {
-                            LOGGER.warn("Error applying optimizations on server thread", e);
-                        }
-                    });
-                } catch (Exception e) {
-                    LOGGER.warn("Error during async processing of optimizations", e);
-                }
-            });
+            getExecutor().submit(() -> performAsyncOptimization(server, data, shouldProfile));
         } catch (Exception e) {
             // Fallback to synchronous processing if executor rejects
             LOGGER.debug("Executor rejected task; running synchronously", e);
             runSynchronousOptimizations(server, data, shouldProfile);
+        }
+    }
+
+    private static void performAsyncOptimization(MinecraftServer server, EntityDataCollection data, boolean shouldProfile) {
+        try {
+            long processingStart = shouldProfile ? System.nanoTime() : 0;
+            OptimizationResults results = processOptimizations(data);
+            if (shouldProfile) {
+                ProfileData profile = profileData.get();
+                if (profile != null) {
+                    profile.optimizationProcessingTime = System.nanoTime() - processingStart;
+                }
+            }
+            
+            // Schedule modifications back on server thread to stay thread-safe with Minecraft internals
+            server.execute(() -> applyOptimizationResults(server, results, shouldProfile));
+        } catch (Exception e) {
+            LOGGER.warn("Error during async processing of optimizations", e);
+        }
+    }
+
+    private static void applyOptimizationResults(MinecraftServer server, OptimizationResults results, boolean shouldProfile) {
+        try {
+            long applicationStart = shouldProfile ? System.nanoTime() : 0;
+            applyOptimizations(server, results);
+            if (shouldProfile) {
+                ProfileData profile = profileData.get();
+                if (profile != null) {
+                    profile.optimizationApplicationTime = System.nanoTime() - applicationStart;
+                }
+            }
+            if (tickCounter % CONFIG.getLogIntervalTicks() == 0) logOptimizations(results);
+            removeItems(server, results.itemResult());
+        } catch (Exception e) {
+            LOGGER.warn("Error applying optimizations on server thread", e);
         }
     }
 
@@ -591,7 +627,7 @@ public class PerformanceManager {
                 levelPlayers.add(new PlayerData(p.getId(), p.getX(), p.getY(), p.getZ()));
             }
             
-            collectEntitiesFromLevel(level, entities, items, mobs, maxEntities, distanceCutoff, levelPlayers, excludedTypes, cutoffSq);
+            collectEntitiesFromLevel(level, new EntityCollectionContext(entities, items, mobs, maxEntities, distanceCutoff, levelPlayers, excludedTypes, cutoffSq));
             
             // collect into global players list used by Rust processing
             players.addAll(levelPlayers);
@@ -600,12 +636,10 @@ public class PerformanceManager {
         return new EntityDataCollection(entities, items, mobs, blockEntities, players);
     }
 
-    private static void collectEntitiesFromLevel(ServerLevel level, List<EntityData> entities, List<ItemEntityData> items,
-                                                List<MobData> mobs, int maxEntities, double distanceCutoff,
-                                                List<PlayerData> players, String[] excluded, double cutoffSq) {
+    private static void collectEntitiesFromLevel(ServerLevel level, EntityCollectionContext context) {
         // Get or create spatial grid for this level with profiling
         long spatialStart = PROFILING_ENABLED && (tickCounter % PROFILING_SAMPLE_RATE == 0) ? System.nanoTime() : 0;
-        SpatialGrid spatialGrid = getOrCreateSpatialGrid(level, players);
+        SpatialGrid spatialGrid = getOrCreateSpatialGrid(level, context.players());
         if (PROFILING_ENABLED && (tickCounter % PROFILING_SAMPLE_RATE == 0)) {
             ProfileData profile = profileData.get();
             if (profile != null) {
@@ -614,7 +648,7 @@ public class PerformanceManager {
         }
 
         // Create bounding box that encompasses all players within distance cutoff
-        AABB searchBounds = createSearchBounds(players, distanceCutoff);
+        AABB searchBounds = createSearchBounds(context.players(), context.distanceCutoff());
         
         // Use asynchronous distance calculations every N ticks to reduce CPU load
         if (tickCounter % DISTANCE_CALCULATION_INTERVAL == 0) {
@@ -622,59 +656,20 @@ public class PerformanceManager {
             List<Entity> entityList = level.getEntities(null, searchBounds);
             int entityCount = entityList.size();
             
-            for (int i = 0; i < entityCount && entities.size() < maxEntities; i++) {
+            for (int i = 0; i < entityCount && context.entities().size() < context.maxEntities(); i++) {
                 Entity entity = entityList.get(i);
                 // Use spatial grid for efficient distance calculation
-                double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, distanceCutoff);
-                if (minSq <= cutoffSq) {
-                    processEntityWithinCutoff(entity, minSq, excluded, entities, items, mobs);
+                double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, context.distanceCutoff());
+                if (minSq <= context.cutoffSq()) {
+                    processEntityWithinCutoff(entity, minSq, context.excluded(), context.entities(), context.items(), context.mobs());
                 }
             }
         } else {
             // Reduced frequency calculation - use cached distances or approximate
-            performReducedDistanceCalculation(level, searchBounds, entities, items, mobs, maxEntities,
-                                            excluded, spatialGrid, cutoffSq, distanceCutoff);
+            performReducedDistanceCalculation(level, searchBounds, context, spatialGrid);
         }
-    }
-
-    // Helper to compute squared distance to nearest player with caching
-    private static double computeMinSquaredDistanceToPlayers(Entity entity, List<PlayerData> players) {
-        // Use approximation cache for better performance
-        return computeMinSquaredDistanceToPlayersOptimized(entity, players, -1);
     }
     
-    // Optimized distance calculation with approximation caching
-    private static double computeMinSquaredDistanceToPlayersOptimized(Entity entity, List<PlayerData> players, double maxSearchRadius) {
-        // Create cache key based on entity position (rounded to nearest block for approximation)
-        int entityX = (int) Math.round(entity.getX());
-        int entityY = (int) Math.round(entity.getY());
-        int entityZ = (int) Math.round(entity.getZ());
-        String cacheKey = entityX + "," + entityY + "," + entityZ;
-        
-        // Check cache first for approximate distance
-        Double cachedDistance = distanceApproximationCache.get(cacheKey);
-        if (cachedDistance != null && maxSearchRadius > 0 && cachedDistance > maxSearchRadius * maxSearchRadius) {
-            // Cached distance is beyond search radius, skip detailed calculation
-            return cachedDistance;
-        }
-        
-        double minSq = Double.MAX_VALUE;
-        for (PlayerData p : players) {
-            double dx = entity.getX() - p.x();
-            double dy = entity.getY() - p.y();
-            double dz = entity.getZ() - p.z();
-            double sq = dx*dx + dy*dy + dz*dz;
-            if (sq < minSq) minSq = sq;
-        }
-        
-        // Cache the result if cache is not full
-        if (distanceApproximationCache.size() < DISTANCE_CACHE_SIZE) {
-            distanceApproximationCache.put(cacheKey, minSq);
-        }
-        
-        return minSq;
-    }
-
     // Optimized version using spatial grid - O(log M) instead of O(M)
     private static double computeMinSquaredDistanceToPlayersOptimized(Entity entity, SpatialGrid spatialGrid, double maxSearchRadius) {
         return spatialGrid.findMinSquaredDistance(entity.getX(), entity.getY(), entity.getZ(), maxSearchRadius);
@@ -717,16 +712,13 @@ public class PerformanceManager {
 
     // Get or create spatial grid for a level, updating it with current player positions
     private static SpatialGrid getOrCreateSpatialGrid(ServerLevel level, List<PlayerData> players) {
-        long startTime = PROFILING_ENABLED && (tickCounter % PROFILING_SAMPLE_RATE == 0) ? System.nanoTime() : 0;
         
         synchronized (spatialGridLock) {
-            SpatialGrid grid = levelSpatialGrids.get(level);
-            if (grid == null) {
+            SpatialGrid grid = levelSpatialGrids.computeIfAbsent(level, k -> {
                 // Create grid with cell size based on distance cutoff for optimal performance
                 double cellSize = Math.max(CONFIG.getEntityDistanceCutoff() / 4.0, 16.0);
-                grid = new SpatialGrid(cellSize);
-                levelSpatialGrids.put(level, grid);
-            }
+                return new SpatialGrid(cellSize);
+            });
             
             // Update grid with current player positions
             grid.clear();
@@ -777,18 +769,15 @@ public class PerformanceManager {
      * Perform reduced frequency distance calculation to optimize performance.
      * Uses cached distances and approximate calculations when full precision is not needed.
      */
-    private static void performReducedDistanceCalculation(ServerLevel level, AABB searchBounds,
-                                                         List<EntityData> entities, List<ItemEntityData> items,
-                                                         List<MobData> mobs, int maxEntities, String[] excluded,
-                                                         SpatialGrid spatialGrid, double cutoffSq, double distanceCutoff) {
+    private static void performReducedDistanceCalculation(ServerLevel level, AABB searchBounds, EntityCollectionContext context, SpatialGrid spatialGrid) {
         // Use a larger search radius to reduce false negatives, then filter more precisely for close entities
-        double approximateCutoff = distanceCutoff * 1.2; // 20% larger for safety margin
+        double approximateCutoff = context.distanceCutoff() * 1.2; // 20% larger for safety margin
         double approximateCutoffSq = approximateCutoff * approximateCutoff;
         
         // First pass: quick approximate filtering using spatial grid
         List<Entity> candidateEntities = new ArrayList<>();
         for (Entity entity : level.getEntities(null, searchBounds)) {
-            if (entities.size() >= maxEntities) break;
+            if (context.entities().size() >= context.maxEntities()) break;
             
             // Quick approximate check using spatial grid
             double approxMinSq = spatialGrid.findMinSquaredDistance(
@@ -801,15 +790,15 @@ public class PerformanceManager {
         
         // Second pass: precise calculation only for candidates
         for (Entity entity : candidateEntities) {
-            if (entities.size() >= maxEntities) break;
+            if (context.entities().size() >= context.maxEntities()) break;
             
             String typeStr = entity.getType().toString();
-            if (isExcludedType(typeStr, excluded)) continue;
-            
-            // Precise distance calculation
-            double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, distanceCutoff);
-            if (minSq <= cutoffSq) {
-                processEntityWithinCutoff(entity, minSq, excluded, entities, items, mobs);
+            if (!isExcludedType(typeStr, context.excluded())) {
+                // Precise distance calculation
+                double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, context.distanceCutoff());
+                if (minSq <= context.cutoffSq()) {
+                    processEntityWithinCutoff(entity, minSq, context.excluded(), context.entities(), context.items(), context.mobs());
+                }
             }
         }
     }
@@ -846,7 +835,7 @@ public class PerformanceManager {
         if (items == null || items.isEmpty()) return items;
         
         int estimatedSize = Math.min(items.size(), items.size() / 2 + 1);
-        Map<Long, ItemEntityData> agg = new HashMap<>(estimatedSize);
+        Map<Long, ItemEntityData> agg = HashMap.newHashMap(estimatedSize);
         
         // Pre-calculate hash codes to avoid repeated calls
         for (ItemEntityData it : items) {
@@ -996,8 +985,8 @@ public class PerformanceManager {
                 totalCells += stats.totalCells();
             }
             
-            if (totalLevels > 0) {
-                LOGGER.debug("SpatialGrid stats: {} levels, {} players, {} cells, avg {:.2f} players/cell",
+            if (totalLevels > 0 && LOGGER.isDebugEnabled()) {
+                LOGGER.debug("SpatialGrid stats: {} levels, {} players, {} cells, avg {} players/cell",
                     totalLevels, totalPlayers, totalCells,
                     totalCells > 0 ? (double) totalPlayers / totalCells : 0.0);
             }
