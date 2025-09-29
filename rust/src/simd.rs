@@ -250,7 +250,7 @@ pub mod entity_processing {
         let cy = _mm256_set1_ps(center.1);
         let cz = _mm256_set1_ps(center.2);
 
-        positions.chunks_exact(8).flat_map(|chunk| {
+    positions.chunks(8).flat_map(|chunk| {
             let mut distances = [0.0f32; 8];
             
             let px = _mm256_set_ps(
@@ -306,7 +306,7 @@ pub mod entity_processing {
         let cy = _mm_set1_ps(center.1);
         let cz = _mm_set1_ps(center.2);
 
-        positions.chunks_exact(4).flat_map(|chunk| {
+    positions.chunks(4).flat_map(|chunk| {
             let mut distances = [0.0f32; 4];
             
             let px = _mm_set_ps(
@@ -355,8 +355,43 @@ pub mod entity_processing {
 
     #[target_feature(enable = "avx512f")]
     unsafe fn calculate_distances_avx512(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
-        // AVX512 path is not fully implemented for all platforms here; fall back to scalar
-        calculate_distances_scalar(positions, center)
+        // Implement AVX-512 path: process up to 16 lanes per iteration and handle remainder safely.
+        let cx = _mm512_set1_ps(center.0);
+        let cy = _mm512_set1_ps(center.1);
+        let cz = _mm512_set1_ps(center.2);
+
+        positions.chunks(16).flat_map(|chunk| {
+            let mut distances = [0.0f32; 16];
+
+            // Prepare position arrays (pad with 0.0 for lanes beyond chunk.len())
+            let mut px_arr = [0.0f32; 16];
+            let mut py_arr = [0.0f32; 16];
+            let mut pz_arr = [0.0f32; 16];
+
+            for (i, p) in chunk.iter().enumerate() {
+                px_arr[i] = p.0;
+                py_arr[i] = p.1;
+                pz_arr[i] = p.2;
+            }
+
+            let px = _mm512_loadu_ps(px_arr.as_ptr());
+            let py = _mm512_loadu_ps(py_arr.as_ptr());
+            let pz = _mm512_loadu_ps(pz_arr.as_ptr());
+
+            let dx = _mm512_sub_ps(px, cx);
+            let dy = _mm512_sub_ps(py, cy);
+            let dz = _mm512_sub_ps(pz, cz);
+
+            let dx2 = _mm512_mul_ps(dx, dx);
+            let dy2 = _mm512_mul_ps(dy, dy);
+            let dz2 = _mm512_mul_ps(dz, dz);
+
+            let sum = _mm512_add_ps(_mm512_add_ps(dx2, dy2), dz2);
+            let dist = _mm512_sqrt_ps(sum);
+
+            _mm512_storeu_ps(distances.as_mut_ptr(), dist);
+            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+        }).collect()
     }
 
     /// SIMD-accelerated entity filtering by distance threshold
