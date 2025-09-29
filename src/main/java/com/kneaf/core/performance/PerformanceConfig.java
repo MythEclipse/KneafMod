@@ -29,6 +29,7 @@ public final class PerformanceConfig {
     private final boolean adaptiveThreadPool;
     private final int maxThreadPoolSize;
     private final String[] excludedEntityTypes;
+    private final int networkExecutorPoolSize;
 
     // Use a Builder to avoid long constructor parameter lists (satisfies java:S107)
     private PerformanceConfig(Builder b) {
@@ -44,6 +45,7 @@ public final class PerformanceConfig {
         this.maxThreadPoolSize = b.maxThreadPoolSize;
         // Defensively copy the array to prevent external mutation after construction
         this.excludedEntityTypes = b.excludedEntityTypes == null ? new String[0] : b.excludedEntityTypes.clone();
+        this.networkExecutorPoolSize = b.networkExecutorPoolSize;
     }
 
     /**
@@ -61,6 +63,7 @@ public final class PerformanceConfig {
         private boolean adaptiveThreadPool;
         private int maxThreadPoolSize;
         private String[] excludedEntityTypes;
+    private int networkExecutorPoolSize;
 
         public Builder enabled(boolean v) { this.enabled = v; return this; }
         public Builder threadPoolSize(int v) { this.threadPoolSize = v; return this; }
@@ -73,6 +76,7 @@ public final class PerformanceConfig {
         public Builder adaptiveThreadPool(boolean v) { this.adaptiveThreadPool = v; return this; }
         public Builder maxThreadPoolSize(int v) { this.maxThreadPoolSize = v; return this; }
     public Builder excludedEntityTypes(String[] v) { this.excludedEntityTypes = v == null ? new String[0] : v.clone(); return this; }
+    public Builder networkExecutorPoolSize(int v) { this.networkExecutorPoolSize = v; return this; }
 
         public PerformanceConfig build() {
             // Apply same defensive constraints as before and build a config using this Builder
@@ -87,6 +91,7 @@ public final class PerformanceConfig {
             boolean vAdaptiveThreadPool = this.adaptiveThreadPool;
             int vMaxThreadPoolSize = Math.max(1, this.maxThreadPoolSize);
             String[] vExcludedEntityTypes = this.excludedEntityTypes == null ? new String[0] : this.excludedEntityTypes;
+            int vNetworkExecutorPoolSize = Math.max(1, this.networkExecutorPoolSize);
 
             Builder validated = new Builder();
             validated.enabled(vEnabled)
@@ -99,7 +104,8 @@ public final class PerformanceConfig {
                     .maxLogBytes(vMaxLogBytes)
                     .adaptiveThreadPool(vAdaptiveThreadPool)
                     .maxThreadPoolSize(vMaxThreadPoolSize)
-                    .excludedEntityTypes(vExcludedEntityTypes);
+            .excludedEntityTypes(vExcludedEntityTypes)
+            .networkExecutorPoolSize(vNetworkExecutorPoolSize);
             return new PerformanceConfig(validated);
         }
 
@@ -116,6 +122,8 @@ public final class PerformanceConfig {
             this.adaptiveThreadPool = false;
             this.maxThreadPoolSize = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
             this.excludedEntityTypes = new String[0];
+            // Default network executor pool size: half of available processors (minimum 1)
+            this.networkExecutorPoolSize = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
         }
     }
 
@@ -130,6 +138,7 @@ public final class PerformanceConfig {
     public boolean isAdaptiveThreadPool() { return adaptiveThreadPool; }
     public int getMaxThreadPoolSize() { return maxThreadPoolSize; }
     public String[] getExcludedEntityTypes() { return excludedEntityTypes.clone(); }
+    public int getNetworkExecutorPoolSize() { return networkExecutorPoolSize; }
 
     public static PerformanceConfig load() {
         Properties props = new Properties();
@@ -145,7 +154,7 @@ public final class PerformanceConfig {
             }
         }
 
-        boolean enabled = Boolean.parseBoolean(props.getProperty("enabled", "true"));
+    boolean enabled = Boolean.parseBoolean(props.getProperty("enabled", "true"));
         int threadPoolSize = parseIntOrDefault(props.getProperty("threadPoolSize"), 4);
         int logIntervalTicks = parseIntOrDefault(props.getProperty("logIntervalTicks"), 100);
         int scanIntervalTicks = parseIntOrDefault(props.getProperty("scanIntervalTicks"), 1);
@@ -156,6 +165,7 @@ public final class PerformanceConfig {
         int maxThreadPoolSize = parseIntOrDefault(props.getProperty("maxThreadPoolSize"), Math.max(1, Runtime.getRuntime().availableProcessors() - 1));
         String excluded = props.getProperty("excludedEntityTypes", "");
         String[] excludedEntityTypes = excluded.isBlank() ? new String[0] : excluded.split("\\s*,\\s*");
+    int networkExecutorPoolSize = parseIntOrDefault(props.getProperty("networkExecutorPoolSize"), Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
 
     long maxLogBytes = parseLongOrDefault(props.getProperty("maxLogBytes"), 10L * 1024 * 1024); // 10MB default
 
@@ -171,7 +181,8 @@ public final class PerformanceConfig {
         .maxLogBytes(maxLogBytes)
         .adaptiveThreadPool(adaptiveThreadPool)
         .maxThreadPoolSize(maxThreadPoolSize)
-        .excludedEntityTypes(excludedEntityTypes);
+    .excludedEntityTypes(excludedEntityTypes)
+    .networkExecutorPoolSize(networkExecutorPoolSize);
 
     return b.build();
     }

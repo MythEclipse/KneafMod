@@ -23,9 +23,33 @@ import java.util.zip.Deflater;
 public class NetworkOptimizer {
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    // Executor for async packet processing
-    private static final java.util.concurrent.ScheduledExecutorService NETWORK_EXECUTOR = java.util.concurrent.Executors.newScheduledThreadPool(
-        Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
+    // Executor for async packet processing. Lazily initialized to avoid heavy work during class loading.
+    private static volatile java.util.concurrent.ScheduledExecutorService networkExecutor = null;
+
+    private static java.util.concurrent.ScheduledExecutorService getNetworkExecutor() {
+        java.util.concurrent.ScheduledExecutorService exec = networkExecutor;
+        if (exec == null) {
+            synchronized (NetworkOptimizer.class) {
+                exec = networkExecutor;
+                if (exec == null) {
+                    int pool = PerformanceConfig.load().getNetworkExecutorPoolSize();
+                    networkExecutor = exec = java.util.concurrent.Executors.newScheduledThreadPool(Math.max(1, pool));
+                    // add a shutdown hook to ensure we don't leak threads in environments that load/unload mods
+                    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                        try {
+                            java.util.concurrent.ScheduledExecutorService e = networkExecutor;
+                            if (e != null) {
+                                e.shutdownNow();
+                            }
+                        } catch (Exception ex) {
+                            // ignore
+                        }
+                    }));
+                }
+            }
+        }
+        return exec;
+    }
 
     // Packet batching
     private static final List<Packet<?>> packetBatch = new ArrayList<>();
@@ -51,7 +75,7 @@ public class NetworkOptimizer {
     public static void onServerTick(ServerTickEvent.Post event) {
         // Process batched packets
         if (!packetBatch.isEmpty()) {
-            NETWORK_EXECUTOR.submit(() -> sendBatchedPackets());
+            getNetworkExecutor().submit(() -> sendBatchedPackets());
         }
     }
 
@@ -72,7 +96,7 @@ public class NetworkOptimizer {
             packetBatch.add(packet);
             if (packetBatch.size() >= BATCH_SIZE) {
                 // schedule immediate execution on executor instead of submit to allow delayed rate-limited tasks
-                NETWORK_EXECUTOR.execute(NetworkOptimizer::sendBatchedPackets);
+                getNetworkExecutor().execute(NetworkOptimizer::sendBatchedPackets);
             }
         }
     }
@@ -131,7 +155,7 @@ public class NetworkOptimizer {
             // Apply rate limiting using scheduled executor rather than blocking sleep
             int rateLimitDelay = calculateRateLimitDelayByEstimate(packet, estSize);
             if (rateLimitDelay > 0) {
-                NETWORK_EXECUTOR.schedule(() -> LOGGER.debug("Rate-limited packet send: {} delayed {}ms", packet.getClass().getSimpleName(), rateLimitDelay), rateLimitDelay, java.util.concurrent.TimeUnit.MILLISECONDS);
+                getNetworkExecutor().schedule(() -> LOGGER.debug("Rate-limited packet send: {} delayed {}ms", packet.getClass().getSimpleName(), rateLimitDelay), rateLimitDelay, java.util.concurrent.TimeUnit.MILLISECONDS);
             } else {
                 LOGGER.debug("Processed packet immediately: {}", packet.getClass().getSimpleName());
             }
