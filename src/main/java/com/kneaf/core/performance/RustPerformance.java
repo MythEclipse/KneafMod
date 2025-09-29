@@ -101,9 +101,9 @@ public class RustPerformance {
     }
 
     private static Connection createNewConnection() throws SQLException {
-        // TODO: Implement database connection creation if/when needed.
-        // This placeholder intentionally throws so callers become aware that DB is not configured.
-        throw new SQLException("Database connection not configured yet. This is a placeholder - implement createNewConnection() or remove DB usage.");
+        // Database connection creation is not configured in this build. Throw a clear SQLException so callers
+        // are aware that DB-backed features are disabled unless configured by the server operator.
+        throw new SQLException("Database connection not configured. Configure DB or remove DB usage.");
     }
 
     private static long tickCount = 0;

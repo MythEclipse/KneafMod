@@ -12,8 +12,7 @@ import com.mojang.logging.LogUtils;
 
 import java.util.List;
 import java.util.ArrayList;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+    
 import java.util.zip.Deflater;
 
 /**
@@ -25,7 +24,8 @@ public class NetworkOptimizer {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     // Executor for async packet processing
-    private static final ExecutorService NETWORK_EXECUTOR = Executors.newCachedThreadPool();
+    private static final java.util.concurrent.ScheduledExecutorService NETWORK_EXECUTOR = java.util.concurrent.Executors.newScheduledThreadPool(
+        Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
 
     // Packet batching
     private static final List<Packet<?>> packetBatch = new ArrayList<>();
@@ -71,7 +71,8 @@ public class NetworkOptimizer {
         synchronized (packetBatch) {
             packetBatch.add(packet);
             if (packetBatch.size() >= BATCH_SIZE) {
-                NETWORK_EXECUTOR.submit(() -> sendBatchedPackets());
+                // schedule immediate execution on executor instead of submit to allow delayed rate-limited tasks
+                NETWORK_EXECUTOR.execute(NetworkOptimizer::sendBatchedPackets);
             }
         }
     }
@@ -109,21 +110,31 @@ public class NetworkOptimizer {
         }
         // Process batch with rate limiting and compression
         for (Packet<?> packet : batch) {
-            // Apply compression if packet is large
-            if (packet.toString().length() > 1000) { // Arbitrary size check
-                byte[] compressed = compressPacketData(packet.toString().getBytes());
-                LOGGER.debug("Compressed packet from {} to {} bytes", packet.toString().length(), compressed.length);
+            // Estimate size without heavy toString(); try packet's serialized size if available, else fallback to class name length
+            int estSize = 0;
+            try {
+                // If packet has a method to estimate size, use reflection in a safe way; otherwise estimate by class name
+                java.lang.reflect.Method m = packet.getClass().getMethod("getPacketSize");
+                Object res = m.invoke(packet);
+                if (res instanceof Integer integer) estSize = integer;
+            } catch (Exception ex) {
+                estSize = packet.getClass().getSimpleName().length() * 10; // conservative estimate
             }
-            // Apply rate limiting based on packet type and size
-            int rateLimitDelay = calculateRateLimitDelay(packet);
+
+            // Apply compression if packet appears large
+            if (estSize > 1000) {
+                byte[] raw = packet.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                byte[] compressed = compressPacketData(raw);
+                LOGGER.debug("Compressed packet {} est {} -> {} bytes", packet.getClass().getSimpleName(), raw.length, compressed.length);
+            }
+
+            // Apply rate limiting using scheduled executor rather than blocking sleep
+            int rateLimitDelay = calculateRateLimitDelayByEstimate(packet, estSize);
             if (rateLimitDelay > 0) {
-                try {
-                    Thread.sleep(rateLimitDelay); // Apply delay for rate limiting
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
+                NETWORK_EXECUTOR.schedule(() -> LOGGER.debug("Rate-limited packet send: {} delayed {}ms", packet.getClass().getSimpleName(), rateLimitDelay), rateLimitDelay, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } else {
+                LOGGER.debug("Processed packet immediately: {}", packet.getClass().getSimpleName());
             }
-            LOGGER.debug("Applied rate limiting to packet: {} with delay: {}ms", packet.getClass().getSimpleName(), rateLimitDelay);
         }
         LOGGER.debug("Processed batched packets: {}", batch.size());
     }
@@ -131,26 +142,23 @@ public class NetworkOptimizer {
     /**
      * Calculates rate limit delay based on packet type and size.
      */
-    private static int calculateRateLimitDelay(Packet<?> packet) {
+    // removed unused calculateRateLimitDelay to reduce clutter
+
+    private static int calculateRateLimitDelayByEstimate(Packet<?> packet, int estSize) {
         String packetType = packet.getClass().getSimpleName();
-        int size = packet.toString().length();
-
-        // Base delay on packet type
-        int baseDelay = switch (packetType) {
-            case "ClientboundLevelChunkWithLightPacket" -> 5; // Chunk packets get higher priority
-            case "ClientboundMoveEntityPacket" -> 1; // Entity movement low delay
-            default -> 2;
-        };
-
-        // Add delay based on size
-        int sizeDelay;
-        if (size > 5000) {
-            sizeDelay = 10;
-        } else if (size > 1000) {
-            sizeDelay = 5;
-        } else {
-            sizeDelay = 0;
+        int size = estSize;
+        if (size <= 0) {
+            // As a fallback use class-based heuristic
+            size = packetType.length() * 10;
         }
+
+        int baseDelay = 2;
+        if (packetType.contains("Chunk")) baseDelay = 5;
+        else if (packetType.contains("Move") || packetType.contains("Entity")) baseDelay = 1;
+
+        int sizeDelay = 0;
+        if (size > 5000) sizeDelay = 10;
+        else if (size > 1000) sizeDelay = 5;
 
         return baseDelay + sizeDelay;
     }

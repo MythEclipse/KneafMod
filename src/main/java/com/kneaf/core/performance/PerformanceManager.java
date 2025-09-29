@@ -326,9 +326,15 @@ public class PerformanceManager {
     }
 
     private static void applyItemUpdates(MinecraftServer server, RustPerformance.ItemProcessResult itemResult) {
-        for (var update : itemResult.getItemUpdates()) {
-            for (ServerLevel level : server.getAllLevels()) {
-                Entity entity = level.getEntity((int) update.getId());
+        if (itemResult == null || itemResult.getItemUpdates() == null) return;
+        // Build a map of entity id -> Entity per level to reduce repeated lookups
+        for (ServerLevel level : server.getAllLevels()) {
+            java.util.Map<Integer, Entity> entityMap = new java.util.HashMap<>();
+            for (Entity e : level.getEntities().getAll()) {
+                entityMap.put(e.getId(), e);
+            }
+            for (var update : itemResult.getItemUpdates()) {
+                Entity entity = entityMap.get((int) update.getId());
                 if (entity instanceof ItemEntity itemEntity) {
                     itemEntity.getItem().setCount(update.getNewCount());
                 }
@@ -337,15 +343,20 @@ public class PerformanceManager {
     }
 
     private static void applyMobOptimizations(MinecraftServer server, RustPerformance.MobProcessResult mobResult) {
+        if (mobResult == null) return;
         for (ServerLevel level : server.getAllLevels()) {
+            java.util.Map<Integer, Entity> entityMap = new java.util.HashMap<>();
+            for (Entity e : level.getEntities().getAll()) {
+                entityMap.put(e.getId(), e);
+            }
             for (Long id : mobResult.getMobsToDisableAI()) {
-                Entity entity = level.getEntity(id.intValue());
+                Entity entity = entityMap.get(id.intValue());
                 if (entity instanceof net.minecraft.world.entity.Mob mob) {
                     mob.setNoAi(true);
                 }
             }
             for (Long id : mobResult.getMobsToSimplifyAI()) {
-                Entity entity = level.getEntity(id.intValue());
+                Entity entity = entityMap.get(id.intValue());
                 if (entity instanceof net.minecraft.world.entity.Mob) {
                     LOGGER.debug("Simplifying AI for mob {}", id);
                 }

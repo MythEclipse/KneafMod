@@ -149,14 +149,21 @@ dependencies {
     // Testing dependencies
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
     testImplementation 'org.slf4j:slf4j-api:2.0.7'
-    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
+    testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
 }
 
 test {
-    useJUnitPlatform()
+    useJUnitPlatform() {
+        // Explicitly declare the JUnit Jupiter engine to avoid Gradle deprecation
+        includeEngines 'junit-jupiter'
+    }
     // Set java.library.path via provider to be configuration-cache friendly
     systemProperty 'java.library.path', layout.buildDirectory.dir('generated/resources/natives').map { it.asFile.absolutePath }
 }
+
+// Ensure the test runtime engine dependency is explicitly present on every Test task's runtime classpath
+// This attaches the configured test framework implementation dependency so Gradle doesn't auto-load it.
+// No extra Test task classpath injection required when the engine is on testImplementation
 
 // This block of code expands all declared replace properties in the specified resource targets.
 // A missing property will result in an error. Properties are expanded using ${} Groovy notation.

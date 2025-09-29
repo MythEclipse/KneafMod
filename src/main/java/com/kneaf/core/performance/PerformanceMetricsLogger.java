@@ -13,6 +13,8 @@ import java.time.Instant;
 public final class PerformanceMetricsLogger {
     private static final Path LOG_PATH = Paths.get("run", "logs", "kneaf-performance.log");
     private static final Path LOG_ARCHIVE_DIR = Paths.get("run", "logs", "archive");
+    // Cache the config so we don't reload properties file on every rotation check
+    private static final PerformanceConfig CONFIG = PerformanceConfig.load();
 
     private PerformanceMetricsLogger() {}
 
@@ -51,7 +53,7 @@ public final class PerformanceMetricsLogger {
         try {
             ensureLogDir();
             if (!Files.exists(LOG_PATH)) return;
-            long maxBytes = com.kneaf.core.performance.PerformanceConfig.load().getMaxLogBytes();
+            long maxBytes = CONFIG.getMaxLogBytes();
             long size = Files.size(LOG_PATH);
             if (size > maxBytes && maxBytes > 0) {
                 rotateNow();
