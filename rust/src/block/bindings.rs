@@ -1,6 +1,6 @@
 use jni::JNIEnv;
-use jni::objects::{JClass, JString, JByteBuffer};
-use jni::sys::jbyteArray;
+use jni::objects::{JClass, JString, JByteBuffer, JObject};
+use jni::sys::{jbyteArray, jobject};
 use crate::block::processing::process_block_entities;
 use crate::flatbuffers::conversions::{deserialize_block_input, serialize_block_result};
 
@@ -37,20 +37,17 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBlockEntitiesBinaryNative(
-    env: JNIEnv,
-    _class: JClass,
-    input_buffer: JByteBuffer,
-) -> jbyteArray {
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBlockEntitiesBinaryNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    input_buffer: JByteBuffer<'local>,
+) -> JObject<'local> {
     // Get direct access to the ByteBuffer data
     let data = match env.get_direct_buffer_address(&input_buffer) {
         Ok(data) => data,
         Err(_) => {
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            return match env.byte_array_from_slice(error_msg) {
-                Ok(arr) => arr.into_raw(),
-                Err(_) => std::ptr::null_mut(),
-            };
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
         }
     };
 
@@ -58,10 +55,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
         Ok(capacity) => capacity,
         Err(_) => {
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            return match env.byte_array_from_slice(error_msg) {
-                Ok(arr) => arr.into_raw(),
-                Err(_) => std::ptr::null_mut(),
-            };
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
         }
     };
 
@@ -71,8 +65,5 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
 
     // For now, return error as binary protocol is not fully implemented
     let error_msg = b"{\"error\":\"Binary protocol not fully implemented\"}";
-    match env.byte_array_from_slice(error_msg) {
-        Ok(arr) => arr.into_raw(),
-        Err(_) => std::ptr::null_mut(),
-    }
+    unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() }
 }

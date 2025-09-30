@@ -1,6 +1,6 @@
 use jni::JNIEnv;
-use jni::objects::{JClass, JString, JByteBuffer};
-use jni::sys::jbyteArray;
+use jni::objects::{JClass, JString, JByteBuffer, JObject};
+use jni::sys::{jbyteArray, jobject};
 use crate::entity::processing::{process_entities, process_entities_json};
 
 #[no_mangle]
@@ -23,17 +23,17 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEntitiesBinaryNative(
-    mut env: JNIEnv,
-    _class: JClass,
-    input_buffer: JByteBuffer,
-) -> jbyteArray {
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEntitiesBinaryNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    input_buffer: JByteBuffer<'local>,
+) -> jobject {
     // Get direct access to the ByteBuffer data
     let data = match env.get_direct_buffer_address(&input_buffer) {
         Ok(data) => data,
         Err(_) => {
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            return env.byte_array_from_slice(error_msg).unwrap().into_raw();
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
         }
     };
 
@@ -41,7 +41,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
         Ok(capacity) => capacity,
         Err(_) => {
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            return env.byte_array_from_slice(error_msg).unwrap().into_raw();
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
         }
     };
 
@@ -51,10 +51,10 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
 
     // Process binary data in batches for better JNI performance
     match process_entities_binary_batch(slice) {
-        Ok(result) => env.byte_array_from_slice(&result).unwrap().into_raw(),
+        Ok(result) => unsafe { env.new_direct_byte_buffer(result.as_ptr() as *mut u8, result.len()).unwrap().into() },
         Err(e) => {
-            let error_msg = format!("{{\"error\":\"{}\"}}", e);
-            env.byte_array_from_slice(error_msg.as_bytes()).unwrap().into_raw()
+            let error_msg = format!("{{\"error\":\"{}\"}}", e).into_bytes();
+            unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() }
         }
     }
 }
