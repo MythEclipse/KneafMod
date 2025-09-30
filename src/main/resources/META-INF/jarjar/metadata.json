@@ -1,0 +1,7 @@
+[
+  {
+    "path": "com/google/flatbuffers/",
+    "artifact": "com.google.flatbuffers:flatbuffers-java:23.5.26",
+    "maven": true
+  }
+]

@@ -49,6 +49,7 @@ neoForge {
 
             // Comma-separated list of namespaces to load gametests from. Empty = all namespaces.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            // Ensure localRuntime jars (like FlatBuffers) are available via the run-client task configuration below
         }
 
         server {
@@ -127,6 +128,8 @@ dependencies {
     implementation 'io.github.astonbitecode:j4rs:0.17.0'
     // FlatBuffers for binary protocol
     implementation 'com.google.flatbuffers:flatbuffers-java:23.5.26'
+    // Ensure FlatBuffers is available on the runtime classpath used by the dev run tasks
+    localRuntime 'com.google.flatbuffers:flatbuffers-java:23.5.26'
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // compileOnly "mezz.jei:jei-${mc_version}-common-api:${jei_version}"
@@ -223,6 +226,30 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
     // When using a toolchain, setting release guarantees the produced bytecode level.
     options.release = 21
+}
+
+// Unpack and include the FlatBuffers runtime jar into the mod jar so the mod classloader
+// (used by NeoForge/ModLauncher in dev runs) can find com.google.flatbuffers classes.
+// We limit inclusion to the FlatBuffers artifact to avoid packaging all transitive runtime deps.
+tasks.named('jar') {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from {
+        configurations.runtimeClasspath
+                .findAll { it.name.toLowerCase().contains('flatbuffers') }
+                .collect { zipTree(it) }
+    }
+}
+
+// Copy any jars declared in localRuntime into run/libs so ModLauncher can load them during dev runs.
+// Use a lazy `from {}` so Gradle doesn't resolve the configuration at configuration time.
+task copyLocalRuntimeToRun(type: Copy) {
+    from { configurations.localRuntime }
+    into file('run/libs')
+}
+
+// Make sure the client run is prepared with those jars present.
+tasks.named('runClient') {
+    dependsOn(copyLocalRuntimeToRun)
 }
 
 // Tasks to build Rust library for both platforms. These are safer and more explicit
