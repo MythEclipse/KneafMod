@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Test class for ChunkCache functionality, specifically focusing on the distance calculation fix.
  * This test works without Minecraft dependencies by testing the core logic in isolation.
  */
-public class ChunkCacheTest {
+class ChunkCacheTest {
 
     private ChunkCache.DistanceEvictionPolicy distancePolicy;
 
@@ -28,27 +28,28 @@ public class ChunkCacheTest {
         
         // Test that the eviction policy can select chunks (even if cache is empty)
         // Create a simple map to test the distance policy
-        java.util.Map<String, ChunkCache.CachedChunk> testMap = new java.util.concurrent.ConcurrentHashMap<>();
+    java.util.Map<String, ChunkCache.CachedChunk> testMap = new java.util.HashMap<>();
         String result = distancePolicy.selectChunkToEvict(testMap);
         assertNull(result); // Should return null for empty map
     }
 
     @Test
     void testDistancePolicyWithValidChunkKey() {
-        // Test distance calculation with a properly formatted chunk key
-        // The distance policy should handle valid chunk keys without throwing exceptions
-        // even with the casting changes
-        
-        // Create a map with a valid chunk key format "world:x:z"
-        java.util.Map<String, ChunkCache.CachedChunk> testMap = new java.util.concurrent.ConcurrentHashMap<>();
-        
-        // Create a mock CachedChunk using reflection or skip this test
-        // Since we can't create a real CachedChunk without Minecraft dependencies,
-        // we'll test the policy with an empty map instead
-        String result = distancePolicy.selectChunkToEvict(testMap);
-        
-        // Empty map should return null
-        assertNull(result, "Empty map should return null");
+        // Test distance calculation parsing behavior with a single simulated key
+        // The distance policy should ignore null CachedChunk values and not throw
+
+    java.util.Map<String, ChunkCache.CachedChunk> testMap = new java.util.HashMap<>();
+        // Put a valid-looking key but with a null value to simulate partial data
+        testMap.put("world:10:20", null);
+
+        try {
+            String result = distancePolicy.selectChunkToEvict(testMap);
+            // Accept either null or the key itself depending on implementation details
+            assertTrue(result == null || "world:10:20".equals(result),
+                "Policy should either ignore null CachedChunk or return its key");
+        } catch (Exception e) {
+            fail("Policy should not throw when encountering null CachedChunk: " + e.getMessage());
+        }
     }
 
     @Test

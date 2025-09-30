@@ -224,7 +224,18 @@ public class NbtChunkSerializer implements ChunkSerializer {
                     beTag.putString("id", blockEntity.getType().toString());
                     chunkData.put("block_entity_" + pos.getX() + "_" + pos.getY() + "_" + pos.getZ(), beTag);
                 } catch (Exception e) {
-                    LOGGER.debug("Could not serialize block entity at {}", pos, e);
+                    // Log the exception with contextual information and continue serializing other
+                    // block entities. We intentionally handle the exception (don't rethrow) to
+                    // avoid failing the whole chunk serialization due to a single bad block
+                    // entity. Use WARN level because this indicates potentially corrupt data.
+                    String beType = "<unknown>";
+                    try {
+                        beType = blockEntity.getType().toString();
+                    } catch (Exception ex) {
+                        // ignore - we still want to log the original exception
+                    }
+                    LOGGER.warn("Could not serialize block entity at {} (type: {}): {}",
+                        pos, beType, e.getMessage(), e);
                 }
             }
         }
