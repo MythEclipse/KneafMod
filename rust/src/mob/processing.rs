@@ -59,3 +59,9 @@ pub fn process_mob_ai_json(json_input: &str) -> Result<String, String> {
     serde_json::to_string(&result)
         .map_err(|e| format!("Failed to serialize result to JSON: {}", e))
 }
+
+/// Process mob AI from binary input in batches for better JNI performance
+pub fn process_mob_ai_binary_batch(data: &[u8]) -> Result<Vec<u8>, String> {
+    // For now, return error as binary protocol is not fully implemented
+    Err("Binary protocol not fully implemented".to_string())
+}

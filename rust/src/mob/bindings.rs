@@ -3,6 +3,7 @@ use jni::objects::{JClass, JString, JByteBuffer, JObject};
 use jni::sys::{jbyteArray, jobject};
 use crate::mob::processing::process_mob_ai;
 use crate::flatbuffers::conversions::{deserialize_mob_input, serialize_mob_result};
+use crate::mob::processing::process_mob_ai_binary_batch;
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMobAiNative(
@@ -37,18 +38,18 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMo
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMobAiBinaryNative(
-    mut env: JNIEnv,
-    _class: JClass,
-    input_buffer: jobject,
-) -> jobject {
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMobAiBinaryNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    input_buffer: JObject<'local>,
+) -> JObject<'local> {
     // Get direct access to the ByteBuffer data
-    let input_buffer = JByteBuffer::from(JObject::from(input_buffer));
+    let input_buffer = JByteBuffer::from(input_buffer);
     let data = match env.get_direct_buffer_address(&input_buffer) {
         Ok(data) => data,
         Err(_) => {
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into_inner() };
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
         }
     };
 
@@ -56,7 +57,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMo
         Ok(capacity) => capacity,
         Err(_) => {
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into_inner() };
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
         }
     };
 
@@ -64,7 +65,12 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMo
         std::slice::from_raw_parts(data, capacity)
     };
 
-    // For now, return error as binary protocol is not fully implemented
-    let error_msg = b"{\"error\":\"Binary protocol not fully implemented\"}";
-    unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into_inner() }
+    // Process binary data in batches for better JNI performance
+    match process_mob_ai_binary_batch(slice) {
+        Ok(result) => unsafe { env.new_direct_byte_buffer(result.as_ptr() as *mut u8, result.len()).unwrap().into() },
+        Err(e) => {
+            let error_msg = format!("{{\"error\":\"{}\"}}", e).into_bytes();
+            unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() }
+        }
+    }
 }
