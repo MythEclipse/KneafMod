@@ -1,6 +1,6 @@
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
-use jni::sys::{jbyteArray, jobject};
+use jni::sys::{jstring, jobject, jbyteArray};
 use crate::entity::processing::{process_entities, process_entities_json};
 
 #[no_mangle]
@@ -8,16 +8,25 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
     mut env: JNIEnv,
     _class: JClass,
     json_input: JString,
-) -> jbyteArray {
-    let input_str: String = env.get_string(&json_input).unwrap().into();
-    
-    match process_entities_json(&input_str) {
-        Ok(result_json) => {
-            env.byte_array_from_slice(result_json.as_bytes()).unwrap().into_raw()
+) -> jstring {
+    let input_str: String = match env.get_string(&json_input) {
+        Ok(s) => s.into(),
+        Err(_) => {
+            return std::ptr::null_mut();
         }
+    };
+
+    match process_entities_json(&input_str) {
+        Ok(result_json) => match env.new_string(result_json) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
         Err(e) => {
             let error_msg = format!("{{\"error\":\"{}\"}}", e);
-            env.byte_array_from_slice(error_msg.as_bytes()).unwrap().into_raw()
+            match env.new_string(error_msg) {
+                Ok(s) => s.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
         }
     }
 }

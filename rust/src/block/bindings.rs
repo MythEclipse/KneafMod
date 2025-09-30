@@ -1,6 +1,6 @@
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
-use jni::sys::{jbyteArray, jobject};
+use jni::sys::{jstring, jobject, jbyteArray};
 use crate::block::processing::process_block_entities;
 use crate::flatbuffers::conversions::{deserialize_block_input, serialize_block_result};
 use crate::block::processing::process_block_entities_binary_batch;
@@ -10,12 +10,11 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
     mut env: JNIEnv,
     _class: JClass,
     json_input: JString,
-) -> jbyteArray {
-    // Helper to create a jbyteArray containing a JSON error message. If creation fails, return null.
-    fn make_error(env: &JNIEnv, msg: &str) -> jbyteArray {
-        let err_bytes = msg.as_bytes();
-        match env.byte_array_from_slice(err_bytes) {
-            Ok(arr) => arr.into_raw(),
+) -> jstring {
+    // Helper to create a jstring containing a JSON error message. If creation fails, return null.
+    fn make_error(env: &JNIEnv, msg: &str) -> jstring {
+        match env.new_string(msg) {
+            Ok(s) => s.into_raw(),
             Err(_) => std::ptr::null_mut(),
         }
     }
@@ -29,8 +28,8 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
     };
 
     match crate::block::processing::process_block_entities_json(&input_str) {
-        Ok(result_json) => match env.byte_array_from_slice(result_json.as_bytes()) {
-            Ok(arr) => arr.into_raw(),
+        Ok(result_json) => match env.new_string(result_json) {
+            Ok(s) => s.into_raw(),
             Err(_) => std::ptr::null_mut(),
         },
         Err(e) => make_error(&env, &format!("{{\"error\":\"{}\"}}", e)),

@@ -1,6 +1,6 @@
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
-use jni::sys::{jbyteArray, jobject};
+use jni::sys::{jbyteArray, jstring, jobject};
 use crate::item::processing::{process_item_entities, process_item_entities_json};
 
 #[no_mangle]
@@ -80,4 +80,36 @@ fn process_item_entities_binary_batch(data: &[u8]) -> Result<Vec<u8>, String> {
     
     // Return combined results
     Ok(b"{\"result\":{\"items_to_remove\":[],\"merged_count\":0,\"despawned_count\":0,\"item_updates\":[],\"batches_processed\":true}}".to_vec())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processItemEntitiesNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    json_input: JString,
+) -> jstring {
+    let input_str = match env.get_string(&json_input) {
+        Ok(s) => match s.to_str() {
+            Ok(st) => st.to_owned(),
+            Err(e) => return match env.new_string(format!("{{\"error\":\"Invalid UTF-8 input: {}\"}}", e)) {
+                Ok(s) => s.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+        },
+        Err(e) => return match env.new_string(format!("{{\"error\":\"Failed to read input string: {}\"}}", e)) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+    };
+
+    match crate::item::processing::process_item_entities_json(&input_str) {
+        Ok(result_json) => match env.new_string(result_json) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(e) => match env.new_string(format!("{{\"error\":\"{}\"}}", e)) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+    }
 }
