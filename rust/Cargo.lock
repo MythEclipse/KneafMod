@@ -1265,6 +1265,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_reflect",
  "blake3",
+ "byteorder",
  "chrono",
  "crossbeam",
  "crossbeam-channel",

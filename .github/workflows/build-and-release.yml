@@ -8,10 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
@@ -26,7 +23,6 @@ jobs:
       with:
         tag: v${{ github.run_number }}
         message: "Release ${{ github.run_number }}"
-      if: matrix.os == 'ubuntu-latest'
 
     - name: Set up JDK 21
       uses: actions/setup-java@v4
@@ -36,36 +32,14 @@ jobs:
 
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
-
-    - name: Install Windows target for cross-compilation
-      run: rustup target add x86_64-pc-windows-gnu
-
-    - name: Install cross for cross-compilation
-      run: cargo install cross
-
     # ✅ FlatBuffers install for Ubuntu
-    - name: Install FlatBuffers compiler (Ubuntu)
+    - name: Install FlatBuffers compiler
       run: |
         sudo apt-get update
         sudo apt-get install -y flatbuffers-compiler
-      if: matrix.os == 'ubuntu-latest'
-
-    # ✅ FlatBuffers install for Windows (Manual via GitHub Release)
-    - name: Install FlatBuffers compiler (Windows)
-      shell: pwsh
-      run: |
-        $release = Invoke-RestMethod https://api.github.com/repos/google/flatbuffers/releases/latest
-        $asset = $release.assets | Where-Object { $_.name -match 'windows' -and $_.name -match 'zip' } | Select-Object -First 1
-        if (-not $asset) { throw "No FlatBuffers Windows asset found!" }
-        Invoke-WebRequest $asset.browser_download_url -OutFile flatc.zip
-        Expand-Archive flatc.zip -DestinationPath $Env:USERPROFILE\flatc
-        echo "$Env:USERPROFILE\flatc" | Out-File -FilePath $Env:GITHUB_PATH -Encoding utf8 -Append
-
 
     - name: Build mod
       run: ./gradlew build
-      env:
-        TARGET_CFLAGS_x86_64-pc-windows-gnu: -DERROR_COMMITMENT_MINIMUM=ERROR_COMMITMENT_LIMIT
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
@@ -75,4 +49,3 @@ jobs:
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      if: matrix.os == 'ubuntu-latest'

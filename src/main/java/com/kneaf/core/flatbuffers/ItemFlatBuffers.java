@@ -1,157 +1,69 @@
 package com.kneaf.core.flatbuffers;
 
-import com.google.flatbuffers.FlatBufferBuilder;
-import com.google.flatbuffers.Table;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * FlatBuffers serialization for ItemEntityData structures
+ * Manual binary serialization for ItemEntityData structures using ByteBuffer.
  */
 public class ItemFlatBuffers {
-    
-    private ItemFlatBuffers() {
-        // Utility class
-    }
-    
-    public static ByteBuffer serializeItemInput(long tickCount, java.util.List<com.kneaf.core.data.ItemEntityData> items) {
-        // Estimate buffer size based on input list to minimize reallocations
-        // Base size + estimated size per item + string overhead
-        int estimatedSize = 1024 +
-                           items.size() * 48 +   // ~48 bytes per item (id, 2 ints, 2 uints, string ref)
-                           items.size() * 16;    // string overhead estimate
-        FlatBufferBuilder builder = new FlatBufferBuilder(estimatedSize);
-        
-        // Serialize items
-        int[] itemOffsets = new int[items.size()];
-        for (int i = 0; i < items.size(); i++) {
-            com.kneaf.core.data.ItemEntityData item = items.get(i);
-            int itemTypeOffset = builder.createString(item.itemType());
-            itemOffsets[i] = createItemEntityData(builder, item.id(), item.chunkX(), item.chunkZ(),
-                                                itemTypeOffset, item.count(), item.ageSeconds());
+    private ItemFlatBuffers() {}
+
+    // Binary layout (little-endian):
+    // [tickCount:long][numItems:int][items...][config: int,int,float,float]
+    // Item layout: [id:long][chunkX:int][chunkZ:int][itemTypeLen:int][itemTypeBytes][count:int][ageSeconds:int]
+
+    public static ByteBuffer serializeItemInput(long tickCount, List<com.kneaf.core.data.ItemEntityData> items) {
+        int size = 8 + 4 + 16; // tick + num + config
+        for (com.kneaf.core.data.ItemEntityData it : items) {
+            byte[] itype = it.itemType() != null ? it.itemType().getBytes(StandardCharsets.UTF_8) : new byte[0];
+            size += 8 + 4 + 4 + 4 + itype.length + 4 + 4;
         }
-        int itemsOffset = builder.createVectorOfTables(itemOffsets);
-        
-        // Create item config
-        int configOffset = createItemConfig(builder, 6000, 20, 0.98f, 0.98f);
-        
-        // Create ItemInput
-        startItemInput(builder);
-        addTickCount(builder, tickCount);
-        addItems(builder, itemsOffset);
-        addItemConfig(builder, configOffset);
-        int inputOffset = endItemInput(builder);
-        
-        builder.finish(inputOffset);
-        return builder.dataBuffer();
+        ByteBuffer buf = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        buf.putLong(tickCount);
+        buf.putInt(items.size());
+        for (com.kneaf.core.data.ItemEntityData it : items) {
+            buf.putLong(it.id());
+            buf.putInt(it.chunkX());
+            buf.putInt(it.chunkZ());
+            byte[] itype = it.itemType() != null ? it.itemType().getBytes(StandardCharsets.UTF_8) : new byte[0];
+            buf.putInt(itype.length);
+            if (itype.length > 0) buf.put(itype);
+            buf.putInt(it.count());
+            buf.putInt(it.ageSeconds());
+        }
+        // config defaults
+        buf.putInt(6000);
+        buf.putInt(20);
+        buf.putFloat(0.98f);
+        buf.putFloat(0.98f);
+        buf.flip();
+        return buf;
     }
-    
-    public static java.util.List<com.kneaf.core.data.ItemEntityData> deserializeItemProcessResult(ByteBuffer buffer) {
+
+    public static List<com.kneaf.core.data.ItemEntityData> deserializeItemProcessResult(ByteBuffer buffer) {
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
         buffer.rewind();
-        ItemProcessResult result = ItemProcessResult.getRootAsItemProcessResult(buffer);
-        
-        java.util.List<com.kneaf.core.data.ItemEntityData> updatedItems = new java.util.ArrayList<>();
-        for (int i = 0; i < result.updatedItemsLength(); i++) {
-            ItemProcessResult.ItemUpdate itemUpdate = result.updatedItems(i);
-            com.kneaf.core.data.ItemEntityData itemData = new com.kneaf.core.data.ItemEntityData(
-                itemUpdate.id(),
-                itemUpdate.chunkX(), itemUpdate.chunkZ(),
-                "", // itemType will be set from original
-                itemUpdate.count(), itemUpdate.ageSeconds()
-            );
-            updatedItems.add(itemData);
-        }
-        return updatedItems;
-    }
-    
-    // ItemEntityData methods
-    public static int createItemEntityData(FlatBufferBuilder builder, long id, int chunkX, int chunkZ,
-                                         int itemType, int count, int ageSeconds) {
-        startItemEntityData(builder);
-        addItemId(builder, id);
-        addChunkX(builder, chunkX);
-        addChunkZ(builder, chunkZ);
-        addItemType(builder, itemType);
-        addCount(builder, count);
-        addAgeSeconds(builder, ageSeconds);
-        return endItemEntityData(builder);
-    }
-    
-    public static void startItemEntityData(FlatBufferBuilder builder) { builder.startTable(5); }
-    public static void addItemId(FlatBufferBuilder builder, long id) { builder.addLong(0, id, 0); }
-    public static void addChunkX(FlatBufferBuilder builder, int chunkX) { builder.addInt(1, chunkX, 0); }
-    public static void addChunkZ(FlatBufferBuilder builder, int chunkZ) { builder.addInt(2, chunkZ, 0); }
-    public static void addItemType(FlatBufferBuilder builder, int itemType) { builder.addOffset(3, itemType, 0); }
-    public static void addCount(FlatBufferBuilder builder, int count) { builder.addInt(4, count, 0); }
-    public static void addAgeSeconds(FlatBufferBuilder builder, int ageSeconds) { builder.addInt(5, ageSeconds, 0); }
-    public static int endItemEntityData(FlatBufferBuilder builder) { return builder.endTable(); }
-    
-    // ItemConfig methods
-    public static int createItemConfig(FlatBufferBuilder builder, int despawnAge, int maxPickupDelay, float gravity, float friction) {
-        startItemConfig(builder);
-        addDespawnAge(builder, despawnAge);
-        addMaxPickupDelay(builder, maxPickupDelay);
-        addGravity(builder, gravity);
-        addFriction(builder, friction);
-        return endItemConfig(builder);
-    }
-    
-    public static void startItemConfig(FlatBufferBuilder builder) { builder.startTable(4); }
-    public static void addDespawnAge(FlatBufferBuilder builder, int despawnAge) { builder.addInt(0, despawnAge, 0); }
-    public static void addMaxPickupDelay(FlatBufferBuilder builder, int maxPickupDelay) { builder.addInt(1, maxPickupDelay, 0); }
-    public static void addGravity(FlatBufferBuilder builder, float gravity) { builder.addFloat(2, gravity, 0); }
-    public static void addFriction(FlatBufferBuilder builder, float friction) { builder.addFloat(3, friction, 0); }
-    public static int endItemConfig(FlatBufferBuilder builder) { return builder.endTable(); }
-    
-    // ItemInput methods
-    public static void startItemInput(FlatBufferBuilder builder) { builder.startTable(3); }
-    public static void addTickCount(FlatBufferBuilder builder, long tickCount) { builder.addLong(0, tickCount, 0); }
-    public static void addItems(FlatBufferBuilder builder, int items) { builder.addOffset(1, items, 0); }
-    public static void addItemConfig(FlatBufferBuilder builder, int itemConfig) { builder.addOffset(2, itemConfig, 0); }
-    public static int endItemInput(FlatBufferBuilder builder) { return builder.endTable(); }
-    
-    // ItemUpdate methods
-    public static int createItemUpdate(FlatBufferBuilder builder, long id, int chunkX, int chunkZ,
-                                     int count, int ageSeconds) {
-        startItemUpdate(builder);
-        addUpdateId(builder, id);
-        addUpdateChunkX(builder, chunkX);
-        addUpdateChunkZ(builder, chunkZ);
-        addUpdateCount(builder, count);
-        addUpdateAgeSeconds(builder, ageSeconds);
-        return endItemUpdate(builder);
-    }
-    
-    public static void startItemUpdate(FlatBufferBuilder builder) { builder.startTable(5); }
-    public static void addUpdateId(FlatBufferBuilder builder, long id) { builder.addLong(0, id, 0); }
-    public static void addUpdateChunkX(FlatBufferBuilder builder, int chunkX) { builder.addInt(1, chunkX, 0); }
-    public static void addUpdateChunkZ(FlatBufferBuilder builder, int chunkZ) { builder.addInt(2, chunkZ, 0); }
-    public static void addUpdateCount(FlatBufferBuilder builder, int count) { builder.addInt(3, count, 0); }
-    public static void addUpdateAgeSeconds(FlatBufferBuilder builder, int ageSeconds) { builder.addInt(4, ageSeconds, 0); }
-    public static int endItemUpdate(FlatBufferBuilder builder) { return builder.endTable(); }
-    
-    // ItemProcessResult methods
-    public static class ItemProcessResult extends Table {
-        public static ItemProcessResult getRootAsItemProcessResult(ByteBuffer buffer) { return getRootAsItemProcessResult(buffer, new ItemProcessResult()); }
-        public static ItemProcessResult getRootAsItemProcessResult(ByteBuffer buffer, ItemProcessResult obj) { buffer.order(ByteOrder.LITTLE_ENDIAN); return (obj.assign(buffer.getInt(buffer.position()) + buffer.position(), buffer)); }
-        public void init(int index, ByteBuffer buffer) { __reset(index, buffer); }
-        public ItemProcessResult assign(int index, ByteBuffer buffer) { init(index, buffer); return this; }
-        
-        public ItemUpdate updatedItems(int j) { return updatedItems(new ItemUpdate(), j); }
-        public ItemUpdate updatedItems(ItemUpdate obj, int j) { int o = __offset(4); return o != 0 ? obj.assign(__indirect(__vector(o) + j * 4), bb) : null; }
-        public int updatedItemsLength() { int o = __offset(4); return o != 0 ? __vector_len(o) : 0; }
-        
-        public static class ItemUpdate extends Table {
-            public ItemUpdate() {
-                // Empty constructor for FlatBuffers
+        int num = buffer.getInt();
+        List<com.kneaf.core.data.ItemEntityData> out = new ArrayList<>();
+        for (int i = 0; i < num; i++) {
+            long id = buffer.getLong();
+            int chunkX = buffer.getInt();
+            int chunkZ = buffer.getInt();
+            int itLen = buffer.getInt();
+            String itemType = "";
+            if (itLen > 0) {
+                byte[] itb = new byte[itLen];
+                buffer.get(itb);
+                itemType = new String(itb, StandardCharsets.UTF_8);
             }
-            public ItemUpdate assign(int index, ByteBuffer buffer) { init(index, buffer); return this; }
-            public void init(int index, ByteBuffer buffer) { __reset(index, buffer); }
-            public long id() { int o = __offset(4); return o != 0 ? bb.getLong(o + bb_pos) : 0; }
-            public int chunkX() { int o = __offset(6); return o != 0 ? bb.getInt(o + bb_pos) : 0; }
-            public int chunkZ() { int o = __offset(8); return o != 0 ? bb.getInt(o + bb_pos) : 0; }
-            public int count() { int o = __offset(10); return o != 0 ? bb.getInt(o + bb_pos) : 0; }
-            public int ageSeconds() { int o = __offset(12); return o != 0 ? bb.getInt(o + bb_pos) : 0; }
+            int count = buffer.getInt();
+            int age = buffer.getInt();
+            out.add(new com.kneaf.core.data.ItemEntityData(id, chunkX, chunkZ, itemType, count, age));
         }
+        return out;
     }
 }

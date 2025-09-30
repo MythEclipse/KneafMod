@@ -33,5 +33,6 @@ chrono = { version = "0.4", features = ["serde"] }
 num_cpus = "1.16"
 flatbuffers = "23.5.26"
 fastrand = "2.0"
+byteorder = "1.4"
 
 [dev-dependencies]
