@@ -27,19 +27,16 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     input_buffer: JObject<'local>,
-) -> JObject<'local> {
+) -> jbyteArray {
     // Get direct access to the ByteBuffer data
     let input_buffer = JByteBuffer::from(input_buffer);
     let data = match env.get_direct_buffer_address(&input_buffer) {
         Ok(data) => data,
         Err(_) => {
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            // Create a copy of the data to ensure memory safety
-            let mut buffer = vec![0u8; error_msg.len()];
-            buffer.copy_from_slice(error_msg);
-            return match env.new_direct_byte_buffer(&mut buffer) {
-                Ok(buf) => buf.into(),
-                Err(_) => JObject::null(),
+            return match env.byte_array_from_slice(error_msg) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
             };
         }
     };
@@ -48,12 +45,9 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
         Ok(capacity) => capacity,
         Err(_) => {
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            // Create a copy of the data to ensure memory safety
-            let mut buffer = vec![0u8; error_msg.len()];
-            buffer.copy_from_slice(error_msg);
-            return match env.new_direct_byte_buffer(&mut buffer) {
-                Ok(buf) => buf.into(),
-                Err(_) => JObject::null(),
+            return match env.byte_array_from_slice(error_msg) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
             };
         }
     };
@@ -64,21 +58,15 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
 
     // Process binary data in batches for better JNI performance
     match process_entities_binary_batch(slice) {
-        Ok(result) => {
-            // Create a copy of the data to ensure memory safety
-            let mut buffer = result.clone();
-            match env.new_direct_byte_buffer(&mut buffer) {
-                Ok(buf) => buf.into(),
-                Err(_) => JObject::null(),
-            }
+        Ok(result) => match env.byte_array_from_slice(&result) {
+            Ok(arr) => arr.into_raw(),
+            Err(_) => std::ptr::null_mut(),
         },
         Err(e) => {
             let error_msg = format!("{{\"error\":\"{}\"}}", e);
-            // Create a copy of the data to ensure memory safety
-            let mut buffer = error_msg.into_bytes();
-            match env.new_direct_byte_buffer(&mut buffer) {
-                Ok(buf) => buf.into(),
-                Err(_) => JObject::null(),
+            match env.byte_array_from_slice(error_msg.as_bytes()) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
             }
         }
     }

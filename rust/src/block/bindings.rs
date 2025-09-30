@@ -42,14 +42,17 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     input_buffer: JObject<'local>,
-) -> JObject<'local> {
+) -> jbyteArray {
     // Get direct access to the ByteBuffer data
     let input_buffer = JByteBuffer::from(input_buffer);
     let data = match env.get_direct_buffer_address(&input_buffer) {
         Ok(data) => data,
         Err(_) => {
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
+            return match env.byte_array_from_slice(error_msg) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            };
         }
     };
 
@@ -57,7 +60,10 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
         Ok(capacity) => capacity,
         Err(_) => {
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
+            return match env.byte_array_from_slice(error_msg) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            };
         }
     };
 
@@ -67,10 +73,16 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
 
     // Process binary data in batches for better JNI performance
     match process_block_entities_binary_batch(slice) {
-        Ok(result) => unsafe { env.new_direct_byte_buffer(result.as_ptr() as *mut u8, result.len()).unwrap().into() },
+        Ok(result) => match env.byte_array_from_slice(&result) {
+            Ok(arr) => arr.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
         Err(e) => {
-            let error_msg = format!("{{\"error\":\"{}\"}}", e).into_bytes();
-            unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() }
+            let error_msg = format!("{{\"error\":\"{}\"}}", e);
+            match env.byte_array_from_slice(error_msg.as_bytes()) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
         }
     }
 }

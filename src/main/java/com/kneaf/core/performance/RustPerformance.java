@@ -473,10 +473,11 @@ public class RustPerformance {
                 java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.EntityFlatBuffers.serializeEntityInput(
                     tickCount++, entities, players);
                 
-                // Call binary native method
-                java.nio.ByteBuffer resultBuffer = processEntitiesBinaryNative(inputBuffer);
-                
-                if (resultBuffer != null) {
+                // Call binary native method (returns byte[] from Rust)
+                byte[] resultBytes = processEntitiesBinaryNative(inputBuffer);
+
+                if (resultBytes != null) {
+                    java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
                     // Deserialize result
                     List<Long> resultList = com.kneaf.core.flatbuffers.EntityFlatBuffers.deserializeEntityProcessResult(resultBuffer);
                     totalEntitiesProcessed += resultList.size();
@@ -553,10 +554,11 @@ public class RustPerformance {
             java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.ItemFlatBuffers.serializeItemInput(
                 tickCount, items);
             
-            // Call binary native method
-            java.nio.ByteBuffer resultBuffer = processItemEntitiesBinaryNative(inputBuffer);
-            
-            if (resultBuffer != null) {
+            // Call binary native method (returns byte[] from Rust)
+            byte[] resultBytes = processItemEntitiesBinaryNative(inputBuffer);
+
+            if (resultBytes != null) {
+                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
                 // Deserialize result
                 List<com.kneaf.core.data.ItemEntityData> updatedItems =
                     com.kneaf.core.flatbuffers.ItemFlatBuffers.deserializeItemProcessResult(resultBuffer);
@@ -620,10 +622,11 @@ public class RustPerformance {
                 java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.MobFlatBuffers.serializeMobInput(
                     tickCount, mobs);
                 
-                // Call binary native method
-                java.nio.ByteBuffer resultBuffer = processMobAiBinaryNative(inputBuffer);
-                
-                if (resultBuffer != null) {
+                // Call binary native method (returns byte[] from Rust)
+                byte[] resultBytes = processMobAiBinaryNative(inputBuffer);
+
+                if (resultBytes != null) {
+                    java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
                     // Deserialize result
                     List<com.kneaf.core.data.MobData> updatedMobs =
                         com.kneaf.core.flatbuffers.MobFlatBuffers.deserializeMobProcessResult(resultBuffer);
@@ -677,11 +680,12 @@ public class RustPerformance {
                 java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.BlockFlatBuffers.serializeBlockInput(
                     tickCount++, blockEntities);
                 
-                // Call binary native method
-                java.nio.ByteBuffer resultBuffer = processBlockEntitiesBinaryNative(inputBuffer);
-                
-                if (resultBuffer != null) {
-                    // Deserialize result - for now, return all block entities as the binary protocol
+                // Call binary native method (returns byte[] from Rust)
+                byte[] resultBytes = processBlockEntitiesBinaryNative(inputBuffer);
+
+                if (resultBytes != null) {
+                        // Binary protocol returned bytes (not currently deserialized here) -
+                        // for now return all block entities as the binary protocol doesn't return a specific list
                     // doesn't return a specific list of entities to tick
                     List<Long> resultList = new ArrayList<>();
                     for (BlockEntityData block : blockEntities) {
@@ -748,10 +752,11 @@ public class RustPerformance {
     private static native String processBlockEntitiesNative(String jsonInput);
     
     // Native methods - Binary FlatBuffers (new)
-    private static native java.nio.ByteBuffer processEntitiesBinaryNative(java.nio.ByteBuffer input);
-    private static native java.nio.ByteBuffer processItemEntitiesBinaryNative(java.nio.ByteBuffer input);
-    private static native java.nio.ByteBuffer processMobAiBinaryNative(java.nio.ByteBuffer input);
-    private static native java.nio.ByteBuffer processBlockEntitiesBinaryNative(java.nio.ByteBuffer input);
+    // NOTE: Rust JNI currently returns jbyteArray (copied byte[]). Match that by returning byte[] here
+    private static native byte[] processEntitiesBinaryNative(java.nio.ByteBuffer input);
+    private static native byte[] processItemEntitiesBinaryNative(java.nio.ByteBuffer input);
+    private static native byte[] processMobAiBinaryNative(java.nio.ByteBuffer input);
+    private static native byte[] processBlockEntitiesBinaryNative(java.nio.ByteBuffer input);
     // numeric utilities exposed from Rust
     public static native String parallelSumNative(String arrJson);
     public static native String matrixMultiplyNative(String aJson, String bJson);
@@ -825,10 +830,11 @@ public class RustPerformance {
             java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.MobFlatBuffers.serializeMobInput(
                 tickCount, mobs);
             
-            // Call binary native method
-            java.nio.ByteBuffer resultBuffer = processMobAiBinaryNative(inputBuffer);
-            
-            if (resultBuffer != null) {
+            // Call binary native method (returns byte[] from Rust)
+            byte[] resultBytes = processMobAiBinaryNative(inputBuffer);
+
+            if (resultBytes != null) {
+                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
                 // Deserialize result
                 List<com.kneaf.core.data.MobData> updatedMobs =
                     com.kneaf.core.flatbuffers.MobFlatBuffers.deserializeMobProcessResult(resultBuffer);
@@ -904,10 +910,11 @@ public class RustPerformance {
             java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.BlockFlatBuffers.serializeBlockInput(
                 tickCount++, blockEntities);
             
-            // Call binary native method
-            java.nio.ByteBuffer resultBuffer = processBlockEntitiesBinaryNative(inputBuffer);
-            
-            if (resultBuffer != null) {
+            // Call binary native method (returns byte[] from Rust)
+            byte[] resultBytes = processBlockEntitiesBinaryNative(inputBuffer);
+
+            if (resultBytes != null) {
+                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
                 // Deserialize result - for now, return all block entities as the binary protocol
                 // doesn't return a specific list of entities to tick
                 List<Long> resultList = new ArrayList<>();
