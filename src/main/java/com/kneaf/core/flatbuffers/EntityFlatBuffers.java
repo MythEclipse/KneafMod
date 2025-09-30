@@ -32,7 +32,7 @@ public class EntityFlatBuffers {
             size += 8 + 4*3; // id + x/y/z floats
         }
 
-        ByteBuffer buf = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);
         buf.putLong(tickCount);
 
         // entities
