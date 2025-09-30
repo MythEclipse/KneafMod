@@ -34,7 +34,13 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
         Ok(data) => data,
         Err(_) => {
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
+            // Create a copy of the data to ensure memory safety
+            let mut buffer = vec![0u8; error_msg.len()];
+            buffer.copy_from_slice(error_msg);
+            return match env.new_direct_byte_buffer(&mut buffer) {
+                Ok(buf) => buf.into(),
+                Err(_) => JObject::null(),
+            };
         }
     };
 
@@ -42,7 +48,13 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
         Ok(capacity) => capacity,
         Err(_) => {
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
+            // Create a copy of the data to ensure memory safety
+            let mut buffer = vec![0u8; error_msg.len()];
+            buffer.copy_from_slice(error_msg);
+            return match env.new_direct_byte_buffer(&mut buffer) {
+                Ok(buf) => buf.into(),
+                Err(_) => JObject::null(),
+            };
         }
     };
 
@@ -52,10 +64,22 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
 
     // Process binary data in batches for better JNI performance
     match process_entities_binary_batch(slice) {
-        Ok(result) => unsafe { env.new_direct_byte_buffer(result.as_ptr() as *mut u8, result.len()).unwrap().into() },
+        Ok(result) => {
+            // Create a copy of the data to ensure memory safety
+            let mut buffer = result.clone();
+            match env.new_direct_byte_buffer(&mut buffer) {
+                Ok(buf) => buf.into(),
+                Err(_) => JObject::null(),
+            }
+        },
         Err(e) => {
-            let error_msg = format!("{{\"error\":\"{}\"}}", e).into_bytes();
-            unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() }
+            let error_msg = format!("{{\"error\":\"{}\"}}", e);
+            // Create a copy of the data to ensure memory safety
+            let mut buffer = error_msg.into_bytes();
+            match env.new_direct_byte_buffer(&mut buffer) {
+                Ok(buf) => buf.into(),
+                Err(_) => JObject::null(),
+            }
         }
     }
 }
