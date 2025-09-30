@@ -25,6 +25,7 @@ pub mod chunk;
 pub mod spatial;
 pub mod parallelism;
 pub mod types;
+pub mod database;
 
 fn ensure_logging() {
     INIT.call_once(|| {

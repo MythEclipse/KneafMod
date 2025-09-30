@@ -19,6 +19,9 @@ public class PerformanceCommand {
                 .then(Commands.literal("status").executes(PerformanceCommand::status))
                 .then(Commands.literal("metrics").executes(PerformanceCommand::metrics))
                 .then(Commands.literal("rotatelog").executes(PerformanceCommand::rotateLog))));
+        
+        // Register the chunk cache command
+        ChunkCacheCommand.register(dispatcher);
     }
 
     private static int toggle(CommandContext<CommandSourceStack> context) {
