@@ -50,10 +50,7 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
 
     - name: Install FlatBuffers compiler (Windows)
-      run: |
-        Invoke-WebRequest -Uri "https://github.com/google/flatbuffers/releases/download/v23.5.26/flatc_windows_amd64.zip" -OutFile "flatc.zip"
-        Expand-Archive -Path "flatc.zip" -DestinationPath "."
-        # Add to PATH or use absolute path
+      run: choco install flatbuffers -y
       if: matrix.os == 'windows-latest'
 
     - name: Build mod
