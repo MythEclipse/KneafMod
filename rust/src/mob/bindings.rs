@@ -37,17 +37,18 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMo
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMobAiBinaryNative<'local>(
-    mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
-    input_buffer: JByteBuffer<'local>,
-) -> JObject<'local> {
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMobAiBinaryNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    input_buffer: jobject,
+) -> jobject {
     // Get direct access to the ByteBuffer data
+    let input_buffer = JByteBuffer::from(JObject::from(input_buffer));
     let data = match env.get_direct_buffer_address(&input_buffer) {
         Ok(data) => data,
         Err(_) => {
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into_inner() };
         }
     };
 
@@ -55,7 +56,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMo
         Ok(capacity) => capacity,
         Err(_) => {
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into_inner() };
         }
     };
 
@@ -65,5 +66,5 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMo
 
     // For now, return error as binary protocol is not fully implemented
     let error_msg = b"{\"error\":\"Binary protocol not fully implemented\"}";
-    unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() }
+    unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into_inner() }
 }

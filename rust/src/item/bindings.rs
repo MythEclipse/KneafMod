@@ -4,36 +4,18 @@ use jni::sys::{jbyteArray, jobject};
 use crate::item::processing::{process_item_entities, process_item_entities_json};
 
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processItemEntitiesNative(
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processItemEntitiesBinaryNative(
     mut env: JNIEnv,
     _class: JClass,
-    json_input: JString,
-) -> jbyteArray {
-    let input_str: String = env.get_string(&json_input).unwrap().into();
-    
-    match process_item_entities_json(&input_str) {
-        Ok(result_json) => {
-            env.byte_array_from_slice(result_json.as_bytes()).unwrap().into_raw()
-        }
-        Err(e) => {
-            let error_msg = format!("{{\"error\":\"{}\"}}", e);
-            env.byte_array_from_slice(error_msg.as_bytes()).unwrap().into_raw()
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processItemEntitiesBinaryNative<'local>(
-    mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
-    input_buffer: JByteBuffer<'local>,
-) -> JObject<'local> {
+    input_buffer: jobject,
+) -> jobject {
     // Get direct access to the ByteBuffer data
+    let input_buffer = JByteBuffer::from(JObject::from(input_buffer));
     let data = match env.get_direct_buffer_address(&input_buffer) {
         Ok(data) => data,
         Err(_) => {
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into_inner() };
         }
     };
 
@@ -41,7 +23,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processIt
         Ok(capacity) => capacity,
         Err(_) => {
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() };
+            return unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into_inner() };
         }
     };
 
@@ -51,10 +33,10 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processIt
 
     // Process binary data in batches for better JNI performance
     match process_item_entities_binary_batch(slice) {
-        Ok(result) => unsafe { env.new_direct_byte_buffer(result.as_ptr() as *mut u8, result.len()).unwrap().into() },
+        Ok(result) => unsafe { env.new_direct_byte_buffer(result.as_ptr() as *mut u8, result.len()).unwrap().into_inner() },
         Err(e) => {
             let error_msg = format!("{{\"error\":\"{}\"}}", e).into_bytes();
-            unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into() }
+            unsafe { env.new_direct_byte_buffer(error_msg.as_ptr() as *mut u8, error_msg.len()).unwrap().into_inner() }
         }
     }
 }
