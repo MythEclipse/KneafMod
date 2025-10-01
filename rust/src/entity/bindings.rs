@@ -276,7 +276,10 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
             for entity_id in &entities_to_tick {
                 result.extend_from_slice(&entity_id.to_le_bytes());
             }
-            log_to_java(env, "DEBUG", &format!("[BINARY] Manual fallback successful, returning {} entities", entities_to_tick.len()));
+            // Log a short hex prefix of the result for diagnostics before returning to Java
+            let prefix_len = std::cmp::min(result.len(), 32);
+            let prefix_hex: String = result.iter().take(prefix_len).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+            log_to_java(env, "DEBUG", &format!("[BINARY] Manual fallback successful, returning {} entities; result_len={} prefix={}", entities_to_tick.len(), result.len(), prefix_hex));
             Ok(result)
         },
         Err(manual_err) => {
