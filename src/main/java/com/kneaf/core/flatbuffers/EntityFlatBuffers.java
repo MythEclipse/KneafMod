@@ -109,4 +109,100 @@ public class EntityFlatBuffers {
         }
         return entityIds;
     }
+
+    /**
+     * Deserializes entity input data from binary buffer.
+     * Reads in little-endian order: tickCount (long), numEntities (int), then numEntities entities
+     * (each: id long, x float, y float, z float, distance float, isBlockEntity byte, entityTypeLen int, entityTypeBytes),
+     * then numPlayers (int), then numPlayers players (each: id long, x float, y float, z float),
+     * then 5 config floats.
+     * Returns an EntityInput object with these values.
+     * Throws IllegalArgumentException on invalid data or buffer bounds.
+     */
+    public static com.kneaf.core.data.EntityInput deserializeEntityInput(ByteBuffer buffer) {
+        if (buffer == null) {
+            throw new IllegalArgumentException("Buffer cannot be null");
+        }
+        buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        buffer.rewind();
+
+        // Read tickCount
+        if (buffer.remaining() < 8) {
+            throw new IllegalArgumentException("Buffer too small for tickCount");
+        }
+        long tickCount = buffer.getLong();
+
+        // Read numEntities
+        if (buffer.remaining() < 4) {
+            throw new IllegalArgumentException("Buffer too small for numEntities");
+        }
+        int numEntities = buffer.getInt();
+        if (numEntities < 0) {
+            throw new IllegalArgumentException("Invalid numEntities: " + numEntities);
+        }
+
+        // Read entities
+        List<com.kneaf.core.data.EntityData> entities = new ArrayList<>();
+        for (int i = 0; i < numEntities; i++) {
+            if (buffer.remaining() < 8 + 4*4 + 1 + 4) {
+                throw new IllegalArgumentException("Buffer too small for entity " + i);
+            }
+            long id = buffer.getLong();
+            float x = buffer.getFloat();
+            float y = buffer.getFloat();
+            float z = buffer.getFloat();
+            float distance = buffer.getFloat();
+            byte isBlockEntityByte = buffer.get();
+            boolean isBlockEntity = isBlockEntityByte != 0;
+            int entityTypeLen = buffer.getInt();
+            if (entityTypeLen < 0) {
+                throw new IllegalArgumentException("Invalid entityTypeLen for entity " + i + ": " + entityTypeLen);
+            }
+            if (buffer.remaining() < entityTypeLen) {
+                throw new IllegalArgumentException("Buffer too small for entityType bytes for entity " + i);
+            }
+            String entityType;
+            if (entityTypeLen == 0) {
+                entityType = "";
+            } else {
+                byte[] entityTypeBytes = new byte[entityTypeLen];
+                buffer.get(entityTypeBytes);
+                entityType = new String(entityTypeBytes, java.nio.charset.StandardCharsets.UTF_8);
+            }
+            entities.add(new com.kneaf.core.data.EntityData(id, (double) x, (double) y, (double) z, (double) distance, isBlockEntity, entityType));
+        }
+
+        // Read numPlayers
+        if (buffer.remaining() < 4) {
+            throw new IllegalArgumentException("Buffer too small for numPlayers");
+        }
+        int numPlayers = buffer.getInt();
+        if (numPlayers < 0) {
+            throw new IllegalArgumentException("Invalid numPlayers: " + numPlayers);
+        }
+
+        // Read players
+        List<com.kneaf.core.data.PlayerData> players = new ArrayList<>();
+        for (int i = 0; i < numPlayers; i++) {
+            if (buffer.remaining() < 8 + 4*3) {
+                throw new IllegalArgumentException("Buffer too small for player " + i);
+            }
+            long id = buffer.getLong();
+            float x = buffer.getFloat();
+            float y = buffer.getFloat();
+            float z = buffer.getFloat();
+            players.add(new com.kneaf.core.data.PlayerData(id, (double) x, (double) y, (double) z));
+        }
+
+        // Read config floats
+        if (buffer.remaining() < 5 * 4) {
+            throw new IllegalArgumentException("Buffer too small for config floats");
+        }
+        float[] config = new float[5];
+        for (int i = 0; i < 5; i++) {
+            config[i] = buffer.getFloat();
+        }
+
+        return new com.kneaf.core.data.EntityInput(tickCount, entities, players, config);
+    }
 }

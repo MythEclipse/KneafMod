@@ -1,5 +1,5 @@
 use jni::JNIEnv;
-use jni::objects::{JClass, JString, JByteBuffer, JObject, JValue};
+use jni::objects::{JClass, JString, JByteBuffer, JObject, JValue, JFloatArray};
 use jni::sys::{jstring, jobject, jbyteArray};
 use crate::entity::processing::process_entities_json;
 use crate::flatbuffers::entity::kneaf::entity::root_as_entity_input;
@@ -192,7 +192,9 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
     // We'll validate: non-zero root offset, alignment, bounds, and a small sanity-check of the
     // vtable (length and inline object size) before attempting a full parse. This reduces
     // false positives (manual layout buffers that resemble a u32 at the start).
-    let mut looks_like_flatbuffers = false;
+    // We intentionally skip the FlatBuffers fast-path for entity input, so we don't need
+    // a `looks_like_flatbuffers` flag here. Proceed with the probe for logging/diagnostics
+    // but always use the manual deserializer below.
     if data.len() >= 6 {
         // Read the root offset (uoffset_t)
         let root_offset_u32 = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
@@ -243,7 +245,6 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
                         } else if root_offset + object_inline_size > data.len() {
                             log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: object_inline_size overruns buffer: root_offset={} object_inline_size={} data_len={}", root_offset, object_inline_size, data.len()));
                         } else {
-                            looks_like_flatbuffers = true;
                             log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe passed: root_offset={}, vtable_pos={}, vtable_len={}, object_inline_size={}", root_offset, vtable_pos, vtable_len, object_inline_size));
                         }
                     }
@@ -265,8 +266,9 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
     // fast-path entirely and use the manual deserializer directly.
     log_to_java(env, "DEBUG", "[BINARY] Skipping FlatBuffers fast-path for entity input; using manual deserializer");
 
-    // Manual deserialization fallback
-    match crate::flatbuffers::conversions::deserialize_entity_input(data) {
+    // Manual deserialization fallback. Build a Result here and return it once so we
+    // avoid early `return` calls inside the match (which made subsequent code unreachable).
+    let manual_result: Result<Vec<u8>, String> = match crate::flatbuffers::conversions::deserialize_entity_input(data) {
         Ok(manual_input) => {
             let entities_to_tick: Vec<u64> = manual_input.entities.iter().map(|e| e.id).collect();
             let mut result = Vec::with_capacity(4 + entities_to_tick.len() * 8);
@@ -275,14 +277,13 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
                 result.extend_from_slice(&entity_id.to_le_bytes());
             }
             log_to_java(env, "DEBUG", &format!("[BINARY] Manual fallback successful, returning {} entities", entities_to_tick.len()));
-            return Ok(result);
+            Ok(result)
         },
         Err(manual_err) => {
             log_to_java(env, "ERROR", &format!("[BINARY] Manual deserialization also failed: {}", manual_err));
-            return Err(format!("Manual deserialization failed: {}", manual_err));
+            Err(format!("Manual deserialization failed: {}", manual_err))
         }
-    }
+    };
 
-    // All code paths above return a Result; we should never reach here.
-    Err("Unreachable: processing should have returned earlier".to_string())
+    manual_result
 }
