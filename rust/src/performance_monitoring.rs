@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::time::{Instant, Duration};
 use serde::{Serialize, Deserialize};
 use lazy_static::lazy_static;
-use jni::{JNIEnv, objects::JClass, sys::jstring};
+use jni::{JNIEnv, objects::JClass, sys::{jint, jstring}};
 use sysinfo::System;
 use crate::logging::{PerformanceLogger, generate_trace_id, ProcessingError};
 
@@ -14,6 +14,9 @@ pub struct PerformanceMonitor {
     metrics: Arc<Mutex<Metrics>>,
     counters: Arc<HashMap<String, Arc<AtomicU64>>>,
     logger: PerformanceLogger,
+    /// Configurable thresholds for sound pool warnings/limits
+    sound_warn_threshold: Arc<std::sync::atomic::AtomicU32>,
+    sound_hard_limit: Arc<std::sync::atomic::AtomicU32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +30,12 @@ pub struct Metrics {
     pub memory_deallocations: u64,
     pub jni_calls_total: u64,
     pub simd_operations_total: u64,
+    /// Number of currently open sound handles (observed or tracked)
+    pub sound_handles_open: u64,
+    /// Current reported sound pool size (if Java reports it)
+    pub current_sound_pool: u32,
+    /// Maximum observed sound pool size reported
+    pub max_sound_pool_observed: u32,
     pub thread_pool_utilization: f64,
     pub batch_sizes: HashMap<String, BatchMetrics>,
     pub errors_by_type: HashMap<String, u64>,
@@ -62,6 +71,9 @@ impl Default for Metrics {
             memory_allocations: 0,
             memory_deallocations: 0,
             jni_calls_total: 0,
+            sound_handles_open: 0,
+            current_sound_pool: 0,
+            max_sound_pool_observed: 0,
             simd_operations_total: 0,
             thread_pool_utilization: 0.0,
             batch_sizes: HashMap::new(),
@@ -80,11 +92,15 @@ impl PerformanceMonitor {
         counters.insert("memory_deallocations".to_string(), Arc::new(AtomicU64::new(0)));
         counters.insert("jni_calls_total".to_string(), Arc::new(AtomicU64::new(0)));
         counters.insert("simd_operations_total".to_string(), Arc::new(AtomicU64::new(0)));
+    counters.insert("sound_handles_open".to_string(), Arc::new(AtomicU64::new(0)));
+    counters.insert("sound_handles_created_total".to_string(), Arc::new(AtomicU64::new(0)));
 
         Self {
             metrics: Arc::new(Mutex::new(Metrics::default())),
             counters: Arc::new(counters),
             logger: PerformanceLogger::new("performance_monitor"),
+            sound_warn_threshold: Arc::new(std::sync::atomic::AtomicU32::new(220)),
+            sound_hard_limit: Arc::new(std::sync::atomic::AtomicU32::new(247)),
         }
     }
 
@@ -167,6 +183,85 @@ impl PerformanceMonitor {
         self.counters["simd_operations_total"].fetch_add(operation_count, Ordering::Relaxed);
         let mut metrics = self.metrics.lock().unwrap();
         metrics.simd_operations_total += operation_count;
+    }
+
+    /// Record that a sound handle/resource was created (increment open handles)
+    pub fn record_sound_handle_created(&self) {
+        self.counters["sound_handles_open"].fetch_add(1, Ordering::Relaxed);
+        self.counters["sound_handles_created_total"].fetch_add(1, Ordering::Relaxed);
+        let mut metrics = self.metrics.lock().unwrap();
+        metrics.sound_handles_open += 1;
+        metrics.max_sound_pool_observed = metrics.max_sound_pool_observed.max(metrics.sound_handles_open as u32);
+    }
+
+    /// Record that a sound handle/resource was destroyed (decrement open handles)
+    pub fn record_sound_handle_destroyed(&self) {
+        // avoid underflow
+        let prev = self.counters["sound_handles_open"].fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+            Some(v.saturating_sub(1))
+        });
+
+        let mut metrics = self.metrics.lock().unwrap();
+        if metrics.sound_handles_open > 0 {
+            metrics.sound_handles_open -= 1;
+        }
+        // no change to max observed on destruction
+        let _ = prev; // ignore result
+    }
+
+    /// Record a sound pool size reported from the Java side. Logs warnings if approaching limits.
+    pub fn record_sound_pool_size(&self, pool_size: u32) {
+        let mut metrics = self.metrics.lock().unwrap();
+        metrics.current_sound_pool = pool_size;
+        if pool_size > metrics.max_sound_pool_observed {
+            metrics.max_sound_pool_observed = pool_size;
+        }
+
+        // Use configurable thresholds (defaults are 220 warn, 247 hard)
+        let warn = self.sound_warn_threshold.load(std::sync::atomic::Ordering::Relaxed);
+        let hard = self.sound_hard_limit.load(std::sync::atomic::Ordering::Relaxed);
+        if pool_size >= warn && pool_size < hard {
+            log::warn!("Sound pool size {} approaching configured maximum ({}). Consider throttling sounds or checking for leaks.", pool_size, hard);
+        } else if pool_size >= hard {
+            log::error!("Sound pool size {} reached or exceeded configured hard limit ({}). This will cause failed handle creation.", pool_size, hard);
+        }
+    }
+
+    /// Set sound pool thresholds programmatically
+    pub fn set_sound_limits(&self, warn_threshold: u32, hard_limit: u32) {
+        self.sound_warn_threshold.store(warn_threshold, std::sync::atomic::Ordering::Relaxed);
+        self.sound_hard_limit.store(hard_limit, std::sync::atomic::Ordering::Relaxed);
+        log::info!("Sound pool thresholds set: warn={}, hard={}", warn_threshold, hard_limit);
+    }
+
+    /// Load sound pool thresholds from a simple properties file. Format: key=value per line.
+    /// Recognized keys: sound.pool.warn_threshold, sound.pool.hard_limit
+    pub fn load_sound_limits_from_config<P: AsRef<std::path::Path>>(&self, path: P) {
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                for line in contents.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') { continue; }
+                    if let Some((k, v)) = line.split_once('=') {
+                        let key = k.trim();
+                        let val = v.trim();
+                        if key == "sound.pool.warn_threshold" {
+                            if let Ok(n) = val.parse::<u32>() {
+                                self.sound_warn_threshold.store(n, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        } else if key == "sound.pool.hard_limit" {
+                            if let Ok(n) = val.parse::<u32>() {
+                                self.sound_hard_limit.store(n, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+                log::info!("Loaded sound pool limits from config: {}", path.as_ref().display());
+            }
+            Err(e) => {
+                log::warn!("Could not read sound pool config '{}': {} - using defaults", path.as_ref().display(), e);
+            }
+        }
     }
 
     /// Record batch operation details
