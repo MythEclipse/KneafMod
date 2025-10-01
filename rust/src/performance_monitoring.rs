@@ -1,45 +1,14 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use std::time::{Instant, Duration};
-use serde::{Serialize, Deserialize};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use jni::{objects::JClass, sys::{jint, jstring}, JNIEnv};
 use lazy_static::lazy_static;
-use jni::{JNIEnv, objects::JClass, sys::{jint, jstring}};
+use serde::{Deserialize, Serialize};
 use sysinfo::System;
-use crate::logging::{PerformanceLogger, generate_trace_id, ProcessingError};
 
-/// Performance metrics collection system
-#[derive(Debug, Clone)]
-pub struct PerformanceMonitor {
-    metrics: Arc<Mutex<Metrics>>,
-    counters: Arc<HashMap<String, Arc<AtomicU64>>>,
-    logger: PerformanceLogger,
-    /// Configurable thresholds for sound pool warnings/limits
-    sound_warn_threshold: Arc<std::sync::atomic::AtomicU32>,
-    sound_hard_limit: Arc<std::sync::atomic::AtomicU32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Metrics {
-    pub operations_total: u64,
-    pub operations_success: u64,
-    pub operations_failed: u64,
-    pub average_operation_time_ms: f64,
-    pub total_operation_time_ms: u64,
-    pub memory_allocations: u64,
-    pub memory_deallocations: u64,
-    pub jni_calls_total: u64,
-    pub simd_operations_total: u64,
-    /// Number of currently open sound handles (observed or tracked)
-    pub sound_handles_open: u64,
-    /// Current reported sound pool size (if Java reports it)
-    pub current_sound_pool: u32,
-    /// Maximum observed sound pool size reported
-    pub max_sound_pool_observed: u32,
-    pub thread_pool_utilization: f64,
-    pub batch_sizes: HashMap<String, BatchMetrics>,
-    pub errors_by_type: HashMap<String, u64>,
-}
+use crate::logging::{generate_trace_id, PerformanceLogger, ProcessingError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchMetrics {
@@ -60,6 +29,25 @@ impl Default for BatchMetrics {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Metrics {
+    pub operations_total: u64,
+    pub operations_success: u64,
+    pub operations_failed: u64,
+    pub average_operation_time_ms: f64,
+    pub total_operation_time_ms: u64,
+    pub memory_allocations: u64,
+    pub memory_deallocations: u64,
+    pub jni_calls_total: u64,
+    pub simd_operations_total: u64,
+    pub sound_handles_open: u64,
+    pub current_sound_pool: u32,
+    pub max_sound_pool_observed: u32,
+    pub thread_pool_utilization: f64,
+    pub batch_sizes: HashMap<String, BatchMetrics>,
+    pub errors_by_type: HashMap<String, u64>,
+}
+
 impl Default for Metrics {
     fn default() -> Self {
         Self {
@@ -71,10 +59,10 @@ impl Default for Metrics {
             memory_allocations: 0,
             memory_deallocations: 0,
             jni_calls_total: 0,
+            simd_operations_total: 0,
             sound_handles_open: 0,
             current_sound_pool: 0,
             max_sound_pool_observed: 0,
-            simd_operations_total: 0,
             thread_pool_utilization: 0.0,
             batch_sizes: HashMap::new(),
             errors_by_type: HashMap::new(),
@@ -82,176 +70,212 @@ impl Default for Metrics {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PerformanceMonitor {
+    metrics: Arc<Mutex<Metrics>>,
+    counters: Arc<HashMap<String, Arc<AtomicU64>>>,
+    logger: PerformanceLogger,
+    sound_warn_threshold: Arc<AtomicU32>,
+    sound_hard_limit: Arc<AtomicU32>,
+    base_sound_warn_threshold: Arc<AtomicU32>,
+    base_sound_hard_limit: Arc<AtomicU32>,
+}
+
 impl PerformanceMonitor {
     pub fn new() -> Self {
         let mut counters = HashMap::new();
-        counters.insert("operations_total".to_string(), Arc::new(AtomicU64::new(0)));
-        counters.insert("operations_success".to_string(), Arc::new(AtomicU64::new(0)));
-        counters.insert("operations_failed".to_string(), Arc::new(AtomicU64::new(0)));
-        counters.insert("memory_allocations".to_string(), Arc::new(AtomicU64::new(0)));
-        counters.insert("memory_deallocations".to_string(), Arc::new(AtomicU64::new(0)));
-        counters.insert("jni_calls_total".to_string(), Arc::new(AtomicU64::new(0)));
-        counters.insert("simd_operations_total".to_string(), Arc::new(AtomicU64::new(0)));
-    counters.insert("sound_handles_open".to_string(), Arc::new(AtomicU64::new(0)));
-    counters.insert("sound_handles_created_total".to_string(), Arc::new(AtomicU64::new(0)));
+        macro_rules! insert_counter {
+            ($map:expr, $name:expr) => {
+                $map.insert($name.to_string(), Arc::new(AtomicU64::new(0)));
+            };
+        }
+        insert_counter!(counters, "operations_total");
+        insert_counter!(counters, "operations_success");
+        insert_counter!(counters, "operations_failed");
+        insert_counter!(counters, "memory_allocations");
+        insert_counter!(counters, "memory_deallocations");
+        insert_counter!(counters, "jni_calls_total");
+        insert_counter!(counters, "simd_operations_total");
+        insert_counter!(counters, "sound_handles_open");
+        insert_counter!(counters, "sound_handles_created_total");
 
         Self {
             metrics: Arc::new(Mutex::new(Metrics::default())),
             counters: Arc::new(counters),
             logger: PerformanceLogger::new("performance_monitor"),
-            sound_warn_threshold: Arc::new(std::sync::atomic::AtomicU32::new(220)),
-            sound_hard_limit: Arc::new(std::sync::atomic::AtomicU32::new(247)),
+            sound_warn_threshold: Arc::new(AtomicU32::new(220)),
+            sound_hard_limit: Arc::new(AtomicU32::new(247)),
+            base_sound_warn_threshold: Arc::new(AtomicU32::new(220)),
+            base_sound_hard_limit: Arc::new(AtomicU32::new(247)),
         }
     }
 
-    /// Record a successful operation
+    pub fn get_metrics(&self) -> Metrics {
+        self.metrics.lock().unwrap().clone()
+    }
+
+    pub fn get_metrics_json(&self) -> Result<String, String> {
+        serde_json::to_string(&self.get_metrics()).map_err(|e| format!("Failed to serialize metrics: {}", e))
+    }
+
+    pub fn reset_metrics(&self) {
+        let mut m = self.metrics.lock().unwrap();
+        *m = Metrics::default();
+        for c in self.counters.values() {
+            c.store(0, Ordering::Relaxed);
+        }
+        log::info!("Performance metrics reset");
+    }
+
     pub fn record_operation_success(&self, duration: Duration, operation_type: &str) {
-        let trace_id = generate_trace_id();
-        self.logger.log_operation("record_success", &trace_id, || {
-            self.counters["operations_total"].fetch_add(1, Ordering::Relaxed);
-            self.counters["operations_success"].fetch_add(1, Ordering::Relaxed);
+        let ms = duration.as_millis() as u64;
+        self.counters["operations_total"].fetch_add(1, Ordering::Relaxed);
+        self.counters["operations_success"].fetch_add(1, Ordering::Relaxed);
 
-            let mut metrics = self.metrics.lock().unwrap();
-            metrics.operations_total += 1;
-            metrics.operations_success += 1;
-            
-            let duration_ms = duration.as_millis() as u64;
-            metrics.total_operation_time_ms += duration_ms;
-            metrics.average_operation_time_ms = metrics.total_operation_time_ms as f64 / metrics.operations_total as f64;
+        let mut m = self.metrics.lock().unwrap();
+        m.operations_total += 1;
+        m.operations_success += 1;
+        m.total_operation_time_ms += ms;
+        // update running average
+        if m.operations_success > 0 {
+            m.average_operation_time_ms =
+                (m.average_operation_time_ms * (m.operations_success - 1) as f64 + ms as f64)
+                    / m.operations_success as f64;
+        } else {
+            m.average_operation_time_ms = ms as f64;
+        }
 
-            // Update batch metrics if this is a batch operation
-            if operation_type.contains("batch") {
-                metrics.batch_sizes.entry(operation_type.to_string())
-                    .or_insert_with(BatchMetrics::default)
-                    .total_batches += 1;
-            }
+        // optional: record batch metrics for operation_type if used as batch key
+        let _ = operation_type; // keep parameter for future use
 
-            log::debug!("Operation success recorded: {}ms, type: {}", duration_ms, operation_type);
+        self.logger.log_operation("operation_success", &generate_trace_id(), || {
+            log::debug!("Recorded operation success: {} ({}ms)", operation_type, ms);
         });
     }
 
-    /// Record a failed operation
-    pub fn record_operation_failure(&self, error: &ProcessingError, operation_type: &str) {
-        let trace_id = generate_trace_id();
-        self.logger.log_operation("record_failure", &trace_id, || {
-            self.counters["operations_total"].fetch_add(1, Ordering::Relaxed);
-            self.counters["operations_failed"].fetch_add(1, Ordering::Relaxed);
+    pub fn record_operation_failure(&self, error: ProcessingError, operation_type: &str) {
+        self.counters["operations_total"].fetch_add(1, Ordering::Relaxed);
+        self.counters["operations_failed"].fetch_add(1, Ordering::Relaxed);
 
-            let mut metrics = self.metrics.lock().unwrap();
-            metrics.operations_total += 1;
-            metrics.operations_failed += 1;
+        let mut m = self.metrics.lock().unwrap();
+        m.operations_total += 1;
+        m.operations_failed += 1;
 
-            // Record error by type
-            let error_type = match error {
-                ProcessingError::SerializationError { .. } => "serialization",
-                ProcessingError::DeserializationError { .. } => "deserialization",
-                ProcessingError::ValidationError { .. } => "validation",
-                ProcessingError::ResourceExhaustionError { .. } => "resource_exhaustion",
-                ProcessingError::TimeoutError { .. } => "timeout",
-                ProcessingError::InternalError { .. } => "internal",
-            };
-            
-            *metrics.errors_by_type.entry(error_type.to_string()).or_insert(0) += 1;
+        let error_type = match error {
+            ProcessingError::ValidationError { .. } => "validation",
+            ProcessingError::ResourceExhaustionError { .. } => "resource_exhaustion",
+            ProcessingError::TimeoutError { .. } => "timeout",
+            ProcessingError::InternalError { .. } => "internal",
+            // Fallback for unknown variants
+            _ => "other",
+        };
+        *m.errors_by_type.entry(error_type.to_string()).or_insert(0) += 1;
 
-            log::error!("Operation failure recorded: {}, type: {}", error, operation_type);
+        self.logger.log_operation("operation_failure", &generate_trace_id(), || {
+            log::error!("Operation failure recorded: type={}, operation={}", error_type, operation_type);
         });
     }
 
-    /// Record memory allocation
     pub fn record_memory_allocation(&self, bytes: usize) {
         self.counters["memory_allocations"].fetch_add(bytes as u64, Ordering::Relaxed);
-        let mut metrics = self.metrics.lock().unwrap();
-        metrics.memory_allocations += bytes as u64;
+        let mut m = self.metrics.lock().unwrap();
+        m.memory_allocations += bytes as u64;
     }
 
-    /// Record memory deallocation
     pub fn record_memory_deallocation(&self, bytes: usize) {
         self.counters["memory_deallocations"].fetch_add(bytes as u64, Ordering::Relaxed);
-        let mut metrics = self.metrics.lock().unwrap();
-        metrics.memory_deallocations += bytes as u64;
+        let mut m = self.metrics.lock().unwrap();
+        m.memory_deallocations += bytes as u64;
     }
 
-    /// Record JNI call
     pub fn record_jni_call(&self) {
         self.counters["jni_calls_total"].fetch_add(1, Ordering::Relaxed);
-        let mut metrics = self.metrics.lock().unwrap();
-        metrics.jni_calls_total += 1;
+        let mut m = self.metrics.lock().unwrap();
+        m.jni_calls_total += 1;
     }
 
-    /// Record SIMD operation
-    pub fn record_simd_operation(&self, operation_count: u64) {
-        self.counters["simd_operations_total"].fetch_add(operation_count, Ordering::Relaxed);
-        let mut metrics = self.metrics.lock().unwrap();
-        metrics.simd_operations_total += operation_count;
+    pub fn record_simd_operation(&self, count: u64) {
+        self.counters["simd_operations_total"].fetch_add(count, Ordering::Relaxed);
+        let mut m = self.metrics.lock().unwrap();
+        m.simd_operations_total += count;
     }
 
-    /// Record that a sound handle/resource was created (increment open handles)
     pub fn record_sound_handle_created(&self) {
         self.counters["sound_handles_open"].fetch_add(1, Ordering::Relaxed);
         self.counters["sound_handles_created_total"].fetch_add(1, Ordering::Relaxed);
-        let mut metrics = self.metrics.lock().unwrap();
-        metrics.sound_handles_open += 1;
-        metrics.max_sound_pool_observed = metrics.max_sound_pool_observed.max(metrics.sound_handles_open as u32);
+        let mut m = self.metrics.lock().unwrap();
+        m.sound_handles_open += 1;
+        m.max_sound_pool_observed = m.max_sound_pool_observed.max(m.sound_handles_open as u32);
     }
 
-    /// Record that a sound handle/resource was destroyed (decrement open handles)
     pub fn record_sound_handle_destroyed(&self) {
-        // avoid underflow
-        let prev = self.counters["sound_handles_open"].fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-            Some(v.saturating_sub(1))
-        });
-
-        let mut metrics = self.metrics.lock().unwrap();
-        if metrics.sound_handles_open > 0 {
-            metrics.sound_handles_open -= 1;
+        let _ = self.counters["sound_handles_open"].fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |v| Some(v.saturating_sub(1)),
+        );
+        let mut m = self.metrics.lock().unwrap();
+        if m.sound_handles_open > 0 {
+            m.sound_handles_open -= 1;
         }
-        // no change to max observed on destruction
-        let _ = prev; // ignore result
     }
 
-    /// Record a sound pool size reported from the Java side. Logs warnings if approaching limits.
     pub fn record_sound_pool_size(&self, pool_size: u32) {
-        let mut metrics = self.metrics.lock().unwrap();
-        metrics.current_sound_pool = pool_size;
-        if pool_size > metrics.max_sound_pool_observed {
-            metrics.max_sound_pool_observed = pool_size;
+        let mut m = self.metrics.lock().unwrap();
+        m.current_sound_pool = pool_size;
+        if pool_size > m.max_sound_pool_observed {
+            m.max_sound_pool_observed = pool_size;
         }
 
-        // Use configurable thresholds (defaults are 220 warn, 247 hard)
-        let warn = self.sound_warn_threshold.load(std::sync::atomic::Ordering::Relaxed);
-        let hard = self.sound_hard_limit.load(std::sync::atomic::Ordering::Relaxed);
+        let warn = self.sound_warn_threshold.load(Ordering::Relaxed);
+        let hard = self.sound_hard_limit.load(Ordering::Relaxed);
+
         if pool_size >= warn && pool_size < hard {
-            log::warn!("Sound pool size {} approaching configured maximum ({}). Consider throttling sounds or checking for leaks.", pool_size, hard);
+            log::warn!(
+                "Sound pool size {} approaching configured maximum (hard={}).",
+                pool_size,
+                hard
+            );
         } else if pool_size >= hard {
-            log::error!("Sound pool size {} reached or exceeded configured hard limit ({}). This will cause failed handle creation.", pool_size, hard);
+            log::error!(
+                "Sound pool size {} reached or exceeded configured hard limit ({}).",
+                pool_size,
+                hard
+            );
         }
     }
 
-    /// Set sound pool thresholds programmatically
     pub fn set_sound_limits(&self, warn_threshold: u32, hard_limit: u32) {
-        self.sound_warn_threshold.store(warn_threshold, std::sync::atomic::Ordering::Relaxed);
-        self.sound_hard_limit.store(hard_limit, std::sync::atomic::Ordering::Relaxed);
+        self.base_sound_warn_threshold
+            .store(warn_threshold, Ordering::Relaxed);
+        self.base_sound_hard_limit
+            .store(hard_limit, Ordering::Relaxed);
+        self.sound_warn_threshold
+            .store(warn_threshold, Ordering::Relaxed);
+        self.sound_hard_limit.store(hard_limit, Ordering::Relaxed);
         log::info!("Sound pool thresholds set: warn={}, hard={}", warn_threshold, hard_limit);
     }
 
-    /// Load sound pool thresholds from a simple properties file. Format: key=value per line.
-    /// Recognized keys: sound.pool.warn_threshold, sound.pool.hard_limit
     pub fn load_sound_limits_from_config<P: AsRef<std::path::Path>>(&self, path: P) {
         match std::fs::read_to_string(&path) {
             Ok(contents) => {
                 for line in contents.lines() {
                     let line = line.trim();
-                    if line.is_empty() || line.starts_with('#') { continue; }
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
                     if let Some((k, v)) = line.split_once('=') {
                         let key = k.trim();
                         let val = v.trim();
                         if key == "sound.pool.warn_threshold" {
                             if let Ok(n) = val.parse::<u32>() {
-                                self.sound_warn_threshold.store(n, std::sync::atomic::Ordering::Relaxed);
+                                self.base_sound_warn_threshold.store(n, Ordering::Relaxed);
+                                self.sound_warn_threshold.store(n, Ordering::Relaxed);
                             }
                         } else if key == "sound.pool.hard_limit" {
                             if let Ok(n) = val.parse::<u32>() {
-                                self.sound_hard_limit.store(n, std::sync::atomic::Ordering::Relaxed);
+                                self.base_sound_hard_limit.store(n, Ordering::Relaxed);
+                                self.sound_hard_limit.store(n, Ordering::Relaxed);
                             }
                         }
                     }
@@ -259,138 +283,140 @@ impl PerformanceMonitor {
                 log::info!("Loaded sound pool limits from config: {}", path.as_ref().display());
             }
             Err(e) => {
-                log::warn!("Could not read sound pool config '{}': {} - using defaults", path.as_ref().display(), e);
+                log::warn!(
+                    "Could not read sound pool config '{}': {} - using defaults",
+                    path.as_ref().display(),
+                    e
+                );
             }
         }
     }
 
-    /// Record batch operation details
     pub fn record_batch_operation(&self, batch_type: &str, batch_size: usize) {
-        let mut metrics = self.metrics.lock().unwrap();
-        let batch_metrics = metrics.batch_sizes.entry(batch_type.to_string())
+        let mut m = self.metrics.lock().unwrap();
+        let bm = m
+            .batch_sizes
+            .entry(batch_type.to_string())
             .or_insert_with(BatchMetrics::default);
-        
-        batch_metrics.total_batches += 1;
-        batch_metrics.average_batch_size = 
-            (batch_metrics.average_batch_size * (batch_metrics.total_batches - 1) as f64 + batch_size as f64) 
-            / batch_metrics.total_batches as f64;
-        
-        batch_metrics.max_batch_size = batch_metrics.max_batch_size.max(batch_size);
-        if batch_metrics.min_batch_size == 0 {
-            batch_metrics.min_batch_size = batch_size;
+
+        bm.total_batches += 1;
+        bm.average_batch_size =
+            (bm.average_batch_size * (bm.total_batches - 1) as f64 + batch_size as f64)
+                / bm.total_batches as f64;
+        bm.max_batch_size = bm.max_batch_size.max(batch_size);
+        if bm.min_batch_size == 0 {
+            bm.min_batch_size = batch_size;
         } else {
-            batch_metrics.min_batch_size = batch_metrics.min_batch_size.min(batch_size);
+            bm.min_batch_size = bm.min_batch_size.min(batch_size);
         }
     }
 
-    /// Record thread pool utilization
     pub fn record_thread_pool_utilization(&self, utilization: f64) {
-        let mut metrics = self.metrics.lock().unwrap();
-        metrics.thread_pool_utilization = (metrics.thread_pool_utilization * 0.9) + (utilization * 0.1);
+        let mut m = self.metrics.lock().unwrap();
+        m.thread_pool_utilization = (m.thread_pool_utilization * 0.9) + (utilization * 0.1);
     }
 
-    /// Get current metrics snapshot
-    pub fn get_metrics(&self) -> Metrics {
-        self.metrics.lock().unwrap().clone()
-    }
-
-    /// Get metrics as JSON string
-    pub fn get_metrics_json(&self) -> Result<String, String> {
-        let metrics = self.get_metrics();
-        serde_json::to_string(&metrics)
-            .map_err(|e| format!("Failed to serialize metrics to JSON: {}", e))
-    }
-
-    /// Reset metrics
-    pub fn reset_metrics(&self) {
-        let mut metrics = self.metrics.lock().unwrap();
-        *metrics = Metrics::default();
-        
-        // Reset atomic counters
-        for counter in self.counters.values() {
-            counter.store(0, Ordering::Relaxed);
-        }
-        
-        log::info!("Performance metrics reset");
-    }
-
-    /// Start periodic metrics logging
     pub fn start_periodic_logging(&self, interval: Duration) {
         let monitor = Arc::new(self.clone());
-        
         std::thread::spawn(move || {
-            let mut last_log = Instant::now();
+            let mut last = Instant::now();
             loop {
-                std::thread::sleep(Duration::from_millis(100));
-                
-                if last_log.elapsed() >= interval {
+                std::thread::sleep(Duration::from_millis(200));
+                if last.elapsed() >= interval {
                     let metrics = monitor.get_metrics();
-                    let trace_id = generate_trace_id();
-                    
-                    monitor.logger.log_operation("periodic_metrics", &trace_id, || {
-                        log::info!("Performance Metrics: {:?}", metrics);
-                        
-                        // Log detailed breakdown
-                        log::info!("Operations: total={}, success={}, failed={}", 
-                            metrics.operations_total, metrics.operations_success, metrics.operations_failed);
-                        log::info!("Performance: avg_time={:.2}ms, total_time={}ms", 
-                            metrics.average_operation_time_ms, metrics.total_operation_time_ms);
-                        log::info!("Memory: allocations={}, deallocations={}", 
-                            metrics.memory_allocations, metrics.memory_deallocations);
-                        log::info!("JNI calls: {}, SIMD operations: {}", 
-                            metrics.jni_calls_total, metrics.simd_operations_total);
-                        log::info!("Thread pool utilization: {:.2}%", 
-                            metrics.thread_pool_utilization * 100.0);
-                        
-                        // Log batch metrics
-                        for (batch_type, batch_metrics) in &metrics.batch_sizes {
-                            log::info!("Batch '{}' - total: {}, avg_size: {:.1}, min: {}, max: {}", 
-                                batch_type, batch_metrics.total_batches, 
-                                batch_metrics.average_batch_size, 
-                                batch_metrics.min_batch_size, 
-                                batch_metrics.max_batch_size);
-                        }
-                        
-                        // Log error breakdown
-                        for (error_type, count) in &metrics.errors_by_type {
-                            log::info!("Error '{}' count: {}", error_type, count);
-                        }
+                    let trace = generate_trace_id();
+                    monitor.logger.log_operation("periodic_metrics", &trace, || {
+                        log::info!("Periodic Performance Metrics: {:?}", metrics);
                     });
-                    
-                    last_log = Instant::now();
+                    last = Instant::now();
+                }
+            }
+        });
+    }
+
+    pub fn start_dynamic_sound_limit_adjustment(&self, interval: Duration) {
+        let monitor = Arc::new(self.clone());
+        std::thread::spawn(move || {
+            let mut sys = System::new_all();
+            loop {
+                std::thread::sleep(interval);
+                sys.refresh_memory();
+                let total = sys.total_memory() as f64;
+                let avail = sys.available_memory() as f64;
+                let ratio = if total > 0.0 { avail / total } else { 1.0 };
+
+                let base_hard = monitor.base_sound_hard_limit.load(Ordering::Relaxed);
+                let base_warn = monitor.base_sound_warn_threshold.load(Ordering::Relaxed);
+
+                let factor = if ratio < 0.10 {
+                    0.5_f64
+                } else if ratio < 0.25 {
+                    0.75_f64
+                } else {
+                    1.0_f64
+                };
+
+                let mut new_hard = ((base_hard as f64) * factor).round() as u32;
+                if new_hard < 64 {
+                    new_hard = 64;
+                }
+                let mut new_warn = (new_hard as f64 * 0.9).round() as u32;
+                if new_warn > base_warn {
+                    new_warn = base_warn;
+                }
+
+                let cur_hard = monitor.sound_hard_limit.load(Ordering::Relaxed);
+                let cur_warn = monitor.sound_warn_threshold.load(Ordering::Relaxed);
+
+                if cur_hard != new_hard || cur_warn != new_warn {
+                    monitor.sound_hard_limit.store(new_hard, Ordering::Relaxed);
+                    monitor.sound_warn_threshold.store(new_warn, Ordering::Relaxed);
+                    log::info!(
+                        "Adjusted sound limits: warn={}, hard={} (free_ratio={:.2})",
+                        new_warn,
+                        new_hard,
+                        ratio
+                    );
+                }
+
+                let m = monitor.get_metrics();
+                if m.current_sound_pool >= new_hard {
+                    log::error!(
+                        "Current sound pool {} >= dynamic hard {} (free_ratio={:.2})",
+                        m.current_sound_pool,
+                        new_hard,
+                        ratio
+                    );
                 }
             }
         });
     }
 }
 
-/// Global performance monitor instance
-lazy_static::lazy_static! {
-    pub static ref GLOBAL_PERFORMANCE_MONITOR: Arc<PerformanceMonitor> = Arc::new(PerformanceMonitor::new());
+// Global instance
+lazy_static! {
+    pub static ref GLOBAL_PERFORMANCE_MONITOR: Arc<PerformanceMonitor> =
+        Arc::new(PerformanceMonitor::new());
 }
 
-/// Initialize performance monitoring
 pub fn init_performance_monitoring() {
-    // Start periodic logging every 30 seconds
     GLOBAL_PERFORMANCE_MONITOR.start_periodic_logging(Duration::from_secs(30));
-    log::info!("Performance monitoring initialized with 30-second logging interval");
+    GLOBAL_PERFORMANCE_MONITOR
+        .start_dynamic_sound_limit_adjustment(Duration::from_secs(5));
+    log::info!("Performance monitoring initialized");
 }
 
-/// Get global performance monitor
 pub fn get_performance_monitor() -> &'static PerformanceMonitor {
     &GLOBAL_PERFORMANCE_MONITOR
 }
 
-/// JNI function to get memory stats as JSON
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getMemoryStatsNative(
     env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let mut sys = sysinfo::System::new_all();
-    // Refresh memory info
+    let mut sys = System::new_all();
     sys.refresh_memory();
-
     let mem_json = serde_json::json!({
         "total_kb": sys.total_memory(),
         "free_kb": sys.free_memory(),
@@ -398,48 +424,53 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getMemoryStats
         "total_swap_kb": sys.total_swap(),
         "used_swap_kb": sys.used_swap(),
     });
-
     match env.new_string(&serde_json::to_string(&mem_json).unwrap_or_default()) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
 }
 
-/// JNI function to get CPU stats as JSON
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getCpuStatsNative(
     env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let mut sys = sysinfo::System::new_all();
-    // Refresh CPU info; refresh twice if needed to get non-zero usage
+    let mut sys = System::new_all();
     sys.refresh_cpu();
-    // small refresh delay can improve accuracy but avoid blocking long
-    // Note: keeping single refresh to keep this call cheap.
-
     let cpu_usages: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
-    let average = if cpu_usages.is_empty() { 0.0 } else { cpu_usages.iter().copied().sum::<f32>() / cpu_usages.len() as f32 };
-
+    let average = if cpu_usages.is_empty() {
+        0.0
+    } else {
+        cpu_usages.iter().copied().sum::<f32>() / cpu_usages.len() as f32
+    };
     let cpu_json = serde_json::json!({
         "perCore": cpu_usages,
         "average": average,
         "numCores": sys.cpus().len(),
     });
-
     match env.new_string(&serde_json::to_string(&cpu_json).unwrap_or_default()) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
 }
 
-/// Backwards-compatible helper used by older modules that call
-/// monitoring::record_operation(start_time, item_count, thread_count)
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_reportSoundPoolSizeNative(
+    _env: JNIEnv,
+    _class: JClass,
+    pool_size: jint,
+) {
+    let size = if pool_size < 0 { 0 } else { pool_size as u32 };
+    get_performance_monitor().record_sound_pool_size(size);
+}
+
+// Backwards-compatible helper
 pub fn record_operation(start_time: std::time::Instant, _item_count: usize, _thread_count: usize) {
     let duration = start_time.elapsed();
     GLOBAL_PERFORMANCE_MONITOR.record_operation_success(duration, "operation");
 }
 
-/// Convenience macro for recording operation success
+// Macros
 #[macro_export]
 macro_rules! record_operation_success {
     ($duration:expr, $operation_type:expr) => {
@@ -448,7 +479,6 @@ macro_rules! record_operation_success {
     };
 }
 
-/// Convenience macro for recording operation failure
 #[macro_export]
 macro_rules! record_operation_failure {
     ($error:expr, $operation_type:expr) => {
@@ -457,7 +487,6 @@ macro_rules! record_operation_failure {
     };
 }
 
-/// Convenience macro for recording memory allocation
 #[macro_export]
 macro_rules! record_memory_allocation {
     ($bytes:expr) => {
@@ -466,7 +495,6 @@ macro_rules! record_memory_allocation {
     };
 }
 
-/// Convenience macro for recording memory deallocation
 #[macro_export]
 macro_rules! record_memory_deallocation {
     ($bytes:expr) => {
@@ -475,25 +503,20 @@ macro_rules! record_memory_deallocation {
     };
 }
 
-/// Convenience macro for recording JNI call
 #[macro_export]
 macro_rules! record_jni_call {
     () => {
-        crate::performance_monitoring::get_performance_monitor()
-            .record_jni_call();
+        crate::performance_monitoring::get_performance_monitor().record_jni_call();
     };
 }
 
-/// Convenience macro for recording SIMD operation
 #[macro_export]
 macro_rules! record_simd_operation {
     ($count:expr) => {
-        crate::performance_monitoring::get_performance_monitor()
-            .record_simd_operation($count);
+        crate::performance_monitoring::get_performance_monitor().record_simd_operation($count);
     };
 }
 
-/// Convenience macro for recording batch operation
 #[macro_export]
 macro_rules! record_batch_operation {
     ($batch_type:expr, $batch_size:expr) => {
@@ -502,11 +525,24 @@ macro_rules! record_batch_operation {
     };
 }
 
-/// Convenience macro for recording thread pool utilization
 #[macro_export]
 macro_rules! record_thread_pool_utilization {
     ($utilization:expr) => {
         crate::performance_monitoring::get_performance_monitor()
             .record_thread_pool_utilization($utilization);
+    };
+}
+
+#[macro_export]
+macro_rules! record_sound_handle_created {
+    () => {
+        crate::performance_monitoring::get_performance_monitor().record_sound_handle_created();
+    };
+}
+
+#[macro_export]
+macro_rules! record_sound_handle_destroyed {
+    () => {
+        crate::performance_monitoring::get_performance_monitor().record_sound_handle_destroyed();
     };
 }
