@@ -582,6 +582,21 @@ public class RustPerformance {
                     }
                     try {
                         // Deserialize result
+                        // Additional numeric diagnostics: interpret raw bytes as little-endian int/long at offsets 0 and 8
+                        try {
+                            int lenBytes = resultBytes != null ? resultBytes.length : 0;
+                            int int0 = Integer.MIN_VALUE;
+                            long long0 = Long.MIN_VALUE;
+                            int int8 = Integer.MIN_VALUE;
+                            java.nio.ByteBuffer dbgBuf = java.nio.ByteBuffer.wrap(resultBytes == null ? new byte[0] : resultBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                            if (lenBytes >= 4) int0 = dbgBuf.getInt(0);
+                            if (lenBytes >= 8) long0 = dbgBuf.getLong(0);
+                            if (lenBytes >= 12) int8 = dbgBuf.getInt(8);
+                            KneafCore.LOGGER.debug("[BINARY] resultBytes numeric view: len={} int0={} long0={} int8={}", lenBytes, int0, long0, int8);
+                        } catch (Throwable t) {
+                            KneafCore.LOGGER.debug("[BINARY] Failed to compute numeric diagnostics for native result: {}", t.getMessage());
+                        }
+
                         R result = binaryDeserializer.deserialize(resultBytes);
                         return result;
                     } catch (Exception deserEx) {
@@ -617,10 +632,20 @@ public class RustPerformance {
             (input) -> com.kneaf.core.flatbuffers.EntityFlatBuffers.serializeEntityInput(tickCount++, input.entities, input.players),
             (inputBuffer) -> processEntitiesBinaryNative(inputBuffer),
             (resultBytes) -> {
-                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
-                List<Long> resultList = com.kneaf.core.flatbuffers.EntityFlatBuffers.deserializeEntityProcessResult(resultBuffer);
-                totalEntitiesProcessed += resultList.size();
-                return resultList;
+                try {
+                    java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
+                    List<Long> resultList = com.kneaf.core.flatbuffers.EntityFlatBuffers.deserializeEntityProcessResult(resultBuffer);
+                    totalEntitiesProcessed += resultList.size();
+                    return resultList;
+                } catch (Throwable t) {
+                    try {
+                        String prefix = bytesPrefixHex(resultBytes, 128);
+                        KneafCore.LOGGER.error("Entity binary deserialization failed: {} ; result_len={} ; prefix={}", t.getMessage(), resultBytes == null ? 0 : resultBytes.length, prefix, t);
+                    } catch (Throwable t2) {
+                        KneafCore.LOGGER.error("Entity binary deserialization failed and prefix computation also failed: {}", t2.getMessage(), t2);
+                    }
+                    throw t;
+                }
             },
             (input) -> {
                 Map<String, Object> jsonInput = new HashMap<>();
