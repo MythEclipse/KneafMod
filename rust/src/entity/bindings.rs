@@ -187,52 +187,102 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
         return Err(format!("Data too small for FlatBuffers header: {} bytes", data.len()));
     }
 
-    let entity_input = match root_as_entity_input(data) {
-        Ok(input) => input,
-        Err(e) => {
-            log_to_java(env, "ERROR", &format!("[BINARY] Failed to deserialize FlatBuffers input: {:?}", e));
-            // Try manual deserialization as fallback
-            match crate::flatbuffers::conversions::deserialize_entity_input(data) {
-                Ok(manual_input) => {
-                    let entities_to_tick: Vec<u64> = manual_input.entities.iter().map(|e| e.id).collect();
-                    let mut result = Vec::with_capacity(4 + entities_to_tick.len() * 8);
-                    result.extend_from_slice(&(entities_to_tick.len() as i32).to_le_bytes());
-                    for entity_id in &entities_to_tick {
-                        result.extend_from_slice(&entity_id.to_le_bytes());
+    // Strengthened probe to decide whether the buffer resembles a FlatBuffers buffer.
+    // FlatBuffers stores a uoffset_t (u32 little-endian) at the start that points to the root table.
+    // We'll validate: non-zero root offset, alignment, bounds, and a small sanity-check of the
+    // vtable (length and inline object size) before attempting a full parse. This reduces
+    // false positives (manual layout buffers that resemble a u32 at the start).
+    let mut looks_like_flatbuffers = false;
+    if data.len() >= 6 {
+        // Read the root offset (uoffset_t)
+        let root_offset_u32 = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let root_offset = root_offset_u32 as usize;
+
+        // Basic checks: non-zero, in-bounds, aligned and reasonably large (root table typically not at very small offsets)
+        if root_offset_u32 == 0 {
+            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: root_offset=0, data_len={}", data.len()));
+        } else if root_offset + 4 > data.len() {
+            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: root_offset out of bounds: {}, data_len={}", root_offset, data.len()));
+        } else if (root_offset_u32 % 4) != 0 || root_offset < 8 {
+            // Require 4-byte alignment and a minimum offset so we don't accept tiny/implausible values
+            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: root_offset alignment/size: {}, data_len={}", root_offset, data.len()));
+        } else {
+            // Attempt a small vtable sanity check. At table start, FlatBuffers stores a 16-bit vtable offset
+            // (little-endian signed i16) that is typically negative; the vtable itself starts at
+            // `vtable_pos = root_offset - (-vtable_offset)`.
+            if root_offset + 2 <= data.len() {
+                let vtable_rel = i16::from_le_bytes([data[root_offset], data[root_offset + 1]]);
+                if vtable_rel >= 0 {
+                    log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: unexpected non-negative vtable_rel={} at root_offset={}", vtable_rel, root_offset));
+                } else {
+                    // compute vtable position (safe because vtable_rel is negative)
+                    let vtable_pos = root_offset - ((-vtable_rel) as usize);
+                    if vtable_pos + 4 > data.len() {
+                        log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable out of bounds vtable_pos={}, data_len={}", vtable_pos, data.len()));
+                    } else {
+                        // vtable begins with two uint16: [vtable_len, object_inline_size]
+                        let vtable_len = u16::from_le_bytes([data[vtable_pos], data[vtable_pos + 1]]) as usize;
+                        let object_inline_size = u16::from_le_bytes([data[vtable_pos + 2], data[vtable_pos + 3]]) as usize;
+                        // Basic sanity ranges and bounds checks to avoid mis-identifying manual layouts
+                        // - vtable_len should be at least 4 (two uint16 values) and not huge
+                        // - vtable_pos should be within bounds and 2-byte aligned
+                        // - object_inline_size must be reasonable and fit within the remaining buffer after root_offset
+                        if vtable_len < 4 {
+                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable_len too small={} at vtable_pos={} (root_offset={})", vtable_len, vtable_pos, root_offset));
+                        } else if vtable_len > 64 {
+                            // Tighten the vtable length cap - smaller vtables are expected for our schema.
+                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable_len unreasonably large={}", vtable_len));
+                        } else if (vtable_pos % 2) != 0 {
+                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable_pos not 2-byte aligned={}", vtable_pos));
+                        } else if vtable_pos + vtable_len > data.len() {
+                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable overruns buffer: vtable_pos={} vtable_len={} data_len={}", vtable_pos, vtable_len, data.len()));
+                        } else if object_inline_size > 256 {
+                            // Reduce allowed inline object size to avoid accepting manual formats that look
+                            // superficially like FlatBuffers (we expect small inline object sizes for entity tables)
+                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: object_inline_size unreasonably large={}", object_inline_size));
+                        } else if root_offset + object_inline_size > data.len() {
+                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: object_inline_size overruns buffer: root_offset={} object_inline_size={} data_len={}", root_offset, object_inline_size, data.len()));
+                        } else {
+                            looks_like_flatbuffers = true;
+                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe passed: root_offset={}, vtable_pos={}, vtable_len={}, object_inline_size={}", root_offset, vtable_pos, vtable_len, object_inline_size));
+                        }
                     }
-                    log_to_java(env, "DEBUG", &format!("[BINARY] Manual fallback successful, returning {} entities", entities_to_tick.len()));
-                    return Ok(result);
-                },
-                Err(manual_err) => {
-                    log_to_java(env, "ERROR", &format!("[BINARY] Manual deserialization also failed: {}", manual_err));
-                    return Err(format!("FlatBuffers deserialization failed: {:?}, manual fallback failed: {}", e, manual_err));
                 }
+            } else {
+                log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: not enough bytes for vtable check, root_offset={}, data_len={}", root_offset, data.len()));
             }
         }
-    };
+    } else {
+        log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe skipped: data too small ({})", data.len()));
+    }
 
-    log_to_java(env, "DEBUG", &format!("[BINARY] Processing entity input - tick_count: {}, entities: {:?}, players: {:?}",
-        entity_input.tick_count(),
-        entity_input.entities().map(|v| v.len()).unwrap_or(0),
-        entity_input.players().map(|v| v.len()).unwrap_or(0)
-    ));
+    // For entity inputs we use a custom manual binary layout produced by the Java side.
+    // The FlatBuffers fast-path has proved unreliable for this schema because the Java
+    // serializer writes a manual layout (tickCount at the start) rather than a true
+    // FlatBuffers buffer. Attempting the generated FlatBuffers parser may intermittently
+    // produce alignment/Unaligned errors when the probe mis-identifies the layout.
+    // To avoid noisy errors and unnecessary failed parse attempts, skip the FlatBuffers
+    // fast-path entirely and use the manual deserializer directly.
+    log_to_java(env, "DEBUG", "[BINARY] Skipping FlatBuffers fast-path for entity input; using manual deserializer");
 
-    let mut entities_to_tick = Vec::new();
-    if let Some(entities) = entity_input.entities() {
-        for i in 0..entities.len() {
-            let entity = entities.get(i);
-            entities_to_tick.push(entity.id());
+    // Manual deserialization fallback
+    match crate::flatbuffers::conversions::deserialize_entity_input(data) {
+        Ok(manual_input) => {
+            let entities_to_tick: Vec<u64> = manual_input.entities.iter().map(|e| e.id).collect();
+            let mut result = Vec::with_capacity(4 + entities_to_tick.len() * 8);
+            result.extend_from_slice(&(entities_to_tick.len() as i32).to_le_bytes());
+            for entity_id in &entities_to_tick {
+                result.extend_from_slice(&entity_id.to_le_bytes());
+            }
+            log_to_java(env, "DEBUG", &format!("[BINARY] Manual fallback successful, returning {} entities", entities_to_tick.len()));
+            return Ok(result);
+        },
+        Err(manual_err) => {
+            log_to_java(env, "ERROR", &format!("[BINARY] Manual deserialization also failed: {}", manual_err));
+            return Err(format!("Manual deserialization failed: {}", manual_err));
         }
     }
 
-    log_to_java(env, "DEBUG", &format!("[BINARY] Total entities to tick: {}", entities_to_tick.len()));
-
-    let mut result = Vec::with_capacity(4 + entities_to_tick.len() * 8);
-    result.extend_from_slice(&(entities_to_tick.len() as i32).to_le_bytes());
-    for entity_id in &entities_to_tick {
-        result.extend_from_slice(&entity_id.to_le_bytes());
-    }
-
-    log_to_java(env, "DEBUG", &format!("[BINARY] Successfully created binary result with {} entities", entities_to_tick.len()));
-    Ok(result)
+    // All code paths above return a Result; we should never reach here.
+    Err("Unreachable: processing should have returned earlier".to_string())
 }

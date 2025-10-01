@@ -560,14 +560,29 @@ public class RustPerformance {
             try {
                 // Serialize to FlatBuffers binary format
                 java.nio.ByteBuffer inputBuffer = binarySerializer.serialize(input);
-                
+
                 // Call binary native method (returns byte[] from Rust)
-                byte[] resultBytes = binaryNativeCaller.callNative(inputBuffer);
+                byte[] resultBytes = null;
+                try {
+                    resultBytes = binaryNativeCaller.callNative(inputBuffer);
+                } catch (Exception callEx) {
+                    // Log native call failure with stacktrace and fall through to JSON fallback
+                    KneafCore.LOGGER.debug(BINARY_FALLBACK_MESSAGE + " (native call failed)", callEx.getMessage(), callEx);
+                    resultBytes = null;
+                }
 
                 if (resultBytes != null) {
-                    // Deserialize result
-                    R result = binaryDeserializer.deserialize(resultBytes);
-                    return result;
+                    try {
+                        // Deserialize result
+                        R result = binaryDeserializer.deserialize(resultBytes);
+                        return result;
+                    } catch (Exception deserEx) {
+                        // Log detailed diagnostics to help find protocol/format mismatches
+                        String prefix = bytesPrefixHex(resultBytes, 64);
+                        KneafCore.LOGGER.error("Binary protocol deserialization failed: {} ; resultBytes.length={} ; prefix={}", deserEx.getMessage(),
+                            resultBytes.length, prefix, deserEx);
+                        // Fall through to JSON fallback
+                    }
                 }
             } catch (Exception binaryEx) {
                 KneafCore.LOGGER.debug(BINARY_FALLBACK_MESSAGE, binaryEx.getMessage());
@@ -991,6 +1006,19 @@ public class RustPerformance {
     // Worker metrics (exposed from native worker)
     public static native int nativeGetWorkerQueueDepth();
     public static native double nativeGetWorkerAvgProcessingMs();
+
+    // Helper to produce a short hex prefix of a byte array for logging
+    private static String bytesPrefixHex(byte[] data, int maxBytes) {
+        if (data == null) return "";
+        int len = Math.min(data.length, Math.max(0, maxBytes));
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < len; i++) {
+            sb.append(String.format("%02x", data[i] & 0xff));
+            if (i < len - 1) sb.append(',');
+        }
+        if (data.length > len) sb.append("...");
+        return sb.toString();
+    }
 
     public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
         return submitBatchRequest(ENTITIES_KEY, Map.of(ENTITIES_KEY, entities, PLAYERS_KEY, players, TICK_COUNT_KEY, tickCount++));

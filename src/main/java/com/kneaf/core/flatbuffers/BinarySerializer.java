@@ -224,8 +224,27 @@ public class BinarySerializer {
                                               List<FieldDescriptor<T>> fieldDescriptors) {
         buffer.order(ByteOrder.LITTLE_ENDIAN);
         buffer.rewind();
-        
+        // Consume the tickCount (long) header which precedes the item count
+        if (buffer.remaining() < 8 + 4) {
+            System.err.println("[BinarySerializer] Buffer too small to contain header; remaining=" + buffer.remaining());
+            return List.of();
+        }
+    long tickCount = buffer.getLong(); // consume to advance position
+    // Use tickCount in a diagnostic log to avoid unused-variable warnings
+    System.err.println("[BinarySerializer] tickCount=" + tickCount + ", numItemsHeaderPos=" + buffer.position());
         int numItems = buffer.getInt();
+
+        // Sanity checks to avoid allocating massive lists from malformed input
+        if (numItems < 0) {
+            System.err.println("[BinarySerializer] Invalid negative item count: " + numItems + ", returning empty list");
+            return List.of();
+        }
+        final int MAX_ITEMS = 1_000_000; // cap to avoid OOM
+        if (numItems > MAX_ITEMS) {
+            System.err.println("[BinarySerializer] Item count " + numItems + " exceeds max allowed " + MAX_ITEMS + ", returning empty list");
+            return List.of();
+        }
+
         List<T> result = new ArrayList<>(numItems);
         
         for (int i = 0; i < numItems; i++) {
