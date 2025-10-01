@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::time::{Instant, Duration};
 use serde::{Serialize, Deserialize};
 use lazy_static::lazy_static;
+use jni::{JNIEnv, objects::JClass, sys::jstring};
+use sysinfo::System;
 use crate::logging::{PerformanceLogger, generate_trace_id, ProcessingError};
 
 /// Performance metrics collection system
@@ -282,6 +284,57 @@ pub fn init_performance_monitoring() {
 /// Get global performance monitor
 pub fn get_performance_monitor() -> &'static PerformanceMonitor {
     &GLOBAL_PERFORMANCE_MONITOR
+}
+
+/// JNI function to get memory stats as JSON
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getMemoryStatsNative(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut sys = sysinfo::System::new_all();
+    // Refresh memory info
+    sys.refresh_memory();
+
+    let mem_json = serde_json::json!({
+        "total_kb": sys.total_memory(),
+        "free_kb": sys.free_memory(),
+        "used_kb": sys.used_memory(),
+        "total_swap_kb": sys.total_swap(),
+        "used_swap_kb": sys.used_swap(),
+    });
+
+    match env.new_string(&serde_json::to_string(&mem_json).unwrap_or_default()) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// JNI function to get CPU stats as JSON
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getCpuStatsNative(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut sys = sysinfo::System::new_all();
+    // Refresh CPU info; refresh twice if needed to get non-zero usage
+    sys.refresh_cpu();
+    // small refresh delay can improve accuracy but avoid blocking long
+    // Note: keeping single refresh to keep this call cheap.
+
+    let cpu_usages: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
+    let average = if cpu_usages.is_empty() { 0.0 } else { cpu_usages.iter().copied().sum::<f32>() / cpu_usages.len() as f32 };
+
+    let cpu_json = serde_json::json!({
+        "perCore": cpu_usages,
+        "average": average,
+        "numCores": sys.cpus().len(),
+    });
+
+    match env.new_string(&serde_json::to_string(&cpu_json).unwrap_or_default()) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 /// Backwards-compatible helper used by older modules that call
