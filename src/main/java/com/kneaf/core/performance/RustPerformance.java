@@ -215,6 +215,54 @@ public class RustPerformance {
         }
     }
 
+    // Called from native Rust code via JNI to forward native logs into the server logger.
+    // Signature matches: public static void logFromNative(String level, String msg)
+    public static void logFromNative(String level, String msg) {
+        if (level == null) level = "INFO";
+        if (msg == null) msg = "";
+        switch (level.toUpperCase()) {
+            case "TRACE": KneafCore.LOGGER.trace(msg); break;
+            case "DEBUG": KneafCore.LOGGER.debug(msg); break;
+            case "WARN":  KneafCore.LOGGER.warn(msg);  break;
+            case "ERROR": KneafCore.LOGGER.error(msg); break;
+            default:       KneafCore.LOGGER.info(msg);  break;
+        }
+    }
+
+    // Redirect native stderr (where Rust's eprintln! writes) into the server logger.
+    private static volatile boolean nativeErrRedirectInstalled = false;
+
+    private static void installNativeErrRedirector() {
+        if (nativeErrRedirectInstalled) return;
+        try {
+            OutputStream os = new java.io.OutputStream() {
+                private final java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+                @Override
+                public synchronized void write(int b) throws java.io.IOException {
+                    buf.write(b);
+                    if (b == '\n') flush();
+                }
+                @Override
+                public synchronized void flush() throws java.io.IOException {
+                    String s = buf.toString("UTF-8");
+                    if (s.endsWith("\n")) s = s.substring(0, s.length()-1);
+                    if (!s.isEmpty()) {
+                        // Tag native logs for easy filtering
+                        KneafCore.LOGGER.error("[rust] {}", s);
+                    }
+                    buf.reset();
+                }
+            };
+
+            java.io.PrintStream ps = new java.io.PrintStream(os, true, "UTF-8");
+            System.setErr(ps);
+            nativeErrRedirectInstalled = true;
+            KneafCore.LOGGER.info("Installed native stderr redirector to KneafCore.LOGGER");
+        } catch (Throwable t) {
+            KneafCore.LOGGER.warn("Failed to install native stderr redirector: {}", t.getMessage());
+        }
+    }
+
     // Batch processing methods
     private static void startBatchProcessor() {
         synchronized (batchLock) {
@@ -581,16 +629,72 @@ public class RustPerformance {
                 jsonInput.put("entityConfig", config);
                 return jsonInput;
             },
-            (jsonInput) -> null,
-            (jsonResult) -> {
-                JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
-                JsonArray entitiesToTick = result.getAsJsonArray("entitiesToTick");
-                List<Long> resultList = new ArrayList<>();
-                for (JsonElement e : entitiesToTick) {
-                    resultList.add(e.getAsLong());
+            (jsonInput) -> {
+                try {
+                    String result = processEntitiesNative(jsonInput);
+                    if (result == null) {
+                        KneafCore.LOGGER.error("processEntitiesNative returned null for JSON input");
+                        return "{\"error\":\"Native method returned null\"}";
+                    }
+                    // Validate result is not empty and contains valid JSON
+                    if (result.isEmpty()) {
+                        KneafCore.LOGGER.error("processEntitiesNative returned empty string");
+                        return "{\"error\":\"Native method returned empty string\"}";
+                    }
+                    // Basic JSON validation - check if it starts with { and ends with }
+                    if (!result.trim().startsWith("{") || !result.trim().endsWith("}")) {
+                        KneafCore.LOGGER.error("processEntitiesNative returned invalid JSON format: {}", result.substring(0, Math.min(result.length(), 100)));
+                        return "{\"error\":\"Native method returned invalid JSON format\"}";
+                    }
+                    return result;
+                } catch (Exception e) {
+                    KneafCore.LOGGER.error("Exception in processEntitiesNative: {}", e.getMessage(), e);
+                    return "{\"error\":\"" + e.getMessage() + "\"}";
                 }
-                totalEntitiesProcessed += resultList.size();
-                return resultList;
+            },
+            (jsonResult) -> {
+                try {
+                    JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
+                    if (result == null) {
+                        KneafCore.LOGGER.error("Failed to parse JSON result: null result object");
+                        return new ArrayList<>();
+                    }
+                    
+                    // Check for error field first
+                    if (result.has("error")) {
+                        String error = result.get("error").getAsString();
+                        KneafCore.LOGGER.error("Rust processing returned error: {}", error);
+                        return new ArrayList<>();
+                    }
+                    
+                    if (!result.has("entitiesToTick")) {
+                        KneafCore.LOGGER.error("JSON result missing 'entitiesToTick' field");
+                        return new ArrayList<>();
+                    }
+                    
+                    JsonElement entitiesElement = result.get("entitiesToTick");
+                    if (entitiesElement == null || !entitiesElement.isJsonArray()) {
+                        KneafCore.LOGGER.error("entitiesToTick is null or not an array");
+                        return new ArrayList<>();
+                    }
+                    
+                    JsonArray entitiesToTick = entitiesElement.getAsJsonArray();
+                    List<Long> resultList = new ArrayList<>();
+                    for (JsonElement e : entitiesToTick) {
+                        if (e != null && e.isJsonPrimitive()) {
+                            try {
+                                resultList.add(e.getAsLong());
+                            } catch (NumberFormatException nfe) {
+                                KneafCore.LOGGER.error("Invalid entity ID in result: {}", e);
+                            }
+                        }
+                    }
+                    totalEntitiesProcessed += resultList.size();
+                    return resultList;
+                } catch (Exception e) {
+                    KneafCore.LOGGER.error("Error parsing JSON result: {}", jsonResult, e);
+                    return new ArrayList<>();
+                }
             },
             new ArrayList<>(),
             "Entity processing"
@@ -639,7 +743,7 @@ public class RustPerformance {
                 jsonInput.put(ITEMS_KEY, input);
                 return jsonInput;
             },
-            (jsonInput) -> null,
+            (jsonInput) -> { try { return processItemEntitiesNative(jsonInput); } catch (Exception e) { return null; } },
             (jsonResult) -> {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
                 JsonArray itemsToRemove = result.getAsJsonArray("items_to_remove");
@@ -758,7 +862,7 @@ public class RustPerformance {
                 jsonInput.put("mobs", input);
                 return jsonInput;
             },
-            (jsonInput) -> null,
+            (jsonInput) -> { try { return processMobAiNative(jsonInput); } catch (Exception e) { return null; } },
             (jsonResult) -> {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
                 JsonArray disableAi = result.getAsJsonArray("mobs_to_disable_ai");
@@ -812,7 +916,12 @@ public class RustPerformance {
         input.put(TICK_COUNT_KEY, tickCount++);
         input.put("block_entities", blockEntities);
         String jsonInput = gson.toJson(input);
-        String jsonResult = null;
+        String jsonResult;
+        try {
+            jsonResult = processBlockEntitiesNative(jsonInput);
+        } catch (Exception e) {
+            jsonResult = null;
+        }
         if (jsonResult != null) {
             JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
             JsonArray entitiesToTick = result.getAsJsonArray("block_entities_to_tick");

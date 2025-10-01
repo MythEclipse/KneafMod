@@ -103,6 +103,29 @@ public class BinarySerializer {
                 },
                 buf -> {
                     int len = buf.getInt();
+                    // Sanity checks to avoid allocating huge arrays from malformed input
+                    if (len < 0) {
+                        System.err.println("[BinarySerializer] Invalid negative string length: " + len + ", returning empty string");
+                        return "";
+                    }
+                    final int MAX_STRING_BYTES = 1_000_000; // 1MB cap for a single string
+                    if (len > MAX_STRING_BYTES) {
+                        System.err.println("[BinarySerializer] String length " + len + " exceeds max allowed " + MAX_STRING_BYTES + ", returning empty string");
+                        // Advance the buffer position to skip the claimed bytes if possible
+                        if (buf.remaining() >= len) {
+                            buf.position(buf.position() + len);
+                        } else {
+                            // If not enough data, move to the end to avoid misreads later
+                            buf.position(buf.limit());
+                        }
+                        return "";
+                    }
+                    if (buf.remaining() < len) {
+                        System.err.println("[BinarySerializer] Buffer does not contain " + len + " bytes for string; remaining=" + buf.remaining() + ", returning empty string");
+                        // Move to end to avoid repeated failures
+                        buf.position(buf.limit());
+                        return "";
+                    }
                     if (len > 0) {
                         byte[] bytes = new byte[len];
                         buf.get(bytes);

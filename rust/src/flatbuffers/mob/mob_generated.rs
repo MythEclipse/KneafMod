@@ -48,11 +48,11 @@ impl<'a> MobData<'a> {
   pub const VT_IS_PASSIVE: flatbuffers::VOffsetT = 10;
 
   #[inline]
-  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     MobData { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args MobDataArgs<'args>
   ) -> flatbuffers::WIPOffset<MobData<'bldr>> {
@@ -67,19 +67,31 @@ impl<'a> MobData<'a> {
 
   #[inline]
   pub fn id(&self) -> u64 {
-    unsafe { self._tab.get::<u64>(MobData::VT_ID, Some(0)).unwrap() }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(MobData::VT_ID, Some(0)).unwrap()}
   }
   #[inline]
   pub fn entity_type(&self) -> Option<&'a str> {
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(MobData::VT_ENTITY_TYPE, None) }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(MobData::VT_ENTITY_TYPE, None)}
   }
   #[inline]
   pub fn distance(&self) -> f32 {
-    unsafe { self._tab.get::<f32>(MobData::VT_DISTANCE, Some(0.0)).unwrap() }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<f32>(MobData::VT_DISTANCE, Some(0.0)).unwrap()}
   }
   #[inline]
   pub fn is_passive(&self) -> bool {
-    unsafe { self._tab.get::<bool>(MobData::VT_IS_PASSIVE, Some(false)).unwrap() }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(MobData::VT_IS_PASSIVE, Some(false)).unwrap()}
   }
 }
 
@@ -182,11 +194,11 @@ impl<'a> MobInput<'a> {
   pub const VT_MOBS: flatbuffers::VOffsetT = 6;
 
   #[inline]
-  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     MobInput { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args MobInputArgs<'args>
   ) -> flatbuffers::WIPOffset<MobInput<'bldr>> {
@@ -199,11 +211,17 @@ impl<'a> MobInput<'a> {
 
   #[inline]
   pub fn tick_count(&self) -> u64 {
-    unsafe { self._tab.get::<u64>(MobInput::VT_TICK_COUNT, Some(0)).unwrap() }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(MobInput::VT_TICK_COUNT, Some(0)).unwrap()}
   }
   #[inline]
   pub fn mobs(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MobData<'a>>>> {
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MobData>>>>(MobInput::VT_MOBS, None) }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MobData>>>>(MobInput::VT_MOBS, None)}
   }
 }
 
@@ -290,11 +308,11 @@ impl<'a> MobProcessResult<'a> {
   pub const VT_MOBS_TO_SIMPLIFY_AI: flatbuffers::VOffsetT = 6;
 
   #[inline]
-  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     MobProcessResult { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args MobProcessResultArgs<'args>
   ) -> flatbuffers::WIPOffset<MobProcessResult<'bldr>> {
@@ -307,11 +325,17 @@ impl<'a> MobProcessResult<'a> {
 
   #[inline]
   pub fn mobs_to_disable_ai(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(MobProcessResult::VT_MOBS_TO_DISABLE_AI, None) }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(MobProcessResult::VT_MOBS_TO_DISABLE_AI, None)}
   }
   #[inline]
   pub fn mobs_to_simplify_ai(&self) -> Option<flatbuffers::Vector<'a, u64>> {
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(MobProcessResult::VT_MOBS_TO_SIMPLIFY_AI, None) }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(MobProcessResult::VT_MOBS_TO_SIMPLIFY_AI, None)}
   }
 }
 
@@ -399,11 +423,11 @@ impl<'a> AiConfig<'a> {
   pub const VT_AI_TICK_RATE_FAR: flatbuffers::VOffsetT = 8;
 
   #[inline]
-  pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
     AiConfig { _tab: table }
   }
   #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: 'bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
     args: &'args AiConfigArgs
   ) -> flatbuffers::WIPOffset<AiConfig<'bldr>> {
@@ -417,15 +441,24 @@ impl<'a> AiConfig<'a> {
 
   #[inline]
   pub fn passive_disable_distance(&self) -> f32 {
-    unsafe { self._tab.get::<f32>(AiConfig::VT_PASSIVE_DISABLE_DISTANCE, Some(0.0)).unwrap() }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<f32>(AiConfig::VT_PASSIVE_DISABLE_DISTANCE, Some(0.0)).unwrap()}
   }
   #[inline]
   pub fn hostile_simplify_distance(&self) -> f32 {
-    unsafe { self._tab.get::<f32>(AiConfig::VT_HOSTILE_SIMPLIFY_DISTANCE, Some(0.0)).unwrap() }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<f32>(AiConfig::VT_HOSTILE_SIMPLIFY_DISTANCE, Some(0.0)).unwrap()}
   }
   #[inline]
   pub fn ai_tick_rate_far(&self) -> f32 {
-    unsafe { self._tab.get::<f32>(AiConfig::VT_AI_TICK_RATE_FAR, Some(0.0)).unwrap() }
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<f32>(AiConfig::VT_AI_TICK_RATE_FAR, Some(0.0)).unwrap()}
   }
 }
 
@@ -500,18 +533,6 @@ impl core::fmt::Debug for AiConfig<'_> {
       ds.finish()
   }
 }
-#[inline]
-#[deprecated(since="2.0.0", note="Deprecated in favor of `root_as...` methods.")]
-pub fn get_root_as_mob_input<'a>(buf: &'a [u8]) -> MobInput<'a> {
-  unsafe { flatbuffers::root_unchecked::<MobInput<'a>>(buf) }
-}
-
-#[inline]
-#[deprecated(since="2.0.0", note="Deprecated in favor of `root_as...` methods.")]
-pub fn get_size_prefixed_root_as_mob_input<'a>(buf: &'a [u8]) -> MobInput<'a> {
-  unsafe { flatbuffers::size_prefixed_root_unchecked::<MobInput<'a>>(buf) }
-}
-
 #[inline]
 /// Verifies that a buffer of bytes contains a `MobInput`
 /// and returns it.
