@@ -271,18 +271,16 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
     let manual_result: Result<Vec<u8>, String> = match crate::flatbuffers::conversions::deserialize_entity_input(data) {
         Ok(manual_input) => {
             let entities_to_tick: Vec<u64> = manual_input.entities.iter().map(|e| e.id).collect();
-            // Format expected by Java BinarySerializer: [tickCount:u64][numItems:i32][ids...]
-            let mut result = Vec::with_capacity(8 + 4 + entities_to_tick.len() * 8);
-            // Preserve the tick count from the input so the Java side sees a valid header
-            result.extend_from_slice(&manual_input.tick_count.to_le_bytes());
-            // Number of entities
+            // Format expected by Java BinarySerializer for process result: [numItems:i32][ids...]
+            let mut result = Vec::with_capacity(4 + entities_to_tick.len() * 8);
+            // Number of entities (i32 little-endian)
             result.extend_from_slice(&(entities_to_tick.len() as i32).to_le_bytes());
             for entity_id in &entities_to_tick {
                 result.extend_from_slice(&entity_id.to_le_bytes());
             }
             // Log header values and a short hex prefix of the result for diagnostics before returning to Java
             let num_items = entities_to_tick.len();
-            log_to_java(env, "DEBUG", &format!("[BINARY] Manual fallback successful: tick_count={} num_items={} result_len={}", manual_input.tick_count, num_items, 8 + 4 + num_items * 8));
+            log_to_java(env, "DEBUG", &format!("[BINARY] Manual fallback successful: num_items={} result_len={}", num_items, 4 + num_items * 8));
             let prefix_len = std::cmp::min(result.len(), 32);
             let prefix_hex: String = result.iter().take(prefix_len).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
             log_to_java(env, "DEBUG", &format!("[BINARY] Manual fallback prefix={}", prefix_hex));
