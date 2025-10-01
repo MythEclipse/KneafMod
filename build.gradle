@@ -107,6 +107,11 @@ sourceSets.main.resources {
     srcDir file("$buildDir/generated/resources")
 }
 
+// Configure processResources task to handle duplicates
+tasks.named('processResources').configure {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 // Sets up a dependency configuration called 'localRuntime'.
 // This configuration should be used instead of 'runtimeOnly' to declare
 // a dependency that will be present for runtime testing but that is
@@ -276,28 +281,28 @@ task copyRustLib(type: Copy) {
     description = 'Copy built Rust native libraries into build-generated resources (avoid modifying src/)'
     dependsOn tasks.named('buildRust')
     into file("$buildDir/generated/resources/natives")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
-    doFirst {
-        def os = System.getProperty('os.name').toLowerCase()
-        def candidates = []
-        if (os.contains('windows')) {
-            candidates << file('rust/target/release/rustperf.dll')
-            candidates << file('rust/target/release/librustperf.so')
-        } else if (os.contains('linux')) {
-            candidates << file('rust/target/release/librustperf.so')
-            candidates << file('rust/target/x86_64-pc-windows-gnu/release/rustperf.dll')
-        } else {
-            candidates << file('rust/target/release/librustperf.so')
-            candidates << file('rust/target/release/rustperf.dll')
-        }
+    // Properly declare inputs so Gradle can track them
+    def os = System.getProperty('os.name').toLowerCase()
+    def candidates = []
+    if (os.contains('windows')) {
+        candidates << file('rust/target/release/rustperf.dll')
+        candidates << file('rust/target/release/librustperf.so')
+    } else if (os.contains('linux')) {
+        candidates << file('rust/target/release/librustperf.so')
+        candidates << file('rust/target/x86_64-pc-windows-gnu/release/rustperf.dll')
+    } else {
+        candidates << file('rust/target/release/librustperf.so')
+        candidates << file('rust/target/release/rustperf.dll')
+    }
 
-        // Filter only existing files so the copy doesn't fail when optional artifacts are absent
-        candidates = candidates.findAll { it.exists() }
-        if (candidates.isEmpty()) {
-            logger.warn('No Rust library artifacts found to copy. Expected some of: rust/target/**/rustperf.*')
-        } else {
-            from candidates
-        }
+    // Filter only existing files so the copy doesn't fail when optional artifacts are absent
+    candidates = candidates.findAll { it.exists() }
+    if (candidates.isEmpty()) {
+        logger.warn('No Rust library artifacts found to copy. Expected some of: rust/target/**/rustperf.*')
+    } else {
+        from candidates
     }
 }
 
