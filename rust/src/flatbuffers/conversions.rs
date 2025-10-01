@@ -35,6 +35,9 @@ pub fn serialize_mob_result(result: &MobProcessResult) -> Result<Vec<u8>, String
     // Java expects a list of mob ids to disable/simplify? We'll serialize two vectors lengths + ids for simplicity
     // Format: [disable_len:i32][disable_ids...][simplify_len:i32][simplify_ids...]
     let mut out: Vec<u8> = Vec::new();
+    // Java/BinarySerializer expects a leading tickCount:u64 in the result buffer for list deserializers.
+    // The Rust processing doesn't provide a meaningful tickCount for mob results, so write a placeholder 0.
+    out.write_u64::<LittleEndian>(0u64).map_err(|e| e.to_string())?;
     out.write_i32::<LittleEndian>(result.mobs_to_disable_ai.len() as i32).map_err(|e| e.to_string())?;
     for id in &result.mobs_to_disable_ai { out.write_u64::<LittleEndian>(*id).map_err(|e| e.to_string())?; }
     out.write_i32::<LittleEndian>(result.mobs_to_simplify_ai.len() as i32).map_err(|e| e.to_string())?;
@@ -69,6 +72,8 @@ pub fn deserialize_block_input(data: &[u8]) -> Result<BlockInput, String> {
 pub fn serialize_block_result(result: &BlockProcessResult) -> Result<Vec<u8>, String> {
     // Serialize list of block entity ids to tick: [len:i32][ids...]
     let mut out: Vec<u8> = Vec::new();
+    // Add a placeholder tickCount:u64 to match Java BinarySerializer list format ([tickCount:u64][num:i32][ids...])
+    out.write_u64::<LittleEndian>(0u64).map_err(|e| e.to_string())?;
     out.write_i32::<LittleEndian>(result.block_entities_to_tick.len() as i32).map_err(|e| e.to_string())?;
     for id in &result.block_entities_to_tick { out.write_u64::<LittleEndian>(*id).map_err(|e| e.to_string())?; }
     Ok(out)

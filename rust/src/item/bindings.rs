@@ -2,6 +2,7 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
 use jni::sys::{jbyteArray, jstring, jobject};
 use crate::item::processing::{process_item_entities, process_item_entities_json};
+use crate::flatbuffers::conversions::{deserialize_item_input, serialize_item_result};
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processItemEntitiesBinaryNative<'local>(
@@ -55,31 +56,16 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processIt
 
 /// Process item entities from binary input in batches for better JNI performance
 fn process_item_entities_binary_batch(data: &[u8]) -> Result<Vec<u8>, String> {
-    // Batch size optimization for JNI performance
-    const BATCH_SIZE: usize = 1024; // Increased batch size for better throughput
-    
+    // Expect a single manual-format message produced by Java's ManualSerializers.
     if data.is_empty() {
-        return Ok(b"{\"result\":{\"items_to_remove\":[],\"merged_count\":0,\"despawned_count\":0,\"item_updates\":[]}}".to_vec());
+        return Ok(Vec::new());
     }
-    
-    // Process data in batches to reduce JNI overhead
-    let mut offset = 0;
-    let mut all_results = Vec::new();
-    
-    while offset < data.len() {
-        let end_offset = (offset + BATCH_SIZE).min(data.len());
-        let batch_data = &data[offset..end_offset];
-        
-        // For now, return a placeholder result for each batch
-        // In a full implementation, this would deserialize and process the batch
-        let batch_result = b"{\"batch_processed\":true}";
-        all_results.extend_from_slice(batch_result);
-        
-        offset = end_offset;
-    }
-    
-    // Return combined results
-    Ok(b"{\"result\":{\"items_to_remove\":[],\"merged_count\":0,\"despawned_count\":0,\"item_updates\":[],\"batches_processed\":true}}".to_vec())
+
+    // Deserialize the manual item input layout (little-endian) and process it.
+    let input = deserialize_item_input(data).map_err(|e| format!("Failed to deserialize item input: {}", e))?;
+    let result = process_item_entities(input);
+    let out = serialize_item_result(&result).map_err(|e| format!("Failed to serialize item result: {}", e))?;
+    Ok(out)
 }
 
 #[no_mangle]

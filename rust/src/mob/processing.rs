@@ -62,6 +62,15 @@ pub fn process_mob_ai_json(json_input: &str) -> Result<String, String> {
 
 /// Process mob AI from binary input in batches for better JNI performance
 pub fn process_mob_ai_binary_batch(data: &[u8]) -> Result<Vec<u8>, String> {
-    // For now, return error as binary protocol is not fully implemented
-    Err("Binary protocol not fully implemented".to_string())
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Deserialize manual mob input, process, and serialize result
+    let input = crate::flatbuffers::conversions::deserialize_mob_input(data)
+        .map_err(|e| format!("Failed to deserialize mob input: {}", e))?;
+    let result = process_mob_ai(input);
+    let out = crate::flatbuffers::conversions::serialize_mob_result(&result)
+        .map_err(|e| format!("Failed to serialize mob result: {}", e))?;
+    Ok(out)
 }

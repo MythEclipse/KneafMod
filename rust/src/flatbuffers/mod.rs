@@ -1,23 +1,10 @@
-pub mod entity {
-    include!("entity/entity_generated.rs");
-}
-
-pub mod item {
-    include!("item/item_generated.rs");
-}
-
-pub mod mob {
-    include!("mob/mob_generated.rs");
-}
-
-pub mod block {
-    include!("block/block_generated.rs");
-}
+// We no longer use FlatBuffers-generated sources for JNI binary paths.
+// The project uses manual little-endian byte layouts implemented in
+// `conversions.rs` to serialize/deserialize data between Java and Rust.
+//
+// Keep only the conversions module here to make the manual format the
+// canonical API surface for the native crate. The original generated
+// FlatBuffers files are left on disk for reference but are not included
+// into the crate root to avoid accidental usage.
 
 pub mod conversions;
-
-// Re-export the FlatBuffers generated types for convenience
-pub use self::entity::kneaf::*;
-pub use self::item::kneaf::*;
-pub use self::mob::kneaf::*;
-pub use self::block::kneaf::*;

@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import com.kneaf.core.binary.ManualSerializers;
 
 public class RustPerformance {
     private RustPerformance() {}
@@ -629,22 +630,47 @@ public class RustPerformance {
     private static List<Long> processEntitiesDirect(List<EntityData> entities, List<PlayerData> players) {
         return processWithBinaryFallback(
             new EntityInput(entities, players),
-            (input) -> com.kneaf.core.flatbuffers.EntityFlatBuffers.serializeEntityInput(tickCount++, input.entities, input.players),
+            (input) -> ManualSerializers.serializeEntityInput(tickCount++, input.entities, input.players),
             (inputBuffer) -> processEntitiesBinaryNative(inputBuffer),
             (resultBytes) -> {
+                // Try the preferred entity-format first: [len:i32][ids...]
                 try {
-                    java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
-                    List<Long> resultList = com.kneaf.core.flatbuffers.EntityFlatBuffers.deserializeEntityProcessResult(resultBuffer);
+                    java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                    List<Long> resultList = ManualSerializers.deserializeEntityProcessResult(resultBuffer);
                     totalEntitiesProcessed += resultList.size();
                     return resultList;
-                } catch (Throwable t) {
+                } catch (Throwable primaryEx) {
+                    // Primary parse failed: attempt a tolerant fallback for tickCount-prefixed lists: [tickCount:u64][num:i32][ids...]
                     try {
-                        String prefix = bytesPrefixHex(resultBytes, 128);
-                        KneafCore.LOGGER.error("Entity binary deserialization failed: {} ; result_len={} ; prefix={}", t.getMessage(), resultBytes == null ? 0 : resultBytes.length, prefix, t);
-                    } catch (Throwable t2) {
-                        KneafCore.LOGGER.error("Entity binary deserialization failed and prefix computation also failed: {}", t2.getMessage(), t2);
+                        if (resultBytes == null) throw primaryEx;
+                        int len = resultBytes.length;
+                        java.nio.ByteBuffer altBuf = java.nio.ByteBuffer.wrap(resultBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                        if (len >= 12) {
+                            long maybeTick = altBuf.getLong(0);
+                            int numItems = altBuf.getInt(8);
+                            // Sanity checks
+                            if (numItems >= 0 && numItems <= 1_000_000 && 12 + numItems * 8 <= len) {
+                                List<Long> altList = new java.util.ArrayList<>(numItems);
+                                for (int i = 0; i < numItems; i++) {
+                                    long id = altBuf.getLong(12 + i * 8);
+                                    altList.add(id);
+                                }
+                                KneafCore.LOGGER.warn("Entity binary parser primary format failed ({}); used tickCount-prefixed fallback: tick={} numItems={} result_len={}", primaryEx.getMessage(), maybeTick, numItems, len);
+                                totalEntitiesProcessed += altList.size();
+                                return altList;
+                            }
+                        }
+                    } catch (Throwable altEx) {
+                        try {
+                            String prefix = bytesPrefixHex(resultBytes, 128);
+                            KneafCore.LOGGER.error("Entity binary deserialization failed (primary: {}; fallback: {}); result_len={} ; prefix={}", primaryEx.getMessage(), altEx.getMessage(), resultBytes == null ? 0 : resultBytes.length, prefix, primaryEx);
+                        } catch (Throwable t2) {
+                            KneafCore.LOGGER.error("Entity binary deserialization failed and prefix computation also failed: {}", t2.getMessage(), t2);
+                        }
+                        // Fall through to outer binary fallback
                     }
-                    throw t;
+                    // Re-throw the primary exception so the outer handler logs and falls back to JSON
+                    throw primaryEx;
                 }
             },
             (input) -> {
@@ -763,12 +789,12 @@ public class RustPerformance {
     private static ItemProcessResult processItemEntitiesDirect(List<ItemEntityData> items) {
         return processWithBinaryFallback(
             items,
-            (input) -> com.kneaf.core.flatbuffers.ItemFlatBuffers.serializeItemInput(tickCount, input),
+            (input) -> ManualSerializers.serializeItemInput(tickCount, input),
             (inputBuffer) -> processItemEntitiesBinaryNative(inputBuffer),
             (resultBytes) -> {
                 java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
                 List<com.kneaf.core.data.ItemEntityData> updatedItems =
-                    com.kneaf.core.flatbuffers.ItemFlatBuffers.deserializeItemProcessResult(resultBuffer);
+                    ManualSerializers.deserializeItemProcessResult(resultBuffer);
                 
                 // Convert to ItemProcessResult format
                 List<Long> removeList = new ArrayList<>();
@@ -822,7 +848,7 @@ public class RustPerformance {
     private static ItemProcessResult processItemEntitiesBinary(List<ItemEntityData> items) {
         try {
             // Serialize to FlatBuffers binary format
-            java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.ItemFlatBuffers.serializeItemInput(
+            java.nio.ByteBuffer inputBuffer = ManualSerializers.serializeItemInput(
                 tickCount, items);
             
             // Call binary native method (returns byte[] from Rust)
@@ -832,7 +858,7 @@ public class RustPerformance {
                 java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
                 // Deserialize result
                 List<com.kneaf.core.data.ItemEntityData> updatedItems =
-                    com.kneaf.core.flatbuffers.ItemFlatBuffers.deserializeItemProcessResult(resultBuffer);
+                    ManualSerializers.deserializeItemProcessResult(resultBuffer);
                 
                 // Convert to ItemProcessResult format
                 List<Long> removeList = new ArrayList<>();
@@ -888,12 +914,12 @@ public class RustPerformance {
     private static MobProcessResult processMobAIDirect(List<MobData> mobs) {
         return processWithBinaryFallback(
             mobs,
-            (input) -> com.kneaf.core.flatbuffers.MobFlatBuffers.serializeMobInput(tickCount, input),
+            (input) -> ManualSerializers.serializeMobInput(tickCount, input),
             (inputBuffer) -> processMobAiBinaryNative(inputBuffer),
             (resultBytes) -> {
                 java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
                 List<com.kneaf.core.data.MobData> updatedMobs =
-                    com.kneaf.core.flatbuffers.MobFlatBuffers.deserializeMobProcessResult(resultBuffer);
+                    ManualSerializers.deserializeMobProcessResult(resultBuffer);
                 
                 // For now, assume all returned mobs need AI simplification
                 List<Long> simplifyList = new ArrayList<>();
@@ -936,7 +962,7 @@ public class RustPerformance {
         if (nativeAvailable) {
             try {
                 // Serialize to FlatBuffers binary format
-                java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.BlockFlatBuffers.serializeBlockInput(
+                java.nio.ByteBuffer inputBuffer = ManualSerializers.serializeBlockInput(
                     tickCount++, blockEntities);
                 
                 // Call binary native method (returns byte[] from Rust)
@@ -1103,18 +1129,18 @@ public class RustPerformance {
 
     private static MobProcessResult processMobAIBinary(List<MobData> mobs) {
         try {
-            // Serialize to FlatBuffers binary format
-            java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.MobFlatBuffers.serializeMobInput(
+            // Serialize to ByteBuffer binary format
+            java.nio.ByteBuffer inputBuffer = ManualSerializers.serializeMobInput(
                 tickCount, mobs);
             
             // Call binary native method (returns byte[] from Rust)
             byte[] resultBytes = processMobAiBinaryNative(inputBuffer);
 
             if (resultBytes != null) {
-                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
+                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
                 // Deserialize result
                 List<com.kneaf.core.data.MobData> updatedMobs =
-                    com.kneaf.core.flatbuffers.MobFlatBuffers.deserializeMobProcessResult(resultBuffer);
+                    ManualSerializers.deserializeMobProcessResult(resultBuffer);
                 
                 // For now, assume all returned mobs need AI simplification
                 List<Long> simplifyList = new ArrayList<>();
@@ -1183,9 +1209,9 @@ public class RustPerformance {
 
     private static List<Long> getBlockEntitiesToTickBinary(List<BlockEntityData> blockEntities) {
         try {
-            // Serialize to FlatBuffers binary format
-            java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.BlockFlatBuffers.serializeBlockInput(
-                tickCount++, blockEntities);
+                // Serialize to ByteBuffer binary format
+                java.nio.ByteBuffer inputBuffer = ManualSerializers.serializeBlockInput(
+                    tickCount++, blockEntities);
             
             // Call binary native method (returns byte[] from Rust)
             byte[] resultBytes = processBlockEntitiesBinaryNative(inputBuffer);
@@ -1354,4 +1380,7 @@ public class RustPerformance {
     public static long getTotalBlocksProcessed() { return totalBlocksProcessed; }
     public static long getTotalMerged() { return totalMerged; }
     public static long getTotalDespawned() { return totalDespawned; }
+
+    // --- Manual ByteBuffer serializers/deserializers (replaces com.kneaf.core.flatbuffers helpers) ---
+    // Serializer/deserializer implementations moved to com.kneaf.core.binary.ManualSerializers
 }

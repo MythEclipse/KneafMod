@@ -2,7 +2,8 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject, JValue, JFloatArray};
 use jni::sys::{jstring, jobject, jbyteArray};
 use crate::entity::processing::process_entities_json;
-use crate::flatbuffers::entity::kneaf::entity::root_as_entity_input;
+// Generated FlatBuffers bindings are not used; the manual converters in
+// `crate::flatbuffers::conversions` are the canonical path for binary data.
 
 // Helper to forward logs from Rust to Java: calls
 // com.kneaf.core.performance.RustPerformance.logFromNative(String level, String msg)

@@ -63,6 +63,14 @@ pub fn process_block_entities_json(json_input: &str) -> Result<String, String> {
 
 /// Process block entities from binary input in batches for better JNI performance
 pub fn process_block_entities_binary_batch(data: &[u8]) -> Result<Vec<u8>, String> {
-    // For now, return error as binary protocol is not fully implemented
-    Err("Binary protocol not fully implemented".to_string())
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let input = crate::flatbuffers::conversions::deserialize_block_input(data)
+        .map_err(|e| format!("Failed to deserialize block input: {}", e))?;
+    let result = process_block_entities(input);
+    let out = crate::flatbuffers::conversions::serialize_block_result(&result)
+        .map_err(|e| format!("Failed to serialize block result: {}", e))?;
+    Ok(out)
 }
