@@ -2,7 +2,7 @@ use super::types::*;
 use super::config::*;
 use rayon::prelude::*;
 use serde_json;
-use crate::parallelism::{get_adaptive_pool, monitoring, WorkStealingScheduler};
+use crate::parallelism::{get_adaptive_pool, WorkStealingScheduler};
 use std::time::Instant;
 
 pub fn process_block_entities(input: BlockInput) -> BlockProcessResult {

@@ -1,8 +1,8 @@
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
-use jni::sys::{jstring, jobject, jbyteArray};
-use crate::mob::processing::process_mob_ai;
-use crate::binary::conversions::{deserialize_mob_input, serialize_mob_result};
+use jni::sys::{jstring, jbyteArray};
+
+
 use crate::mob::processing::process_mob_ai_binary_batch;
 
 #[no_mangle]
@@ -11,13 +11,6 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMo
     _class: JClass,
     json_input: JString,
 ) -> jstring {
-    // Helper to create a jstring containing a JSON error message. If creation fails, return null.
-    fn make_error(env: &JNIEnv, msg: &str) -> jstring {
-        match env.new_string(msg) {
-            Ok(s) => s.into_raw(),
-            Err(_) => std::ptr::null_mut(),
-        }
-    }
 
     let input_str = match env.get_string(&json_input) {
         Ok(s) => match s.to_str() {
@@ -47,7 +40,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMo
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMobAiBinaryNative<'local>(
-    mut env: JNIEnv<'local>,
+    env: JNIEnv<'local>,
     _class: JClass<'local>,
     input_buffer: JObject<'local>,
 ) -> jbyteArray {

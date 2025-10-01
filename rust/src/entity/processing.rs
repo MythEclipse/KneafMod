@@ -2,7 +2,7 @@ use super::types::*;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use serde_json;
-use crate::memory_pool::{get_thread_local_pool, PooledVec};
+use crate::memory_pool::get_thread_local_pool;
 use crate::parallelism::WorkStealingScheduler;
 use std::time::Instant;
 

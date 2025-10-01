@@ -1,6 +1,6 @@
 use jni::JNIEnv;
-use jni::objects::{JClass, JString, JByteBuffer, JObject, JValue, JFloatArray};
-use jni::sys::{jstring, jobject, jbyteArray};
+use jni::objects::{JClass, JString, JByteBuffer, JObject, JValue};
+use jni::sys::{jstring, jbyteArray};
 use crate::entity::processing::process_entities_json;
 // Generated FlatBuffers bindings are not used; the manual converters in
 // `crate::binary::conversions` are the canonical path for binary data.

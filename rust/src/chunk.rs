@@ -23,7 +23,7 @@ impl ChunkGenerator {
     /// Pre-generates nearby chunks asynchronously with proximity-based optimization
     pub fn pre_generate_nearby_chunks(&self, center_x: i32, center_z: i32, radius: i32) -> Vec<ChunkPos> {
         // Use proximity-based optimization to reduce processing overhead
-        let mut results: Vec<ChunkPos> = Vec::new();
+        
 
         // Create chunk positions with proximity-based filtering
         let chunk_positions: Vec<ChunkPos> = (-radius..=radius)

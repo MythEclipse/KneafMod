@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use glam::Vec3;
 use bevy_ecs::prelude::Entity;
 use rayon::prelude::*;
-use crate::simd::{get_simd_manager, vector_ops, entity_processing};
+use crate::simd::{vector_ops, entity_processing};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

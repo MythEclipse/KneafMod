@@ -1,12 +1,12 @@
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
-use jni::sys::{jbyteArray, jstring, jobject};
-use crate::item::processing::{process_item_entities, process_item_entities_json};
+use jni::sys::{jbyteArray, jstring};
+use crate::item::processing::process_item_entities;
 use crate::binary::conversions::{deserialize_item_input, serialize_item_result};
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processItemEntitiesBinaryNative<'local>(
-    mut env: JNIEnv<'local>,
+    env: JNIEnv<'local>,
     _class: JClass<'local>,
     input_buffer: JObject<'local>,
 ) -> jbyteArray {

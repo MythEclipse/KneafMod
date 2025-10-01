@@ -2,11 +2,60 @@ use std::arch::is_x86_feature_detected;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use log::{info, debug};
 use serde::{Serialize, Deserialize};
-use rayon::prelude::*;
+
 use jni::JNIEnv;
 use jni::objects::JClass;
 use jni::sys::{jint, jstring};
 
+/// Custom error type for SIMD operations
+#[derive(Debug, Clone, PartialEq)]
+pub enum SimdError {
+    /// Vector length mismatch in operations requiring equal lengths
+    InvalidInputLength {
+        expected: usize,
+        actual: usize,
+        operation: &'static str,
+    },
+    /// SIMD instruction set not supported on this hardware
+    UnsupportedInstructionSet {
+        required: &'static str,
+        available: String,
+    },
+    /// Memory allocation failed
+    MemoryAllocationFailed {
+        size: usize,
+        reason: String,
+    },
+    /// JNI operation failed
+    JniError {
+        operation: &'static str,
+        details: String,
+    },
+}
+
+impl std::fmt::Display for SimdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SimdError::InvalidInputLength { expected, actual, operation } => {
+                write!(f, "Invalid input length for {}: expected {}, got {}", operation, expected, actual)
+            }
+            SimdError::UnsupportedInstructionSet { required, available } => {
+                write!(f, "Required SIMD instruction set '{}' not supported. Available: {}", required, available)
+            }
+            SimdError::MemoryAllocationFailed { size, reason } => {
+                write!(f, "Memory allocation failed for size {}: {}", size, reason)
+            }
+            SimdError::JniError { operation, details } => {
+                write!(f, "JNI operation '{}' failed: {}", operation, details)
+            }
+        }
+    }
+}
+
+impl std::error::Error for SimdError {}
+
+/// Type alias for SIMD operation results
+pub type SimdResult<T> = Result<T, SimdError>;
 /// SIMD feature detection and optimization configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimdConfig {
@@ -189,27 +238,39 @@ pub fn init_simd(config: SimdConfig) {
 
 /// SIMD-accelerated vector operations (scalar-first, safe implementations)
 pub mod vector_ops {
-    use super::*;
-    use rayon::prelude::*;
+    use super::{SimdError, SimdResult};
 
     /// Dot product (scalar implementation, always available)
-    pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-        assert_eq!(a.len(), b.len());
-        a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    pub fn dot_product(a: &[f32], b: &[f32]) -> SimdResult<f32> {
+        if a.len() != b.len() {
+            return Err(SimdError::InvalidInputLength {
+                expected: a.len(),
+                actual: b.len(),
+                operation: "dot_product",
+            });
+        }
+        Ok(a.iter().zip(b.iter()).map(|(x, y)| x * y).sum())
     }
 
     /// Vector add: a += b * scale
-    pub fn vector_add(a: &mut [f32], b: &[f32], scale: f32) {
-        assert_eq!(a.len(), b.len());
+    pub fn vector_add(a: &mut [f32], b: &[f32], scale: f32) -> SimdResult<()> {
+        if a.len() != b.len() {
+            return Err(SimdError::InvalidInputLength {
+                expected: a.len(),
+                actual: b.len(),
+                operation: "vector_add",
+            });
+        }
         for (av, bv) in a.iter_mut().zip(b.iter()) {
             *av += *bv * scale;
         }
+        Ok(())
     }
 
-    /// Chunk distances (2D) - scalar implementation using rayon for parallelism
+    /// Chunk distances (2D) - scalar implementation using sequential processing
     pub fn calculate_chunk_distances(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
         chunk_coords
-            .par_iter()
+            .iter()
             .map(|(x, z)| {
                 let dx = *x as f32 - center_chunk.0 as f32;
                 let dz = *z as f32 - center_chunk.1 as f32;
@@ -220,22 +281,20 @@ pub mod vector_ops {
 
     /// Batch AABB intersections - scalar implementation
     pub fn batch_aabb_intersections(aabbs: &[crate::spatial::Aabb], queries: &[crate::spatial::Aabb]) -> Vec<Vec<bool>> {
-        queries
-            .par_iter()
-            .map(|q| aabbs.iter().map(|a| a.intersects(q)).collect())
-            .collect()
+        queries.iter().map(|q| aabbs.iter().map(|a| a.intersects(q)).collect()).collect()
     }
 }
 
 /// SIMD-accelerated entity processing
 pub mod entity_processing {
-    use super::*;
+    use crate::simd::{get_simd_manager, SimdLevel};
     use std::arch::x86_64::*;
+    use rayon::prelude::*;
 
     /// SIMD-accelerated distance calculation for entities
     pub fn calculate_entity_distances(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
         let level = get_simd_manager().get_level();
-        
+
         match level {
             SimdLevel::Avx2 => unsafe { calculate_distances_avx2(positions, center) },
             SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { calculate_distances_sse(positions, center) },
@@ -252,7 +311,7 @@ pub mod entity_processing {
 
     positions.chunks(8).flat_map(|chunk| {
             let mut distances = [0.0f32; 8];
-            
+
             let px = _mm256_set_ps(
                 chunk.get(7).map(|p| p.0).unwrap_or(0.0),
                 chunk.get(6).map(|p| p.0).unwrap_or(0.0),
@@ -308,7 +367,7 @@ pub mod entity_processing {
 
     positions.chunks(4).flat_map(|chunk| {
             let mut distances = [0.0f32; 4];
-            
+
             let px = _mm_set_ps(
                 chunk.get(3).map(|p| p.0).unwrap_or(0.0),
                 chunk.get(2).map(|p| p.0).unwrap_or(0.0),
@@ -401,7 +460,7 @@ pub mod entity_processing {
         max_distance: f64,
     ) -> Vec<(T, [f64; 3])> {
         let level = get_simd_manager().get_level();
-        
+
         match level {
             SimdLevel::Avx2 => unsafe { filter_entities_by_distance_avx2(entities, center, max_distance) },
             SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { filter_entities_by_distance_sse(entities, center, max_distance) },
@@ -420,44 +479,44 @@ pub mod entity_processing {
         let center_y = _mm256_set1_ps(center[1] as f32);
         let center_z = _mm256_set1_ps(center[2] as f32);
         let max_dist_sq = _mm256_set1_ps((max_distance * max_distance) as f32);
-        
+
         entities.par_chunks(8).flat_map(|chunk| {
             let mut results = Vec::new();
-            
+
             // Extract positions for SIMD processing
             let mut positions_x = [0.0f32; 8];
             let mut positions_y = [0.0f32; 8];
             let mut positions_z = [0.0f32; 8];
-            
+
             for (i, (_, pos)) in chunk.iter().enumerate() {
                 positions_x[i] = pos[0] as f32;
                 positions_y[i] = pos[1] as f32;
                 positions_z[i] = pos[2] as f32;
             }
-            
+
             let px = _mm256_loadu_ps(positions_x.as_ptr());
             let py = _mm256_loadu_ps(positions_y.as_ptr());
             let pz = _mm256_loadu_ps(positions_z.as_ptr());
-            
+
             let dx = _mm256_sub_ps(px, center_x);
             let dy = _mm256_sub_ps(py, center_y);
             let dz = _mm256_sub_ps(pz, center_z);
-            
+
             let dx2 = _mm256_mul_ps(dx, dx);
             let dy2 = _mm256_mul_ps(dy, dy);
             let dz2 = _mm256_mul_ps(dz, dz);
-            
+
             let dist_sq = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
             let within_range = _mm256_cmp_ps(dist_sq, max_dist_sq, _CMP_LE_OQ);
-            
+
             let mask = _mm256_movemask_ps(within_range);
-            
+
             for (i, (entity, pos)) in chunk.iter().enumerate() {
                     if (mask & (1 << i)) != 0 {
                     results.push(((*entity).clone(), *pos));
                 }
             }
-            
+
             results
         }).collect()
     }
@@ -472,44 +531,44 @@ pub mod entity_processing {
         let center_y = _mm_set1_ps(center[1] as f32);
         let center_z = _mm_set1_ps(center[2] as f32);
         let max_dist_sq = _mm_set1_ps((max_distance * max_distance) as f32);
-        
+
         entities.par_chunks(4).flat_map(|chunk| {
             let mut results = Vec::new();
-            
+
             // Extract positions for SIMD processing
             let mut positions_x = [0.0f32; 4];
             let mut positions_y = [0.0f32; 4];
             let mut positions_z = [0.0f32; 4];
-            
+
             for (i, (_, pos)) in chunk.iter().enumerate() {
                 positions_x[i] = pos[0] as f32;
                 positions_y[i] = pos[1] as f32;
                 positions_z[i] = pos[2] as f32;
             }
-            
+
             let px = _mm_loadu_ps(positions_x.as_ptr());
             let py = _mm_loadu_ps(positions_y.as_ptr());
             let pz = _mm_loadu_ps(positions_z.as_ptr());
-            
+
             let dx = _mm_sub_ps(px, center_x);
             let dy = _mm_sub_ps(py, center_y);
             let dz = _mm_sub_ps(pz, center_z);
-            
+
             let dx2 = _mm_mul_ps(dx, dx);
             let dy2 = _mm_mul_ps(dy, dy);
             let dz2 = _mm_mul_ps(dz, dz);
-            
+
             let dist_sq = _mm_add_ps(_mm_add_ps(dx2, dy2), dz2);
             let within_range = _mm_cmple_ps(dist_sq, max_dist_sq);
-            
+
             let mask = _mm_movemask_ps(within_range);
-            
+
             for (i, (entity, pos)) in chunk.iter().enumerate() {
                     if (mask & (1 << i)) != 0 {
                     results.push(((*entity).clone(), *pos));
                 }
             }
-            
+
             results
         }).collect()
     }
@@ -541,42 +600,42 @@ pub mod entity_processing {
         let center_y = _mm512_set1_ps(center[1] as f32);
         let center_z = _mm512_set1_ps(center[2] as f32);
         let max_dist_sq = _mm512_set1_ps((max_distance * max_distance) as f32);
-        
+
         entities.par_chunks(16).flat_map(|chunk| {
             let mut results = Vec::new();
-            
+
             // Extract positions for SIMD processing
             let mut positions_x = [0.0f32; 16];
             let mut positions_y = [0.0f32; 16];
             let mut positions_z = [0.0f32; 16];
-            
+
             for (i, (_, pos)) in chunk.iter().enumerate() {
                 positions_x[i] = pos[0] as f32;
                 positions_y[i] = pos[1] as f32;
                 positions_z[i] = pos[2] as f32;
             }
-            
+
             let px = _mm512_loadu_ps(positions_x.as_ptr());
             let py = _mm512_loadu_ps(positions_y.as_ptr());
             let pz = _mm512_loadu_ps(positions_z.as_ptr());
-            
+
             let dx = _mm512_sub_ps(px, center_x);
             let dy = _mm512_sub_ps(py, center_y);
             let dz = _mm512_sub_ps(pz, center_z);
-            
+
             let dx2 = _mm512_mul_ps(dx, dx);
             let dy2 = _mm512_mul_ps(dy, dy);
             let dz2 = _mm512_mul_ps(dz, dz);
-            
+
             let dist_sq = _mm512_add_ps(_mm512_add_ps(dx2, dy2), dz2);
             let within_range = _mm512_cmp_ps_mask(dist_sq, max_dist_sq, _MM_CMPINT_LE);
-            
+
             for (i, (entity, pos)) in chunk.iter().enumerate() {
                 if (within_range & (1 << i)) != 0 {
                     results.push(((*entity).clone(), *pos));
                 }
             }
-            
+
             results
         }).collect()
     }
@@ -590,7 +649,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getSimdFeature
 ) -> jstring {
     let features = SimdFeatures::detect();
     let level = features.best_level();
-    
+
     let features_json = serde_json::json!({
         "hasAvx2": features.has_avx2,
         "hasSse41": features.has_sse41,
@@ -638,29 +697,28 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_initSimd(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_simd_detection() {
-        let features = SimdFeatures::detect();
+        let features = super::SimdFeatures::detect();
         println!("Detected SIMD features: {:?}", features);
-        
+
         let level = features.best_level();
         println!("Best SIMD level: {:?}", level);
-        
+
         // Test should pass regardless of actual hardware capabilities
-        assert!(level as u32 >= SimdLevel::Scalar as u32);
+        assert!(level as u32 >= super::SimdLevel::Scalar as u32);
     }
 
     #[test]
     fn test_vector_operations() {
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let b = vec![8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0];
-        
-        let result = vector_ops::dot_product(&a, &b);
+
+        let result = super::vector_ops::dot_product(&a, &b);
         let expected = 120.0; // Sum of products
-        
-        assert!((result - expected).abs() < 0.001);
+
+        assert!((result.unwrap() - expected).abs() < 0.001);
     }
 
     #[test]
@@ -671,9 +729,9 @@ mod tests {
             (6.0, 8.0, 0.0),
         ];
         let center = (0.0, 0.0, 0.0);
-        
-        let distances = entity_processing::calculate_entity_distances(&positions, center);
-        
+
+        let distances = super::entity_processing::calculate_entity_distances(&positions, center);
+
         assert_eq!(distances.len(), 3);
         assert!((distances[0] - 0.0).abs() < 0.001);
         assert!((distances[1] - 5.0).abs() < 0.001);

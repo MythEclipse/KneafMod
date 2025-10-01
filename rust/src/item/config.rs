@@ -1,6 +1,6 @@
 use super::types::*;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]

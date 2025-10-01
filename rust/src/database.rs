@@ -1,13 +1,13 @@
-use std::collections::HashMap;
+
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::Path;
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteArray, JObject};
-use jni::sys::{jboolean, jlong, jbyteArray, jobject};
+use jni::sys::{jboolean, jlong, jbyteArray};
 use sled::Db;
-use blake3::Hasher;
-use log::{debug, info, warn, error};
+
+use log::{debug, info, error};
 
 /// Database statistics for monitoring
 #[derive(Debug, Clone)]
@@ -605,7 +605,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeGetDatabaseType<'a>(
-    mut env: JNIEnv<'a>,
+    env: JNIEnv<'a>,
     _class: JClass<'a>,
     adapter_ptr: jlong,
 ) -> JString<'a> {

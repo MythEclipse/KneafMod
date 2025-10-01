@@ -1,8 +1,8 @@
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
-use jni::sys::{jstring, jobject, jbyteArray};
-use crate::block::processing::process_block_entities;
-use crate::binary::conversions::{deserialize_block_input, serialize_block_result};
+use jni::sys::{jstring, jbyteArray};
+
+
 use crate::block::processing::process_block_entities_binary_batch;
 
 #[no_mangle]
@@ -38,7 +38,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBlockEntitiesBinaryNative<'local>(
-    mut env: JNIEnv<'local>,
+    env: JNIEnv<'local>,
     _class: JClass<'local>,
     input_buffer: JObject<'local>,
 ) -> jbyteArray {

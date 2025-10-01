@@ -1,9 +1,9 @@
-use super::*;
+
 use crate::mob::types::{MobInput, MobProcessResult};
 use crate::block::types::{BlockInput, BlockProcessResult};
-use crate::entity::types::{Input as EntityInput, ProcessResult as EntityProcessResult, EntityData as REntityData, PlayerData as RPlayerData};
-use crate::item::types::{ItemInput, ItemProcessResult, ItemEntityData as RItemEntityData};
-use std::convert::TryInto;
+use crate::entity::types::{Input as EntityInput, EntityData as REntityData, PlayerData as RPlayerData};
+use crate::item::types::{ItemInput, ItemEntityData as RItemEntityData};
+
 use std::io::{Cursor, Read};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::entity::config::Config as EntityConfig;
@@ -131,7 +131,7 @@ pub fn serialize_entity_result(result: &crate::entity::types::ProcessResult) -> 
 // Placeholder for item conversions (if needed in the future)
 pub fn deserialize_item_input(data: &[u8]) -> Result<crate::item::ItemInput, String> {
     let mut cur = Cursor::new(data);
-    let tick_count = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
+    let _tick_count = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
     let num = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
     let mut items = Vec::with_capacity(num);
     for _ in 0..num {

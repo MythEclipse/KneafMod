@@ -1,8 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::fmt::Debug;
-use crate::logging::{PerformanceLogger, generate_trace_id, ProcessingError};
-use lazy_static::lazy_static;
+use crate::logging::{PerformanceLogger, generate_trace_id};
 
 /// Generic object pool for memory reuse
 pub struct ObjectPool<T> {
@@ -44,22 +43,6 @@ where
         }
     }
 
-    /// Return an object to the pool
-    fn return_object(&self, obj: T) {
-        let trace_id = generate_trace_id();
-        let mut pool = self.pool.lock().unwrap();
-
-        if pool.len() < self.max_size {
-            pool.push_front(obj);
-            self.logger.log_operation("pool_return", &trace_id, || {
-                log::debug!("Returned object to pool, current size: {}", pool.len());
-            });
-        } else {
-            self.logger.log_operation("pool_discard", &trace_id, || {
-                log::debug!("Pool full, discarding object");
-            });
-        }
-    }
 }
 
 /// Wrapper for pooled objects that automatically returns to pool when dropped
