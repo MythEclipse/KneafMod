@@ -310,6 +310,46 @@ task copyRustLib(type: Copy) {
 tasks.named('compileJava').configure { dependsOn(copyRustLib) }
 tasks.named('processResources').configure { dependsOn(copyRustLib) }
 
+// Task to remove any existing src/main/resources/natives directory so we always overwrite
+task cleanSrcNatives(type: Delete) {
+    group = 'build'
+    description = 'Remove src/main/resources/natives so it can be freshly populated'
+    delete file('src/main/resources/natives')
+}
+
+// Copy built Rust artifacts into src/main/resources/natives (overwrites via cleanSrcNatives)
+task copyRustToSrc(type: Copy) {
+    group = 'build'
+    description = 'Copy built Rust native libraries into src/main/resources/natives, always overwriting'
+    dependsOn 'buildRust'
+    dependsOn 'cleanSrcNatives'
+
+    into file('src/main/resources/natives')
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+
+    // Common release output directories to check
+    from('rust/target/release') {
+        include 'rustperf.*'
+        include 'librustperf.*'
+    }
+    from('rust/target/x86_64-pc-windows-gnu/release') {
+        include 'rustperf.*'
+        include 'librustperf.*'
+    }
+
+    // Intentionally minimal task body to remain configuration-cache friendly.
+    // The Copy task will populate src/main/resources/natives; inspect build logs or the filesystem to verify.
+}
+
+// Ensure compile and resource processing use the fresh natives in src/main/resources
+tasks.named('compileJava').configure { dependsOn(copyRustToSrc) }
+tasks.named('processResources').configure { dependsOn(copyRustToSrc) }
+
+// Ensure run tasks pick up fresh natives before launching the game in a dev environment
+// Use string-based dependsOn to remain configuration-cache friendly.
+tasks.named('runClient').configure { dependsOn 'copyRustToSrc' }
+tasks.named('runServer').configure { dependsOn 'copyRustToSrc' }
+
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {
     module {
