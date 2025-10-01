@@ -581,7 +581,7 @@ public class RustPerformance {
                 jsonInput.put("entityConfig", config);
                 return jsonInput;
             },
-            (jsonInput) -> processEntitiesNative(jsonInput),
+            (jsonInput) -> null,
             (jsonResult) -> {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
                 JsonArray entitiesToTick = result.getAsJsonArray("entitiesToTick");
@@ -639,7 +639,7 @@ public class RustPerformance {
                 jsonInput.put(ITEMS_KEY, input);
                 return jsonInput;
             },
-            (jsonInput) -> processItemEntitiesNative(jsonInput),
+            (jsonInput) -> null,
             (jsonResult) -> {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
                 JsonArray itemsToRemove = result.getAsJsonArray("items_to_remove");
@@ -708,7 +708,7 @@ public class RustPerformance {
         Map<String, Object> input = new HashMap<>();
         input.put(ITEMS_KEY, items);
         String jsonInput = gson.toJson(input);
-        String jsonResult = processItemEntitiesNative(jsonInput);
+        String jsonResult = null;
         if (jsonResult != null) {
             JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
             JsonArray itemsToRemove = result.getAsJsonArray("items_to_remove");
@@ -758,7 +758,7 @@ public class RustPerformance {
                 jsonInput.put("mobs", input);
                 return jsonInput;
             },
-            (jsonInput) -> processMobAiNative(jsonInput),
+            (jsonInput) -> null,
             (jsonResult) -> {
                 JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
                 JsonArray disableAi = result.getAsJsonArray("mobs_to_disable_ai");
@@ -812,7 +812,7 @@ public class RustPerformance {
         input.put(TICK_COUNT_KEY, tickCount++);
         input.put("block_entities", blockEntities);
         String jsonInput = gson.toJson(input);
-        String jsonResult = processBlockEntitiesNative(jsonInput);
+        String jsonResult = null;
         if (jsonResult != null) {
             JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
             JsonArray entitiesToTick = result.getAsJsonArray("block_entities_to_tick");
@@ -966,7 +966,7 @@ public class RustPerformance {
         input.put(TICK_COUNT_KEY, tickCount);
         input.put("mobs", mobs);
         String jsonInput = gson.toJson(input);
-        String jsonResult = processMobAiNative(jsonInput);
+        String jsonResult = null;
         if (jsonResult != null) {
             JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
             JsonArray disableAi = result.getAsJsonArray("mobs_to_disable_ai");
@@ -1042,7 +1042,7 @@ public class RustPerformance {
         input.put(TICK_COUNT_KEY, tickCount++);
         input.put("block_entities", blockEntities);
         String jsonInput = gson.toJson(input);
-        String jsonResult = processBlockEntitiesNative(jsonInput);
+        String jsonResult = null;
         if (jsonResult != null) {
             JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
             JsonArray entitiesToTick = result.getAsJsonArray("block_entities_to_tick");
