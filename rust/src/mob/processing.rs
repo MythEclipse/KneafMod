@@ -67,10 +67,10 @@ pub fn process_mob_ai_binary_batch(data: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     // Deserialize manual mob input, process, and serialize result
-    let input = crate::flatbuffers::conversions::deserialize_mob_input(data)
+    let input = crate::binary::conversions::deserialize_mob_input(data)
         .map_err(|e| format!("Failed to deserialize mob input: {}", e))?;
     let result = process_mob_ai(input);
-    let out = crate::flatbuffers::conversions::serialize_mob_result(&result)
+    let out = crate::binary::conversions::serialize_mob_result(&result)
         .map_err(|e| format!("Failed to serialize mob result: {}", e))?;
     Ok(out)
 }

@@ -67,10 +67,10 @@ pub fn process_block_entities_binary_batch(data: &[u8]) -> Result<Vec<u8>, Strin
         return Ok(Vec::new());
     }
 
-    let input = crate::flatbuffers::conversions::deserialize_block_input(data)
+    let input = crate::binary::conversions::deserialize_block_input(data)
         .map_err(|e| format!("Failed to deserialize block input: {}", e))?;
     let result = process_block_entities(input);
-    let out = crate::flatbuffers::conversions::serialize_block_result(&result)
+    let out = crate::binary::conversions::serialize_block_result(&result)
         .map_err(|e| format!("Failed to serialize block result: {}", e))?;
     Ok(out)
 }

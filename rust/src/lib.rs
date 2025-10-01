@@ -16,7 +16,7 @@ pub mod entity;
 pub mod item;
 pub mod mob;
 pub mod block;
-pub mod flatbuffers;
+pub mod binary;
 pub mod logging;
 pub mod memory_pool;
 pub mod performance_monitoring;

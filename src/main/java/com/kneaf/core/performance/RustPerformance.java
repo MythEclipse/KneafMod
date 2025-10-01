@@ -586,14 +586,49 @@ public class RustPerformance {
                         // Additional numeric diagnostics: interpret raw bytes as little-endian int/long at offsets 0 and 8
                         try {
                             int lenBytes = resultBytes != null ? resultBytes.length : 0;
-                            int int0 = Integer.MIN_VALUE;
-                            long long0 = Long.MIN_VALUE;
-                            int int8 = Integer.MIN_VALUE;
                             java.nio.ByteBuffer dbgBuf = java.nio.ByteBuffer.wrap(resultBytes == null ? new byte[0] : resultBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-                            if (lenBytes >= 4) int0 = dbgBuf.getInt(0);
-                            if (lenBytes >= 8) long0 = dbgBuf.getLong(0);
-                            if (lenBytes >= 12) int8 = dbgBuf.getInt(8);
-                            KneafCore.LOGGER.debug("[BINARY] resultBytes numeric view: len={} int0={} long0={} int8={}", lenBytes, int0, long0, int8);
+                            int parsedCount = -1;
+                            String tickPrefix = "";
+                            java.util.List<Long> previewIds = new java.util.ArrayList<>();
+
+                            // Try primary format: [len:i32][ids...]
+                            if (lenBytes >= 4) {
+                                int candidate = dbgBuf.getInt(0);
+                                if (candidate >= 0 && 4 + (long)candidate * 8 <= lenBytes) {
+                                    parsedCount = candidate;
+                                    int to = Math.min(candidate, 8);
+                                    for (int i = 0; i < to; i++) {
+                                        previewIds.add(dbgBuf.getLong(4 + i * 8));
+                                    }
+                                }
+                            }
+
+                            // If primary didn't match, try tickCount-prefixed: [tick:u64][num:i32][ids...]
+                            if (parsedCount < 0 && lenBytes >= 12) {
+                                long maybeTick = dbgBuf.getLong(0);
+                                int numItems = dbgBuf.getInt(8);
+                                if (numItems >= 0 && 12 + (long)numItems * 8 <= lenBytes) {
+                                    parsedCount = numItems;
+                                    tickPrefix = "tick=" + maybeTick + " ";
+                                    int to = Math.min(numItems, 8);
+                                    for (int i = 0; i < to; i++) {
+                                        previewIds.add(dbgBuf.getLong(12 + i * 8));
+                                    }
+                                }
+                            }
+
+                            if (parsedCount >= 0) {
+                                KneafCore.LOGGER.debug("[BINARY] result preview: len={} parsedCount={} {}ids={}", lenBytes, parsedCount, tickPrefix, previewIds);
+                            } else {
+                                // Fallback to the old numeric view if we couldn't parse a list
+                                int int0 = Integer.MIN_VALUE;
+                                long long0 = Long.MIN_VALUE;
+                                int int8 = Integer.MIN_VALUE;
+                                if (lenBytes >= 4) int0 = dbgBuf.getInt(0);
+                                if (lenBytes >= 8) long0 = dbgBuf.getLong(0);
+                                if (lenBytes >= 12) int8 = dbgBuf.getInt(8);
+                                KneafCore.LOGGER.debug("[BINARY] resultBytes numeric view: len={} int0={} long0={} int8={}", lenBytes, int0, long0, int8);
+                            }
                         } catch (Throwable t) {
                             KneafCore.LOGGER.debug("[BINARY] Failed to compute numeric diagnostics for native result: {}", t.getMessage());
                         }

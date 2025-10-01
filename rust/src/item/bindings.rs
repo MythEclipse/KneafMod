@@ -2,7 +2,7 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
 use jni::sys::{jbyteArray, jstring, jobject};
 use crate::item::processing::{process_item_entities, process_item_entities_json};
-use crate::flatbuffers::conversions::{deserialize_item_input, serialize_item_result};
+use crate::binary::conversions::{deserialize_item_input, serialize_item_result};
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processItemEntitiesBinaryNative<'local>(

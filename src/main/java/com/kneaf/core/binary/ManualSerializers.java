@@ -53,14 +53,37 @@ public final class ManualSerializers {
     public static List<Long> deserializeEntityProcessResult(ByteBuffer buffer) {
         buffer.order(ByteOrder.LITTLE_ENDIAN);
         buffer.rewind();
-        if (buffer.remaining() < 4) return List.of();
-        int len = buffer.getInt();
-        List<Long> ids = new ArrayList<>(Math.max(0, len));
-        for (int i = 0; i < len; i++) {
-            if (buffer.remaining() < 8) break;
-            ids.add(buffer.getLong());
+        // Be tolerant: accept either [num:i32][ids...] or [tick:u64][num:i32][ids...]
+        int rem = buffer.remaining();
+        if (rem < 4) return List.of();
+
+        // Helper to safely read an int/long at absolute offsets without changing position
+        java.nio.ByteBuffer dup = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+
+        // Try primary: [num:i32][ids...]
+        int candidateNum = dup.getInt(0);
+        if (candidateNum >= 0 && 4 + (long)candidateNum * 8 <= rem) {
+            List<Long> ids = new ArrayList<>(Math.max(0, candidateNum));
+            for (int i = 0; i < candidateNum; i++) {
+                ids.add(dup.getLong(4 + i * 8));
+            }
+            return ids;
         }
-        return ids;
+
+        // Try tick-prefixed: [tick:u64][num:i32][ids...]
+        if (rem >= 12) {
+            int numItems = dup.getInt(8);
+            if (numItems >= 0 && 12 + (long)numItems * 8 <= rem) {
+                List<Long> ids = new ArrayList<>(Math.max(0, numItems));
+                for (int i = 0; i < numItems; i++) {
+                    ids.add(dup.getLong(12 + i * 8));
+                }
+                return ids;
+            }
+        }
+
+        // No recognized layout
+        return List.of();
     }
 
     public static ByteBuffer serializeItemInput(long tickCount, List<com.kneaf.core.data.ItemEntityData> items) {

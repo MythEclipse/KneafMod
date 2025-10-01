@@ -2,7 +2,7 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
 use jni::sys::{jstring, jobject, jbyteArray};
 use crate::mob::processing::process_mob_ai;
-use crate::flatbuffers::conversions::{deserialize_mob_input, serialize_mob_result};
+use crate::binary::conversions::{deserialize_mob_input, serialize_mob_result};
 use crate::mob::processing::process_mob_ai_binary_batch;
 
 #[no_mangle]

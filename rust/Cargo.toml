@@ -31,7 +31,6 @@ env_logger = "0.10"
 sled = "0.34"
 chrono = { version = "0.4", features = ["serde"] }
 num_cpus = "1.16"
-flatbuffers = "23.5.26"
 fastrand = "2.0"
 byteorder = "1.4"
 

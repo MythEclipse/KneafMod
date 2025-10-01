@@ -32,11 +32,9 @@ jobs:
 
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
-    # ✅ FlatBuffers install for Ubuntu
-    - name: Install FlatBuffers compiler
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y flatbuffers-compiler
+    # FlatBuffers compiler is not required because the project uses manual
+    # ByteBuffer serializers. If you need to regenerate code, add a step
+    # to install flatc here.
 
     - name: Build mod
       run: ./gradlew build

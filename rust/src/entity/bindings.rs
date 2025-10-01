@@ -3,7 +3,7 @@ use jni::objects::{JClass, JString, JByteBuffer, JObject, JValue, JFloatArray};
 use jni::sys::{jstring, jobject, jbyteArray};
 use crate::entity::processing::process_entities_json;
 // Generated FlatBuffers bindings are not used; the manual converters in
-// `crate::flatbuffers::conversions` are the canonical path for binary data.
+// `crate::binary::conversions` are the canonical path for binary data.
 
 // Helper to forward logs from Rust to Java: calls
 // com.kneaf.core.performance.RustPerformance.logFromNative(String level, String msg)
@@ -203,12 +203,12 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
 
         // Basic checks: non-zero, in-bounds, aligned and reasonably large (root table typically not at very small offsets)
         if root_offset_u32 == 0 {
-            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: root_offset=0, data_len={}", data.len()));
+            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: root_offset=0, data_len={}", data.len()));
         } else if root_offset + 4 > data.len() {
-            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: root_offset out of bounds: {}, data_len={}", root_offset, data.len()));
+            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: root_offset out of bounds: {}, data_len={}", root_offset, data.len()));
         } else if (root_offset_u32 % 4) != 0 || root_offset < 8 {
             // Require 4-byte alignment and a minimum offset so we don't accept tiny/implausible values
-            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: root_offset alignment/size: {}, data_len={}", root_offset, data.len()));
+            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: root_offset alignment/size: {}, data_len={}", root_offset, data.len()));
         } else {
             // Attempt a small vtable sanity check. At table start, FlatBuffers stores a 16-bit vtable offset
             // (little-endian signed i16) that is typically negative; the vtable itself starts at
@@ -216,12 +216,12 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
             if root_offset + 2 <= data.len() {
                 let vtable_rel = i16::from_le_bytes([data[root_offset], data[root_offset + 1]]);
                 if vtable_rel >= 0 {
-                    log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: unexpected non-negative vtable_rel={} at root_offset={}", vtable_rel, root_offset));
+                    log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: unexpected non-negative vtable_rel={} at root_offset={}", vtable_rel, root_offset));
                 } else {
                     // compute vtable position (safe because vtable_rel is negative)
                     let vtable_pos = root_offset - ((-vtable_rel) as usize);
                     if vtable_pos + 4 > data.len() {
-                        log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable out of bounds vtable_pos={}, data_len={}", vtable_pos, data.len()));
+                        log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: vtable out of bounds vtable_pos={}, data_len={}", vtable_pos, data.len()));
                     } else {
                         // vtable begins with two uint16: [vtable_len, object_inline_size]
                         let vtable_len = u16::from_le_bytes([data[vtable_pos], data[vtable_pos + 1]]) as usize;
@@ -231,31 +231,31 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
                         // - vtable_pos should be within bounds and 2-byte aligned
                         // - object_inline_size must be reasonable and fit within the remaining buffer after root_offset
                         if vtable_len < 4 {
-                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable_len too small={} at vtable_pos={} (root_offset={})", vtable_len, vtable_pos, root_offset));
+                            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: vtable_len too small={} at vtable_pos={} (root_offset={})", vtable_len, vtable_pos, root_offset));
                         } else if vtable_len > 64 {
                             // Tighten the vtable length cap - smaller vtables are expected for our schema.
-                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable_len unreasonably large={}", vtable_len));
+                            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: vtable_len unreasonably large={}", vtable_len));
                         } else if (vtable_pos % 2) != 0 {
-                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable_pos not 2-byte aligned={}", vtable_pos));
+                            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: vtable_pos not 2-byte aligned={}", vtable_pos));
                         } else if vtable_pos + vtable_len > data.len() {
-                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: vtable overruns buffer: vtable_pos={} vtable_len={} data_len={}", vtable_pos, vtable_len, data.len()));
+                            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: vtable overruns buffer: vtable_pos={} vtable_len={} data_len={}", vtable_pos, vtable_len, data.len()));
                         } else if object_inline_size > 256 {
                             // Reduce allowed inline object size to avoid accepting manual formats that look
                             // superficially like FlatBuffers (we expect small inline object sizes for entity tables)
-                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: object_inline_size unreasonably large={}", object_inline_size));
+                            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: object_inline_size unreasonably large={}", object_inline_size));
                         } else if root_offset + object_inline_size > data.len() {
-                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: object_inline_size overruns buffer: root_offset={} object_inline_size={} data_len={}", root_offset, object_inline_size, data.len()));
+                            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: object_inline_size overruns buffer: root_offset={} object_inline_size={} data_len={}", root_offset, object_inline_size, data.len()));
                         } else {
-                            log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe passed: root_offset={}, vtable_pos={}, vtable_len={}, object_inline_size={}", root_offset, vtable_pos, vtable_len, object_inline_size));
+                            log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe passed: root_offset={}, vtable_pos={}, vtable_len={}, object_inline_size={}", root_offset, vtable_pos, vtable_len, object_inline_size));
                         }
                     }
                 }
             } else {
-                log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe failed: not enough bytes for vtable check, root_offset={}, data_len={}", root_offset, data.len()));
+                log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe failed: not enough bytes for vtable check, root_offset={}, data_len={}", root_offset, data.len()));
             }
         }
     } else {
-        log_to_java(env, "DEBUG", &format!("[BINARY] FlatBuffers header probe skipped: data too small ({})", data.len()));
+        log_to_java(env, "TRACE", &format!("[BINARY] FlatBuffers header probe skipped: data too small ({})", data.len()));
     }
 
     // For entity inputs we use a custom manual binary layout produced by the Java side.
@@ -265,11 +265,11 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
     // produce alignment/Unaligned errors when the probe mis-identifies the layout.
     // To avoid noisy errors and unnecessary failed parse attempts, skip the FlatBuffers
     // fast-path entirely and use the manual deserializer directly.
-    log_to_java(env, "DEBUG", "[BINARY] Skipping FlatBuffers fast-path for entity input; using manual deserializer");
+    log_to_java(env, "DEBUG", "[BINARY] Using manual binary deserializer for entity input");
 
     // Manual deserialization fallback. Build a Result here and return it once so we
     // avoid early `return` calls inside the match (which made subsequent code unreachable).
-    let manual_result: Result<Vec<u8>, String> = match crate::flatbuffers::conversions::deserialize_entity_input(data) {
+    let manual_result: Result<Vec<u8>, String> = match crate::binary::conversions::deserialize_entity_input(data) {
         Ok(manual_input) => {
             let entities_to_tick: Vec<u64> = manual_input.entities.iter().map(|e| e.id).collect();
             // Format expected by Java BinarySerializer for process result: [numItems:i32][ids...]

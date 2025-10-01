@@ -22,7 +22,7 @@ fn item_roundtrip_deserialize_process_serialize() {
     // Append merged/despawned counts? conversions.deserialize_item_input doesn't expect them for input
 
     // Now call the crate deserializer
-    let input = crate::flatbuffers::conversions::deserialize_item_input(&out).expect("deserialize_item_input failed");
+    let input = crate::binary::conversions::deserialize_item_input(&out).expect("deserialize_item_input failed");
     assert_eq!(input.items.len(), 1);
     assert_eq!(input.items[0].id, 12345u64);
     assert_eq!(input.items[0].item_type, "minecraft:stone");
@@ -31,7 +31,7 @@ fn item_roundtrip_deserialize_process_serialize() {
     let result = crate::item::processing::process_item_entities(input);
 
     // Serialize result
-    let bytes = crate::flatbuffers::conversions::serialize_item_result(&result).expect("serialize_item_result failed");
+    let bytes = crate::binary::conversions::serialize_item_result(&result).expect("serialize_item_result failed");
     // At minimum, ensure serialization produced bytes
     assert!(!bytes.is_empty());
 }
@@ -50,11 +50,11 @@ fn mob_roundtrip_deserialize_process_serialize() {
     out.write_i32::<LittleEndian>(t.len() as i32).unwrap();
     out.extend_from_slice(t);
 
-    let input = crate::flatbuffers::conversions::deserialize_mob_input(&out).expect("deserialize_mob_input failed");
+    let input = crate::binary::conversions::deserialize_mob_input(&out).expect("deserialize_mob_input failed");
     assert_eq!(input.mobs.len(), 1);
     assert_eq!(input.mobs[0].id, 555u64);
 
     let result = crate::mob::processing::process_mob_ai(input);
-    let bytes = crate::flatbuffers::conversions::serialize_mob_result(&result).expect("serialize_mob_result failed");
+    let bytes = crate::binary::conversions::serialize_mob_result(&result).expect("serialize_mob_result failed");
     assert!(!bytes.is_empty());
 }

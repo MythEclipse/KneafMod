@@ -2,7 +2,7 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
 use jni::sys::{jstring, jobject, jbyteArray};
 use crate::block::processing::process_block_entities;
-use crate::flatbuffers::conversions::{deserialize_block_input, serialize_block_result};
+use crate::binary::conversions::{deserialize_block_input, serialize_block_result};
 use crate::block::processing::process_block_entities_binary_batch;
 
 #[no_mangle]

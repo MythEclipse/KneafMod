@@ -245,7 +245,7 @@ impl JniBatchProcessor {
     }
 
     fn process_binary_batch(ops: &[(u8, Vec<u8>, Sender<Result<Vec<u8>, String>>)]) {
-        use crate::flatbuffers::conversions::{deserialize_entity_input, serialize_entity_result};
+    use crate::binary::conversions::{deserialize_entity_input, serialize_entity_result};
         use crate::entity::processing::process_entities;
         
         for (op_type, input_data, response_tx) in ops {
