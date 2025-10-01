@@ -21,7 +21,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * In-memory implementation of DatabaseAdapter for testing and development.
  * Uses ConcurrentHashMap for thread-safe operations.
  */
-public class InMemoryDatabaseAdapter implements DatabaseAdapter {
+public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
     private static final Logger LOGGER = LogUtils.getLogger();
     
     /**
@@ -56,12 +56,8 @@ public class InMemoryDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public void putChunk(String key, byte[] data) throws IOException {
-        if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Key cannot be null or empty");
-        }
-        if (data == null) {
-            throw new IllegalArgumentException("Data cannot be null");
-        }
+        validateKey(key);
+        validateData(data);
         
         long startTime = System.nanoTime();
         
@@ -101,9 +97,7 @@ public class InMemoryDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public Optional<byte[]> getChunk(String key) throws IOException {
-        if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Key cannot be null or empty");
-        }
+        validateKey(key);
         
         long startTime = System.nanoTime();
         
@@ -143,9 +137,7 @@ public class InMemoryDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public boolean deleteChunk(String key) throws IOException {
-        if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Key cannot be null or empty");
-        }
+        validateKey(key);
         
         try {
             byte[] removedData = chunkStorage.remove(key);
@@ -178,9 +170,7 @@ public class InMemoryDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public boolean hasChunk(String key) throws IOException {
-        if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Key cannot be null or empty");
-        }
+        validateKey(key);
         
         try {
             return chunkStorage.containsKey(key);
@@ -277,9 +267,7 @@ public class InMemoryDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public void createBackup(String backupPath) throws IOException {
-        if (backupPath == null || backupPath.isEmpty()) {
-            throw new IllegalArgumentException("Backup path cannot be null or empty");
-        }
+        validateBackupPath(backupPath);
         
         File backupFile = new File(backupPath);
         File parentDir = backupFile.getParentFile();

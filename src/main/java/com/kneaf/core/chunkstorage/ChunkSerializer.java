@@ -6,7 +6,7 @@ import java.io.IOException;
 
 /**
  * Abstract serializer interface for converting LevelChunk to/from binary format.
- * Supports multiple serialization formats (NBT, MessagePack, etc.) for flexibility.
+ * Supports NBT serialization format for flexibility.
  */
 public interface ChunkSerializer {
     

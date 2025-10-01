@@ -1,65 +1,56 @@
 package com.kneaf.core.flatbuffers;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Manual binary serialization for MobData structures using ByteBuffer.
+ * Refactored binary serialization for MobData structures using generic BinarySerializer.
+ * Maintains same functionality and interface as original.
  */
 public class MobFlatBuffers {
     private MobFlatBuffers() {}
 
-    // Binary layout (little-endian):
-    // [tickCount:long][numMobs:int][mobs...][aiConfig:4 floats]
-    // Mob layout: [id:long][distance:float][isPassive:byte][etypeLen:int][etypeBytes]
+    // Field descriptors for MobData serialization
+    private static final List<BinarySerializer.FieldDescriptor<com.kneaf.core.data.MobData>> MOB_FIELD_DESCRIPTORS = List.of(
+        BinarySerializer.FieldDescriptor.longField(com.kneaf.core.data.MobData::id),
+        BinarySerializer.FieldDescriptor.floatField(m -> (float) m.distance()),
+        BinarySerializer.FieldDescriptor.byteField(m -> (byte) (m.isPassive() ? 1 : 0)),
+        BinarySerializer.FieldDescriptor.utf8StringField(com.kneaf.core.data.MobData::entityType)
+    );
 
+    // Config values for mob serialization
+    private static final List<Float> MOB_CONFIG_FLOATS = List.of(16.0f, 32.0f, 1.0f, 0.5f);
+
+    // Base size: tickCount(8) + numMobs(4) + config(4 floats = 16)
+    private static final int MOB_BASE_SIZE = 8 + 4 + 16;
+
+    /**
+     * Serializes mob input data using generic BinarySerializer.
+     * Maintains same binary format as original.
+     */
     public static ByteBuffer serializeMobInput(long tickCount, List<com.kneaf.core.data.MobData> mobs) {
-        int size = 8 + 4 + 16; // tick + num + config
-        for (com.kneaf.core.data.MobData m : mobs) {
-            byte[] et = m.entityType() != null ? m.entityType().getBytes(StandardCharsets.UTF_8) : new byte[0];
-            size += 8 + 4 + 1 + 4 + et.length;
-        }
-        ByteBuffer buf = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
-        buf.putLong(tickCount);
-        buf.putInt(mobs.size());
-        for (com.kneaf.core.data.MobData m : mobs) {
-            buf.putLong(m.id());
-            buf.putFloat((float) m.distance());
-            buf.put((byte) (m.isPassive() ? 1 : 0));
-            byte[] et = m.entityType() != null ? m.entityType().getBytes(StandardCharsets.UTF_8) : new byte[0];
-            buf.putInt(et.length);
-            if (et.length > 0) buf.put(et);
-        }
-        // ai config defaults
-        buf.putFloat(16.0f);
-        buf.putFloat(32.0f);
-        buf.putFloat(1.0f);
-        buf.putFloat(0.5f);
-        buf.flip();
-        return buf;
+        BinarySerializer.SerializationConfig<com.kneaf.core.data.MobData> config =
+            new BinarySerializer.SerializationConfig<>(MOB_BASE_SIZE, MOB_FIELD_DESCRIPTORS, MOB_CONFIG_FLOATS, null);
+        
+        return BinarySerializer.serializeList(tickCount, mobs, config, null);
     }
 
+    /**
+     * Deserializes mob process result using generic BinarySerializer.
+     * Maintains same binary format as original.
+     */
     public static List<com.kneaf.core.data.MobData> deserializeMobProcessResult(ByteBuffer buffer) {
-        buffer.order(ByteOrder.LITTLE_ENDIAN);
-        buffer.rewind();
-        int num = buffer.getInt();
-        List<com.kneaf.core.data.MobData> out = new ArrayList<>();
-        for (int i = 0; i < num; i++) {
-            long id = buffer.getLong();
-            float distance = buffer.getFloat();
-            boolean isPassive = buffer.get() != 0;
-            int etLen = buffer.getInt();
-            String etype = "";
-            if (etLen > 0) {
-                byte[] etb = new byte[etLen];
-                buffer.get(etb);
-                etype = new String(etb, StandardCharsets.UTF_8);
-            }
-            out.add(new com.kneaf.core.data.MobData(id, distance, isPassive, etype));
-        }
-        return out;
+        return BinarySerializer.deserializeList(buffer,
+            fieldValues -> {
+                // fieldValues order: id, distance, isPassive, entityType
+                long id = (Long) fieldValues[0];
+                float distance = (Float) fieldValues[1];
+                byte isPassiveByte = (Byte) fieldValues[2];
+                boolean isPassive = isPassiveByte != 0;
+                String entityType = (String) fieldValues[3];
+                return new com.kneaf.core.data.MobData(id, distance, isPassive, entityType);
+            },
+            MOB_FIELD_DESCRIPTORS);
     }
 }

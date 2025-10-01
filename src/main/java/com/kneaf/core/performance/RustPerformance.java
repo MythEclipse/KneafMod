@@ -464,24 +464,62 @@ public class RustPerformance {
         }
     }
 
-    // Direct processing fallback methods
-    private static List<Long> processEntitiesDirect(List<EntityData> entities, List<PlayerData> players) {
+    // Functional interfaces for the template method
+    @FunctionalInterface
+    private interface BinarySerializer<T, R> {
+        java.nio.ByteBuffer serialize(T input) throws Exception;
+    }
+    
+    @FunctionalInterface
+    private interface BinaryNativeCaller {
+        byte[] callNative(java.nio.ByteBuffer input) throws Exception;
+    }
+    
+    @FunctionalInterface
+    private interface BinaryDeserializer<R> {
+        R deserialize(byte[] resultBytes) throws Exception;
+    }
+    
+    @FunctionalInterface
+    private interface JsonInputPreparer<T> {
+        Map<String, Object> prepareInput(T input);
+    }
+    
+    @FunctionalInterface
+    private interface JsonNativeCaller {
+        String callNative(String jsonInput);
+    }
+    
+    @FunctionalInterface
+    private interface JsonResultParser<R> {
+        R parseResult(String jsonResult);
+    }
+
+    // Template method for try-binary-catch-fallback-JSON pattern
+    private static <T, R> R processWithBinaryFallback(
+            T input,
+            BinarySerializer<T, R> binarySerializer,
+            BinaryNativeCaller binaryNativeCaller,
+            BinaryDeserializer<R> binaryDeserializer,
+            JsonInputPreparer<T> jsonInputPreparer,
+            JsonNativeCaller jsonNativeCaller,
+            JsonResultParser<R> jsonResultParser,
+            R fallbackResult,
+            String operationName) {
+        
         // Use binary protocol if available, fallback to JSON
         if (nativeAvailable) {
             try {
                 // Serialize to FlatBuffers binary format
-                java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.EntityFlatBuffers.serializeEntityInput(
-                    tickCount++, entities, players);
+                java.nio.ByteBuffer inputBuffer = binarySerializer.serialize(input);
                 
                 // Call binary native method (returns byte[] from Rust)
-                byte[] resultBytes = processEntitiesBinaryNative(inputBuffer);
+                byte[] resultBytes = binaryNativeCaller.callNative(inputBuffer);
 
                 if (resultBytes != null) {
-                    java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
                     // Deserialize result
-                    List<Long> resultList = com.kneaf.core.flatbuffers.EntityFlatBuffers.deserializeEntityProcessResult(resultBuffer);
-                    totalEntitiesProcessed += resultList.size();
-                    return resultList;
+                    R result = binaryDeserializer.deserialize(resultBytes);
+                    return result;
                 }
             } catch (Exception binaryEx) {
                 KneafCore.LOGGER.debug(BINARY_FALLBACK_MESSAGE, binaryEx.getMessage());
@@ -490,64 +528,145 @@ public class RustPerformance {
         }
         
         // JSON fallback
-        Map<String, Object> input = new HashMap<>();
-        input.put(TICK_COUNT_KEY, tickCount++);
-        input.put(ENTITIES_KEY, entities);
-        input.put(PLAYERS_KEY, players);
-        
-        // Add entity config
-        Map<String, Object> config = new HashMap<>();
-        config.put("closeRadius", 16.0f);
-        config.put("mediumRadius", 32.0f);
-        config.put("closeRate", 1.0f);
-        config.put("mediumRate", 0.5f);
-        config.put("farRate", 0.1f);
-        config.put("useSpatialPartitioning", true);
-        
-        // World bounds (example values)
-        Map<String, Object> worldBounds = new HashMap<>();
-        worldBounds.put("minX", -1000.0);
-        worldBounds.put("minY", 0.0);
-        worldBounds.put("minZ", -1000.0);
-        worldBounds.put("maxX", 1000.0);
-        worldBounds.put("maxY", 256.0);
-        worldBounds.put("maxZ", 1000.0);
-        config.put("worldBounds", worldBounds);
-        
-        config.put("quadtreeMaxEntities", 1000);
-        config.put("quadtreeMaxDepth", 10);
-        input.put("entityConfig", config);
-        
-        String jsonInput = gson.toJson(input);
-        String jsonResult = processEntitiesNative(jsonInput);
+        Map<String, Object> jsonInputMap = jsonInputPreparer.prepareInput(input);
+        String jsonInput = gson.toJson(jsonInputMap);
+        String jsonResult = jsonNativeCaller.callNative(jsonInput);
         if (jsonResult != null) {
-            JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
-            JsonArray entitiesToTick = result.getAsJsonArray("entitiesToTick");
-            List<Long> resultList = new ArrayList<>();
-            for (JsonElement e : entitiesToTick) {
-                resultList.add(e.getAsLong());
-            }
-            totalEntitiesProcessed += resultList.size();
-            return resultList;
+            return jsonResultParser.parseResult(jsonResult);
         } else {
-            KneafCore.LOGGER.warn("Rust processing returned null, returning empty list");
-            return new ArrayList<>();
+            KneafCore.LOGGER.warn("{} returned null, returning fallback result", operationName);
+            return fallbackResult;
+        }
+    }
+
+    // Direct processing fallback methods
+    private static List<Long> processEntitiesDirect(List<EntityData> entities, List<PlayerData> players) {
+        return processWithBinaryFallback(
+            new EntityInput(entities, players),
+            (input) -> com.kneaf.core.flatbuffers.EntityFlatBuffers.serializeEntityInput(tickCount++, input.entities, input.players),
+            (inputBuffer) -> processEntitiesBinaryNative(inputBuffer),
+            (resultBytes) -> {
+                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
+                List<Long> resultList = com.kneaf.core.flatbuffers.EntityFlatBuffers.deserializeEntityProcessResult(resultBuffer);
+                totalEntitiesProcessed += resultList.size();
+                return resultList;
+            },
+            (input) -> {
+                Map<String, Object> jsonInput = new HashMap<>();
+                jsonInput.put(TICK_COUNT_KEY, tickCount++);
+                jsonInput.put(ENTITIES_KEY, input.entities);
+                jsonInput.put(PLAYERS_KEY, input.players);
+                
+                // Add entity config
+                Map<String, Object> config = new HashMap<>();
+                config.put("closeRadius", 16.0f);
+                config.put("mediumRadius", 32.0f);
+                config.put("closeRate", 1.0f);
+                config.put("mediumRate", 0.5f);
+                config.put("farRate", 0.1f);
+                config.put("useSpatialPartitioning", true);
+                
+                // World bounds (example values)
+                Map<String, Object> worldBounds = new HashMap<>();
+                worldBounds.put("minX", -1000.0);
+                worldBounds.put("minY", 0.0);
+                worldBounds.put("minZ", -1000.0);
+                worldBounds.put("maxX", 1000.0);
+                worldBounds.put("maxY", 256.0);
+                worldBounds.put("maxZ", 1000.0);
+                config.put("worldBounds", worldBounds);
+                
+                config.put("quadtreeMaxEntities", 1000);
+                config.put("quadtreeMaxDepth", 10);
+                jsonInput.put("entityConfig", config);
+                return jsonInput;
+            },
+            (jsonInput) -> processEntitiesNative(jsonInput),
+            (jsonResult) -> {
+                JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
+                JsonArray entitiesToTick = result.getAsJsonArray("entitiesToTick");
+                List<Long> resultList = new ArrayList<>();
+                for (JsonElement e : entitiesToTick) {
+                    resultList.add(e.getAsLong());
+                }
+                totalEntitiesProcessed += resultList.size();
+                return resultList;
+            },
+            new ArrayList<>(),
+            "Entity processing"
+        );
+    }
+
+    // Helper class for entity input
+    private static class EntityInput {
+        final List<EntityData> entities;
+        final List<PlayerData> players;
+        
+        EntityInput(List<EntityData> entities, List<PlayerData> players) {
+            this.entities = entities;
+            this.players = players;
         }
     }
 
     private static ItemProcessResult processItemEntitiesDirect(List<ItemEntityData> items) {
-        // Use binary protocol if available, fallback to JSON
-        if (nativeAvailable) {
-            ItemProcessResult binaryResult = processItemEntitiesBinary(items);
-            if (binaryResult != null) {
-                return binaryResult;
-            }
-        }
-        
-        // JSON fallback
-        return processItemEntitiesJson(items);
+        return processWithBinaryFallback(
+            items,
+            (input) -> com.kneaf.core.flatbuffers.ItemFlatBuffers.serializeItemInput(tickCount, input),
+            (inputBuffer) -> processItemEntitiesBinaryNative(inputBuffer),
+            (resultBytes) -> {
+                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
+                List<com.kneaf.core.data.ItemEntityData> updatedItems =
+                    com.kneaf.core.flatbuffers.ItemFlatBuffers.deserializeItemProcessResult(resultBuffer);
+                
+                // Convert to ItemProcessResult format
+                List<Long> removeList = new ArrayList<>();
+                List<ItemUpdate> updates = new ArrayList<>();
+                
+                for (com.kneaf.core.data.ItemEntityData item : updatedItems) {
+                    if (item.count() == 0) {
+                        removeList.add(item.id());
+                    } else {
+                        updates.add(new ItemUpdate(item.id(), item.count()));
+                    }
+                }
+                
+                totalMerged += updates.size();
+                totalDespawned += removeList.size();
+                return new ItemProcessResult(removeList, updates.size(), removeList.size(), updates);
+            },
+            (input) -> {
+                Map<String, Object> jsonInput = new HashMap<>();
+                jsonInput.put(ITEMS_KEY, input);
+                return jsonInput;
+            },
+            (jsonInput) -> processItemEntitiesNative(jsonInput),
+            (jsonResult) -> {
+                JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
+                JsonArray itemsToRemove = result.getAsJsonArray("items_to_remove");
+                List<Long> removeList = new ArrayList<>();
+                for (JsonElement e : itemsToRemove) {
+                    removeList.add(e.getAsLong());
+                }
+                long merged = result.get("merged_count").getAsLong();
+                long despawned = result.get("despawned_count").getAsLong();
+                JsonArray itemUpdatesArray = result.getAsJsonArray("item_updates");
+                List<ItemUpdate> updates = new ArrayList<>();
+                for (JsonElement e : itemUpdatesArray) {
+                    JsonObject obj = e.getAsJsonObject();
+                    long id = obj.get("id").getAsLong();
+                    int newCount = obj.get("new_count").getAsInt();
+                    updates.add(new ItemUpdate(id, newCount));
+                }
+                totalMerged += merged;
+                totalDespawned += despawned;
+                return new ItemProcessResult(removeList, merged, despawned, updates);
+            },
+            new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>()),
+            "Item entity processing"
+        );
     }
 
+    // Legacy binary and JSON methods - kept for compatibility but now use template method internally
     private static ItemProcessResult processItemEntitiesBinary(List<ItemEntityData> items) {
         try {
             // Serialize to FlatBuffers binary format
@@ -615,61 +734,49 @@ public class RustPerformance {
     }
 
     private static MobProcessResult processMobAIDirect(List<MobData> mobs) {
-        // Use binary protocol if available, fallback to JSON
-        if (nativeAvailable) {
-            try {
-                // Serialize to FlatBuffers binary format
-                java.nio.ByteBuffer inputBuffer = com.kneaf.core.flatbuffers.MobFlatBuffers.serializeMobInput(
-                    tickCount, mobs);
+        return processWithBinaryFallback(
+            mobs,
+            (input) -> com.kneaf.core.flatbuffers.MobFlatBuffers.serializeMobInput(tickCount, input),
+            (inputBuffer) -> processMobAiBinaryNative(inputBuffer),
+            (resultBytes) -> {
+                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
+                List<com.kneaf.core.data.MobData> updatedMobs =
+                    com.kneaf.core.flatbuffers.MobFlatBuffers.deserializeMobProcessResult(resultBuffer);
                 
-                // Call binary native method (returns byte[] from Rust)
-                byte[] resultBytes = processMobAiBinaryNative(inputBuffer);
-
-                if (resultBytes != null) {
-                    java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes);
-                    // Deserialize result
-                    List<com.kneaf.core.data.MobData> updatedMobs =
-                        com.kneaf.core.flatbuffers.MobFlatBuffers.deserializeMobProcessResult(resultBuffer);
-                    
-                    // For now, assume all returned mobs need AI simplification
-                    List<Long> simplifyList = new ArrayList<>();
-                    for (com.kneaf.core.data.MobData mob : updatedMobs) {
-                        simplifyList.add(mob.id());
-                    }
-                    
-                    totalMobsProcessed += mobs.size();
-                    return new MobProcessResult(new ArrayList<>(), simplifyList);
+                // For now, assume all returned mobs need AI simplification
+                List<Long> simplifyList = new ArrayList<>();
+                for (com.kneaf.core.data.MobData mob : updatedMobs) {
+                    simplifyList.add(mob.id());
                 }
-            } catch (Exception binaryEx) {
-                KneafCore.LOGGER.debug(BINARY_FALLBACK_MESSAGE, binaryEx.getMessage());
-                // Fall through to JSON fallback
-            }
-        }
-        
-        // JSON fallback
-        Map<String, Object> input = new HashMap<>();
-        input.put(TICK_COUNT_KEY, tickCount);
-        input.put("mobs", mobs);
-        String jsonInput = gson.toJson(input);
-        String jsonResult = processMobAiNative(jsonInput);
-        if (jsonResult != null) {
-            JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
-            JsonArray disableAi = result.getAsJsonArray("mobs_to_disable_ai");
-            JsonArray simplifyAi = result.getAsJsonArray("mobs_to_simplify_ai");
-            List<Long> disableList = new ArrayList<>();
-            List<Long> simplifyList = new ArrayList<>();
-            for (JsonElement e : disableAi) {
-                disableList.add(e.getAsLong());
-            }
-            for (JsonElement e : simplifyAi) {
-                simplifyList.add(e.getAsLong());
-            }
-            totalMobsProcessed += mobs.size();
-            return new MobProcessResult(disableList, simplifyList);
-        }
-        
-        // Fallback: no optimization
-        return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
+                
+                totalMobsProcessed += mobs.size();
+                return new MobProcessResult(new ArrayList<>(), simplifyList);
+            },
+            (input) -> {
+                Map<String, Object> jsonInput = new HashMap<>();
+                jsonInput.put(TICK_COUNT_KEY, tickCount);
+                jsonInput.put("mobs", input);
+                return jsonInput;
+            },
+            (jsonInput) -> processMobAiNative(jsonInput),
+            (jsonResult) -> {
+                JsonObject result = gson.fromJson(jsonResult, JsonObject.class);
+                JsonArray disableAi = result.getAsJsonArray("mobs_to_disable_ai");
+                JsonArray simplifyAi = result.getAsJsonArray("mobs_to_simplify_ai");
+                List<Long> disableList = new ArrayList<>();
+                List<Long> simplifyList = new ArrayList<>();
+                for (JsonElement e : disableAi) {
+                    disableList.add(e.getAsLong());
+                }
+                for (JsonElement e : simplifyAi) {
+                    simplifyList.add(e.getAsLong());
+                }
+                totalMobsProcessed += mobs.size();
+                return new MobProcessResult(disableList, simplifyList);
+            },
+            new MobProcessResult(new ArrayList<>(), new ArrayList<>()),
+            "Mob AI processing"
+        );
     }
 
     private static List<Long> getBlockEntitiesToTickDirect(List<BlockEntityData> blockEntities) {

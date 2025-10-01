@@ -11,7 +11,7 @@ import java.util.concurrent.CompletableFuture;
  * High-performance Rust-based database adapter implementation.
  * Provides native performance with checksum validation and thread-safe operations.
  */
-public class RustDatabaseAdapter implements DatabaseAdapter {
+public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
     private static final Logger LOGGER = LoggerFactory.getLogger(RustDatabaseAdapter.class);
     
     /**
@@ -62,12 +62,8 @@ public class RustDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public void putChunk(String key, byte[] data) throws IOException {
-        if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Key cannot be null or empty");
-        }
-        if (data == null || data.length == 0) {
-            throw new IllegalArgumentException("Data cannot be null or empty");
-        }
+        validateKey(key);
+        validateDataNotEmpty(data);
         
         try {
             boolean success = nativePutChunk(nativePointer, key, data);
@@ -81,9 +77,7 @@ public class RustDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public Optional<byte[]> getChunk(String key) throws IOException {
-        if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Key cannot be null or empty");
-        }
+        validateKey(key);
         
         try {
             byte[] data = nativeGetChunk(nativePointer, key);
@@ -95,9 +89,7 @@ public class RustDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public boolean deleteChunk(String key) throws IOException {
-        if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Key cannot be null or empty");
-        }
+        validateKey(key);
         
         try {
             return nativeDeleteChunk(nativePointer, key);
@@ -119,9 +111,7 @@ public class RustDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public boolean hasChunk(String key) throws IOException {
-        if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Key cannot be null or empty");
-        }
+        validateKey(key);
         
         try {
             return nativeHasChunk(nativePointer, key);
@@ -162,9 +152,7 @@ public class RustDatabaseAdapter implements DatabaseAdapter {
     
     @Override
     public void createBackup(String backupPath) throws IOException {
-        if (backupPath == null || backupPath.isEmpty()) {
-            throw new IllegalArgumentException("Backup path cannot be null or empty");
-        }
+        validateBackupPath(backupPath);
         
         try {
             boolean success = nativeCreateBackup(nativePointer, backupPath);

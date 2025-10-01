@@ -1,10 +1,16 @@
 package com.kneaf.core.chunkstorage;
 
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
 
@@ -57,16 +63,11 @@ public class NbtChunkSerializer implements ChunkSerializer {
             chunkData.putInt("zPos", chunk.getPos().z);
             chunkData.putString("status", chunk.getFullStatus().name());
             
-            // Save section data for non-empty sections
-            for (int y = chunk.getMinSection(); y < chunk.getMaxSection(); y++) {
-                if (!chunk.isSectionEmpty(y)) {
-                    String sectionKey = "section_" + y;
-                    CompoundTag sectionTag = new CompoundTag();
-                    sectionTag.putInt("y", y);
-                    // Note: Full section serialization would require more complex handling
-                    chunkData.put(sectionKey, sectionTag);
-                }
-            }
+            // Save section data for all sections
+            serializeChunkSections(chunk, chunkData);
+            
+            // Save heightmaps
+            serializeHeightmaps(chunk, chunkData);
             
             rootTag.put(TAG_CHUNK_DATA, chunkData);
             
@@ -202,6 +203,124 @@ public class NbtChunkSerializer implements ChunkSerializer {
         } finally {
             dis.close();
         }
+    }
+    
+    /**
+     * Serialize all chunk sections including block states and data.
+     * This method serializes each non-empty section with complete block data.
+     *
+     * @param chunk The chunk containing sections
+     * @param chunkData The compound tag to store section data in
+     */
+    private void serializeChunkSections(LevelChunk chunk, CompoundTag chunkData) {
+        ListTag sectionsList = new ListTag();
+        
+        for (int y = chunk.getMinSection(); y < chunk.getMaxSection(); y++) {
+            LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(y));
+            if (section != null && !section.hasOnlyAir()) {
+                CompoundTag sectionTag = new CompoundTag();
+                sectionTag.putInt("y", y);
+                
+                // Serialize block states
+                serializeBlockStates(section, sectionTag);
+                
+                // Serialize block light data if present
+                // Note: Light data is typically handled by the server's light engine
+                // and may not be directly accessible from the section
+                
+                sectionsList.add(sectionTag);
+            }
+        }
+        
+        chunkData.put("sections", sectionsList);
+    }
+    
+    /**
+     * Serialize block states for a chunk section.
+     * This method serializes all block states in the section using a compact format.
+     *
+     * @param section The chunk section containing block states
+     * @param sectionTag The compound tag to store block state data in
+     */
+    private void serializeBlockStates(LevelChunkSection section, CompoundTag sectionTag) {
+        ListTag blockStatesList = new ListTag();
+        
+        for (int x = 0; x < 16; x++) {
+            for (int y = 0; y < 16; y++) {
+                for (int z = 0; z < 16; z++) {
+                    BlockState blockState = section.getBlockState(x, y, z);
+                    if (!blockState.isAir()) {
+                        CompoundTag blockTag = new CompoundTag();
+                        blockTag.putInt("x", x);
+                        blockTag.putInt("y", y);
+                        blockTag.putInt("z", z);
+                        blockTag.putString("block", blockState.toString());
+                        blockStatesList.add(blockTag);
+                    }
+                }
+            }
+        }
+        
+        sectionTag.put("block_states", blockStatesList);
+    }
+    
+    /**
+     * Serialize heightmaps for the chunk.
+     * This method saves heightmap data for terrain generation.
+     *
+     * @param chunk The chunk containing heightmap data
+     * @param chunkData The compound tag to store heightmap data in
+     */
+    private void serializeHeightmaps(LevelChunk chunk, CompoundTag chunkData) {
+        CompoundTag heightmapsTag = new CompoundTag();
+        
+        // Serialize basic heightmap information
+        // Note: Heightmap data is typically stored within the chunk's internal structure
+        // and accessed during chunk serialization through Minecraft's built-in mechanisms
+        try {
+            // Store basic height information for the chunk
+            int minHeight = chunk.getMinBuildHeight();
+            int maxHeight = chunk.getMaxBuildHeight();
+            heightmapsTag.putInt("minHeight", minHeight);
+            heightmapsTag.putInt("maxHeight", maxHeight);
+            
+            // Store surface height information at key positions
+            // This provides basic terrain height data for reconstruction
+            for (int x = 0; x < 16; x += 4) {
+                for (int z = 0; z < 16; z += 4) {
+                    // Find surface height at this position
+                    int surfaceY = findSurfaceHeight(chunk, x, z, minHeight, maxHeight);
+                    String key = "height_" + x + "_" + z;
+                    heightmapsTag.putInt(key, surfaceY);
+                }
+            }
+        } catch (Exception e) {
+            // If heightmap access fails, log and continue
+            LOGGER.debug("Could not serialize heightmaps: {}", e.getMessage());
+        }
+        
+        chunkData.put("heightmaps", heightmapsTag);
+    }
+    
+    /**
+     * Find the surface height at a given position within the chunk.
+     * This method scans from top to bottom to find the first non-air block.
+     *
+     * @param chunk The chunk to search
+     * @param x Local x coordinate within chunk (0-15)
+     * @param z Local z coordinate within chunk (0-15)
+     * @param minHeight Minimum build height
+     * @param maxHeight Maximum build height
+     * @return The y-coordinate of the surface, or minHeight if no surface found
+     */
+    private int findSurfaceHeight(LevelChunk chunk, int x, int z, int minHeight, int maxHeight) {
+        for (int y = maxHeight - 1; y >= minHeight; y--) {
+            BlockPos pos = new BlockPos(chunk.getPos().getMinBlockX() + x, y, chunk.getPos().getMinBlockZ() + z);
+            if (!chunk.getBlockState(pos).isAir()) {
+                return y;
+            }
+        }
+        return minHeight;
     }
     
     /**
