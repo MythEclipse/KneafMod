@@ -572,6 +572,14 @@ public class RustPerformance {
                 }
 
                 if (resultBytes != null) {
+                    // Always log the raw bytes we received from native for easier debugging of protocol mismatches
+                    try {
+                        String recvPrefix = bytesPrefixHex(resultBytes, 64);
+                        KneafCore.LOGGER.debug("[BINARY] Received {} bytes from native; prefix={}", resultBytes.length, recvPrefix);
+                    } catch (Throwable t) {
+                        // Swallow logging failures to avoid interfering with normal fallback behavior
+                        KneafCore.LOGGER.debug("[BINARY] Failed to compute prefix for native result: {}", t.getMessage());
+                    }
                     try {
                         // Deserialize result
                         R result = binaryDeserializer.deserialize(resultBytes);
