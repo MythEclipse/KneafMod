@@ -919,11 +919,14 @@ public class PerformanceManager {
                 }
             }
             
-            // Process mobs to simplify AI
-            for (Integer id : simplifyAiIds) {
-                Entity entity = level.getEntity(id);
-                if (entity instanceof net.minecraft.world.entity.Mob) {
-                    LOGGER.debug("Simplifying AI for mob {}", id);
+            // Process mobs to simplify AI - only log if there are new additions
+            if (!simplifyAiIds.isEmpty()) {
+                for (Integer id : simplifyAiIds) {
+                    Entity entity = level.getEntity(id);
+                    if (entity instanceof net.minecraft.world.entity.Mob) {
+                        // Only log when there are actual new additions to the log
+                        LOGGER.debug("Simplifying AI for mob {}", id);
+                    }
                 }
             }
         }

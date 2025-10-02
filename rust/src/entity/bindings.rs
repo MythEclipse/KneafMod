@@ -88,8 +88,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
     input_buffer: JObject<'local>,
 ) -> jbyteArray {
     let logger = get_logger();
-    jni_log_debug!(logger, &mut env, "JNI", "processEntitiesBinaryNative called");
-
+    // Remove debug log to reduce noise - only log errors
     if input_buffer.is_null() {
         jni_log_error!(logger, &mut env, "JNI", "input_buffer is null");
         let error_msg = b"{\"error\":\"Input ByteBuffer is null\"}";
@@ -135,7 +134,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
     }
 
     let slice = unsafe { std::slice::from_raw_parts(data, capacity) };
-    jni_log_debug!(logger, &mut env, "JNI", &format!("Calling process_entities_binary_batch with slice length: {}", slice.len()));
+    // Remove debug log to reduce noise - only log warnings/errors
 
     if slice.is_empty() {
         jni_log_warn!(logger, &mut env, "JNI", "Empty slice, returning empty result");
@@ -168,7 +167,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
 /// Process entities from binary input in batches for better JNI performance
 fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8>, String> {
     let logger = get_logger();
-    jni_log_debug!(logger, env, "BINARY", &format!("process_entities_binary_batch called with data length: {}", data.len()));
+    // Remove debug log to reduce noise - only log warnings/errors
 
     if data.is_empty() {
         jni_log_warn!(logger, env, "BINARY", "Empty input data, returning empty result");
@@ -259,7 +258,7 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
     // produce alignment/Unaligned errors when the probe mis-identifies the layout.
     // To avoid noisy errors and unnecessary failed parse attempts, skip the FlatBuffers
     // fast-path entirely and use the manual deserializer directly.
-    jni_log_debug!(logger, env, "BINARY", "Using manual binary deserializer for entity input");
+    // Remove debug log to reduce noise - only log errors
 
     // Manual deserialization fallback. Build a Result here and return it once so we
     // avoid early `return` calls inside the match (which made subsequent code unreachable).
@@ -273,12 +272,7 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
             for entity_id in &entities_to_tick {
                 result.extend_from_slice(&entity_id.to_le_bytes());
             }
-            // Log header values and a short hex prefix of the result for diagnostics before returning to Java
-            let num_items = entities_to_tick.len();
-            jni_log_debug!(logger, env, "BINARY", &format!("Manual fallback successful: num_items={} result_len={}", num_items, 4 + num_items * 8));
-            let prefix_len = std::cmp::min(result.len(), 32);
-            let prefix_hex: String = result.iter().take(prefix_len).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
-            jni_log_debug!(logger, env, "BINARY", &format!("Manual fallback prefix={}", prefix_hex));
+            // Remove debug logs to reduce noise - only log errors
             Ok(result)
         },
         Err(manual_err) => {
