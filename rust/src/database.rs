@@ -914,7 +914,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
     match adapter.get_stats() {
         Ok(stats) => {
             // Create a Java DatabaseStats object with extended swap metrics
-            let stats_class = env.find_class("com/kneaf/core/chunkstorage/DatabaseStats")
+            let stats_class = env.find_class("com/kneaf/core/chunkstorage/DatabaseAdapter$DatabaseStats")
                 .expect("Failed to find DatabaseStats class");
             
             env.new_object(

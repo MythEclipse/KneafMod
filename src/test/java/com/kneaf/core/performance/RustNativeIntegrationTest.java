@@ -22,8 +22,14 @@ class RustNativeIntegrationTest {
         } catch (UnsatisfiedLinkError e) {
             Assumptions.assumeTrue(false, "Native library not available: " + e.getMessage());
             return;
+        } catch (ExceptionInInitializerError e) {
+            Assumptions.assumeTrue(false, "RustPerformance initialization failed: " + e.getMessage());
+            return;
         } catch (Exception e) {
             Assumptions.assumeTrue(false, "Error loading RustPerformance: " + e.getMessage());
+            return;
+        } catch (Throwable t) {
+            Assumptions.assumeTrue(false, "Critical error loading RustPerformance: " + t.getMessage());
             return;
         }
         

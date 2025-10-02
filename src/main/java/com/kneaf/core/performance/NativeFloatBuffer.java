@@ -26,6 +26,10 @@ public final class NativeFloatBuffer implements AutoCloseable {
             Class.forName("com.kneaf.core.performance.RustPerformance");
         } catch (ClassNotFoundException e) {
             System.err.println("RustPerformance class not found, native float buffer operations may fail");
+        } catch (ExceptionInInitializerError e) {
+            System.err.println("RustPerformance initialization failed, native float buffer operations disabled: " + e.getMessage());
+        } catch (Throwable t) {
+            System.err.println("Unexpected error during NativeFloatBuffer static initialization: " + t.getMessage());
         }
     }
     
@@ -108,6 +112,9 @@ public final class NativeFloatBuffer implements AutoCloseable {
             try {
                 RustPerformance.freeFloatBufferNative(buf);
                 totalFrees.incrementAndGet();
+            } catch (UnsatisfiedLinkError e) {
+                // Native library not available, buffer will be freed by GC
+                System.err.println("Native library not available for buffer free: " + e.getMessage());
             } catch (Exception e) {
                 System.err.println("Error freeing native buffer: " + e.getMessage());
             }
@@ -233,6 +240,11 @@ public final class NativeFloatBuffer implements AutoCloseable {
                     totalFrees.incrementAndGet();
                     size.decrementAndGet();
                     currentSize--;
+                } catch (UnsatisfiedLinkError e) {
+                    // Native library not available, buffer will be freed by GC
+                    System.err.println("Native library not available during cleanup: " + e.getMessage());
+                    size.decrementAndGet();
+                    currentSize--;
                 } catch (Exception e) {
                     System.err.println("Error freeing native buffer during cleanup: " + e.getMessage());
                 }
@@ -273,21 +285,35 @@ public final class NativeFloatBuffer implements AutoCloseable {
             }
             
             // Allocate new buffer
-            NativeFloatBufferAllocation alloc = RustPerformance.generateFloatBufferWithShapeNative(rows, cols);
-            if (alloc == null) return null;
-            
-            totalAllocations.incrementAndGet();
-            int bucketIndex = usePool ? getBucketIndex(alloc.getBuffer().capacity()) : -1;
-            return new NativeFloatBuffer(alloc.getBuffer(), alloc.getRows(), alloc.getCols(), usePool, bucketIndex);
-            
+            try {
+                NativeFloatBufferAllocation alloc = RustPerformance.generateFloatBufferWithShapeNative(rows, cols);
+                if (alloc == null) return null;
+                
+                totalAllocations.incrementAndGet();
+                int bucketIndex = usePool ? getBucketIndex(alloc.getBuffer().capacity()) : -1;
+                return new NativeFloatBuffer(alloc.getBuffer(), alloc.getRows(), alloc.getCols(), usePool, bucketIndex);
+            } catch (UnsatisfiedLinkError e) {
+                // Fallback to older API
+                try {
+                    ByteBuffer b = RustPerformance.generateFloatBufferNative(rows, cols);
+                    if (b == null) return null;
+                    
+                    totalAllocations.incrementAndGet();
+                    int bucketIndex = usePool ? getBucketIndex(b.capacity()) : -1;
+                    return new NativeFloatBuffer(b, rows, cols, usePool, bucketIndex);
+                } catch (UnsatisfiedLinkError e2) {
+                    // Native library not available
+                    System.err.println("Native library not available for buffer allocation: " + e2.getMessage());
+                    return null;
+                }
+            } catch (Exception e) {
+                System.err.println("Error allocating native buffer: " + e.getMessage());
+                return null;
+            }
         } catch (UnsatisfiedLinkError e) {
-            // Fallback to older API
-            ByteBuffer b = RustPerformance.generateFloatBufferNative(rows, cols);
-            if (b == null) return null;
-            
-            totalAllocations.incrementAndGet();
-            int bucketIndex = usePool ? getBucketIndex(b.capacity()) : -1;
-            return new NativeFloatBuffer(b, rows, cols, usePool, bucketIndex);
+            // Native library not available
+            System.err.println("Native library not available for buffer allocation: " + e.getMessage());
+            return null;
         }
     }
 
@@ -457,6 +483,9 @@ public final class NativeFloatBuffer implements AutoCloseable {
                     try {
                         RustPerformance.freeFloatBufferNative(pooled.buffer);
                         totalFrees.incrementAndGet();
+                    } catch (UnsatisfiedLinkError e) {
+                        // Native library not available, buffer will be freed by GC
+                        System.err.println("Native library not available during pool clear: " + e.getMessage());
                     } catch (Exception e) {
                         System.err.println("Error freeing native buffer during pool clear: " + e.getMessage());
                     }

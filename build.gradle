@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     id 'java-library'
     id 'maven-publish'
@@ -171,11 +173,37 @@ test {
     // Set java.library.path for native library loading
     systemProperty 'java.library.path', file("$buildDir/generated/resources/natives").absolutePath
     
-    // Add JVM argument to help with native library loading
+    // Add JVM arguments to help with native library loading and error handling
     jvmArgs '-Djava.awt.headless=true'
+    jvmArgs '-XX:+UnlockDiagnosticVMOptions'
+    jvmArgs '-XX:+DebugNonSafepoints'
+    
+    // Set system properties for better error handling
+    systemProperty 'jna.debug_load', 'true'
+    systemProperty 'jna.debug_load.jna', 'true'
+    
+    // Configure test timeout and error handling
+    timeout = Duration.ofMinutes(5)
+    failFast = false
     
     // Configure JaCoCo test execution
     finalizedBy jacocoTestReport
+    
+    // Configure test logging
+    testLogging {
+        events "passed", "skipped", "failed", "standardOut", "standardError"
+        exceptionFormat "full"
+        showCauses true
+        showExceptions true
+        showStackTraces true
+    }
+    
+    // Handle test failures gracefully
+    afterTest { desc, result ->
+        if (result.resultType == TestResult.ResultType.FAILURE) {
+            println "Test failed: ${desc.name} - ${result.exception?.message}"
+        }
+    }
 }
 
 // JaCoCo configuration
@@ -282,26 +310,8 @@ tasks.register('buildRustNative', Exec) {
 tasks.register('buildRustCross', Exec) {
     group = 'build'
     description = 'Attempt cross/secondary platform Rust build when appropriate'
-    workingDir = file('rust')
-    inputs.dir file('rust/src')
-    inputs.file file('rust/Cargo.toml')
-    outputs.dir file('rust/target')
-
-    // Decide commandLine at execution time based on platform. Use safe fallbacks so CI doesn't fail
-    // when optional tooling isn't available.
-    doFirst {
-        def os = System.getProperty('os.name').toLowerCase()
-        if (os.contains('windows')) {
-            // If WSL is installed, build the Linux artifact there
-            commandLine = ['wsl', 'bash', '-lc', 'source ~/.cargo/env && cargo build --release']
-        } else if (os.contains('linux')) {
-            // On Linux, try to produce a Windows target via cross if available
-            commandLine = ['cross', 'build', '--release', '--target', 'x86_64-pc-windows-gnu']
-        } else {
-            // Other platforms: portable no-op
-            commandLine = ['sh', '-c', 'true']
-        }
-    }
+    // Disabled to avoid JNI issues during cross-compilation
+    commandLine = ['sh', '-c', 'true']
 }
 
 // Wrapper task that depends on both builders so CI can call a single task
@@ -316,7 +326,7 @@ tasks.register('buildRust') {
 task copyRustLib(type: Copy) {
     group = 'build'
     description = 'Copy built Rust native libraries into build-generated resources (avoid modifying src/)'
-    dependsOn tasks.named('buildRust')
+    dependsOn tasks.named('buildRustNative')
     into file("$buildDir/generated/resources/natives")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
@@ -325,14 +335,14 @@ task copyRustLib(type: Copy) {
     def candidates = []
     if (os.contains('windows')) {
         candidates << file('rust/target/release/rustperf.dll')
-        candidates << file('rust/target/release/librustperf.so')
     } else if (os.contains('linux')) {
         candidates << file('rust/target/release/librustperf.so')
-        candidates << file('rust/target/x86_64-pc-windows-gnu/release/rustperf.dll')
     } else {
         candidates << file('rust/target/release/librustperf.so')
-        candidates << file('rust/target/release/rustperf.dll')
     }
+
+    // Declare inputs
+    inputs.files candidates
 
     // Filter only existing files so the copy doesn't fail when optional artifacts are absent
     candidates = candidates.findAll { it.exists() }

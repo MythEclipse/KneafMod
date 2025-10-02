@@ -164,44 +164,47 @@ public class RustPerformance {
 
     static {
         try {
-            // Attempt to load library normally; fallback handled elsewhere
-            System.loadLibrary("rustperf");
-            nativeAvailable = true;
-            KneafCore.LOGGER.info("Successfully loaded rustperf native library");
-        } catch (UnsatisfiedLinkError e) {
-            KneafCore.LOGGER.info("rustperf native library not loaded via System.loadLibrary: {}", e.getMessage());
-            nativeAvailable = false;
+            // Use NativeLibraryLoader for robust loading with fallbacks
+            if (NativeLibraryLoader.loadNativeLibrary()) {
+                nativeAvailable = true;
+                KneafCore.LOGGER.info("Successfully loaded rustperf native library");
+            } else {
+                nativeAvailable = false;
+                KneafCore.LOGGER.info("rustperf native library not loaded via NativeLibraryLoader");
+            }
         } catch (Exception e) {
             KneafCore.LOGGER.warn("Unexpected error loading rustperf native library: {}", e.getMessage());
+            nativeAvailable = false;
+        } catch (Throwable t) {
+            // Catch any other throwable to prevent ExceptionInInitializerError
+            KneafCore.LOGGER.warn("Critical error loading rustperf native library: {}", t.getMessage());
             nativeAvailable = false;
         }
     }
 
     static {
-        KneafCore.LOGGER.info("Initializing RustPerformance native library");
-        try {
-            // Extract the native library from the JAR and load it
-            String libName = "rustperf.dll";
-            String resourcePath = "natives/" + libName;
-            KneafCore.LOGGER.info("Loading native library from resource path: {}", resourcePath);
-            InputStream in = RustPerformance.class.getClassLoader().getResourceAsStream(resourcePath);
-            if (in == null) {
-                KneafCore.LOGGER.warn("Native library not found in resources: {}. Native optimizations disabled.", resourcePath);
+        KneafCore.LOGGER.info("Initializing RustPerformance native library - secondary initializer");
+        // Only proceed if library is not already loaded by the first initializer
+        if (!nativeAvailable) {
+            try {
+                // Try additional loading strategies if the first initializer failed
+                if (NativeLibraryLoader.loadNativeLibrary()) {
+                    nativeAvailable = true;
+                    KneafCore.LOGGER.info("Successfully loaded rustperf native library via secondary initializer");
+                } else {
+                    KneafCore.LOGGER.warn("Native library not available via secondary initializer");
+                    nativeAvailable = false;
+                }
+            } catch (Exception e) {
+                KneafCore.LOGGER.warn("Failed to initialize Rust native library in secondary initializer: {}. Native optimizations disabled.", e.getMessage());
                 nativeAvailable = false;
-            } else {
-                KneafCore.LOGGER.info("Found native library resource, extracting to temp directory");
-                Path tempDir = Files.createTempDirectory("kneafcore-natives");
-                Path tempFile = tempDir.resolve(libName);
-                Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
-                in.close();
-                KneafCore.LOGGER.info("Extracted native library to: {}", tempFile.toAbsolutePath());
-                tryLoadNative(tempFile);
-                tempFile.toFile().deleteOnExit();
-                tempDir.toFile().deleteOnExit();
+            } catch (Throwable t) {
+                // Catch any other throwable to prevent ExceptionInInitializerError
+                KneafCore.LOGGER.warn("Critical error in secondary initializer: {}. Native optimizations disabled.", t.getMessage());
+                nativeAvailable = false;
             }
-        } catch (Exception e) {
-            KneafCore.LOGGER.warn("Failed to initialize Rust native library: {}. Native optimizations disabled.", e.getMessage());
-            nativeAvailable = false;
+        } else {
+            KneafCore.LOGGER.info("Native library already loaded, skipping secondary initialization");
         }
     }
 

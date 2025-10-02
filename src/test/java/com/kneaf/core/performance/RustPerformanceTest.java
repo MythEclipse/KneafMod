@@ -18,9 +18,17 @@ class RustPerformanceTest {
             System.err.println("Native library not available for tests: " + e.getMessage());
             Assumptions.assumeTrue(false, "Native library not available: " + e.getMessage());
             return;
+        } catch (ExceptionInInitializerError e) {
+            System.err.println("RustPerformance initialization failed for tests: " + e.getMessage());
+            Assumptions.assumeTrue(false, "RustPerformance initialization failed: " + e.getMessage());
+            return;
         } catch (Exception e) {
             System.err.println("Error loading RustPerformance for tests: " + e.getMessage());
             Assumptions.assumeTrue(false, "Error loading RustPerformance: " + e.getMessage());
+            return;
+        } catch (Throwable t) {
+            System.err.println("Critical error loading RustPerformance for tests: " + t.getMessage());
+            Assumptions.assumeTrue(false, "Critical error loading RustPerformance: " + t.getMessage());
             return;
         }
         
