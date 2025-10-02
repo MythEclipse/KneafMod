@@ -78,3 +78,48 @@
 [PROFILING_SUMMARY] Processed 1 items in 1 chunks (total: 0.42ms). Operations: grouping=0, merging=0, filtering=0, sorting=1, despawning=0
 [THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
 [WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[PROFILING_SUMMARY] Processed 1 items in 1 chunks (total: 0.60ms). Operations: grouping=0, merging=0, filtering=0, sorting=0, despawning=0
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[PROFILING_SUMMARY] Processed 1 items in 1 chunks (total: 0.98ms). Operations: grouping=0, merging=0, filtering=0, sorting=0, despawning=1
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[PROFILING_SUMMARY] Processed 1 items in 1 chunks (total: 1.06ms). Operations: grouping=0, merging=1, filtering=0, sorting=0, despawning=1
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
+[THREAD_POOL] Configured Rayon with 40 threads (CPU cores: 20)
+[WORKLOAD_ADAPTATION] Workload: 1 items, Optimal threads: 1, Active: 1, Utilization: 2.5%
