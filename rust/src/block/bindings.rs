@@ -2,8 +2,16 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteBuffer, JObject};
 use jni::sys::{jstring, jbyteArray};
 
-
 use crate::block::processing::process_block_entities_binary_batch;
+use crate::logging::JniLogger;
+use crate::{jni_log_debug, jni_log_error};
+use std::sync::OnceLock;
+
+static LOGGER: OnceLock<JniLogger> = OnceLock::new();
+
+fn get_logger() -> &'static JniLogger {
+    LOGGER.get_or_init(|| JniLogger::new("block"))
+}
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBlockEntitiesNative(
@@ -11,72 +19,94 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBl
     _class: JClass,
     json_input: JString,
 ) -> jstring {
-    // Helper to create a jstring containing a JSON error message. If creation fails, return null.
-    fn make_error(env: &JNIEnv, msg: &str) -> jstring {
-        match env.new_string(msg) {
-            Ok(s) => s.into_raw(),
-            Err(_) => std::ptr::null_mut(),
-        }
-    }
+    let logger = get_logger();
+    jni_log_debug!(logger, &mut env, "JNI", "processBlockEntitiesNative called");
 
     let input_str = match env.get_string(&json_input) {
         Ok(s) => match s.to_str() {
             Ok(st) => st.to_owned(),
-            Err(e) => return make_error(&env, &format!("{{\"error\":\"Invalid UTF-8 input: {}\"}}", e)),
+            Err(e) => {
+                let error_msg = format!("{{\"error\":\"Invalid UTF-8 input: {}\"}}", e);
+                jni_log_error!(logger, &mut env, "JNI", &format!("Invalid UTF-8 input: {}", e));
+                return crate::logging::make_jni_error(&env, &error_msg);
+            },
         },
-        Err(e) => return make_error(&env, &format!("{{\"error\":\"Failed to read input string: {}\"}}", e)),
+        Err(e) => {
+            let error_msg = format!("{{\"error\":\"Failed to read input string: {}\"}}", e);
+            jni_log_error!(logger, &mut env, "JNI", &format!("Failed to read input string: {}", e));
+            return crate::logging::make_jni_error(&env, &error_msg);
+        }
     };
 
+    jni_log_debug!(logger, &mut env, "JNI", &format!("Processing block entities JSON with input length: {}", input_str.len()));
     match crate::block::processing::process_block_entities_json(&input_str) {
-        Ok(result_json) => match env.new_string(result_json) {
-            Ok(s) => s.into_raw(),
-            Err(_) => std::ptr::null_mut(),
+        Ok(result_json) => {
+            jni_log_debug!(logger, &mut env, "JNI", &format!("process_block_entities_json succeeded, result length: {}", result_json.len()));
+            match env.new_string(result_json) {
+                Ok(s) => s.into_raw(),
+                Err(e) => {
+                    jni_log_error!(logger, &mut env, "JNI", &format!("Failed to create JString from result: {:?}", e));
+                    std::ptr::null_mut()
+                }
+            }
         },
-        Err(e) => make_error(&env, &format!("{{\"error\":\"{}\"}}", e)),
+        Err(e) => {
+            jni_log_error!(logger, &mut env, "JNI", &format!("process_block_entities_json failed: {}", e));
+            let error_msg = format!("{{\"error\":\"{}\"}}", e);
+            crate::logging::make_jni_error(&env, &error_msg)
+        }
     }
 }
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processBlockEntitiesBinaryNative<'local>(
-    env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     input_buffer: JObject<'local>,
 ) -> jbyteArray {
+    let logger = get_logger();
+    jni_log_debug!(logger, &mut env, "JNI", "processBlockEntitiesBinaryNative called");
+
     // Get direct access to the ByteBuffer data
     let input_buffer = JByteBuffer::from(input_buffer);
     let data = match env.get_direct_buffer_address(&input_buffer) {
         Ok(data) => data,
-        Err(_) => {
+        Err(e) => {
+            jni_log_error!(logger, &mut env, "JNI", &format!("Failed to get direct buffer address: {:?}", e));
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
-            return match env.byte_array_from_slice(error_msg) {
-                Ok(arr) => arr.into_raw(),
-                Err(_) => std::ptr::null_mut(),
-            };
+            return crate::logging::make_jni_error_bytes(&env, error_msg);
         }
     };
 
     let capacity = match env.get_direct_buffer_capacity(&input_buffer) {
         Ok(capacity) => capacity,
-        Err(_) => {
+        Err(e) => {
+            jni_log_error!(logger, &mut env, "JNI", &format!("Failed to get ByteBuffer capacity: {:?}", e));
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
-            return match env.byte_array_from_slice(error_msg) {
-                Ok(arr) => arr.into_raw(),
-                Err(_) => std::ptr::null_mut(),
-            };
+            return crate::logging::make_jni_error_bytes(&env, error_msg);
         }
     };
 
+    jni_log_debug!(logger, &mut env, "JNI", &format!("ByteBuffer capacity: {}", capacity));
     let slice = unsafe {
         std::slice::from_raw_parts(data, capacity)
     };
 
+    jni_log_debug!(logger, &mut env, "JNI", &format!("Processing binary data with slice length: {}", slice.len()));
     // Process binary data in batches for better JNI performance
     match process_block_entities_binary_batch(slice) {
-        Ok(result) => match env.byte_array_from_slice(&result) {
-            Ok(arr) => arr.into_raw(),
-            Err(_) => std::ptr::null_mut(),
+        Ok(result) => {
+            jni_log_debug!(logger, &mut env, "JNI", &format!("process_block_entities_binary_batch succeeded, result length: {}", result.len()));
+            match env.byte_array_from_slice(&result) {
+                Ok(arr) => arr.into_raw(),
+                Err(e) => {
+                    jni_log_error!(logger, &mut env, "JNI", &format!("Failed to create byte array from result: {:?}", e));
+                    std::ptr::null_mut()
+                }
+            }
         },
         Err(e) => {
+            jni_log_error!(logger, &mut env, "JNI", &format!("process_block_entities_binary_batch failed: {}", e));
             let error_msg = format!("{{\"error\":\"{}\"}}", e);
             match env.byte_array_from_slice(error_msg.as_bytes()) {
                 Ok(arr) => arr.into_raw(),

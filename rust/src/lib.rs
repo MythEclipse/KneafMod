@@ -8,6 +8,7 @@
 
 
 // Module declarations
+pub mod arena;
 pub mod entity;
 pub mod item;
 pub mod mob;

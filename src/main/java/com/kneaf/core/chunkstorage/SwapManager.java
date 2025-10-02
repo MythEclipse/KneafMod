@@ -3,7 +3,7 @@ package com.kneaf.core.chunkstorage;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.slf4j.Logger;
-import com.mojang.logging.LogUtils;
+import org.slf4j.LoggerFactory;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Coordinates between cache, database, and memory pools to optimize memory usage.
  */
 public class SwapManager {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(SwapManager.class);
     
     // Memory pressure thresholds (as percentages of max heap)
     private static final double CRITICAL_MEMORY_THRESHOLD = 0.95; // 95% of max heap

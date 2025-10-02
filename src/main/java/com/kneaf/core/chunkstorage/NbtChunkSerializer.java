@@ -98,10 +98,20 @@ public class NbtChunkSerializer implements ChunkSerializer {
                 chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
             throw new IOException(String.format("Invalid chunk data at (%d, %d): %s",
                 chunk.getPos().x, chunk.getPos().z, e.getMessage()), e);
-        } catch (Exception e) {
-            LOGGER.error("Unexpected error while serializing chunk at ({}, {}): {} - {}",
+        } catch (SecurityException e) {
+            LOGGER.error("Security violation while serializing chunk at ({}, {}): {} - {}",
                 chunk.getPos().x, chunk.getPos().z, e.getClass().getSimpleName(), e.getMessage(), e);
-            throw new IOException(String.format("Unexpected error serializing chunk at (%d, %d): %s",
+            throw new IOException(String.format("Security error serializing chunk at (%d, %d): %s",
+                chunk.getPos().x, chunk.getPos().z, e.getMessage()), e);
+        } catch (OutOfMemoryError e) {
+            LOGGER.error("Out of memory while serializing chunk at ({}, {}): {} - {}",
+                chunk.getPos().x, chunk.getPos().z, e.getClass().getSimpleName(), e.getMessage());
+            throw new IOException(String.format("Memory error serializing chunk at (%d, %d): %s",
+                chunk.getPos().x, chunk.getPos().z, e.getMessage()), e);
+        } catch (StackOverflowError e) {
+            LOGGER.error("Stack overflow while serializing chunk at ({}, {}): {} - {}",
+                chunk.getPos().x, chunk.getPos().z, e.getClass().getSimpleName(), e.getMessage());
+            throw new IOException(String.format("Stack overflow error serializing chunk at (%d, %d): %s",
                 chunk.getPos().x, chunk.getPos().z, e.getMessage()), e);
         }
     }
@@ -154,10 +164,14 @@ public class NbtChunkSerializer implements ChunkSerializer {
         } catch (IllegalArgumentException e) {
             LOGGER.error("Invalid data format while deserializing chunk: {}", e.getMessage(), e);
             throw new IOException("Invalid chunk data format: " + e.getMessage(), e);
-        } catch (Exception e) {
-            LOGGER.error("Unexpected error while deserializing chunk data: {} - {}",
+        } catch (SecurityException e) {
+            LOGGER.error("Security violation while deserializing chunk data: {} - {}",
                 e.getClass().getSimpleName(), e.getMessage(), e);
-            throw new IOException("Unexpected error deserializing chunk data: " + e.getMessage(), e);
+            throw new IOException("Security error deserializing chunk data: " + e.getMessage(), e);
+        } catch (OutOfMemoryError e) {
+            LOGGER.error("Out of memory while deserializing chunk data: {} - {}",
+                e.getClass().getSimpleName(), e.getMessage());
+            throw new IOException("Memory error deserializing chunk data: " + e.getMessage(), e);
         }
     }
     
@@ -270,8 +284,9 @@ public class NbtChunkSerializer implements ChunkSerializer {
      *
      * @param chunk The chunk containing heightmap data
      * @param chunkData The compound tag to store heightmap data in
+     * @throws IOException if heightmap serialization fails critically
      */
-    private void serializeHeightmaps(LevelChunk chunk, CompoundTag chunkData) {
+    private void serializeHeightmaps(LevelChunk chunk, CompoundTag chunkData) throws IOException {
         CompoundTag heightmapsTag = new CompoundTag();
         
         // Serialize basic heightmap information
@@ -294,9 +309,26 @@ public class NbtChunkSerializer implements ChunkSerializer {
                     heightmapsTag.putInt(key, surfaceY);
                 }
             }
-        } catch (Exception e) {
-            // If heightmap access fails, log and continue
-            LOGGER.debug("Could not serialize heightmaps: {}", e.getMessage());
+        } catch (NullPointerException e) {
+            // Handle null chunk or heightmap data access
+            LOGGER.warn("Null pointer while serializing heightmaps for chunk at ({}, {}): {}",
+                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
+            throw new IOException("Heightmap data is corrupted or inaccessible", e);
+        } catch (IllegalArgumentException e) {
+            // Handle invalid height values or coordinates
+            LOGGER.error("Invalid heightmap data for chunk at ({}, {}): {}",
+                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
+            throw new IOException("Invalid heightmap configuration", e);
+        } catch (IndexOutOfBoundsException e) {
+            // Handle coordinate out of bounds during height calculation
+            LOGGER.error("Coordinate out of bounds while serializing heightmaps for chunk at ({}, {}): {}",
+                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
+            throw new IOException("Heightmap coordinate validation failed", e);
+        } catch (UnsupportedOperationException e) {
+            // Handle unsupported operations on chunk data
+            LOGGER.error("Unsupported operation while accessing heightmap data for chunk at ({}, {}): {}",
+                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
+            throw new IOException("Heightmap operation not supported", e);
         }
         
         chunkData.put("heightmaps", heightmapsTag);

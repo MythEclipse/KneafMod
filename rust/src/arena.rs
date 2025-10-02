@@ -1,14 +1,67 @@
-use std::alloc::{alloc, dealloc, Layout};
-use std::cell::UnsafeCell;
+use std::alloc::{alloc, Layout};
 use std::ptr::NonNull;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use log::debug;
+use std::slice;
+
+/// Safe wrapper for memory chunk operations
+#[derive(Debug)]
+struct SafeChunk {
+    /// Pointer to the start of the chunk
+    ptr: NonNull<u8>,
+    /// Current position in the chunk (offset from start)
+    current_offset: usize,
+    /// Total size of the chunk
+    size: usize,
+}
+
+impl SafeChunk {
+    /// Create a new safe chunk from raw allocation
+    fn new(ptr: NonNull<u8>, size: usize) -> Self {
+        Self {
+            ptr,
+            current_offset: 0,
+            size,
+        }
+    }
+
+    /// Get the current pointer position
+    fn current_ptr(&self) -> *mut u8 {
+        unsafe { self.ptr.as_ptr().add(self.current_offset) }
+    }
+
+    /// Get the end pointer of the chunk
+    fn end_ptr(&self) -> *mut u8 {
+        unsafe { self.ptr.as_ptr().add(self.size) }
+    }
+
+    /// Check if we have enough space for allocation
+    fn has_space(&self, size: usize, align: usize) -> bool {
+        let align_mask = align - 1;
+        let aligned_offset = (self.current_offset + align_mask) & !align_mask;
+        let new_offset = aligned_offset + size;
+        new_offset <= self.size
+    }
+
+    /// Allocate memory from this chunk
+    fn allocate(&mut self, size: usize, align: usize) -> Option<*mut u8> {
+        let align_mask = align - 1;
+        let aligned_offset = (self.current_offset + align_mask) & !align_mask;
+        let new_offset = aligned_offset + size;
+
+        if new_offset <= self.size {
+            self.current_offset = new_offset;
+            Some(unsafe { self.ptr.as_ptr().add(aligned_offset) })
+        } else {
+            None
+        }
+    }
+}
 
 /// A fast bump allocator for temporary allocations
 pub struct BumpArena {
     /// The current chunk of memory we're allocating from
-    current: UnsafeCell<Chunk>,
+    current: Mutex<SafeChunk>,
     /// Size of chunks to allocate
     chunk_size: usize,
     /// Total bytes allocated
@@ -17,68 +70,44 @@ pub struct BumpArena {
     total_used: AtomicUsize,
 }
 
-struct Chunk {
-    /// Pointer to the start of the chunk
-    ptr: NonNull<u8>,
-    /// Current position in the chunk
-    current: *mut u8,
-    /// End of the chunk
-    end: *mut u8,
-}
-
-unsafe impl Send for Chunk {}
-unsafe impl Sync for Chunk {}
+unsafe impl Send for SafeChunk {}
+unsafe impl Sync for SafeChunk {}
 
 impl BumpArena {
     /// Create a new bump arena with the specified chunk size
     pub fn new(chunk_size: usize) -> Self {
         let chunk_size = chunk_size.max(1024); // Minimum 1KB chunks
-        let mut chunk = Chunk {
-            ptr: NonNull::dangling(),
-            current: std::ptr::null_mut(),
-            end: std::ptr::null_mut(),
-        };
-        
-        // Allocate initial chunk
-        Self::allocate_chunk(&mut chunk, chunk_size);
+        let chunk = Self::allocate_safe_chunk(chunk_size);
         
         Self {
-            current: UnsafeCell::new(chunk),
+            current: Mutex::new(chunk),
             chunk_size,
             total_allocated: AtomicUsize::new(chunk_size),
             total_used: AtomicUsize::new(0),
         }
     }
 
-    fn allocate_chunk(chunk: &mut Chunk, size: usize) {
+    /// Safely allocate a new chunk with bounds checking
+    fn allocate_safe_chunk(size: usize) -> SafeChunk {
         let layout = Layout::from_size_align(size, 8).unwrap();
-        unsafe {
-            let ptr = alloc(layout);
-            if ptr.is_null() {
-                // Use the global allocation error handler which is the canonical
-                // way to respond to allocation failures in low-level allocators.
+        let ptr = unsafe {
+            let raw_ptr = alloc(layout);
+            if raw_ptr.is_null() {
                 std::alloc::handle_alloc_error(layout);
             }
-            chunk.ptr = NonNull::new(ptr).unwrap();
-            chunk.current = ptr;
-            chunk.end = ptr.add(size);
-        }
+            NonNull::new(raw_ptr).unwrap()
+        };
+        
+        SafeChunk::new(ptr, size)
     }
 
-    /// Allocate memory from the arena
+    /// Allocate memory from the arena with bounds checking
     pub fn alloc(&self, size: usize, align: usize) -> *mut u8 {
-        let chunk = unsafe { &mut *self.current.get() };
+        let mut chunk = self.current.lock().expect("Arena mutex poisoned");
         
-        // Align the current pointer
-        let align_mask = align - 1;
-        let aligned = ((chunk.current as usize) + align_mask) & !align_mask;
-        
-        let new_current = aligned + size;
-        
-        if new_current <= chunk.end as usize {
-            chunk.current = new_current as *mut u8;
+        if let Some(ptr) = chunk.allocate(size, align) {
             self.total_used.fetch_add(size, Ordering::Relaxed);
-            aligned as *mut u8
+            ptr
         } else {
             // Need a new chunk
             self.allocate_new_chunk(size, align)
@@ -87,29 +116,20 @@ impl BumpArena {
 
     fn allocate_new_chunk(&self, min_size: usize, align: usize) -> *mut u8 {
         let chunk_size = min_size.max(self.chunk_size);
-        let mut new_chunk = Chunk {
-            ptr: NonNull::dangling(),
-            current: std::ptr::null_mut(),
-            end: std::ptr::null_mut(),
-        };
+        let mut new_chunk = Self::allocate_safe_chunk(chunk_size);
         
-        Self::allocate_chunk(&mut new_chunk, chunk_size);
-        
-        // Align the current pointer
-        let align_mask = align - 1;
-        let aligned = ((new_chunk.current as usize) + align_mask) & !align_mask;
-        let new_current = aligned + min_size;
-        
-        new_chunk.current = new_current as *mut u8;
+        // Try to allocate from the new chunk
+        let result = new_chunk.allocate(min_size, align)
+            .expect("New chunk should have enough space");
         
         // Replace the current chunk
-        let old_chunk = unsafe { &mut *self.current.get() };
+        let mut old_chunk = self.current.lock().expect("Arena mutex poisoned");
         *old_chunk = new_chunk;
         
         self.total_allocated.fetch_add(chunk_size, Ordering::Relaxed);
         self.total_used.fetch_add(min_size, Ordering::Relaxed);
         
-        aligned as *mut u8
+        result
     }
 
     /// Get usage statistics
@@ -242,20 +262,91 @@ impl Drop for ScopedArena {
     }
 }
 
-/// A vector that allocates from an arena
-pub struct ArenaVec<T> {
-    ptr: *mut T,
+/// Safe memory region that can be used for arena allocations
+#[derive(Debug)]
+struct SafeMemoryRegion<T> {
+    ptr: NonNull<T>,
     len: usize,
     capacity: usize,
+}
+
+impl<T> SafeMemoryRegion<T> {
+    fn new(ptr: *mut T, capacity: usize) -> Self {
+        Self {
+            ptr: NonNull::new(ptr).expect("Null pointer passed to SafeMemoryRegion"),
+            len: 0,
+            capacity,
+        }
+    }
+
+    fn is_valid_index(&self, index: usize) -> bool {
+        index < self.len
+    }
+
+    fn get(&self, index: usize) -> Option<&T> {
+        if self.is_valid_index(index) {
+            unsafe { Some(&*self.ptr.as_ptr().add(index)) }
+        } else {
+            None
+        }
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        if self.is_valid_index(index) {
+            unsafe { Some(&mut *self.ptr.as_ptr().add(index)) }
+        } else {
+            None
+        }
+    }
+
+    fn push(&mut self, value: T) -> Result<(), T> {
+        if self.len < self.capacity {
+            unsafe {
+                self.ptr.as_ptr().add(self.len).write(value);
+                self.len += 1;
+                Ok(())
+            }
+        } else {
+            Err(value)
+        }
+    }
+
+    fn as_slice(&self) -> &[T] {
+        if self.len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [T] {
+        if self.len == 0 {
+            &mut []
+        } else {
+            unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+        }
+    }
+
+    fn clear(&mut self) {
+        unsafe {
+            for i in 0..self.len {
+                self.ptr.as_ptr().add(i).drop_in_place();
+            }
+        }
+        self.len = 0;
+    }
+}
+
+/// A vector that allocates from an arena with safe operations
+pub struct ArenaVec<T> {
+    memory: Option<SafeMemoryRegion<T>>,
     arena: Arc<BumpArena>,
 }
 
 impl<T> ArenaVec<T> {
     pub fn new(arena: Arc<BumpArena>) -> Self {
         Self {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-            capacity: 0,
+            memory: None,
             arena,
         }
     }
@@ -270,77 +361,76 @@ impl<T> ArenaVec<T> {
         let ptr = arena.alloc(size, align) as *mut T;
 
         Self {
-            ptr,
-            len: 0,
-            capacity,
+            memory: Some(SafeMemoryRegion::new(ptr, capacity)),
             arena,
         }
     }
 
     pub fn push(&mut self, value: T) {
-        if self.len == self.capacity {
-            self.grow();
+        // Check if we need to grow first
+        let needs_grow = self.memory.as_ref().map(|m| m.len >= m.capacity).unwrap_or(true);
+        
+        if needs_grow {
+            self.grow_and_repush();
         }
-
-        unsafe {
-            self.ptr.add(self.len).write(value);
-            self.len += 1;
+        
+        // Now we should have space
+        if let Some(ref mut memory) = self.memory {
+            if memory.push(value).is_err() {
+                panic!("Should have space after growing or initial allocation");
+            }
+        } else {
+            panic!("Memory should be initialized after grow_and_repush");
         }
     }
 
-    fn grow(&mut self) {
-        let new_capacity = if self.capacity == 0 { 4 } else { self.capacity * 2 };
+    fn grow_and_repush(&mut self) {
+        let current_capacity = self.memory.as_ref().map(|m| m.capacity).unwrap_or(0);
+        let new_capacity = if current_capacity == 0 { 4 } else { current_capacity * 2 };
+        
         let new_size = new_capacity * std::mem::size_of::<T>();
         let align = std::mem::align_of::<T>();
-        
         let new_ptr = self.arena.alloc(new_size, align) as *mut T;
         
-        if !self.ptr.is_null() {
-            unsafe {
-                std::ptr::copy_nonoverlapping(self.ptr, new_ptr, self.len);
+        let mut new_memory = SafeMemoryRegion::new(new_ptr, new_capacity);
+        
+        // Copy existing elements
+        if let Some(ref mut old_memory) = self.memory {
+            for i in 0..old_memory.len {
+                unsafe {
+                    let val = std::ptr::read(old_memory.ptr.as_ptr().add(i));
+                    if new_memory.push(val).is_err() {
+                        panic!("New memory should have space for existing elements");
+                    }
+                }
             }
+            old_memory.len = 0; // Prevent double drop
         }
-
-        self.ptr = new_ptr;
-        self.capacity = new_capacity;
+        
+        self.memory = Some(new_memory);
     }
 
     pub fn len(&self) -> usize {
-        self.len
+        self.memory.as_ref().map(|m| m.len).unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 
     pub fn as_slice(&self) -> &[T] {
-        if self.ptr.is_null() {
-            &[]
-        } else {
-            unsafe {
-                std::slice::from_raw_parts(self.ptr, self.len)
-            }
-        }
+        self.memory.as_ref().map(|m| m.as_slice()).unwrap_or(&[])
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        if self.ptr.is_null() {
-            &mut []
-        } else {
-            unsafe {
-                std::slice::from_raw_parts_mut(self.ptr, self.len)
-            }
-        }
+        self.memory.as_mut().map(|m| m.as_mut_slice()).unwrap_or(&mut [])
     }
 }
 
 impl<T> Drop for ArenaVec<T> {
     fn drop(&mut self) {
-        // Arena doesn't support deallocation, so we just drop the values
-        unsafe {
-            for i in 0..self.len {
-                self.ptr.add(i).drop_in_place();
-            }
+        if let Some(ref mut memory) = self.memory {
+            memory.clear();
         }
     }
 }
@@ -364,11 +454,12 @@ pub fn create_scoped_arena() -> ScopedArena {
 }
 
 /// JNI function to get arena pool statistics
+#[cfg(feature = "jni")]
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getArenaPoolStats(
-    env: JNIEnv,
-    _class: JClass,
-) -> jstring {
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+) -> jni::sys::jstring {
     let stats = GLOBAL_ARENA_POOL.stats();
     let stats_json = serde_json::json!({
         "arenaCount": stats.arena_count,

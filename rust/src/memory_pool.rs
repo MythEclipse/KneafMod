@@ -149,7 +149,7 @@ pub struct VecPool<T> {
     pool: ObjectPool<Vec<T>>,
 }
 
-impl<T: Debug> VecPool<T> {
+impl<T: Debug + Default + Clone> VecPool<T> {
     pub fn new(max_size: usize) -> Self {
         Self {
             pool: ObjectPool::new(max_size),
@@ -158,11 +158,12 @@ impl<T: Debug> VecPool<T> {
 
     pub fn get_vec(&self, capacity: usize) -> PooledVec<T> {
         let mut pooled = self.pool.get();
-        pooled.clear();
-        pooled.reserve(capacity);
+        let vec = pooled.as_mut();
+        vec.clear();
+        vec.reserve(capacity);
         // Ensure the vector actually has the requested capacity
-        if pooled.capacity() < capacity {
-            *pooled = Vec::with_capacity(capacity);
+        if vec.capacity() < capacity {
+            *vec = Vec::with_capacity(capacity);
         }
         pooled
     }
@@ -427,11 +428,16 @@ impl SwapMemoryPool {
                 return Err(e);
             }
 
-            let pooled = self.chunk_metadata_pool.pool.get_with_tracking(
+            let mut pooled = self.chunk_metadata_pool.pool.get_with_tracking(
                 size as u64,
                 Arc::clone(&self.metrics),
                 "chunk_metadata"
             );
+
+            // Ensure the vector has the requested size (filled with zeros)
+            let vec = pooled.as_mut();
+            vec.clear();
+            vec.resize(size, 0u8);
 
             Ok(pooled)
         })
@@ -449,11 +455,16 @@ impl SwapMemoryPool {
                 return Err(e);
             }
 
-            let pooled = self.compressed_data_pool.pool.get_with_tracking(
+            let mut pooled = self.compressed_data_pool.pool.get_with_tracking(
                 size as u64,
                 Arc::clone(&self.metrics),
                 "compressed_data"
             );
+
+            // Ensure the vector has the requested size (filled with zeros)
+            let vec = pooled.as_mut();
+            vec.clear();
+            vec.resize(size, 0u8);
 
             Ok(pooled)
         })
@@ -471,11 +482,16 @@ impl SwapMemoryPool {
                 return Err(e);
             }
 
-            let pooled = self.temporary_buffer_pool.pool.get_with_tracking(
+            let mut pooled = self.temporary_buffer_pool.pool.get_with_tracking(
                 size as u64,
                 Arc::clone(&self.metrics),
                 "temporary_buffer"
             );
+
+            // Ensure the vector has the requested size (filled with zeros)
+            let vec = pooled.as_mut();
+            vec.clear();
+            vec.resize(size, 0u8);
 
             Ok(pooled)
         })

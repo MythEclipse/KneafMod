@@ -2,7 +2,7 @@ package com.kneaf.core.chunkstorage;
 
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.slf4j.Logger;
-import com.mojang.logging.LogUtils;
+import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.Optional;
@@ -19,7 +19,7 @@ import java.util.function.Consumer;
  * Tracks chunk state (Hot/Cold/Dirty/Serialized) for intelligent caching decisions.
  */
 public class ChunkCache {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(ChunkCache.class);
     
     private final Map<String, CachedChunk> cache = new ConcurrentHashMap<>();
     private final int maxCapacity;

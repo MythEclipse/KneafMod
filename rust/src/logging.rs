@@ -5,6 +5,11 @@ use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
 use log::{Level, Record, Metadata, Log};
 
+// JNI-specific imports for Java logging
+use jni::JNIEnv;
+use jni::objects::{JObject, JValue};
+use jni::sys::jstring;
+
 static TRACE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Generate a unique trace ID for request tracking
@@ -283,6 +288,107 @@ pub fn init_logging() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// JNI Logger for forwarding logs from Rust to Java
+pub struct JniLogger {
+    component: String,
+}
+
+impl JniLogger {
+    pub fn new(component: &str) -> Self {
+        Self {
+            component: component.to_string(),
+        }
+    }
+
+    /// Log a message to Java via JNI
+    pub fn log_to_java(&self, env: &mut JNIEnv, level: &str, message: &str) {
+        if let Ok(cls) = env.find_class("com/kneaf/core/performance/RustPerformance") {
+            if let (Ok(jlevel), Ok(jmsg)) = (env.new_string(level), env.new_string(message)) {
+                let jlevel_obj = JObject::from(jlevel);
+                let jmsg_obj = JObject::from(jmsg);
+                let _ = env.call_static_method(
+                    cls,
+                    "logFromNative",
+                    "(Ljava/lang/String;Ljava/lang/String;)V",
+                    &[JValue::Object(&jlevel_obj), JValue::Object(&jmsg_obj)],
+                );
+            }
+        }
+    }
+
+    /// Log with context information including component prefix
+    pub fn log_with_context(&self, env: &mut JNIEnv, level: &str, context: &str, message: &str) {
+        let full_message = format!("[{}] {}", context, message);
+        self.log_to_java(env, level, &full_message);
+    }
+
+    /// Log debug message
+    pub fn debug(&self, env: &mut JNIEnv, message: &str) {
+        self.log_to_java(env, "DEBUG", message);
+    }
+
+    /// Log info message
+    pub fn info(&self, env: &mut JNIEnv, message: &str) {
+        self.log_to_java(env, "INFO", message);
+    }
+
+    /// Log warning message
+    pub fn warn(&self, env: &mut JNIEnv, message: &str) {
+        self.log_to_java(env, "WARN", message);
+    }
+
+    /// Log error message
+    pub fn error(&self, env: &mut JNIEnv, message: &str) {
+        self.log_to_java(env, "ERROR", message);
+    }
+
+    /// Log trace message
+    pub fn trace(&self, env: &mut JNIEnv, message: &str) {
+        self.log_to_java(env, "TRACE", message);
+    }
+
+    /// Debug with context prefix
+    pub fn debug_ctx(&self, env: &mut JNIEnv, context: &str, message: &str) {
+        self.log_with_context(env, "DEBUG", context, message);
+    }
+
+    /// Info with context prefix
+    pub fn info_ctx(&self, env: &mut JNIEnv, context: &str, message: &str) {
+        self.log_with_context(env, "INFO", context, message);
+    }
+
+    /// Warning with context prefix
+    pub fn warn_ctx(&self, env: &mut JNIEnv, context: &str, message: &str) {
+        self.log_with_context(env, "WARN", context, message);
+    }
+
+    /// Error with context prefix
+    pub fn error_ctx(&self, env: &mut JNIEnv, context: &str, message: &str) {
+        self.log_with_context(env, "ERROR", context, message);
+    }
+
+    /// Trace with context prefix
+    pub fn trace_ctx(&self, env: &mut JNIEnv, context: &str, message: &str) {
+        self.log_with_context(env, "TRACE", context, message);
+    }
+}
+
+/// Helper function to create error response strings for JNI
+pub fn make_jni_error(env: &JNIEnv, message: &str) -> jstring {
+    match env.new_string(message) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Helper function to create error response byte arrays for JNI
+pub fn make_jni_error_bytes(env: &JNIEnv, message: &[u8]) -> jni::sys::jbyteArray {
+    match env.byte_array_from_slice(message) {
+        Ok(arr) => arr.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Convenience macros for logging
 #[macro_export]
 macro_rules! log_error {
@@ -325,5 +431,56 @@ macro_rules! with_trace_logging {
             $crate::logging::log_performance!($component, $operation, &trace_id, duration);
             result
         }
+    };
+}
+
+/// JNI-specific logging macros
+#[macro_export]
+macro_rules! jni_log_debug {
+    ($logger:expr, $env:expr, $message:expr) => {
+        $logger.debug($env, $message);
+    };
+    ($logger:expr, $env:expr, $context:expr, $message:expr) => {
+        $logger.debug_ctx($env, $context, $message);
+    };
+}
+
+#[macro_export]
+macro_rules! jni_log_info {
+    ($logger:expr, $env:expr, $message:expr) => {
+        $logger.info($env, $message);
+    };
+    ($logger:expr, $env:expr, $context:expr, $message:expr) => {
+        $logger.info_ctx($env, $context, $message);
+    };
+}
+
+#[macro_export]
+macro_rules! jni_log_warn {
+    ($logger:expr, $env:expr, $message:expr) => {
+        $logger.warn($env, $message);
+    };
+    ($logger:expr, $env:expr, $context:expr, $message:expr) => {
+        $logger.warn_ctx($env, $context, $message);
+    };
+}
+
+#[macro_export]
+macro_rules! jni_log_error {
+    ($logger:expr, $env:expr, $message:expr) => {
+        $logger.error($env, $message);
+    };
+    ($logger:expr, $env:expr, $context:expr, $message:expr) => {
+        $logger.error_ctx($env, $context, $message);
+    };
+}
+
+#[macro_export]
+macro_rules! jni_log_trace {
+    ($logger:expr, $env:expr, $message:expr) => {
+        $logger.trace($env, $message);
+    };
+    ($logger:expr, $env:expr, $context:expr, $message:expr) => {
+        $logger.trace_ctx($env, $context, $message);
     };
 }
