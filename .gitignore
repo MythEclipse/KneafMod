@@ -17,7 +17,7 @@ NUL
 # gradle
 build
 .gradle
-
+kneaf_db_memory/
 # other
 eclipse
 run

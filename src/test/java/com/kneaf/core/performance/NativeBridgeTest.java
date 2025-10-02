@@ -16,7 +16,8 @@ class NativeBridgeTest {
             }
 
             byte[] payload = new byte[] {1,2,3,4};
-            NativeBridge.nativePushTask(h, payload);
+            TaskEnvelope task = new TaskEnvelope(1L, (byte)1, payload);
+            NativeBridge.nativePushTask(h, task.toBytes());
 
             // busy-wait small amount for result to propagate (MVP)
             byte[] res = null;
@@ -28,7 +29,10 @@ class NativeBridgeTest {
             }
 
             Assertions.assertNotNull(res);
-            Assertions.assertArrayEquals(payload, res);
+            ResultEnvelope result = ResultEnvelope.fromBytes(res);
+            Assertions.assertEquals(1L, result.taskId);
+            Assertions.assertEquals(0, result.status);
+            Assertions.assertArrayEquals(payload, result.payload);
 
             NativeBridge.nativeDestroyWorker(h);
         } catch (UnsatisfiedLinkError e) {
