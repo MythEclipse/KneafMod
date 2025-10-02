@@ -3,6 +3,7 @@ plugins {
     id 'maven-publish'
     id 'net.neoforged.moddev' version '2.0.107'
     id 'idea'
+    id 'jacoco'
 }
 
 tasks.named('wrapper', Wrapper).configure {
@@ -165,11 +166,40 @@ test {
     }
     // Set java.library.path via provider to be configuration-cache friendly
     systemProperty 'java.library.path', layout.buildDirectory.dir('generated/resources/natives').map { it.asFile.absolutePath }
+    
+    // Configure JaCoCo test execution
+    finalizedBy jacocoTestReport
 }
 
-// Ensure the test runtime engine dependency is explicitly present on every Test task's runtime classpath
-// This attaches the configured test framework implementation dependency so Gradle doesn't auto-load it.
-// No extra Test task classpath injection required when the engine is on testImplementation
+// JaCoCo configuration
+jacoco {
+    toolVersion = "0.8.11"
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+    
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.collect {
+            fileTree(dir: it, exclude: [])
+        }))
+    }
+}
+
+jacocoTestCoverageVerification {
+    dependsOn test
+    violationRules {
+        rule {
+            limit {
+                minimum = 0.80
+            }
+        }
+    }
+}
 
 // This block of code expands all declared replace properties in the specified resource targets.
 // A missing property will result in an error. Properties are expanded using ${} Groovy notation.

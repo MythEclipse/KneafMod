@@ -1,18 +1,7 @@
 package com.kneaf.core.chunkstorage;
 
-import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.world.level.chunk.LevelChunkSection;
-import net.minecraft.world.level.chunk.ChunkAccess;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.NbtIo;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.levelgen.Heightmap;
-import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.slf4j.Logger;
-import com.mojang.logging.LogUtils;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -23,9 +12,10 @@ import java.io.IOException;
 /**
  * NBT-based implementation of ChunkSerializer.
  * Uses Minecraft's built-in NBT format for chunk serialization.
+ * This implementation includes proper error handling for test environments.
  */
 public class NbtChunkSerializer implements ChunkSerializer {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(NbtChunkSerializer.class);
     
     private static final String FORMAT_NAME = "NBT";
     private static final int FORMAT_VERSION = 1;
@@ -36,143 +26,56 @@ public class NbtChunkSerializer implements ChunkSerializer {
     private static final String TAG_CHECKSUM = "Checksum";
     private static final String TAG_TIMESTAMP = "Timestamp";
     
+    // Static flag to track if Minecraft classes are available
+    private static final boolean MINECRAFT_CLASSES_AVAILABLE;
+    
+    static {
+        boolean minecraftAvailable = false;
+        try {
+            // Try to load a key Minecraft class
+            Class.forName("net.minecraft.nbt.CompoundTag");
+            minecraftAvailable = true;
+            LOGGER.info("Minecraft classes available - NbtChunkSerializer fully functional");
+        } catch (ClassNotFoundException e) {
+            LOGGER.warn("Minecraft classes not available - NbtChunkSerializer will be non-functional");
+        }
+        MINECRAFT_CLASSES_AVAILABLE = minecraftAvailable;
+    }
+    
+    /**
+     * Check if Minecraft classes are available for serialization.
+     * @return true if Minecraft classes are available, false otherwise
+     */
+    public static boolean isMinecraftAvailable() {
+        return MINECRAFT_CLASSES_AVAILABLE;
+    }
+    
     @Override
-    public byte[] serialize(LevelChunk chunk) throws IOException {
+    public byte[] serialize(Object chunk) throws IOException {
+        if (!MINECRAFT_CLASSES_AVAILABLE) {
+            throw new IOException("Minecraft classes not available - cannot serialize chunks");
+        }
+        
         if (chunk == null) {
             throw new IllegalArgumentException("Chunk cannot be null");
         }
         
-        long startTime = System.nanoTime();
-        
-        try {
-            // Create main compound tag
-            CompoundTag rootTag = new CompoundTag();
-            
-            // Add metadata
-            rootTag.putInt(TAG_VERSION, FORMAT_VERSION);
-            rootTag.putLong(TAG_TIMESTAMP, System.currentTimeMillis());
-            
-            // Serialize chunk data to NBT using basic chunk information
-            CompoundTag chunkData = new CompoundTag();
-            
-            // Save block entities - simplified approach without external dependencies
-            serializeBlockEntities(chunk, chunkData);
-            
-            // Store basic chunk information
-            chunkData.putInt("xPos", chunk.getPos().x);
-            chunkData.putInt("zPos", chunk.getPos().z);
-            chunkData.putString("status", chunk.getFullStatus().name());
-            
-            // Save section data for all sections
-            serializeChunkSections(chunk, chunkData);
-            
-            // Save heightmaps
-            serializeHeightmaps(chunk, chunkData);
-            
-            rootTag.put(TAG_CHUNK_DATA, chunkData);
-            
-            // Calculate and add checksum for data integrity
-            byte[] chunkBytes = writeCompoundTagToBytes(chunkData);
-            long checksum = calculateChecksum(chunkBytes);
-            rootTag.putLong(TAG_CHECKSUM, checksum);
-            
-            // Write complete NBT to bytes
-            byte[] serializedData = writeCompoundTagToBytes(rootTag);
-            
-            if (LOGGER.isDebugEnabled()) {
-                long duration = System.nanoTime() - startTime;
-                LOGGER.debug("Serialized chunk at ({}, {}) to {} bytes in {} ms", 
-                    chunk.getPos().x, chunk.getPos().z, 
-                    serializedData.length, duration / 1_000_000);
-            }
-            
-            return serializedData;
-            
-        } catch (IOException e) {
-            LOGGER.error("Failed to serialize chunk at ({}, {}) due to I/O error: {}",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
-            throw new IOException(String.format("Failed to serialize chunk at (%d, %d): %s",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage()), e);
-        } catch (IllegalArgumentException e) {
-            LOGGER.error("Invalid argument while serializing chunk at ({}, {}): {}",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
-            throw new IOException(String.format("Invalid chunk data at (%d, %d): %s",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage()), e);
-        } catch (SecurityException e) {
-            LOGGER.error("Security violation while serializing chunk at ({}, {}): {} - {}",
-                chunk.getPos().x, chunk.getPos().z, e.getClass().getSimpleName(), e.getMessage(), e);
-            throw new IOException(String.format("Security error serializing chunk at (%d, %d): %s",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage()), e);
-        } catch (OutOfMemoryError e) {
-            LOGGER.error("Out of memory while serializing chunk at ({}, {}): {} - {}",
-                chunk.getPos().x, chunk.getPos().z, e.getClass().getSimpleName(), e.getMessage());
-            throw new IOException(String.format("Memory error serializing chunk at (%d, %d): %s",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage()), e);
-        } catch (StackOverflowError e) {
-            LOGGER.error("Stack overflow while serializing chunk at ({}, {}): {} - {}",
-                chunk.getPos().x, chunk.getPos().z, e.getClass().getSimpleName(), e.getMessage());
-            throw new IOException(String.format("Stack overflow error serializing chunk at (%d, %d): %s",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage()), e);
-        }
+        // Delegate to the actual implementation
+        return serializeChunk(chunk);
     }
     
     @Override
-    public CompoundTag deserialize(byte[] data) throws IOException {
+    public Object deserialize(byte[] data) throws IOException {
+        if (!MINECRAFT_CLASSES_AVAILABLE) {
+            throw new IOException("Minecraft classes not available - cannot deserialize chunks");
+        }
+        
         if (data == null || data.length == 0) {
             throw new IllegalArgumentException("Data cannot be null or empty");
         }
         
-        long startTime = System.nanoTime();
-        
-        try {
-            // Read NBT from bytes
-            CompoundTag rootTag = readCompoundTagFromBytes(data);
-            
-            // Validate format version
-            int version = rootTag.getInt(TAG_VERSION);
-            if (version != FORMAT_VERSION) {
-                throw new IOException("Unsupported format version: " + version);
-            }
-            
-            // Verify checksum
-            if (rootTag.contains(TAG_CHECKSUM, 4)) { // 4 = Long tag type
-                CompoundTag chunkData = rootTag.getCompound(TAG_CHUNK_DATA);
-                byte[] chunkBytes = writeCompoundTagToBytes(chunkData);
-                long expectedChecksum = rootTag.getLong(TAG_CHECKSUM);
-                long actualChecksum = calculateChecksum(chunkBytes);
-                
-                if (expectedChecksum != actualChecksum) {
-                    throw new IOException("Checksum mismatch: expected " + expectedChecksum + 
-                                        ", got " + actualChecksum);
-                }
-            }
-            
-            // Return the chunk data
-            CompoundTag result = rootTag.getCompound(TAG_CHUNK_DATA);
-            
-            if (LOGGER.isDebugEnabled()) {
-                long duration = System.nanoTime() - startTime;
-                LOGGER.debug("Deserialized chunk data from {} bytes in {} ms", 
-                    data.length, duration / 1_000_000);
-            }
-            
-            return result;
-            
-        } catch (IOException e) {
-            LOGGER.error("Failed to deserialize chunk data due to I/O error: {}", e.getMessage(), e);
-            throw new IOException("Failed to deserialize chunk data: " + e.getMessage(), e);
-        } catch (IllegalArgumentException e) {
-            LOGGER.error("Invalid data format while deserializing chunk: {}", e.getMessage(), e);
-            throw new IOException("Invalid chunk data format: " + e.getMessage(), e);
-        } catch (SecurityException e) {
-            LOGGER.error("Security violation while deserializing chunk data: {} - {}",
-                e.getClass().getSimpleName(), e.getMessage(), e);
-            throw new IOException("Security error deserializing chunk data: " + e.getMessage(), e);
-        } catch (OutOfMemoryError e) {
-            LOGGER.error("Out of memory while deserializing chunk data: {} - {}",
-                e.getClass().getSimpleName(), e.getMessage());
-            throw new IOException("Memory error deserializing chunk data: " + e.getMessage(), e);
-        }
+        // Delegate to the actual implementation
+        return deserializeChunk(data);
     }
     
     @Override
@@ -191,14 +94,303 @@ public class NbtChunkSerializer implements ChunkSerializer {
     }
     
     /**
-     * Write a CompoundTag to byte array using Minecraft's NBT IO.
+     * Actual serialization implementation that uses Minecraft classes.
+     * This method is only called if Minecraft classes are available.
      */
-    private byte[] writeCompoundTagToBytes(CompoundTag tag) throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        DataOutputStream dos = new DataOutputStream(baos);
+    private byte[] serializeChunk(Object chunk) throws IOException {
+        try {
+            // Load Minecraft classes dynamically to avoid ClassNotFoundException during class loading
+            Class<?> levelChunkClass = Class.forName("net.minecraft.world.level.chunk.LevelChunk");
+            Class<?> compoundTagClass = Class.forName("net.minecraft.nbt.CompoundTag");
+            Class<?> listTagClass = Class.forName("net.minecraft.nbt.ListTag");
+            Class<?> nbtIoClass = Class.forName("net.minecraft.nbt.NbtIo");
+            Class<?> blockPosClass = Class.forName("net.minecraft.core.BlockPos");
+            Class<?> blockStateClass = Class.forName("net.minecraft.world.level.block.state.BlockState");
+            Class<?> blockEntityClass = Class.forName("net.minecraft.world.level.block.entity.BlockEntity");
+            
+            long startTime = System.nanoTime();
+            
+            // Create main compound tag
+            Object rootTag = compoundTagClass.getDeclaredConstructor().newInstance();
+            
+            // Add metadata using reflection
+            compoundTagClass.getMethod("putInt", String.class, int.class).invoke(rootTag, TAG_VERSION, FORMAT_VERSION);
+            compoundTagClass.getMethod("putLong", String.class, long.class).invoke(rootTag, TAG_TIMESTAMP, System.currentTimeMillis());
+            
+            // Serialize chunk data to NBT using basic chunk information
+            Object chunkData = compoundTagClass.getDeclaredConstructor().newInstance();
+            
+            // Get chunk position and basic info using reflection
+            Object chunkPos = levelChunkClass.getMethod("getPos").invoke(chunk);
+            int chunkX = (int) chunkPos.getClass().getMethod("x").invoke(chunkPos);
+            int chunkZ = (int) chunkPos.getClass().getMethod("z").invoke(chunkPos);
+            
+            // Store basic chunk information
+            compoundTagClass.getMethod("putInt", String.class, int.class).invoke(chunkData, "xPos", chunkX);
+            compoundTagClass.getMethod("putInt", String.class, int.class).invoke(chunkData, "zPos", chunkZ);
+            
+            try {
+                Object fullStatus = levelChunkClass.getMethod("getFullStatus").invoke(chunk);
+                String statusName = fullStatus.toString();
+                compoundTagClass.getMethod("putString", String.class, String.class).invoke(chunkData, "status", statusName);
+            } catch (Exception e) {
+                LOGGER.debug("Could not get chunk status, using default");
+                compoundTagClass.getMethod("putString", String.class, String.class).invoke(chunkData, "status", "FULL");
+            }
+            
+            // Save section data for all sections
+            serializeChunkSections(chunk, chunkData, levelChunkClass, compoundTagClass, listTagClass, blockStateClass);
+            
+            // Save heightmaps
+            serializeHeightmaps(chunk, chunkData, levelChunkClass, compoundTagClass, blockPosClass, blockStateClass);
+            
+            // Save block entities
+            serializeBlockEntities(chunk, chunkData, levelChunkClass, compoundTagClass, blockPosClass, blockEntityClass);
+            
+            compoundTagClass.getMethod("put", String.class, compoundTagClass).invoke(rootTag, TAG_CHUNK_DATA, chunkData);
+            
+            // Calculate and add checksum for data integrity
+            byte[] chunkBytes = writeCompoundTagToBytes(chunkData, nbtIoClass);
+            long checksum = calculateChecksum(chunkBytes);
+            compoundTagClass.getMethod("putLong", String.class, long.class).invoke(rootTag, TAG_CHECKSUM, checksum);
+            
+            // Write complete NBT to bytes
+            byte[] serializedData = writeCompoundTagToBytes(rootTag, nbtIoClass);
+            
+            if (LOGGER.isDebugEnabled()) {
+                long duration = System.nanoTime() - startTime;
+                LOGGER.debug("Serialized chunk at ({}, {}) to {} bytes in {} ms", 
+                    chunkX, chunkZ, serializedData.length, duration / 1_000_000);
+            }
+            
+            return serializedData;
+            
+        } catch (Exception e) {
+            LOGGER.error("Failed to serialize chunk due to error: {}", e.getMessage(), e);
+            if (e instanceof IOException) {
+                throw (IOException) e;
+            }
+            throw new IOException("Failed to serialize chunk: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Actual deserialization implementation that uses Minecraft classes.
+     * This method is only called if Minecraft classes are available.
+     */
+    private Object deserializeChunk(byte[] data) throws IOException {
+        try {
+            // Load Minecraft classes dynamically
+            Class<?> compoundTagClass = Class.forName("net.minecraft.nbt.CompoundTag");
+            Class<?> nbtIoClass = Class.forName("net.minecraft.nbt.NbtIo");
+            
+            long startTime = System.nanoTime();
+            
+            // Read NBT from bytes
+            Object rootTag = readCompoundTagFromBytes(data, nbtIoClass);
+            
+            // Validate format version
+            int version = (int) compoundTagClass.getMethod("getInt", String.class).invoke(rootTag, TAG_VERSION);
+            if (version != FORMAT_VERSION) {
+                throw new IOException("Unsupported format version: " + version);
+            }
+            
+            // Verify checksum
+            if ((boolean) compoundTagClass.getMethod("contains", String.class, int.class).invoke(rootTag, TAG_CHECKSUM, 4)) { // 4 = Long tag type
+                Object chunkData = compoundTagClass.getMethod("getCompound", String.class).invoke(rootTag, TAG_CHUNK_DATA);
+                byte[] chunkBytes = writeCompoundTagToBytes(chunkData, nbtIoClass);
+                long expectedChecksum = (long) compoundTagClass.getMethod("getLong", String.class).invoke(rootTag, TAG_CHECKSUM);
+                long actualChecksum = calculateChecksum(chunkBytes);
+                
+                if (expectedChecksum != actualChecksum) {
+                    throw new IOException("Checksum mismatch: expected " + expectedChecksum + 
+                                        ", got " + actualChecksum);
+                }
+            }
+            
+            // Return the chunk data
+            Object result = compoundTagClass.getMethod("getCompound", String.class).invoke(rootTag, TAG_CHUNK_DATA);
+            
+            if (LOGGER.isDebugEnabled()) {
+                long duration = System.nanoTime() - startTime;
+                LOGGER.debug("Deserialized chunk data from {} bytes in {} ms", 
+                    data.length, duration / 1_000_000);
+            }
+            
+            return result;
+            
+        } catch (Exception e) {
+            LOGGER.error("Failed to deserialize chunk data due to error: {}", e.getMessage(), e);
+            if (e instanceof IOException) {
+                throw (IOException) e;
+            }
+            throw new IOException("Failed to deserialize chunk data: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Serialize all chunk sections including block states and data.
+     */
+    private void serializeChunkSections(Object chunk, Object chunkData, Class<?> levelChunkClass, 
+                                      Class<?> compoundTagClass, Class<?> listTagClass, Class<?> blockStateClass) throws Exception {
+        Object sectionsList = listTagClass.getDeclaredConstructor().newInstance();
+        
+        // Get min and max sections
+        int minSection = (int) levelChunkClass.getMethod("getMinSection").invoke(chunk);
+        int maxSection = (int) levelChunkClass.getMethod("getMaxSection").invoke(chunk);
+        
+        for (int y = minSection; y < maxSection; y++) {
+            Object section = levelChunkClass.getMethod("getSection", int.class).invoke(chunk, 
+                levelChunkClass.getMethod("getSectionIndexFromSectionY", int.class).invoke(chunk, y));
+            
+            if (section != null && !(boolean) section.getClass().getMethod("hasOnlyAir").invoke(section)) {
+                Object sectionTag = compoundTagClass.getDeclaredConstructor().newInstance();
+                compoundTagClass.getMethod("putInt", String.class, int.class).invoke(sectionTag, "y", y);
+                
+                // Serialize block states
+                serializeBlockStates(section, sectionTag, compoundTagClass, listTagClass, blockStateClass);
+                
+                listTagClass.getMethod("add", compoundTagClass).invoke(sectionsList, sectionTag);
+            }
+        }
+        
+        compoundTagClass.getMethod("put", String.class, listTagClass).invoke(chunkData, "sections", sectionsList);
+    }
+    
+    /**
+     * Serialize block states for a chunk section.
+     */
+    private void serializeBlockStates(Object section, Object sectionTag, Class<?> compoundTagClass, 
+                                    Class<?> listTagClass, Class<?> blockStateClass) throws Exception {
+        Object blockStatesList = listTagClass.getDeclaredConstructor().newInstance();
+        
+        for (int x = 0; x < 16; x++) {
+            for (int y = 0; y < 16; y++) {
+                for (int z = 0; z < 16; z++) {
+                    Object blockState = section.getClass().getMethod("getBlockState", int.class, int.class, int.class)
+                        .invoke(section, x, y, z);
+                    
+                    if (!(boolean) blockStateClass.getMethod("isAir").invoke(blockState)) {
+                        Object blockTag = compoundTagClass.getDeclaredConstructor().newInstance();
+                        compoundTagClass.getMethod("putInt", String.class, int.class).invoke(blockTag, "x", x);
+                        compoundTagClass.getMethod("putInt", String.class, int.class).invoke(blockTag, "y", y);
+                        compoundTagClass.getMethod("putInt", String.class, int.class).invoke(blockTag, "z", z);
+                        compoundTagClass.getMethod("putString", String.class, String.class).invoke(blockTag, "block", blockState.toString());
+                        listTagClass.getMethod("add", compoundTagClass).invoke(blockStatesList, blockTag);
+                    }
+                }
+            }
+        }
+        
+        compoundTagClass.getMethod("put", String.class, listTagClass).invoke(sectionTag, "block_states", blockStatesList);
+    }
+    
+    /**
+     * Serialize heightmaps for the chunk.
+     */
+    private void serializeHeightmaps(Object chunk, Object chunkData, Class<?> levelChunkClass, 
+                                   Class<?> compoundTagClass, Class<?> blockPosClass, Class<?> blockStateClass) throws Exception {
+        Object heightmapsTag = compoundTagClass.getDeclaredConstructor().newInstance();
         
         try {
-            NbtIo.write(tag, dos);
+            // Store basic height information for the chunk
+            int minHeight = (int) levelChunkClass.getMethod("getMinBuildHeight").invoke(chunk);
+            int maxHeight = (int) levelChunkClass.getMethod("getMaxBuildHeight").invoke(chunk);
+            compoundTagClass.getMethod("putInt", String.class, int.class).invoke(heightmapsTag, "minHeight", minHeight);
+            compoundTagClass.getMethod("putInt", String.class, int.class).invoke(heightmapsTag, "maxHeight", maxHeight);
+            
+            // Get chunk position
+            Object chunkPos = levelChunkClass.getMethod("getPos").invoke(chunk);
+            int minBlockX = (int) chunkPos.getClass().getMethod("getMinBlockX").invoke(chunkPos);
+            int minBlockZ = (int) chunkPos.getClass().getMethod("getMinBlockZ").invoke(chunkPos);
+            
+            // Store surface height information at key positions
+            for (int x = 0; x < 16; x += 4) {
+                for (int z = 0; z < 16; z += 4) {
+                    // Find surface height at this position
+                    int surfaceY = findSurfaceHeight(chunk, x, z, minHeight, maxHeight, 
+                        levelChunkClass, blockPosClass, blockStateClass, minBlockX, minBlockZ);
+                    String key = "height_" + x + "_" + z;
+                    compoundTagClass.getMethod("putInt", String.class, int.class).invoke(heightmapsTag, key, surfaceY);
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Error while serializing heightmaps: {}", e.getMessage(), e);
+            // Continue with partial heightmap data
+        }
+        
+        compoundTagClass.getMethod("put", String.class, compoundTagClass).invoke(chunkData, "heightmaps", heightmapsTag);
+    }
+    
+    /**
+     * Serialize block entities from a chunk.
+     */
+    private void serializeBlockEntities(Object chunk, Object chunkData, Class<?> levelChunkClass, 
+                                      Class<?> compoundTagClass, Class<?> blockPosClass, Class<?> blockEntityClass) throws Exception {
+        Object blockEntitiesPos = levelChunkClass.getMethod("getBlockEntitiesPos").invoke(chunk);
+        
+        // Iterate over block entity positions
+        if (blockEntitiesPos instanceof Iterable) {
+            for (Object pos : (Iterable<?>) blockEntitiesPos) {
+                Object blockEntity = levelChunkClass.getMethod("getBlockEntity", blockPosClass).invoke(chunk, pos);
+                if (blockEntity != null) {
+                    try {
+                        // Create a simple tag for the block entity
+                        Object beTag = compoundTagClass.getDeclaredConstructor().newInstance();
+                        
+                        int x = (int) blockPosClass.getMethod("getX").invoke(pos);
+                        int y = (int) blockPosClass.getMethod("getY").invoke(pos);
+                        int z = (int) blockPosClass.getMethod("getZ").invoke(pos);
+                        
+                        compoundTagClass.getMethod("putInt", String.class, int.class).invoke(beTag, "x", x);
+                        compoundTagClass.getMethod("putInt", String.class, int.class).invoke(beTag, "y", y);
+                        compoundTagClass.getMethod("putInt", String.class, int.class).invoke(beTag, "z", z);
+                        
+                        try {
+                            Object blockEntityType = blockEntityClass.getMethod("getType").invoke(blockEntity);
+                            String typeString = blockEntityType.toString();
+                            compoundTagClass.getMethod("putString", String.class, String.class).invoke(beTag, "id", typeString);
+                        } catch (Exception e) {
+                            compoundTagClass.getMethod("putString", String.class, String.class).invoke(beTag, "id", "unknown");
+                        }
+                        
+                        String key = "block_entity_" + x + "_" + y + "_" + z;
+                        compoundTagClass.getMethod("put", String.class, compoundTagClass).invoke(chunkData, key, beTag);
+                    } catch (Exception e) {
+                        // Log the exception and continue serializing other block entities
+                        LOGGER.warn("Could not serialize block entity at {}: {}", pos, e.getMessage(), e);
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Find the surface height at a given position within the chunk.
+     */
+    private int findSurfaceHeight(Object chunk, int x, int z, int minHeight, int maxHeight,
+                                Class<?> levelChunkClass, Class<?> blockPosClass, Class<?> blockStateClass,
+                                int minBlockX, int minBlockZ) throws Exception {
+        for (int y = maxHeight - 1; y >= minHeight; y--) {
+            Object pos = blockPosClass.getDeclaredConstructor(int.class, int.class, int.class)
+                .newInstance(minBlockX + x, y, minBlockZ + z);
+            Object blockState = levelChunkClass.getMethod("getBlockState", blockPosClass).invoke(chunk, pos);
+            if (!(boolean) blockStateClass.getMethod("isAir").invoke(blockState)) {
+                return y;
+            }
+        }
+        return minHeight;
+    }
+    
+    /**
+     * Write a CompoundTag to byte array using Minecraft's NBT IO.
+     */
+    private byte[] writeCompoundTagToBytes(Object tag, Class<?> nbtIoClass) throws Exception {
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
+        
+        try {
+            nbtIoClass.getMethod("write", Class.forName("net.minecraft.nbt.CompoundTag"), java.io.DataOutput.class).invoke(null, tag, dos);
             return baos.toByteArray();
         } finally {
             dos.close();
@@ -208,193 +400,19 @@ public class NbtChunkSerializer implements ChunkSerializer {
     /**
      * Read a CompoundTag from byte array using Minecraft's NBT IO.
      */
-    private CompoundTag readCompoundTagFromBytes(byte[] data) throws IOException {
-        ByteArrayInputStream bais = new ByteArrayInputStream(data);
-        DataInputStream dis = new DataInputStream(bais);
+    private Object readCompoundTagFromBytes(byte[] data, Class<?> nbtIoClass) throws Exception {
+        java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(data);
+        java.io.DataInputStream dis = new java.io.DataInputStream(bais);
         
         try {
-            return NbtIo.read(dis);
+            return nbtIoClass.getMethod("read", java.io.DataInput.class).invoke(null, dis);
         } finally {
             dis.close();
         }
     }
     
     /**
-     * Serialize all chunk sections including block states and data.
-     * This method serializes each non-empty section with complete block data.
-     *
-     * @param chunk The chunk containing sections
-     * @param chunkData The compound tag to store section data in
-     */
-    private void serializeChunkSections(LevelChunk chunk, CompoundTag chunkData) {
-        ListTag sectionsList = new ListTag();
-        
-        for (int y = chunk.getMinSection(); y < chunk.getMaxSection(); y++) {
-            LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(y));
-            if (section != null && !section.hasOnlyAir()) {
-                CompoundTag sectionTag = new CompoundTag();
-                sectionTag.putInt("y", y);
-                
-                // Serialize block states
-                serializeBlockStates(section, sectionTag);
-                
-                // Serialize block light data if present
-                // Note: Light data is typically handled by the server's light engine
-                // and may not be directly accessible from the section
-                
-                sectionsList.add(sectionTag);
-            }
-        }
-        
-        chunkData.put("sections", sectionsList);
-    }
-    
-    /**
-     * Serialize block states for a chunk section.
-     * This method serializes all block states in the section using a compact format.
-     *
-     * @param section The chunk section containing block states
-     * @param sectionTag The compound tag to store block state data in
-     */
-    private void serializeBlockStates(LevelChunkSection section, CompoundTag sectionTag) {
-        ListTag blockStatesList = new ListTag();
-        
-        for (int x = 0; x < 16; x++) {
-            for (int y = 0; y < 16; y++) {
-                for (int z = 0; z < 16; z++) {
-                    BlockState blockState = section.getBlockState(x, y, z);
-                    if (!blockState.isAir()) {
-                        CompoundTag blockTag = new CompoundTag();
-                        blockTag.putInt("x", x);
-                        blockTag.putInt("y", y);
-                        blockTag.putInt("z", z);
-                        blockTag.putString("block", blockState.toString());
-                        blockStatesList.add(blockTag);
-                    }
-                }
-            }
-        }
-        
-        sectionTag.put("block_states", blockStatesList);
-    }
-    
-    /**
-     * Serialize heightmaps for the chunk.
-     * This method saves heightmap data for terrain generation.
-     *
-     * @param chunk The chunk containing heightmap data
-     * @param chunkData The compound tag to store heightmap data in
-     * @throws IOException if heightmap serialization fails critically
-     */
-    private void serializeHeightmaps(LevelChunk chunk, CompoundTag chunkData) throws IOException {
-        CompoundTag heightmapsTag = new CompoundTag();
-        
-        // Serialize basic heightmap information
-        // Note: Heightmap data is typically stored within the chunk's internal structure
-        // and accessed during chunk serialization through Minecraft's built-in mechanisms
-        try {
-            // Store basic height information for the chunk
-            int minHeight = chunk.getMinBuildHeight();
-            int maxHeight = chunk.getMaxBuildHeight();
-            heightmapsTag.putInt("minHeight", minHeight);
-            heightmapsTag.putInt("maxHeight", maxHeight);
-            
-            // Store surface height information at key positions
-            // This provides basic terrain height data for reconstruction
-            for (int x = 0; x < 16; x += 4) {
-                for (int z = 0; z < 16; z += 4) {
-                    // Find surface height at this position
-                    int surfaceY = findSurfaceHeight(chunk, x, z, minHeight, maxHeight);
-                    String key = "height_" + x + "_" + z;
-                    heightmapsTag.putInt(key, surfaceY);
-                }
-            }
-        } catch (NullPointerException e) {
-            // Handle null chunk or heightmap data access
-            LOGGER.warn("Null pointer while serializing heightmaps for chunk at ({}, {}): {}",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
-            throw new IOException("Heightmap data is corrupted or inaccessible", e);
-        } catch (IllegalArgumentException e) {
-            // Handle invalid height values or coordinates
-            LOGGER.error("Invalid heightmap data for chunk at ({}, {}): {}",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
-            throw new IOException("Invalid heightmap configuration", e);
-        } catch (IndexOutOfBoundsException e) {
-            // Handle coordinate out of bounds during height calculation
-            LOGGER.error("Coordinate out of bounds while serializing heightmaps for chunk at ({}, {}): {}",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
-            throw new IOException("Heightmap coordinate validation failed", e);
-        } catch (UnsupportedOperationException e) {
-            // Handle unsupported operations on chunk data
-            LOGGER.error("Unsupported operation while accessing heightmap data for chunk at ({}, {}): {}",
-                chunk.getPos().x, chunk.getPos().z, e.getMessage(), e);
-            throw new IOException("Heightmap operation not supported", e);
-        }
-        
-        chunkData.put("heightmaps", heightmapsTag);
-    }
-    
-    /**
-     * Find the surface height at a given position within the chunk.
-     * This method scans from top to bottom to find the first non-air block.
-     *
-     * @param chunk The chunk to search
-     * @param x Local x coordinate within chunk (0-15)
-     * @param z Local z coordinate within chunk (0-15)
-     * @param minHeight Minimum build height
-     * @param maxHeight Maximum build height
-     * @return The y-coordinate of the surface, or minHeight if no surface found
-     */
-    private int findSurfaceHeight(LevelChunk chunk, int x, int z, int minHeight, int maxHeight) {
-        for (int y = maxHeight - 1; y >= minHeight; y--) {
-            BlockPos pos = new BlockPos(chunk.getPos().getMinBlockX() + x, y, chunk.getPos().getMinBlockZ() + z);
-            if (!chunk.getBlockState(pos).isAir()) {
-                return y;
-            }
-        }
-        return minHeight;
-    }
-    
-    /**
-     * Serialize block entities from a chunk into the provided compound tag.
-     * This method extracts the nested try block to improve code readability.
-     *
-     * @param chunk The chunk containing block entities
-     * @param chunkData The compound tag to store block entity data in
-     */
-    private void serializeBlockEntities(LevelChunk chunk, CompoundTag chunkData) {
-        for (BlockPos pos : chunk.getBlockEntitiesPos()) {
-            BlockEntity blockEntity = chunk.getBlockEntity(pos);
-            if (blockEntity != null) {
-                try {
-                    // Create a simple tag for the block entity
-                    CompoundTag beTag = new CompoundTag();
-                    beTag.putInt("x", pos.getX());
-                    beTag.putInt("y", pos.getY());
-                    beTag.putInt("z", pos.getZ());
-                    beTag.putString("id", blockEntity.getType().toString());
-                    chunkData.put("block_entity_" + pos.getX() + "_" + pos.getY() + "_" + pos.getZ(), beTag);
-                } catch (Exception e) {
-                    // Log the exception with contextual information and continue serializing other
-                    // block entities. We intentionally handle the exception (don't rethrow) to
-                    // avoid failing the whole chunk serialization due to a single bad block
-                    // entity. Use WARN level because this indicates potentially corrupt data.
-                    String beType = "<unknown>";
-                    try {
-                        beType = blockEntity.getType().toString();
-                    } catch (Exception ex) {
-                        // ignore - we still want to log the original exception
-                    }
-                    LOGGER.warn("Could not serialize block entity at {} (type: {}): {}",
-                        pos, beType, e.getMessage(), e);
-                }
-            }
-        }
-    }
-    
-    /**
      * Calculate checksum for data integrity verification.
-     * Uses a simple but effective checksum algorithm.
      */
     private long calculateChecksum(byte[] data) {
         if (data == null || data.length == 0) {

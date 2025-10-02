@@ -1,6 +1,5 @@
 package com.kneaf.core.chunkstorage;
 
-import net.minecraft.world.level.chunk.LevelChunk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,8 +14,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 
 /**
- * Thread-safe in-memory cache for LevelChunk objects with configurable capacity and eviction policies.
+ * Thread-safe in-memory cache for chunk objects with configurable capacity and eviction policies.
  * Tracks chunk state (Hot/Cold/Dirty/Serialized) for intelligent caching decisions.
+ * Uses Object type to avoid direct dependency on Minecraft LevelChunk class.
  */
 public class ChunkCache {
     private static final Logger LOGGER = LoggerFactory.getLogger(ChunkCache.class);
@@ -46,9 +46,10 @@ public class ChunkCache {
     
     /**
      * Represents a cached chunk with metadata.
+     * Uses Object type to avoid direct dependency on Minecraft LevelChunk class.
      */
     public static class CachedChunk {
-        private final LevelChunk chunk;
+        private final Object chunk;
         private final long lastAccessTime;
         private final long creationTime;
         private final AtomicInteger accessCount;
@@ -58,7 +59,7 @@ public class ChunkCache {
         private volatile long swapCompleteTime;
         private volatile String swapError;
         
-        public CachedChunk(LevelChunk chunk) {
+        public CachedChunk(Object chunk) {
             this.chunk = chunk;
             this.creationTime = System.currentTimeMillis();
             this.lastAccessTime = creationTime;
@@ -70,7 +71,34 @@ public class ChunkCache {
             this.swapError = null;
         }
         
-        public LevelChunk getChunk() { return chunk; }
+        public Object getChunk() { return chunk; }
+        
+        /**
+         * Get the chunk as a LevelChunk if it's the correct type, otherwise return null.
+         * This method uses reflection to avoid direct dependency on Minecraft classes.
+         */
+        public Object getChunkAsLevelChunk() {
+            try {
+                // Check if the chunk is a Minecraft LevelChunk using reflection
+                if (chunk != null && Class.forName("net.minecraft.world.level.chunk.LevelChunk").isInstance(chunk)) {
+                    return chunk;
+                }
+            } catch (ClassNotFoundException e) {
+                // Minecraft classes not available, return null
+            }
+            return null;
+        }
+        
+        /**
+         * Check if this chunk is a Minecraft LevelChunk.
+         */
+        public boolean isLevelChunk() {
+            try {
+                return chunk != null && Class.forName("net.minecraft.world.level.chunk.LevelChunk").isInstance(chunk);
+            } catch (ClassNotFoundException e) {
+                return false;
+            }
+        }
         public long getLastAccessTime() { return lastAccessTime; }
         public long getCreationTime() { return creationTime; }
         public int getAccessCount() { return accessCount.get(); }
@@ -418,12 +446,12 @@ public class ChunkCache {
     
     /**
      * Put a chunk into the cache.
-     * 
+     *
      * @param key The chunk key
-     * @param chunk The LevelChunk to cache
+     * @param chunk The chunk object to cache (can be LevelChunk or any object)
      * @return The evicted chunk if cache was full, null otherwise
      */
-    public CachedChunk putChunk(String key, LevelChunk chunk) {
+    public CachedChunk putChunk(String key, Object chunk) {
         if (key == null || key.isEmpty() || chunk == null) {
             throw new IllegalArgumentException("Key and chunk cannot be null or empty");
         }
@@ -438,7 +466,7 @@ public class ChunkCache {
                     evictionCount.incrementAndGet();
                     
                     if (LOGGER.isDebugEnabled()) {
-                        LOGGER.debug("Evicted chunk {} from cache (policy: {})", 
+                        LOGGER.debug("Evicted chunk {} from cache (policy: {})",
                                    keyToEvict, evictionPolicy.getPolicyName());
                     }
                     

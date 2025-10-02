@@ -1,7 +1,7 @@
 package com.kneaf.core.chunkstorage;
 
 import org.slf4j.Logger;
-import com.mojang.logging.LogUtils;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.ObjectOutputStream;
@@ -22,7 +22,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * Uses ConcurrentHashMap for thread-safe operations.
  */
 public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(InMemoryDatabaseAdapter.class);
     
     /**
      * Exception thrown for database operation failures.

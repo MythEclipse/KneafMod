@@ -339,7 +339,7 @@ public class SwapManager {
             startMemoryMonitoring();
             LOGGER.info("SwapManager initialized with config: {}", config);
         } else {
-            LOGGER.info("SwapManager disabled");
+            LOGGER.info("SwapManager disabled by configuration");
         }
     }
     
@@ -791,7 +791,8 @@ public class SwapManager {
         }
         
         // Serialize chunk data
-        byte[] serializedData = serializeChunk(cachedChunk.getChunk());
+        Object chunkObject = cachedChunk.getChunk();
+        byte[] serializedData = serializeChunk(chunkObject);
         if (serializedData == null) {
             LOGGER.error("Failed to serialize chunk for swap-out: {}", chunkKey);
             return false;
@@ -839,12 +840,18 @@ public class SwapManager {
         }
     }
     
-    private byte[] serializeChunk(LevelChunk chunk) {
+    private byte[] serializeChunk(Object chunk) {
         // This would use the chunk serializer from ChunkStorageManager
         // For now, return a dummy implementation
         try {
-            // Simulate serialization
-            return new byte[1024]; // Placeholder
+            // Check if it's a LevelChunk first
+            if (chunk != null && Class.forName("net.minecraft.world.level.chunk.LevelChunk").isInstance(chunk)) {
+                // Simulate serialization - in real implementation this would use proper serializer
+                return new byte[1024]; // Placeholder
+            } else {
+                // For non-LevelChunk objects, return empty array
+                return new byte[0];
+            }
         } catch (Exception e) {
             LOGGER.error("Failed to serialize chunk", e);
             return null;

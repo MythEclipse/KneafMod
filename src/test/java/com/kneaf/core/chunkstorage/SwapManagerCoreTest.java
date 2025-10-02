@@ -165,12 +165,29 @@ public class SwapManagerCoreTest {
     void testSwapManagerStatistics() {
         System.out.println("Testing SwapManager Statistics...");
         
-        swapManager = new SwapManager(swapConfig);
+        // Create fresh config to ensure it's enabled
+        SwapManager.SwapConfig freshConfig = new SwapManager.SwapConfig();
+        freshConfig.setEnabled(true);
+        freshConfig.setMemoryCheckIntervalMs(1000);
+        freshConfig.setMaxConcurrentSwaps(3);
+        freshConfig.setSwapBatchSize(5);
+        freshConfig.setEnableAutomaticSwapping(true);
+        freshConfig.setCriticalMemoryThreshold(0.95);
+        freshConfig.setHighMemoryThreshold(0.85);
+        freshConfig.setElevatedMemoryThreshold(0.75);
+        
+        swapManager = new SwapManager(freshConfig);
         
         SwapManager.SwapManagerStats stats = swapManager.getStats();
         
+        // Debug information
+        System.out.println("✓ Fresh config enabled: " + freshConfig.isEnabled());
+        System.out.println("✓ Stats enabled: " + stats.isEnabled());
+        System.out.println("✓ SwapManager instance: " + swapManager);
+        System.out.println("✓ Stats instance: " + stats);
+        
         // Test basic statistics
-        assertTrue(stats.isEnabled(), "Swap manager should be enabled");
+        assertTrue(stats.isEnabled(), "Swap manager should be enabled (config: " + freshConfig.isEnabled() + ", stats: " + stats.isEnabled() + ")");
         assertNotNull(stats.getPressureLevel(), "Pressure level should not be null");
         assertEquals(0, stats.getTotalOperations(), "Total operations should be 0");
         assertEquals(0, stats.getFailedOperations(), "Failed operations should be 0");

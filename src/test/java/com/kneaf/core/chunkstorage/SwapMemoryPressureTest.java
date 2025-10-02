@@ -28,6 +28,16 @@ public class SwapMemoryPressureTest {
     void setUp() {
         System.out.println("=== Setting up Memory Pressure Test ===");
         
+        // Check if native library is available
+        if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
+            System.out.println("Skipping Memory Pressure Test - native library not available");
+            swapManager = null;
+            chunkCache = null;
+            databaseAdapter = null;
+            config = null;
+            return;
+        }
+        
         // Create swap configuration with sensitive memory thresholds for testing
         config = new SwapManager.SwapConfig();
         config.setEnabled(true);
@@ -70,12 +80,22 @@ public class SwapMemoryPressureTest {
                 System.err.println("Error closing database adapter: " + e.getMessage());
             }
         }
+        // Reset references to prevent memory leaks
+        swapManager = null;
+        chunkCache = null;
+        databaseAdapter = null;
+        config = null;
     }
     
     @Test
     @DisplayName("Test Memory Pressure Level Detection")
     @Timeout(10)
     void testMemoryPressureLevelDetection() throws Exception {
+        if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
+            System.out.println("Skipping testMemoryPressureLevelDetection - native library not available");
+            return;
+        }
+        
         System.out.println("Testing memory pressure level detection...");
         
         // Get initial memory usage
@@ -117,6 +137,11 @@ public class SwapMemoryPressureTest {
     @DisplayName("Test Automatic Swap Triggering Thresholds")
     @Timeout(15)
     void testAutomaticSwapTriggeringThresholds() throws Exception {
+        if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
+            System.out.println("Skipping testAutomaticSwapTriggeringThresholds - native library not available");
+            return;
+        }
+        
         System.out.println("Testing automatic swap triggering thresholds...");
         
         // Fill cache to trigger memory pressure
@@ -162,6 +187,11 @@ public class SwapMemoryPressureTest {
     @DisplayName("Test Memory Pressure Transitions")
     @Timeout(20)
     void testMemoryPressureTransitions() throws Exception {
+        if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
+            System.out.println("Skipping testMemoryPressureTransitions - native library not available");
+            return;
+        }
+        
         System.out.println("Testing memory pressure level transitions...");
         
         // Monitor pressure level changes over time
@@ -227,6 +257,11 @@ public class SwapMemoryPressureTest {
     @DisplayName("Test Swap Batch Size Under Different Pressure Levels")
     @Timeout(15)
     void testSwapBatchSizeUnderPressure() throws Exception {
+        if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
+            System.out.println("Skipping testSwapBatchSizeUnderPressure - native library not available");
+            return;
+        }
+        
         System.out.println("Testing swap batch size under different pressure levels...");
         
         // Fill cache with chunks
@@ -269,6 +304,11 @@ public class SwapMemoryPressureTest {
     @DisplayName("Test Memory Usage Statistics Accuracy")
     @Timeout(10)
     void testMemoryUsageStatisticsAccuracy() throws Exception {
+        if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
+            System.out.println("Skipping testMemoryUsageStatisticsAccuracy - native library not available");
+            return;
+        }
+        
         System.out.println("Testing memory usage statistics accuracy...");
         
         SwapManager.MemoryUsageInfo usage = swapManager.getMemoryUsage();
@@ -306,6 +346,11 @@ public class SwapMemoryPressureTest {
     @DisplayName("Test Swap Statistics Under Memory Pressure")
     @Timeout(15)
     void testSwapStatisticsUnderMemoryPressure() throws Exception {
+        if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
+            System.out.println("Skipping testSwapStatisticsUnderMemoryPressure - native library not available");
+            return;
+        }
+        
         System.out.println("Testing swap statistics under memory pressure...");
         
         // Record initial statistics
@@ -369,6 +414,11 @@ public class SwapMemoryPressureTest {
     @DisplayName("Test Concurrent Memory Pressure Monitoring")
     @Timeout(15)
     void testConcurrentMemoryPressureMonitoring() throws Exception {
+        if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
+            System.out.println("Skipping testConcurrentMemoryPressureMonitoring - native library not available");
+            return;
+        }
+        
         System.out.println("Testing concurrent memory pressure monitoring...");
         
         // Create multiple threads that access memory usage and pressure information

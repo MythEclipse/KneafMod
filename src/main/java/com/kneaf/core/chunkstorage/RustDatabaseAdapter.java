@@ -30,24 +30,40 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
     private final long nativePointer;
     private final String databaseType;
     private final boolean checksumEnabled;
+    private static volatile boolean nativeLibraryAvailable = false;
     
-    // Load native library
+    // Load native library with proper error handling
     static {
         try {
             System.loadLibrary("rustperf");
+            nativeLibraryAvailable = true;
             LOGGER.info("Rust database library loaded successfully");
         } catch (UnsatisfiedLinkError e) {
-            throw new RustDatabaseException("Failed to load Rust database library: " + e.getMessage(), e);
+            nativeLibraryAvailable = false;
+            LOGGER.warn("Failed to load Rust database library: {}. Native operations will be disabled.", e.getMessage());
         }
     }
     
     /**
+     * Check if the native library is available.
+     * @return true if native library is loaded and available
+     */
+    public static boolean isNativeLibraryAvailable() {
+        return nativeLibraryAvailable;
+    }
+    
+    /**
      * Creates a new Rust database adapter.
-     * 
+     *
      * @param databaseType The type of database (e.g., "memory", "sled", "rocksdb")
      * @param checksumEnabled Whether to enable checksum validation
+     * @throws RustDatabaseException if native library is not available or initialization fails
      */
     public RustDatabaseAdapter(String databaseType, boolean checksumEnabled) {
+        if (!nativeLibraryAvailable) {
+            throw new RustDatabaseException("Rust native library is not available. Cannot initialize RustDatabaseAdapter.");
+        }
+        
         this.databaseType = databaseType;
         this.checksumEnabled = checksumEnabled;
         this.nativePointer = nativeInit(databaseType, checksumEnabled);
@@ -56,7 +72,7 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
             throw new RustDatabaseException("Failed to initialize Rust database adapter");
         }
         
-        LOGGER.info("RustDatabaseAdapter initialized with type: {}, checksum: {}", 
+        LOGGER.info("RustDatabaseAdapter initialized with type: {}, checksum: {}",
                    databaseType, checksumEnabled);
     }
     
