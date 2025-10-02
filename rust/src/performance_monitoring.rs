@@ -29,6 +29,60 @@ impl Default for BatchMetrics {
     }
 }
 
+/// Swap operation metrics for comprehensive swap performance tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwapMetrics {
+    pub swap_in_operations: u64,
+    pub swap_out_operations: u64,
+    pub swap_failures: u64,
+    pub swap_in_bytes: u64,
+    pub swap_out_bytes: u64,
+    pub swap_in_time_ms: u64,
+    pub swap_out_time_ms: u64,
+    pub average_swap_in_time_ms: f64,
+    pub average_swap_out_time_ms: f64,
+    pub swap_hit_rate: f64,
+    pub swap_miss_rate: f64,
+    pub swap_io_throughput_mbps: f64,
+    pub swap_latency_ms: f64,
+    pub memory_pressure_level: String,
+    pub pressure_trigger_events: u64,
+    pub swap_pool_usage_bytes: u64,
+    pub swap_pool_capacity_bytes: u64,
+    pub swap_pool_efficiency: f64,
+    pub swap_cleanup_operations: u64,
+    pub swap_health_status: String,
+    pub swap_component_failures: u64,
+}
+
+impl Default for SwapMetrics {
+    fn default() -> Self {
+        Self {
+            swap_in_operations: 0,
+            swap_out_operations: 0,
+            swap_failures: 0,
+            swap_in_bytes: 0,
+            swap_out_bytes: 0,
+            swap_in_time_ms: 0,
+            swap_out_time_ms: 0,
+            average_swap_in_time_ms: 0.0,
+            average_swap_out_time_ms: 0.0,
+            swap_hit_rate: 0.0,
+            swap_miss_rate: 0.0,
+            swap_io_throughput_mbps: 0.0,
+            swap_latency_ms: 0.0,
+            memory_pressure_level: "Normal".to_string(),
+            pressure_trigger_events: 0,
+            swap_pool_usage_bytes: 0,
+            swap_pool_capacity_bytes: 0,
+            swap_pool_efficiency: 0.0,
+            swap_cleanup_operations: 0,
+            swap_health_status: "Healthy".to_string(),
+            swap_component_failures: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metrics {
     pub operations_total: u64,
@@ -46,6 +100,7 @@ pub struct Metrics {
     pub thread_pool_utilization: f64,
     pub batch_sizes: HashMap<String, BatchMetrics>,
     pub errors_by_type: HashMap<String, u64>,
+    pub swap_metrics: SwapMetrics,
 }
 
 impl Default for Metrics {
@@ -66,6 +121,27 @@ impl Default for Metrics {
             thread_pool_utilization: 0.0,
             batch_sizes: HashMap::new(),
             errors_by_type: HashMap::new(),
+            swap_metrics: SwapMetrics::default(),
+        }
+    }
+}
+
+/// Swap health status for component monitoring
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapHealthStatus {
+    Healthy,
+    Degraded,
+    Unhealthy,
+    Failed,
+}
+
+impl SwapHealthStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SwapHealthStatus::Healthy => "Healthy",
+            SwapHealthStatus::Degraded => "Degraded",
+            SwapHealthStatus::Unhealthy => "Unhealthy",
+            SwapHealthStatus::Failed => "Failed",
         }
     }
 }
@@ -79,6 +155,22 @@ pub struct PerformanceMonitor {
     sound_hard_limit: Arc<AtomicU32>,
     base_sound_warn_threshold: Arc<AtomicU32>,
     base_sound_hard_limit: Arc<AtomicU32>,
+    // Swap-specific atomic counters for thread-safe tracking
+    swap_in_operations: Arc<AtomicU64>,
+    swap_out_operations: Arc<AtomicU64>,
+    swap_failures: Arc<AtomicU64>,
+    swap_in_bytes: Arc<AtomicU64>,
+    swap_out_bytes: Arc<AtomicU64>,
+    swap_in_time_ms: Arc<AtomicU64>,
+    swap_out_time_ms: Arc<AtomicU64>,
+    swap_hits: Arc<AtomicU64>,
+    swap_misses: Arc<AtomicU64>,
+    swap_io_operations: Arc<AtomicU64>,
+    swap_cleanup_operations: Arc<AtomicU64>,
+    swap_component_failures: Arc<AtomicU32>,
+    memory_pressure_events: Arc<AtomicU32>,
+    swap_pool_usage_bytes: Arc<AtomicU64>,
+    swap_pool_capacity_bytes: Arc<AtomicU64>,
 }
 
 impl PerformanceMonitor {
@@ -107,6 +199,22 @@ impl PerformanceMonitor {
             sound_hard_limit: Arc::new(AtomicU32::new(247)),
             base_sound_warn_threshold: Arc::new(AtomicU32::new(220)),
             base_sound_hard_limit: Arc::new(AtomicU32::new(247)),
+            // Initialize swap-specific atomic counters
+            swap_in_operations: Arc::new(AtomicU64::new(0)),
+            swap_out_operations: Arc::new(AtomicU64::new(0)),
+            swap_failures: Arc::new(AtomicU64::new(0)),
+            swap_in_bytes: Arc::new(AtomicU64::new(0)),
+            swap_out_bytes: Arc::new(AtomicU64::new(0)),
+            swap_in_time_ms: Arc::new(AtomicU64::new(0)),
+            swap_out_time_ms: Arc::new(AtomicU64::new(0)),
+            swap_hits: Arc::new(AtomicU64::new(0)),
+            swap_misses: Arc::new(AtomicU64::new(0)),
+            swap_io_operations: Arc::new(AtomicU64::new(0)),
+            swap_cleanup_operations: Arc::new(AtomicU64::new(0)),
+            swap_component_failures: Arc::new(AtomicU32::new(0)),
+            memory_pressure_events: Arc::new(AtomicU32::new(0)),
+            swap_pool_usage_bytes: Arc::new(AtomicU64::new(0)),
+            swap_pool_capacity_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -124,6 +232,22 @@ impl PerformanceMonitor {
         for c in self.counters.values() {
             c.store(0, Ordering::Relaxed);
         }
+        // Reset swap-specific atomic counters
+        self.swap_in_operations.store(0, Ordering::Relaxed);
+        self.swap_out_operations.store(0, Ordering::Relaxed);
+        self.swap_failures.store(0, Ordering::Relaxed);
+        self.swap_in_bytes.store(0, Ordering::Relaxed);
+        self.swap_out_bytes.store(0, Ordering::Relaxed);
+        self.swap_in_time_ms.store(0, Ordering::Relaxed);
+        self.swap_out_time_ms.store(0, Ordering::Relaxed);
+        self.swap_hits.store(0, Ordering::Relaxed);
+        self.swap_misses.store(0, Ordering::Relaxed);
+        self.swap_io_operations.store(0, Ordering::Relaxed);
+        self.swap_cleanup_operations.store(0, Ordering::Relaxed);
+        self.swap_component_failures.store(0, Ordering::Relaxed);
+        self.memory_pressure_events.store(0, Ordering::Relaxed);
+        self.swap_pool_usage_bytes.store(0, Ordering::Relaxed);
+        self.swap_pool_capacity_bytes.store(0, Ordering::Relaxed);
         log::info!("Performance metrics reset");
     }
 
@@ -323,6 +447,8 @@ impl PerformanceMonitor {
             loop {
                 std::thread::sleep(Duration::from_millis(200));
                 if last.elapsed() >= interval {
+                    // Update swap metrics before logging
+                    monitor.update_swap_metrics();
                     let metrics = monitor.get_metrics();
                     let trace = generate_trace_id();
                     monitor.logger.log_operation("periodic_metrics", &trace, || {
@@ -332,6 +458,240 @@ impl PerformanceMonitor {
                 }
             }
         });
+    }
+
+    /// Record swap-in operation with timing and byte tracking
+    pub fn record_swap_in(&self, bytes: u64, duration: Duration) {
+        let ms = duration.as_millis() as u64;
+        self.swap_in_operations.fetch_add(1, Ordering::Relaxed);
+        self.swap_in_bytes.fetch_add(bytes, Ordering::Relaxed);
+        
+        let mut current_total_time = self.swap_in_time_ms.load(Ordering::Relaxed);
+        loop {
+            let new_total = current_total_time + ms;
+            match self.swap_in_time_ms.compare_exchange_weak(
+                current_total_time,
+                new_total,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current_total_time = actual,
+            }
+        }
+        
+        let trace_id = generate_trace_id();
+        self.logger.log_operation("swap_in", &trace_id, || {
+            log::debug!("Recorded swap-in: {} bytes in {}ms", bytes, ms);
+        });
+    }
+
+    /// Record swap-out operation with timing and byte tracking
+    pub fn record_swap_out(&self, bytes: u64, duration: Duration) {
+        let ms = duration.as_millis() as u64;
+        self.swap_out_operations.fetch_add(1, Ordering::Relaxed);
+        self.swap_out_bytes.fetch_add(bytes, Ordering::Relaxed);
+        
+        let mut current_total_time = self.swap_out_time_ms.load(Ordering::Relaxed);
+        loop {
+            let new_total = current_total_time + ms;
+            match self.swap_out_time_ms.compare_exchange_weak(
+                current_total_time,
+                new_total,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current_total_time = actual,
+            }
+        }
+        
+        let trace_id = generate_trace_id();
+        self.logger.log_operation("swap_out", &trace_id, || {
+            log::debug!("Recorded swap-out: {} bytes in {}ms", bytes, ms);
+        });
+    }
+
+    /// Record swap failure with error context
+    pub fn record_swap_failure(&self, error_type: &str, context: &str) {
+        self.swap_failures.fetch_add(1, Ordering::Relaxed);
+        
+        let trace_id = generate_trace_id();
+        self.logger.log_operation("swap_failure", &trace_id, || {
+            log::error!("Swap failure recorded: type={}, context={}", error_type, context);
+        });
+    }
+
+    /// Record swap cache hit/miss for I/O performance tracking
+    pub fn record_swap_cache_hit(&self) {
+        self.swap_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_swap_cache_miss(&self) {
+        self.swap_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record swap I/O operation for throughput calculation
+    pub fn record_swap_io_operation(&self, bytes_transferred: u64, duration: Duration) {
+        self.swap_io_operations.fetch_add(1, Ordering::Relaxed);
+        
+        let trace_id = generate_trace_id();
+        let throughput_mbps = (bytes_transferred as f64 * 8.0) / (duration.as_secs_f64() * 1_000_000.0);
+        
+        self.logger.log_operation("swap_io", &trace_id, || {
+            log::debug!("Swap I/O: {} bytes in {:.2}s ({:.2} Mbps)", bytes_transferred, duration.as_secs_f64(), throughput_mbps);
+        });
+    }
+
+    /// Record memory pressure level and trigger events
+    pub fn record_memory_pressure(&self, pressure_level: &str, triggered_cleanup: bool) {
+        self.memory_pressure_events.fetch_add(1, Ordering::Relaxed);
+        
+        if triggered_cleanup {
+            self.swap_cleanup_operations.fetch_add(1, Ordering::Relaxed);
+        }
+        
+        let trace_id = generate_trace_id();
+        let log_level = match pressure_level {
+            "Normal" => log::Level::Debug,
+            "Moderate" => log::Level::Info,
+            "High" => log::Level::Warn,
+            "Critical" => log::Level::Error,
+            _ => log::Level::Info,
+        };
+        
+        self.logger.log_operation("memory_pressure", &trace_id, || {
+            log::log!(log_level, "Memory pressure: {} (cleanup: {})", pressure_level, triggered_cleanup);
+        });
+    }
+
+    /// Record swap pool usage and capacity for efficiency tracking
+    pub fn record_swap_pool_usage(&self, usage_bytes: u64, capacity_bytes: u64) {
+        self.swap_pool_usage_bytes.store(usage_bytes, Ordering::Relaxed);
+        self.swap_pool_capacity_bytes.store(capacity_bytes, Ordering::Relaxed);
+        
+        let efficiency = if capacity_bytes > 0 {
+            (usage_bytes as f64 / capacity_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
+        
+        let trace_id = generate_trace_id();
+        self.logger.log_operation("swap_pool_usage", &trace_id, || {
+            log::debug!("Swap pool usage: {} / {} bytes ({:.1}% efficiency)", usage_bytes, capacity_bytes, efficiency);
+        });
+    }
+
+    /// Record swap component health status and failures
+    pub fn record_swap_component_status(&self, component: &str, status: SwapHealthStatus, failure_reason: Option<&str>) {
+        if status != SwapHealthStatus::Healthy {
+            self.swap_component_failures.fetch_add(1, Ordering::Relaxed);
+        }
+        
+        let trace_id = generate_trace_id();
+        let log_level = match status {
+            SwapHealthStatus::Healthy => log::Level::Debug,
+            SwapHealthStatus::Degraded => log::Level::Info,
+            SwapHealthStatus::Unhealthy => log::Level::Warn,
+            SwapHealthStatus::Failed => log::Level::Error,
+        };
+        
+        self.logger.log_operation("swap_component_status", &trace_id, || {
+            if let Some(reason) = failure_reason {
+                log::log!(log_level, "Swap component {} status: {} - {}", component, status.as_str(), reason);
+            } else {
+                log::log!(log_level, "Swap component {} status: {}", component, status.as_str());
+            }
+        });
+    }
+
+    /// Update swap metrics with current atomic counter values
+    pub fn update_swap_metrics(&self) {
+        let mut m = self.metrics.lock().unwrap();
+        
+        // Update swap operation counts
+        m.swap_metrics.swap_in_operations = self.swap_in_operations.load(Ordering::Relaxed);
+        m.swap_metrics.swap_out_operations = self.swap_out_operations.load(Ordering::Relaxed);
+        m.swap_metrics.swap_failures = self.swap_failures.load(Ordering::Relaxed);
+        
+        // Update byte counters
+        m.swap_metrics.swap_in_bytes = self.swap_in_bytes.load(Ordering::Relaxed);
+        m.swap_metrics.swap_out_bytes = self.swap_out_bytes.load(Ordering::Relaxed);
+        
+        // Update timing metrics
+        let swap_in_ops = m.swap_metrics.swap_in_operations;
+        let swap_out_ops = m.swap_metrics.swap_out_operations;
+        let swap_in_time = self.swap_in_time_ms.load(Ordering::Relaxed);
+        let swap_out_time = self.swap_out_time_ms.load(Ordering::Relaxed);
+        
+        m.swap_metrics.average_swap_in_time_ms = if swap_in_ops > 0 {
+            swap_in_time as f64 / swap_in_ops as f64
+        } else {
+            0.0
+        };
+        
+        m.swap_metrics.average_swap_out_time_ms = if swap_out_ops > 0 {
+            swap_out_time as f64 / swap_out_ops as f64
+        } else {
+            0.0
+        };
+        
+        // Update cache hit/miss rates
+        let total_cache_ops = self.swap_hits.load(Ordering::Relaxed) + self.swap_misses.load(Ordering::Relaxed);
+        if total_cache_ops > 0 {
+            m.swap_metrics.swap_hit_rate = (self.swap_hits.load(Ordering::Relaxed) as f64 / total_cache_ops as f64) * 100.0;
+            m.swap_metrics.swap_miss_rate = (self.swap_misses.load(Ordering::Relaxed) as f64 / total_cache_ops as f64) * 100.0;
+        }
+        
+        // Update I/O throughput (simplified calculation)
+        let total_bytes = m.swap_metrics.swap_in_bytes + m.swap_metrics.swap_out_bytes;
+        let total_time_seconds = (swap_in_time + swap_out_time) as f64 / 1000.0;
+        m.swap_metrics.swap_io_throughput_mbps = if total_time_seconds > 0.0 {
+            (total_bytes as f64 * 8.0) / (total_time_seconds * 1_000_000.0)
+        } else {
+            0.0
+        };
+        
+        // Update latency (average of in/out times)
+        m.swap_metrics.swap_latency_ms = if swap_in_ops + swap_out_ops > 0 {
+            (swap_in_time + swap_out_time) as f64 / (swap_in_ops + swap_out_ops) as f64
+        } else {
+            0.0
+        };
+        
+        // Update pool metrics
+        m.swap_metrics.swap_pool_usage_bytes = self.swap_pool_usage_bytes.load(Ordering::Relaxed);
+        m.swap_metrics.swap_pool_capacity_bytes = self.swap_pool_capacity_bytes.load(Ordering::Relaxed);
+        
+        let capacity = m.swap_metrics.swap_pool_capacity_bytes;
+        m.swap_metrics.swap_pool_efficiency = if capacity > 0 {
+            (m.swap_metrics.swap_pool_usage_bytes as f64 / capacity as f64) * 100.0
+        } else {
+            0.0
+        };
+        
+        // Update cleanup and failure counters
+        m.swap_metrics.swap_cleanup_operations = self.swap_cleanup_operations.load(Ordering::Relaxed);
+        m.swap_metrics.swap_component_failures = self.swap_component_failures.load(Ordering::Relaxed) as u64;
+        m.swap_metrics.pressure_trigger_events = self.memory_pressure_events.load(Ordering::Relaxed) as u64;
+        
+        // Update health status based on failure rate
+        let total_ops = m.swap_metrics.swap_in_operations + m.swap_metrics.swap_out_operations;
+        let failure_rate = if total_ops > 0 {
+            (m.swap_metrics.swap_failures as f64 / total_ops as f64) * 100.0
+        } else {
+            0.0
+        };
+        
+        m.swap_metrics.swap_health_status = if failure_rate > 10.0 {
+            SwapHealthStatus::Failed.as_str().to_string()
+        } else if failure_rate > 5.0 {
+            SwapHealthStatus::Unhealthy.as_str().to_string()
+        } else if failure_rate > 2.0 {
+            SwapHealthStatus::Degraded.as_str().to_string()
+        } else {
+            SwapHealthStatus::Healthy.as_str().to_string()
+        };
     }
 
     pub fn start_dynamic_sound_limit_adjustment(&self, interval: Duration) {
@@ -545,4 +905,134 @@ macro_rules! record_sound_handle_destroyed {
     () => {
         crate::performance_monitoring::get_performance_monitor().record_sound_handle_destroyed();
     };
+}
+
+// Swap-specific macros for easy integration
+#[macro_export]
+macro_rules! record_swap_in {
+    ($bytes:expr, $duration:expr) => {
+        $crate::performance_monitoring::get_performance_monitor()
+            .record_swap_in($bytes, $duration)
+    };
+}
+
+#[macro_export]
+macro_rules! record_swap_out {
+    ($bytes:expr, $duration:expr) => {
+        $crate::performance_monitoring::get_performance_monitor()
+            .record_swap_out($bytes, $duration)
+    };
+}
+
+#[macro_export]
+macro_rules! record_swap_failure {
+    ($error_type:expr, $context:expr) => {
+        $crate::performance_monitoring::get_performance_monitor()
+            .record_swap_failure($error_type, $context)
+    };
+}
+
+#[macro_export]
+macro_rules! record_swap_cache_hit {
+    () => {
+        $crate::performance_monitoring::get_performance_monitor().record_swap_cache_hit();
+    };
+}
+
+#[macro_export]
+macro_rules! record_swap_cache_miss {
+    () => {
+        $crate::performance_monitoring::get_performance_monitor().record_swap_cache_miss();
+    };
+}
+
+#[macro_export]
+macro_rules! record_swap_io_operation {
+    ($bytes:expr, $duration:expr) => {
+        $crate::performance_monitoring::get_performance_monitor()
+            .record_swap_io_operation($bytes, $duration)
+    };
+}
+
+#[macro_export]
+macro_rules! record_memory_pressure {
+    ($level:expr, $triggered_cleanup:expr) => {
+        $crate::performance_monitoring::get_performance_monitor()
+            .record_memory_pressure($level, $triggered_cleanup)
+    };
+}
+
+#[macro_export]
+macro_rules! record_swap_pool_usage {
+    ($usage:expr, $capacity:expr) => {
+        $crate::performance_monitoring::get_performance_monitor()
+            .record_swap_pool_usage($usage, $capacity);
+    };
+}
+
+#[macro_export]
+macro_rules! record_swap_component_status {
+    ($component:expr, $status:expr, $reason:expr) => {
+        crate::performance_monitoring::get_performance_monitor()
+            .record_swap_component_status($component, $status, Some($reason));
+    };
+}
+
+#[macro_export]
+macro_rules! update_swap_metrics {
+    () => {
+        $crate::performance_monitoring::get_performance_monitor().update_swap_metrics();
+    };
+}
+
+/// Integration helper for SwapManager to report swap operations
+pub fn report_swap_operation(swap_type: &str, bytes: u64, duration: Duration, success: bool) {
+    if success {
+        match swap_type {
+            "in" | "swap_in" => record_swap_in!(bytes, duration),
+            "out" | "swap_out" => record_swap_out!(bytes, duration),
+            _ => {
+                log::warn!("Unknown swap operation type: {}", swap_type);
+            }
+        }
+    } else {
+        record_swap_failure!(swap_type, "Operation failed");
+    }
+}
+
+/// Integration helper for MemoryPressureDetector to report pressure levels
+pub fn report_memory_pressure(pressure_level: &str, triggered_cleanup: bool) {
+    record_memory_pressure!(pressure_level, triggered_cleanup);
+}
+
+/// Integration helper for ChunkCache to report cache statistics
+pub fn report_swap_cache_statistics(hits: u64, misses: u64) {
+    for _ in 0..hits {
+        record_swap_cache_hit!();
+    }
+    for _ in 0..misses {
+        record_swap_cache_miss!();
+    }
+}
+
+/// Integration helper for DatabaseAdapter to report I/O performance
+pub fn report_swap_io_performance(bytes_transferred: u64, duration: Duration) {
+    record_swap_io_operation!(bytes_transferred, duration);
+}
+
+/// Integration helper for swap memory pool to report usage
+pub fn report_swap_pool_metrics(usage_bytes: u64, capacity_bytes: u64) {
+    record_swap_pool_usage!(usage_bytes, capacity_bytes);
+}
+
+/// Integration helper for swap health monitoring
+pub fn report_swap_component_health(component: &str, status: SwapHealthStatus, failure_reason: Option<&str>) {
+    get_performance_monitor().record_swap_component_status(component, status, failure_reason);
+}
+
+/// Get comprehensive swap performance summary
+pub fn get_swap_performance_summary() -> SwapMetrics {
+    // Update metrics before returning
+    get_performance_monitor().update_swap_metrics();
+    get_performance_monitor().get_metrics().swap_metrics
 }

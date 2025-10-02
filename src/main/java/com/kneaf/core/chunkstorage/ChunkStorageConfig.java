@@ -19,6 +19,19 @@ public class ChunkStorageConfig {
     private String databaseType = "rust"; // "rust", "inmemory", "rocksdb", "sled", "lmdb"
     private boolean useRustDatabase = true;
     
+    // Swap configuration
+    private boolean enableSwapManager = true;
+    private long swapMemoryCheckIntervalMs = 5000;
+    private int maxConcurrentSwaps = 10;
+    private int swapBatchSize = 50;
+    private long swapTimeoutMs = 30000;
+    private boolean enableAutomaticSwapping = true;
+    private double criticalMemoryThreshold = 0.95;
+    private double highMemoryThreshold = 0.85;
+    private double elevatedMemoryThreshold = 0.75;
+    private int minSwapChunkAgeMs = 60000;
+    private boolean enableSwapStatistics = true;
+    
     public ChunkStorageConfig() {}
     
     public ChunkStorageConfig(boolean enabled, int cacheCapacity, String evictionPolicy) {
@@ -164,16 +177,78 @@ public class ChunkStorageConfig {
         this.useRustDatabase = useRustDatabase;
     }
     
+    // Swap configuration getters and setters
+    public boolean isEnableSwapManager() { return enableSwapManager; }
+    public void setEnableSwapManager(boolean enableSwapManager) { this.enableSwapManager = enableSwapManager; }
+    
+    public long getSwapMemoryCheckIntervalMs() { return swapMemoryCheckIntervalMs; }
+    public void setSwapMemoryCheckIntervalMs(long swapMemoryCheckIntervalMs) {
+        this.swapMemoryCheckIntervalMs = swapMemoryCheckIntervalMs;
+    }
+    
+    public int getMaxConcurrentSwaps() { return maxConcurrentSwaps; }
+    public void setMaxConcurrentSwaps(int maxConcurrentSwaps) {
+        this.maxConcurrentSwaps = maxConcurrentSwaps;
+    }
+    
+    public int getSwapBatchSize() { return swapBatchSize; }
+    public void setSwapBatchSize(int swapBatchSize) {
+        this.swapBatchSize = swapBatchSize;
+    }
+    
+    public long getSwapTimeoutMs() { return swapTimeoutMs; }
+    public void setSwapTimeoutMs(long swapTimeoutMs) {
+        this.swapTimeoutMs = swapTimeoutMs;
+    }
+    
+    public boolean isEnableAutomaticSwapping() { return enableAutomaticSwapping; }
+    public void setEnableAutomaticSwapping(boolean enableAutomaticSwapping) {
+        this.enableAutomaticSwapping = enableAutomaticSwapping;
+    }
+    
+    public double getCriticalMemoryThreshold() { return criticalMemoryThreshold; }
+    public void setCriticalMemoryThreshold(double criticalMemoryThreshold) {
+        this.criticalMemoryThreshold = criticalMemoryThreshold;
+    }
+    
+    public double getHighMemoryThreshold() { return highMemoryThreshold; }
+    public void setHighMemoryThreshold(double highMemoryThreshold) {
+        this.highMemoryThreshold = highMemoryThreshold;
+    }
+    
+    public double getElevatedMemoryThreshold() { return elevatedMemoryThreshold; }
+    public void setElevatedMemoryThreshold(double elevatedMemoryThreshold) {
+        this.elevatedMemoryThreshold = elevatedMemoryThreshold;
+    }
+    
+    public int getMinSwapChunkAgeMs() { return minSwapChunkAgeMs; }
+    public void setMinSwapChunkAgeMs(int minSwapChunkAgeMs) {
+        this.minSwapChunkAgeMs = minSwapChunkAgeMs;
+    }
+    
+    public boolean isEnableSwapStatistics() { return enableSwapStatistics; }
+    public void setEnableSwapStatistics(boolean enableSwapStatistics) {
+        this.enableSwapStatistics = enableSwapStatistics;
+    }
+    
     @Override
     public String toString() {
         return String.format("ChunkStorageConfig{enabled=%s, cacheCapacity=%d, evictionPolicy='%s', " +
                            "asyncThreadPoolSize=%d, enableAsyncOperations=%s, maintenanceIntervalMinutes=%d, " +
                            "enableBackups=%s, backupPath='%s', enableChecksums=%s, enableCompression=%s, " +
-                           "maxBackupFiles=%d, backupRetentionDays=%d, databaseType='%s', useRustDatabase=%s}",
+                           "maxBackupFiles=%d, backupRetentionDays=%d, databaseType='%s', useRustDatabase=%s, " +
+                           "enableSwapManager=%s, swapMemoryCheckIntervalMs=%d, maxConcurrentSwaps=%d, " +
+                           "swapBatchSize=%d, swapTimeoutMs=%d, enableAutomaticSwapping=%s, " +
+                           "criticalMemoryThreshold=%.2f, highMemoryThreshold=%.2f, elevatedMemoryThreshold=%.2f, " +
+                           "minSwapChunkAgeMs=%d, enableSwapStatistics=%s}",
                            enabled, cacheCapacity, evictionPolicy, asyncThreadPoolSize,
                            enableAsyncOperations, maintenanceIntervalMinutes, enableBackups,
                            backupPath, enableChecksums, enableCompression, maxBackupFiles,
-                           backupRetentionDays, databaseType, useRustDatabase);
+                           backupRetentionDays, databaseType, useRustDatabase,
+                           enableSwapManager, swapMemoryCheckIntervalMs, maxConcurrentSwaps,
+                           swapBatchSize, swapTimeoutMs, enableAutomaticSwapping,
+                           criticalMemoryThreshold, highMemoryThreshold, elevatedMemoryThreshold,
+                           minSwapChunkAgeMs, enableSwapStatistics);
     }
     
     /**
@@ -201,6 +276,9 @@ public class ChunkStorageConfig {
         config.setAsyncThreadPoolSize(8);
         config.setMaintenanceIntervalMinutes(60);
         config.setEnableCompression(true);
+        config.setEnableSwapManager(true);
+        config.setMaxConcurrentSwaps(20);
+        config.setSwapBatchSize(100);
         return config;
     }
 }

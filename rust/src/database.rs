@@ -2,12 +2,83 @@
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::Path;
+use std::collections::HashMap;
+use std::fs::OpenOptions;
+use memmap2::{MmapOptions, Mmap};
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteArray, JObject};
-use jni::sys::{jboolean, jlong, jbyteArray};
+use jni::sys::{jboolean, jlong, jint, jbyteArray};
 use sled::Db;
 
 use log::{debug, info, error};
+
+/// Swap metadata for tracking chunk access patterns
+#[derive(Debug, Clone)]
+pub struct SwapMetadata {
+    pub last_swap_time: u64,
+    pub access_frequency: u64,
+    pub priority_score: f64,
+    pub swap_count: u64,
+    pub last_access_time: u64,
+    pub size_bytes: u64,
+}
+
+impl SwapMetadata {
+    pub fn new(size_bytes: u64) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+            
+        Self {
+            last_swap_time: 0,
+            access_frequency: 0,
+            priority_score: 0.0,
+            swap_count: 0,
+            last_access_time: now,
+            size_bytes,
+        }
+    }
+    
+    pub fn update_access(&mut self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+            
+        self.access_frequency += 1;
+        self.last_access_time = now;
+        self.recalculate_priority();
+    }
+    
+    pub fn update_swap(&mut self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+            
+        self.last_swap_time = now;
+        self.swap_count += 1;
+        self.recalculate_priority();
+    }
+    
+    fn recalculate_priority(&mut self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+            
+        let time_since_access = now.saturating_sub(self.last_access_time);
+        let _time_since_swap = now.saturating_sub(self.last_swap_time);
+        
+        // Priority score based on access frequency, recency, and swap cost
+        let frequency_score = (self.access_frequency as f64 * 0.1).min(10.0);
+        let recency_score = if time_since_access < 60 { 5.0 } else { 0.0 };
+        let swap_cost_score = if self.swap_count > 5 { -2.0 } else { 0.0 };
+        
+        self.priority_score = frequency_score + recency_score + swap_cost_score;
+    }
+}
 
 /// Database statistics for monitoring
 #[derive(Debug, Clone)]
@@ -18,6 +89,13 @@ pub struct DatabaseStats {
     pub write_latency_ms: u64,
     pub last_maintenance_time: u64,
     pub is_healthy: bool,
+    // Swap-specific metrics
+    pub swap_operations_total: u64,
+    pub swap_operations_failed: u64,
+    pub swap_in_latency_ms: u64,
+    pub swap_out_latency_ms: u64,
+    pub memory_mapped_files_active: u64,
+    pub total_swap_size_bytes: u64,
 }
 
 impl DatabaseStats {
@@ -32,17 +110,26 @@ impl DatabaseStats {
                 .unwrap()
                 .as_secs(),
             is_healthy: true,
+            swap_operations_total: 0,
+            swap_operations_failed: 0,
+            swap_in_latency_ms: 0,
+            swap_out_latency_ms: 0,
+            memory_mapped_files_active: 0,
+            total_swap_size_bytes: 0,
         }
     }
 }
 
-/// Rust-based database adapter for chunk storage using sled
+/// Rust-based database adapter for chunk storage using sled with swap support
 pub struct RustDatabaseAdapter {
     db: Arc<Db>,
     stats: Arc<RwLock<DatabaseStats>>,
+    swap_metadata: Arc<RwLock<HashMap<String, SwapMetadata>>>,
+    memory_mapped_files: Arc<RwLock<HashMap<String, Mmap>>>,
     database_type: String,
     checksum_enabled: bool,
     db_path: String,
+    swap_path: String,
 }
 
 impl RustDatabaseAdapter {
@@ -61,18 +148,28 @@ impl RustDatabaseAdapter {
                 .map_err(|e| format!("Failed to create database directory: {}", e))?;
         }
         
+        // Create swap directory
+        let swap_path = format!("{}/swap", db_path);
+        std::fs::create_dir_all(&swap_path)
+            .map_err(|e| format!("Failed to create swap directory: {}", e))?;
+        
         // Open or create sled database
         let db = sled::open(path)
             .map_err(|e| format!("Failed to open sled database: {}", e))?;
         
-        // Count existing chunks
+        // Count existing chunks and load swap metadata
         let mut total_chunks = 0u64;
         let mut total_size_bytes = 0u64;
+        let mut swap_metadata = HashMap::new();
         
         for item in db.iter() {
-            if let Ok((_, value)) = item {
+            if let Ok((key, value)) = item {
                 total_chunks += 1;
                 total_size_bytes += value.len() as u64;
+                
+                // Initialize swap metadata for existing chunks
+                let key_str = String::from_utf8_lossy(&key).to_string();
+                swap_metadata.insert(key_str, SwapMetadata::new(value.len() as u64));
             }
         }
         
@@ -83,9 +180,12 @@ impl RustDatabaseAdapter {
         Ok(Self {
             db: Arc::new(db),
             stats: Arc::new(RwLock::new(stats)),
+            swap_metadata: Arc::new(RwLock::new(swap_metadata)),
+            memory_mapped_files: Arc::new(RwLock::new(HashMap::new())),
             database_type: database_type.to_string(),
             checksum_enabled,
             db_path: db_path.to_string(),
+            swap_path,
         })
     }
     
@@ -122,6 +222,16 @@ impl RustDatabaseAdapter {
         self.db.insert(key_bytes, data_to_store)
             .map_err(|e| format!("Failed to insert data: {}", e))?;
         
+        // Update swap metadata
+        if let Ok(mut swap_meta) = self.swap_metadata.write() {
+            if let Some(metadata) = swap_meta.get_mut(key) {
+                metadata.update_access();
+                metadata.size_bytes = data_size;
+            } else {
+                swap_meta.insert(key.to_string(), SwapMetadata::new(data_size));
+            }
+        }
+        
         // Update statistics
         if let Ok(mut stats) = self.stats.write() {
             if exists {
@@ -137,7 +247,7 @@ impl RustDatabaseAdapter {
             stats.is_healthy = true;
         }
         
-        debug!("Stored chunk {} ({} bytes) in {} ms", 
+        debug!("Stored chunk {} ({} bytes) in {} ms",
                key, data_size, start_time.elapsed().as_millis());
         
         Ok(())
@@ -167,12 +277,21 @@ impl RustDatabaseAdapter {
             None => Ok(None),
         };
         
+        // Update swap metadata if chunk was found
+            if let Ok(Some(_)) = processed_result {
+                if let Ok(mut swap_meta) = self.swap_metadata.write() {
+                    if let Some(metadata) = swap_meta.get_mut(key) {
+                        metadata.update_access();
+                    }
+                }
+            }
+        
         // Update statistics
         if let Ok(mut stats) = self.stats.write() {
             stats.read_latency_ms = start_time.elapsed().as_millis() as u64;
         }
         
-        debug!("Retrieved chunk {} in {} ms", 
+        debug!("Retrieved chunk {} in {} ms",
                key, start_time.elapsed().as_millis());
         
         processed_result
@@ -343,7 +462,273 @@ impl RustDatabaseAdapter {
             stats.total_size_bytes = 0;
         }
         
+        if let Ok(mut swap_meta) = self.swap_metadata.write() {
+            swap_meta.clear();
+        }
+        
         info!("Database cleared");
+        Ok(())
+    }
+    
+    /// Swap out a chunk to disk storage
+    pub fn swap_out_chunk(&self, key: &str) -> Result<(), String> {
+        let start_time = std::time::Instant::now();
+        
+        if key.is_empty() {
+            return Err("Key cannot be empty".to_string());
+        }
+        
+        let key_bytes = key.as_bytes();
+        
+        // Get the chunk data
+        let data = self.db.get(key_bytes)
+            .map_err(|e| format!("Failed to get chunk for swap out: {}", e))?
+            .ok_or_else(|| format!("Chunk not found: {}", key))?;
+        
+        let data_size = data.len() as u64;
+        
+        // Create swap file path
+        let swap_file_path = format!("{}/{}.swap", self.swap_path, key.replace(':', "_"));
+        
+        // Write data to swap file
+        std::fs::write(&swap_file_path, &data)
+            .map_err(|e| format!("Failed to write swap file: {}", e))?;
+        
+        // Remove from main database
+        self.db.remove(key_bytes)
+            .map_err(|e| format!("Failed to remove chunk from database: {}", e))?;
+        
+        // Update swap metadata
+        if let Ok(mut swap_meta) = self.swap_metadata.write() {
+            if let Some(metadata) = swap_meta.get_mut(key) {
+                metadata.update_swap();
+            }
+        }
+        
+        // Update statistics
+        if let Ok(mut stats) = self.stats.write() {
+            stats.swap_operations_total += 1;
+            stats.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
+            stats.total_swap_size_bytes += data_size;
+            stats.total_chunks = stats.total_chunks.saturating_sub(1);
+            stats.total_size_bytes = stats.total_size_bytes.saturating_sub(data_size);
+        }
+        
+        info!("Swapped out chunk {} ({} bytes) in {} ms",
+              key, data_size, start_time.elapsed().as_millis());
+        
+        Ok(())
+    }
+    
+    /// Swap in a chunk from disk storage
+    pub fn swap_in_chunk(&self, key: &str) -> Result<Vec<u8>, String> {
+        let start_time = std::time::Instant::now();
+        
+        if key.is_empty() {
+            return Err("Key cannot be empty".to_string());
+        }
+        
+        // Check if chunk exists in swap
+        let swap_file_path = format!("{}/{}.swap", self.swap_path, key.replace(':', "_"));
+        
+        if !Path::new(&swap_file_path).exists() {
+            return Err(format!("Swap file not found: {}", swap_file_path));
+        }
+        
+        // Read data from swap file
+        let data = std::fs::read(&swap_file_path)
+            .map_err(|e| format!("Failed to read swap file: {}", e))?;
+        
+        let data_size = data.len() as u64;
+        
+        // Restore to main database
+        let key_bytes = key.as_bytes();
+        self.db.insert(key_bytes, data.clone())
+            .map_err(|e| format!("Failed to restore chunk to database: {}", e))?;
+        
+        // Remove swap file
+        std::fs::remove_file(&swap_file_path)
+            .map_err(|e| format!("Failed to remove swap file: {}", e))?;
+        
+        // Update swap metadata
+        if let Ok(mut swap_meta) = self.swap_metadata.write() {
+            if let Some(metadata) = swap_meta.get_mut(key) {
+                metadata.update_access();
+            }
+        }
+        
+        // Update statistics
+        if let Ok(mut stats) = self.stats.write() {
+            stats.swap_operations_total += 1;
+            stats.swap_in_latency_ms = start_time.elapsed().as_millis() as u64;
+            stats.total_swap_size_bytes = stats.total_swap_size_bytes.saturating_sub(data_size);
+            stats.total_chunks += 1;
+            stats.total_size_bytes += data_size;
+        }
+        
+        info!("Swapped in chunk {} ({} bytes) in {} ms",
+              key, data_size, start_time.elapsed().as_millis());
+        
+        Ok(data)
+    }
+    
+    /// Get swap candidates based on access patterns and priority scores
+    pub fn get_swap_candidates(&self, limit: usize) -> Result<Vec<String>, String> {
+        if let Ok(swap_meta) = self.swap_metadata.read() {
+            let mut candidates: Vec<(String, f64)> = swap_meta
+                .iter()
+                .map(|(key, metadata)| (key.clone(), metadata.priority_score))
+                .collect();
+            
+            // Sort by priority score (lowest first - these are best swap candidates)
+            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            
+            // Return the keys with lowest priority scores
+            let result: Vec<String> = candidates
+                .into_iter()
+                .take(limit)
+                .map(|(key, _)| key)
+                .collect();
+            
+            Ok(result)
+        } else {
+            Err("Failed to acquire swap metadata lock".to_string())
+        }
+    }
+    
+    /// Bulk swap out multiple chunks
+    pub fn bulk_swap_out(&self, keys: &[String]) -> Result<usize, String> {
+        let mut success_count = 0;
+        
+        for key in keys {
+            match self.swap_out_chunk(key) {
+                Ok(_) => success_count += 1,
+                Err(e) => {
+                    error!("Failed to swap out chunk {}: {}", key, e);
+                    if let Ok(mut stats) = self.stats.write() {
+                        stats.swap_operations_failed += 1;
+                    }
+                }
+            }
+        }
+        
+        info!("Bulk swap out completed: {}/{} chunks swapped successfully",
+              success_count, keys.len());
+        
+        Ok(success_count)
+    }
+    
+    /// Bulk swap in multiple chunks
+    pub fn bulk_swap_in(&self, keys: &[String]) -> Result<Vec<Vec<u8>>, String> {
+        let mut results = Vec::new();
+        
+        for key in keys {
+            match self.swap_in_chunk(key) {
+                Ok(data) => results.push(data),
+                Err(e) => {
+                    error!("Failed to swap in chunk {}: {}", key, e);
+                    if let Ok(mut stats) = self.stats.write() {
+                        stats.swap_operations_failed += 1;
+                    }
+                }
+            }
+        }
+        
+        info!("Bulk swap in completed: {}/{} chunks swapped successfully",
+              results.len(), keys.len());
+        
+        Ok(results)
+    }
+    
+    /// Create memory-mapped access for a large chunk
+    pub fn create_memory_mapped_chunk(&self, key: &str, data: &[u8]) -> Result<Mmap, String> {
+        let mmap_path = format!("{}/{}.mmap", self.swap_path, key.replace(':', "_"));
+        
+        // Write data to file first
+        std::fs::write(&mmap_path, data)
+            .map_err(|e| format!("Failed to write mmap file: {}", e))?;
+        
+        // Open file for memory mapping
+        let file = OpenOptions::new()
+            .read(true)
+            .open(&mmap_path)
+            .map_err(|e| format!("Failed to open mmap file: {}", e))?;
+        
+        // Create memory map
+        let mmap = unsafe {
+            MmapOptions::new()
+                .map(&file)
+                .map_err(|e| format!("Failed to create memory map: {}", e))?
+        };
+        
+        // Store in memory-mapped files cache - Mmap doesn't implement Clone, so we store the path instead
+        if let Ok(mut mm_files) = self.memory_mapped_files.write() {
+            // We'll recreate the mmap when needed since we can't clone it
+            // For now, just track that this key has memory-mapped access
+            mm_files.insert(key.to_string(), mmap);
+        }
+        
+        // Update statistics
+        if let Ok(mut stats) = self.stats.write() {
+            stats.memory_mapped_files_active += 1;
+        }
+        
+        // Return a new mmap by reading the file again since we can't clone the original
+        let file2 = OpenOptions::new()
+            .read(true)
+            .open(&mmap_path)
+            .map_err(|e| format!("Failed to open mmap file for return: {}", e))?;
+        
+        unsafe {
+            MmapOptions::new()
+                .map(&file2)
+                .map_err(|e| format!("Failed to create return memory map: {}", e))
+        }
+    }
+    
+    /// Get memory-mapped access for a chunk
+    pub fn get_memory_mapped_chunk(&self, key: &str) -> Result<Option<Mmap>, String> {
+        // Check if already memory-mapped
+        if let Ok(mm_files) = self.memory_mapped_files.read() {
+            if mm_files.contains_key(key) {
+                // Recreate the mmap since we can't clone it
+                drop(mm_files);
+                if let Some(data) = self.get_chunk(key)? {
+                    let mmap = self.create_memory_mapped_chunk(key, &data)?;
+                    return Ok(Some(mmap));
+                }
+            }
+        }
+        
+        // Try to get chunk from database and create memory map
+        if let Some(data) = self.get_chunk(key)? {
+            let mmap = self.create_memory_mapped_chunk(key, &data)?;
+            Ok(Some(mmap))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Remove memory-mapped access for a chunk
+    pub fn remove_memory_mapped_chunk(&self, key: &str) -> Result<(), String> {
+        let mmap_path = format!("{}/{}.mmap", self.swap_path, key.replace(':', "_"));
+        
+        // Remove from cache
+        if let Ok(mut mm_files) = self.memory_mapped_files.write() {
+            mm_files.remove(key);
+        }
+        
+        // Remove file
+        if Path::new(&mmap_path).exists() {
+            std::fs::remove_file(&mmap_path)
+                .map_err(|e| format!("Failed to remove mmap file: {}", e))?;
+        }
+        
+        // Update statistics
+        if let Ok(mut stats) = self.stats.write() {
+            stats.memory_mapped_files_active = stats.memory_mapped_files_active.saturating_sub(1);
+        }
+        
         Ok(())
     }
 }
@@ -528,13 +913,13 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
     
     match adapter.get_stats() {
         Ok(stats) => {
-            // Create a Java DatabaseStats object
+            // Create a Java DatabaseStats object with extended swap metrics
             let stats_class = env.find_class("com/kneaf/core/chunkstorage/DatabaseStats")
                 .expect("Failed to find DatabaseStats class");
             
             env.new_object(
                 stats_class,
-                "(JJJJJZ)V",
+                "(JJJJJZJJJJJ)V",
                 &[
                     jni::objects::JValue::Long(stats.total_chunks as jlong),
                     jni::objects::JValue::Long(stats.total_size_bytes as jlong),
@@ -542,6 +927,11 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
                     jni::objects::JValue::Long(stats.write_latency_ms as jlong),
                     jni::objects::JValue::Long(stats.last_maintenance_time as jlong),
                     jni::objects::JValue::Bool(stats.is_healthy as jboolean),
+                    jni::objects::JValue::Long(stats.swap_operations_total as jlong),
+                    jni::objects::JValue::Long(stats.swap_operations_failed as jlong),
+                    jni::objects::JValue::Long(stats.swap_in_latency_ms as jlong),
+                    jni::objects::JValue::Long(stats.swap_out_latency_ms as jlong),
+                    jni::objects::JValue::Long(stats.memory_mapped_files_active as jlong),
                 ],
             ).expect("Failed to create DatabaseStats object")
         }
@@ -643,5 +1033,225 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
 ) {
     if adapter_ptr != 0 {
         let _ = unsafe { Box::from_raw(adapter_ptr as *mut RustDatabaseAdapter) };
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeSwapOutChunk<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    adapter_ptr: jlong,
+    key: JString<'a>,
+) -> jboolean {
+    if adapter_ptr == 0 {
+        error!("Database adapter pointer is null");
+        return 0;
+    }
+    
+    let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+    
+    let key_str = env.get_string(&key)
+        .expect("Failed to get key string")
+        .to_str()
+        .expect("Failed to convert key to str")
+        .to_string();
+    
+    match adapter.swap_out_chunk(&key_str) {
+        Ok(_) => 1,
+        Err(e) => {
+            error!("Failed to swap out chunk: {}", e);
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeSwapInChunk<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    adapter_ptr: jlong,
+    key: JString<'a>,
+) -> jbyteArray {
+    if adapter_ptr == 0 {
+        error!("Database adapter pointer is null");
+        return std::ptr::null_mut();
+    }
+    
+    let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+    
+    let key_str = env.get_string(&key)
+        .expect("Failed to get key string")
+        .to_str()
+        .expect("Failed to convert key to str")
+        .to_string();
+    
+    match adapter.swap_in_chunk(&key_str) {
+        Ok(data) => {
+            env.byte_array_from_slice(&data)
+                .expect("Failed to create byte array")
+                .into_raw()
+        }
+        Err(e) => {
+            error!("Failed to swap in chunk: {}", e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeGetSwapCandidates<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    adapter_ptr: jlong,
+    limit: jint,
+) -> JObject<'a> {
+    if adapter_ptr == 0 {
+        error!("Database adapter pointer is null");
+        return JObject::null();
+    }
+    
+    let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+    
+    match adapter.get_swap_candidates(limit as usize) {
+        Ok(candidates) => {
+            // Create Java ArrayList
+            let list_class = env.find_class("java/util/ArrayList")
+                .expect("Failed to find ArrayList class");
+            let list_obj = env.new_object(&list_class, "()V", &[])
+                .expect("Failed to create ArrayList");
+            let _add_method = env.get_method_id(&list_class, "add", "(Ljava/lang/Object;)Z")
+                .expect("Failed to get add method");
+            
+            // Add candidates to list
+            for candidate in candidates {
+                let candidate_str = env.new_string(&candidate)
+                    .expect("Failed to create string");
+                let candidate_obj = JObject::from(candidate_str);
+                env.call_method(&list_obj, "add", "(Ljava/lang/Object;)Z", &[jni::objects::JValue::Object(&candidate_obj)])
+                    .expect("Failed to add to list");
+            }
+            
+            list_obj
+        }
+        Err(e) => {
+            error!("Failed to get swap candidates: {}", e);
+            JObject::null()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeBulkSwapOut<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    adapter_ptr: jlong,
+    keys: JObject<'a>,
+) -> jint {
+    if adapter_ptr == 0 {
+        error!("Database adapter pointer is null");
+        return -1;
+    }
+    
+    let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+    
+    // Convert Java List to Vec<String>
+    let list_class = env.find_class("java/util/List")
+        .expect("Failed to find List class");
+    let _size_method = env.get_method_id(&list_class, "size", "()I")
+        .expect("Failed to get size method");
+    let _get_method = env.get_method_id(&list_class, "get", "(I)Ljava/lang/Object;")
+        .expect("Failed to get get method");
+    
+    let size = env.call_method(&keys, "size", "()I", &[])
+        .expect("Failed to call size method")
+        .i()
+        .unwrap();
+    
+    let mut keys_vec = Vec::new();
+    for i in 0..size {
+        let element = env.call_method(&keys, "get", "(I)Ljava/lang/Object;", &[jni::objects::JValue::Int(i)])
+            .expect("Failed to call get method");
+        
+        let str_obj = element.l().expect("Failed to get object from result");
+        if let Ok(key_str) = env.get_string(&JString::from(str_obj)) {
+            let key_string = key_str.to_str()
+                .expect("Failed to convert to str")
+                .to_string();
+            keys_vec.push(key_string);
+        }
+    }
+    
+    match adapter.bulk_swap_out(&keys_vec) {
+        Ok(count) => count as jint,
+        Err(e) => {
+            error!("Failed to bulk swap out: {}", e);
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeBulkSwapIn<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    adapter_ptr: jlong,
+    keys: JObject<'a>,
+) -> JObject<'a> {
+    if adapter_ptr == 0 {
+        error!("Database adapter pointer is null");
+        return JObject::null();
+    }
+    
+    let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+    
+    // Convert Java List to Vec<String> (similar to bulk_swap_out)
+    let list_class = env.find_class("java/util/List")
+        .expect("Failed to find List class");
+    let _size_method = env.get_method_id(&list_class, "size", "()I")
+        .expect("Failed to get size method");
+    let _get_method = env.get_method_id(&list_class, "get", "(I)Ljava/lang/Object;")
+        .expect("Failed to get get method");
+    
+    let size = env.call_method(&keys, "size", "()I", &[])
+        .expect("Failed to call size method")
+        .i()
+        .unwrap();
+    
+    let mut keys_vec = Vec::new();
+    for i in 0..size {
+        let element = env.call_method(&keys, "get", "(I)Ljava/lang/Object;", &[jni::objects::JValue::Int(i)])
+            .expect("Failed to call get method");
+        
+        let str_obj = element.l().expect("Failed to get object from result");
+        if let Ok(key_str) = env.get_string(&JString::from(str_obj)) {
+            let key_string = key_str.to_str()
+                .expect("Failed to convert to str")
+                .to_string();
+            keys_vec.push(key_string);
+        }
+    }
+    
+    match adapter.bulk_swap_in(&keys_vec) {
+        Ok(results) => {
+            // Create Java ArrayList of byte arrays
+            let list_class = env.find_class("java/util/ArrayList")
+                .expect("Failed to find ArrayList class");
+            let list_obj = env.new_object(&list_class, "()V", &[])
+                .expect("Failed to create ArrayList");
+            
+            // Add results to list
+            for data in results {
+                let byte_array = env.byte_array_from_slice(&data)
+                    .expect("Failed to create byte array");
+                env.call_method(&list_obj, "add", "(Ljava/lang/Object;)Z", &[jni::objects::JValue::Object(&byte_array)])
+                    .expect("Failed to add to list");
+            }
+            
+            list_obj
+        }
+        Err(e) => {
+            error!("Failed to bulk swap in: {}", e);
+            JObject::null()
+        }
     }
 }

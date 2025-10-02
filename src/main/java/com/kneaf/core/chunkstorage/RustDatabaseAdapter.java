@@ -216,11 +216,131 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
     
     /**
      * Gets the checksum status of this adapter.
-     * 
+     *
      * @return true if checksum validation is enabled
      */
     public boolean isChecksumEnabled() {
         return checksumEnabled;
+    }
+    
+    /**
+     * Swap out a chunk to disk storage for memory pressure relief.
+     *
+     * @param key The chunk key to swap out
+     * @return true if swap out was successful, false otherwise
+     * @throws IOException if swap operation fails
+     */
+    public boolean swapOutChunk(String key) throws IOException {
+        validateKey(key);
+        
+        try {
+            return nativeSwapOutChunk(nativePointer, key);
+        } catch (Exception e) {
+            throw new IOException("Rust swap out operation failed", e);
+        }
+    }
+    
+    /**
+     * Swap in a chunk from disk storage.
+     *
+     * @param key The chunk key to swap in
+     * @return The chunk data if successful, null otherwise
+     * @throws IOException if swap operation fails
+     */
+    public Optional<byte[]> swapInChunk(String key) throws IOException {
+        validateKey(key);
+        
+        try {
+            byte[] data = nativeSwapInChunk(nativePointer, key);
+            return Optional.ofNullable(data);
+        } catch (Exception e) {
+            throw new IOException("Rust swap in operation failed", e);
+        }
+    }
+    
+    /**
+     * Get swap candidates based on access patterns and priority scores.
+     *
+     * @param limit Maximum number of candidates to return
+     * @return List of chunk keys that are good swap candidates
+     * @throws IOException if operation fails
+     */
+    public java.util.List<String> getSwapCandidates(int limit) throws IOException {
+        try {
+            return nativeGetSwapCandidates(nativePointer, limit);
+        } catch (Exception e) {
+            throw new IOException("Failed to get swap candidates", e);
+        }
+    }
+    
+    /**
+     * Bulk swap out multiple chunks for efficient memory pressure handling.
+     *
+     * @param keys List of chunk keys to swap out
+     * @return Number of chunks successfully swapped out
+     * @throws IOException if operation fails
+     */
+    public int bulkSwapOut(java.util.List<String> keys) throws IOException {
+        if (keys == null || keys.isEmpty()) {
+            throw new IllegalArgumentException("Keys list cannot be null or empty");
+        }
+        
+        try {
+            return nativeBulkSwapOut(nativePointer, keys);
+        } catch (Exception e) {
+            throw new IOException("Rust bulk swap out operation failed", e);
+        }
+    }
+    
+    /**
+     * Bulk swap in multiple chunks from disk storage.
+     *
+     * @param keys List of chunk keys to swap in
+     * @return List of chunk data for successfully swapped chunks
+     * @throws IOException if operation fails
+     */
+    public java.util.List<byte[]> bulkSwapIn(java.util.List<String> keys) throws IOException {
+        if (keys == null || keys.isEmpty()) {
+            throw new IllegalArgumentException("Keys list cannot be null or empty");
+        }
+        
+        try {
+            return nativeBulkSwapIn(nativePointer, keys);
+        } catch (Exception e) {
+            throw new IOException("Rust bulk swap in operation failed", e);
+        }
+    }
+    
+    /**
+     * Swap out a chunk asynchronously.
+     *
+     * @param key The chunk key to swap out
+     * @return CompletableFuture that completes when the operation is done
+     */
+    public CompletableFuture<Boolean> swapOutChunkAsync(String key) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return swapOutChunk(key);
+            } catch (IOException e) {
+                throw new RustDatabaseException("Async swap out operation failed for key: " + key, e);
+            }
+        });
+    }
+    
+    /**
+     * Swap in a chunk asynchronously.
+     *
+     * @param key The chunk key to swap in
+     * @return CompletableFuture containing the optional chunk data
+     */
+    public CompletableFuture<Optional<byte[]>> swapInChunkAsync(String key) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return swapInChunk(key);
+            } catch (IOException e) {
+                throw new RustDatabaseException("Async swap in operation failed for key: " + key, e);
+            }
+        });
     }
     
     // Native method declarations
@@ -236,6 +356,13 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
     private native String nativeGetDatabaseType(long nativePointer);
     private native boolean nativeIsHealthy(long nativePointer);
     private native void nativeDestroy(long nativePointer);
+    
+    // Swap operation native methods
+    private native boolean nativeSwapOutChunk(long nativePointer, String key);
+    private native byte[] nativeSwapInChunk(long nativePointer, String key);
+    private native java.util.List<String> nativeGetSwapCandidates(long nativePointer, int limit);
+    private native int nativeBulkSwapOut(long nativePointer, java.util.List<String> keys);
+    private native java.util.List<byte[]> nativeBulkSwapIn(long nativePointer, java.util.List<String> keys);
     
     @Override
     public String toString() {

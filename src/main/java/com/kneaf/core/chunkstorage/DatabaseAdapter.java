@@ -133,15 +133,28 @@ public interface DatabaseAdapter {
         private final long writeLatencyMs;
         private final long lastMaintenanceTime;
         private final boolean isHealthy;
+        // Swap-specific metrics
+        private final long swapOperationsTotal;
+        private final long swapOperationsFailed;
+        private final long swapInLatencyMs;
+        private final long swapOutLatencyMs;
+        private final long memoryMappedFilesActive;
         
-        public DatabaseStats(long totalChunks, long totalSizeBytes, long readLatencyMs, 
-                           long writeLatencyMs, long lastMaintenanceTime, boolean isHealthy) {
+        public DatabaseStats(long totalChunks, long totalSizeBytes, long readLatencyMs,
+                           long writeLatencyMs, long lastMaintenanceTime, boolean isHealthy,
+                           long swapOperationsTotal, long swapOperationsFailed,
+                           long swapInLatencyMs, long swapOutLatencyMs, long memoryMappedFilesActive) {
             this.totalChunks = totalChunks;
             this.totalSizeBytes = totalSizeBytes;
             this.readLatencyMs = readLatencyMs;
             this.writeLatencyMs = writeLatencyMs;
             this.lastMaintenanceTime = lastMaintenanceTime;
             this.isHealthy = isHealthy;
+            this.swapOperationsTotal = swapOperationsTotal;
+            this.swapOperationsFailed = swapOperationsFailed;
+            this.swapInLatencyMs = swapInLatencyMs;
+            this.swapOutLatencyMs = swapOutLatencyMs;
+            this.memoryMappedFilesActive = memoryMappedFilesActive;
         }
         
         public long getTotalChunks() { return totalChunks; }
@@ -151,12 +164,22 @@ public interface DatabaseAdapter {
         public long getLastMaintenanceTime() { return lastMaintenanceTime; }
         public boolean isHealthy() { return isHealthy; }
         
+        // Swap-specific getters
+        public long getSwapOperationsTotal() { return swapOperationsTotal; }
+        public long getSwapOperationsFailed() { return swapOperationsFailed; }
+        public long getSwapInLatencyMs() { return swapInLatencyMs; }
+        public long getSwapOutLatencyMs() { return swapOutLatencyMs; }
+        public long getMemoryMappedFilesActive() { return memoryMappedFilesActive; }
+        
         @Override
         public String toString() {
             return String.format("DatabaseStats{chunks=%d, size=%d bytes, readLatency=%d ms, " +
-                               "writeLatency=%d ms, healthy=%s}", 
-                               totalChunks, totalSizeBytes, readLatencyMs, 
-                               writeLatencyMs, isHealthy);
+                               "writeLatency=%d ms, healthy=%s, swapOps=%d, swapFailed=%d, " +
+                               "swapInLatency=%d ms, swapOutLatency=%d ms, mmapFiles=%d}",
+                               totalChunks, totalSizeBytes, readLatencyMs,
+                               writeLatencyMs, isHealthy, swapOperationsTotal,
+                               swapOperationsFailed, swapInLatencyMs, swapOutLatencyMs,
+                               memoryMappedFilesActive);
         }
     }
 }

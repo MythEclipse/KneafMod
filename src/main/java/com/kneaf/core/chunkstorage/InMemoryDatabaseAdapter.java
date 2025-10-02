@@ -201,8 +201,10 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
             long lastMaint = lastMaintenanceTime;
             boolean health = healthy;
             
-            return new DatabaseStats(chunkCount, currentSize, currentReadLatency, 
-                                   currentWriteLatency, lastMaint, health);
+            // In-memory adapter doesn't support swap operations, so use zeros for swap metrics
+            return new DatabaseStats(chunkCount, currentSize, currentReadLatency,
+                                   currentWriteLatency, lastMaint, health,
+                                   0L, 0L, 0L, 0L, 0L);
         } catch (Exception e) {
             LOGGER.error("Failed to get database stats", e);
             throw new IOException("Failed to get database stats", e);

@@ -27,6 +27,7 @@ public class ChunkStorageManager {
     private final ExecutorService asyncExecutor;
     private final String worldName;
     private final boolean enabled;
+    private final SwapManager swapManager;
     
     private volatile boolean shutdown = false;
     
@@ -93,6 +94,19 @@ public class ChunkStorageManager {
             
             this.asyncExecutor = Executors.newFixedThreadPool(config.getAsyncThreadPoolSize(), threadFactory);
             
+            // Initialize swap manager if enabled
+            if (config.isEnableSwapManager() && config.isUseRustDatabase()) {
+                SwapManager.SwapConfig swapConfig = createSwapConfig(config);
+                this.swapManager = new SwapManager(swapConfig);
+                LOGGER.info("Initialized SwapManager for world '{}'", worldName);
+                
+                // Initialize swap manager components after database is ready
+                this.swapManager.initializeComponents(this.cache, (RustDatabaseAdapter) this.database);
+            } else {
+                this.swapManager = null;
+                LOGGER.info("SwapManager disabled for world '{}'", worldName);
+            }
+            
             LOGGER.info("Initialized ChunkStorageManager for world '{}' with cache capacity {} and {} eviction policy",
                        worldName, config.getCacheCapacity(), config.getEvictionPolicy());
         } else {
@@ -101,6 +115,7 @@ public class ChunkStorageManager {
             this.database = null;
             this.cache = null;
             this.asyncExecutor = null;
+            this.swapManager = null;
             LOGGER.info("ChunkStorageManager disabled for world '{}'", worldName);
         }
     }
@@ -145,8 +160,8 @@ public class ChunkStorageManager {
     }
     
     /**
-     * Load a chunk from storage (cache first, then database).
-     * 
+     * Load a chunk from storage (cache first, then database, with swap support).
+     *
      * @param level The server level
      * @param chunkX The chunk X coordinate
      * @param chunkZ The chunk Z coordinate
@@ -164,8 +179,23 @@ public class ChunkStorageManager {
             Optional<ChunkCache.CachedChunk> cached = cache.getChunk(chunkKey);
             if (cached.isPresent()) {
                 LOGGER.trace("Chunk {} found in cache", chunkKey);
-                // Note: In a real implementation, we'd need to serialize the cached chunk back to NBT
-                // For now, we'll continue to database lookup
+                
+                // Check if chunk is swapped out and needs to be swapped in
+                if (cached.get().isSwapped() && swapManager != null) {
+                    LOGGER.debug("Chunk {} is swapped out, initiating swap-in", chunkKey);
+                    boolean swapSuccess = swapManager.swapInChunk(chunkKey).join();
+                    if (swapSuccess) {
+                        LOGGER.debug("Successfully swapped in chunk: {}", chunkKey);
+                        // Chunk should now be available in cache
+                        cached = cache.getChunk(chunkKey);
+                        if (cached.isPresent() && !cached.get().isSwapped()) {
+                            // Note: In a real implementation, we'd need to serialize the cached chunk back to NBT
+                            // For now, we'll continue to database lookup
+                        }
+                    } else {
+                        LOGGER.warn("Failed to swap in chunk: {}", chunkKey);
+                    }
+                }
             }
             
             // Try database
@@ -244,7 +274,7 @@ public class ChunkStorageManager {
     
     /**
      * Get storage statistics.
-     * 
+     *
      * @return StorageStats object containing performance metrics
      */
     public StorageStats getStats() {
@@ -258,12 +288,30 @@ public class ChunkStorageManager {
                 .cacheHitRate(0.0)
                 .overallHitRate(0.0)
                 .status("disabled")
+                .swapEnabled(false)
+                .memoryPressureLevel("NORMAL")
+                .swapOperationsTotal(0)
+                .swapOperationsFailed(0)
                 .build();
         }
         
         try {
             DatabaseAdapter.DatabaseStats dbStats = database.getStats();
             ChunkCache.CacheStats cacheStats = cache.getStats();
+            
+            // Get swap statistics if available
+            SwapManager.MemoryPressureLevel pressureLevel = SwapManager.MemoryPressureLevel.NORMAL;
+            long swapOperationsTotal = 0;
+            long swapOperationsFailed = 0;
+            boolean swapEnabled = false;
+            
+            if (swapManager != null) {
+                SwapManager.SwapManagerStats swapStats = swapManager.getStats();
+                pressureLevel = swapStats.getPressureLevel();
+                swapOperationsTotal = swapStats.getTotalOperations();
+                swapOperationsFailed = swapStats.getFailedOperations();
+                swapEnabled = swapStats.isEnabled();
+            }
             
             return StorageStats.builder()
                 .enabled(true)
@@ -274,6 +322,10 @@ public class ChunkStorageManager {
                 .cacheHitRate(cacheStats.getHitRate())
                 .overallHitRate(cacheStats.getHitRate()) // Using cache hit rate for overall hit rate
                 .status("storage-manager")
+                .swapEnabled(swapEnabled)
+                .memoryPressureLevel(pressureLevel.toString())
+                .swapOperationsTotal(swapOperationsTotal)
+                .swapOperationsFailed(swapOperationsFailed)
                 .build();
             
         } catch (Exception e) {
@@ -287,6 +339,10 @@ public class ChunkStorageManager {
                 .cacheHitRate(0.0)
                 .overallHitRate(0.0)
                 .status("error")
+                .swapEnabled(false)
+                .memoryPressureLevel("NORMAL")
+                .swapOperationsTotal(0)
+                .swapOperationsFailed(0)
                 .build();
         }
     }
@@ -327,6 +383,11 @@ public class ChunkStorageManager {
         
         try {
             LOGGER.info("Shutting down ChunkStorageManager for world '{}'", worldName);
+            
+            // Shutdown swap manager first
+            if (swapManager != null) {
+                swapManager.shutdown();
+            }
             
             // Shutdown async executor
             shutdownExecutor();
@@ -435,6 +496,97 @@ public class ChunkStorageManager {
     }
     
     /**
+     * Swap out a chunk to disk storage.
+     *
+     * @param chunkKey The chunk key to swap out
+     * @return CompletableFuture that completes when swap-out is done
+     */
+    public CompletableFuture<Boolean> swapOutChunk(String chunkKey) {
+        if (!enabled || shutdown || swapManager == null) {
+            return CompletableFuture.completedFuture(false);
+        }
+        
+        return swapManager.swapOutChunk(chunkKey);
+    }
+    
+    /**
+     * Swap in a chunk from disk storage.
+     *
+     * @param chunkKey The chunk key to swap in
+     * @return CompletableFuture that completes when swap-in is done
+     */
+    public CompletableFuture<Boolean> swapInChunk(String chunkKey) {
+        if (!enabled || shutdown || swapManager == null) {
+            return CompletableFuture.completedFuture(false);
+        }
+        
+        return swapManager.swapInChunk(chunkKey);
+    }
+    
+    /**
+     * Get swap manager statistics.
+     *
+     * @return Swap manager statistics
+     */
+    public SwapManager.SwapManagerStats getSwapStats() {
+        if (!enabled || swapManager == null) {
+            return new SwapManager.SwapManagerStats(
+                false, SwapManager.MemoryPressureLevel.NORMAL, 0, 0, 0, 0,
+                new SwapManager.MemoryUsageInfo(0, 0, 0, 0, 0.0),
+                new SwapManager.SwapStatistics()
+            );
+        }
+        
+        return swapManager.getStats();
+    }
+    
+    /**
+     * Get current memory pressure level.
+     *
+     * @return Current memory pressure level
+     */
+    public SwapManager.MemoryPressureLevel getMemoryPressureLevel() {
+        if (!enabled || swapManager == null) {
+            return SwapManager.MemoryPressureLevel.NORMAL;
+        }
+        
+        return swapManager.getMemoryPressureLevel();
+    }
+    
+    /**
+     * Get current memory usage information.
+     *
+     * @return Memory usage information
+     */
+    public SwapManager.MemoryUsageInfo getMemoryUsage() {
+        if (!enabled || swapManager == null) {
+            return new SwapManager.MemoryUsageInfo(0, 0, 0, 0, 0.0);
+        }
+        
+        return swapManager.getMemoryUsage();
+    }
+    
+    /**
+     * Create swap configuration from chunk storage config.
+     */
+    private SwapManager.SwapConfig createSwapConfig(ChunkStorageConfig config) {
+        SwapManager.SwapConfig swapConfig = new SwapManager.SwapConfig();
+        swapConfig.setEnabled(config.isEnableSwapManager());
+        swapConfig.setMemoryCheckIntervalMs(config.getSwapMemoryCheckIntervalMs());
+        swapConfig.setMaxConcurrentSwaps(config.getMaxConcurrentSwaps());
+        swapConfig.setSwapBatchSize(config.getSwapBatchSize());
+        swapConfig.setSwapTimeoutMs(config.getSwapTimeoutMs());
+        swapConfig.setEnableAutomaticSwapping(config.isEnableAutomaticSwapping());
+        swapConfig.setCriticalMemoryThreshold(config.getCriticalMemoryThreshold());
+        swapConfig.setHighMemoryThreshold(config.getHighMemoryThreshold());
+        swapConfig.setElevatedMemoryThreshold(config.getElevatedMemoryThreshold());
+        swapConfig.setMinSwapChunkAgeMs(config.getMinSwapChunkAgeMs());
+        swapConfig.setEnableSwapStatistics(config.isEnableSwapStatistics());
+        swapConfig.setEnablePerformanceMonitoring(true); // Always enable for integration
+        return swapConfig;
+    }
+    
+    /**
      * Storage statistics container.
      */
     public static class StorageStats {
@@ -446,6 +598,10 @@ public class ChunkStorageManager {
         private final double cacheHitRate;
         private final double overallHitRate;
         private final String status;
+        private final boolean swapEnabled;
+        private final String memoryPressureLevel;
+        private final long swapOperationsTotal;
+        private final long swapOperationsFailed;
         
         private StorageStats(Builder builder) {
             this.enabled = builder.enabled;
@@ -456,6 +612,10 @@ public class ChunkStorageManager {
             this.cacheHitRate = builder.cacheHitRate;
             this.overallHitRate = builder.overallHitRate;
             this.status = builder.status;
+            this.swapEnabled = builder.swapEnabled;
+            this.memoryPressureLevel = builder.memoryPressureLevel;
+            this.swapOperationsTotal = builder.swapOperationsTotal;
+            this.swapOperationsFailed = builder.swapOperationsFailed;
         }
         
         public static Builder builder() {
@@ -471,6 +631,10 @@ public class ChunkStorageManager {
             private double cacheHitRate;
             private double overallHitRate;
             private String status;
+            private boolean swapEnabled;
+            private String memoryPressureLevel;
+            private long swapOperationsTotal;
+            private long swapOperationsFailed;
             
             public Builder enabled(boolean enabled) {
                 this.enabled = enabled;
@@ -512,6 +676,26 @@ public class ChunkStorageManager {
                 return this;
             }
             
+            public Builder swapEnabled(boolean swapEnabled) {
+                this.swapEnabled = swapEnabled;
+                return this;
+            }
+            
+            public Builder memoryPressureLevel(String memoryPressureLevel) {
+                this.memoryPressureLevel = memoryPressureLevel;
+                return this;
+            }
+            
+            public Builder swapOperationsTotal(long swapOperationsTotal) {
+                this.swapOperationsTotal = swapOperationsTotal;
+                return this;
+            }
+            
+            public Builder swapOperationsFailed(long swapOperationsFailed) {
+                this.swapOperationsFailed = swapOperationsFailed;
+                return this;
+            }
+            
             public StorageStats build() {
                 return new StorageStats(this);
             }
@@ -525,14 +709,20 @@ public class ChunkStorageManager {
         public double getCacheHitRate() { return cacheHitRate; }
         public double getOverallHitRate() { return overallHitRate; }
         public String getStatus() { return status; }
+        public boolean isSwapEnabled() { return swapEnabled; }
+        public String getMemoryPressureLevel() { return memoryPressureLevel; }
+        public long getSwapOperationsTotal() { return swapOperationsTotal; }
+        public long getSwapOperationsFailed() { return swapOperationsFailed; }
         
         @Override
         public String toString() {
             return String.format("StorageStats{enabled=%s, dbChunks=%d, cached=%d, " +
                                "readLatency=%d ms, writeLatency=%d ms, cacheHitRate=%.2f%%, " +
-                               "overallHitRate=%.2f%%, status=%s}",
-                               enabled, totalChunksInDb, cachedChunks, avgReadLatencyMs, 
-                               avgWriteLatencyMs, cacheHitRate * 100, overallHitRate * 100, status);
+                               "overallHitRate=%.2f%%, status=%s, swapEnabled=%s, pressure=%s, " +
+                               "swapOps=%d, swapFailed=%d}",
+                               enabled, totalChunksInDb, cachedChunks, avgReadLatencyMs,
+                               avgWriteLatencyMs, cacheHitRate * 100, overallHitRate * 100, status,
+                               swapEnabled, memoryPressureLevel, swapOperationsTotal, swapOperationsFailed);
         }
     }
 }
