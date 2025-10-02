@@ -47,3 +47,24 @@ jobs:
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload to Modrinth
+      uses: Kir-Antipov/mc-publish@v3.3
+      with:
+        modrinth-id: ${{ secrets.MODRINTH_PROJECT_ID }}
+        modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+        files: build/libs/*.jar
+        name: KneafCore v${{ github.run_number }}
+        version: ${{ github.run_number }}
+        version-type: release
+        changelog: "Release ${{ github.run_number }}"
+        loaders: neoforge
+        game-versions: |
+          1.21
+          1.21.1
+        java: |
+          21
+        dependencies: |
+          neoforge(required){modrinth:P7dR8mSH}{curseforge:238222}
+        retry-attempts: 3
+        retry-delay: 10000
