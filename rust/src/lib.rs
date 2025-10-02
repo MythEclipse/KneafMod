@@ -69,3 +69,42 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_generateF
         }
     }
 }
+
+// Free a float buffer allocated by generateFloatBufferNative
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_freeFloatBufferNative(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    buffer: jni::sys::jobject,
+) {
+    if buffer.is_null() {
+        return;
+    }
+    
+    // Get the direct ByteBuffer
+    let byte_buffer = unsafe { jni::objects::JByteBuffer::from_raw(buffer) };
+    match env.get_direct_buffer_address(&byte_buffer) {
+        Ok(address) => {
+            if !address.is_null() {
+                // Get the capacity of the buffer
+                match env.get_direct_buffer_capacity(&byte_buffer) {
+                    Ok(capacity) if capacity > 0 => {
+                        // Free the native memory
+                        unsafe {
+                            std::alloc::dealloc(
+                                address as *mut u8,
+                                std::alloc::Layout::from_size_align_unchecked(capacity, 1)
+                            );
+                        }
+                    }
+                    _ => {
+                        eprintln!("Failed to get buffer capacity or invalid capacity");
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to get direct buffer address: {:?}", e);
+        }
+    }
+}

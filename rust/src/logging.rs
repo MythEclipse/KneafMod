@@ -289,6 +289,7 @@ pub fn init_logging() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// JNI Logger for forwarding logs from Rust to Java
+#[allow(dead_code)]
 pub struct JniLogger {
     component: String,
 }

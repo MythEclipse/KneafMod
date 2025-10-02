@@ -15,6 +15,7 @@ struct SafeChunk {
     size: usize,
 }
 
+#[allow(dead_code)]
 impl SafeChunk {
     /// Create a new safe chunk from raw allocation
     fn new(ptr: NonNull<u8>, size: usize) -> Self {
@@ -270,6 +271,7 @@ struct SafeMemoryRegion<T> {
     capacity: usize,
 }
 
+#[allow(dead_code)]
 impl<T> SafeMemoryRegion<T> {
     fn new(ptr: *mut T, capacity: usize) -> Self {
         Self {

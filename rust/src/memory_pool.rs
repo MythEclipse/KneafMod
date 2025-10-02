@@ -85,6 +85,7 @@ where
 }
 
 /// Enhanced wrapper for pooled objects with swap tracking
+#[allow(dead_code)]
 pub struct PooledObject<T> {
     object: Option<T>,
     pool: Arc<Mutex<VecDeque<T>>>,
