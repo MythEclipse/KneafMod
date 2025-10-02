@@ -32,9 +32,22 @@ jobs:
 
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
-    # FlatBuffers compiler is not required because the project uses manual
-    # ByteBuffer serializers. If you need to regenerate code, add a step
-    # to install flatc here.
+      with:
+        components: rustfmt, clippy
+
+    - name: Install Cross
+      run: |
+        cargo install cross --git https://github.com/cross-rs/cross
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Build Rust library
+      working-directory: rust
+      run: |
+        cross build --release --target x86_64-unknown-linux-gnu
+        cross build --release --target x86_64-pc-windows-gnu
+        mkdir -p ../src/main/resources/natives
+        cp target/x86_64-unknown-linux-gnu/release/librustperf.so ../src/main/resources/natives/ || true
+        cp target/x86_64-pc-windows-gnu/release/rustperf.dll ../src/main/resources/natives/ || true
 
     - name: Build mod
       run: ./gradlew build
