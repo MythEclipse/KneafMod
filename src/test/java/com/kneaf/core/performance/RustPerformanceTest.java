@@ -6,6 +6,14 @@ import org.junit.jupiter.api.Assertions;
 class RustPerformanceTest {
     @Test
     void testNativeCalls() {
+        // Ensure native library is loaded first
+        try {
+            Class.forName("com.kneaf.core.performance.RustPerformance");
+        } catch (ClassNotFoundException e) {
+            System.err.println("RustPerformance class not found for tests: " + e.getMessage());
+            return;
+        }
+        
         try {
             String mem = RustPerformance.getMemoryStats();
             Assertions.assertNotNull(mem);

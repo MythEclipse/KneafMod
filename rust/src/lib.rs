@@ -3,10 +3,6 @@
     mismatched_lifetime_syntaxes
 )]
 
-
-
-
-
 // Module declarations
 pub mod arena;
 pub mod entity;
@@ -25,7 +21,6 @@ pub mod types;
 pub mod database;
 pub mod allocator;
 
-
 // Re-export commonly used performance helpers at crate root so tests and Java JNI
 // bindings can import them as `rustperf::calculate_distances_simd` etc.
 pub use crate::spatial::{calculate_distances_simd, calculate_chunk_distances_simd};
@@ -39,6 +34,38 @@ pub use crate::performance_monitoring::{
 
 // Initialize the allocator - should be called once at startup
 #[no_mangle]
-pub extern "C" fn init_rust_allocator() {
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_initRustAllocator() {
     crate::allocator::init_allocator();
+}
+
+// Generate a float buffer for NativeFloatBuffer - allocate native memory for float array
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_generateFloatBufferNative(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    rows: jni::sys::jlong,
+    cols: jni::sys::jlong,
+) -> jni::sys::jobject {
+    let total_elements = rows * cols;
+    let total_bytes = total_elements * 4; // 4 bytes per float
+    
+    // Allocate memory for the buffer
+    let mut buffer = vec![0u8; total_bytes as usize];
+    let buffer_ptr = buffer.as_mut_ptr();
+    
+    // Forget the vector so Rust doesn't free the memory
+    std::mem::forget(buffer);
+    
+    // Create direct ByteBuffer from the allocated memory
+    match unsafe { env.new_direct_byte_buffer(buffer_ptr, total_bytes as usize) } {
+        Ok(buffer) => buffer.into_raw(),
+        Err(e) => {
+            eprintln!("Failed to allocate direct ByteBuffer: {:?}", e);
+            // Free the memory if we failed to create the ByteBuffer
+            unsafe { 
+                std::alloc::dealloc(buffer_ptr, std::alloc::Layout::from_size_align_unchecked(total_bytes as usize, 1));
+            }
+            std::ptr::null_mut()
+        }
+    }
 }

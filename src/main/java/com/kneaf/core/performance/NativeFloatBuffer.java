@@ -19,6 +19,16 @@ import java.util.List;
 public final class NativeFloatBuffer implements AutoCloseable {
     private static final Cleaner CLEANER = Cleaner.create();
     
+    // Static initializer to ensure native library is loaded
+    static {
+        try {
+            // This will trigger RustPerformance static initializer if not already loaded
+            Class.forName("com.kneaf.core.performance.RustPerformance");
+        } catch (ClassNotFoundException e) {
+            System.err.println("RustPerformance class not found, native float buffer operations may fail");
+        }
+    }
+    
     // Buffer pooling configuration
     private static final int MAX_POOL_SIZE_PER_BUCKET = 10;
     private static final int BUCKET_SIZE_POWER = 12; // 4096 byte buckets

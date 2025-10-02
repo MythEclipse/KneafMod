@@ -13,7 +13,7 @@ public class NativeBridgeRoundtripTest {
     public void testWorkerRoundtrip() throws Exception {
         // Skip if native lib not loaded
         try {
-            System.loadLibrary("kneaf");
+            System.loadLibrary("rustperf");
         } catch (Throwable t) {
             Assumptions.assumeTrue(false, "native library not available");
         }

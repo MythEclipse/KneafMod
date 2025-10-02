@@ -10,7 +10,7 @@ public class NativeBridgeHeavyJobTest {
     @Test
     void testHeavyJobSumOfSquares() throws Exception {
         try {
-            System.loadLibrary("kneaf");
+            System.loadLibrary("rustperf");
         } catch (Throwable t) {
             Assumptions.assumeTrue(false, "native library not available");
         }

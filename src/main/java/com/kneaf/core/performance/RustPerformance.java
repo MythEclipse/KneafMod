@@ -167,8 +167,12 @@ public class RustPerformance {
             // Attempt to load library normally; fallback handled elsewhere
             System.loadLibrary("rustperf");
             nativeAvailable = true;
+            KneafCore.LOGGER.info("Successfully loaded rustperf native library");
         } catch (UnsatisfiedLinkError e) {
             KneafCore.LOGGER.info("rustperf native library not loaded via System.loadLibrary: {}", e.getMessage());
+            nativeAvailable = false;
+        } catch (Exception e) {
+            KneafCore.LOGGER.warn("Unexpected error loading rustperf native library: {}", e.getMessage());
             nativeAvailable = false;
         }
     }

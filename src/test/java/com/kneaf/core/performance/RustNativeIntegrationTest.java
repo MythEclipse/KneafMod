@@ -13,6 +13,14 @@ class RustNativeIntegrationTest {
 
     @Test
     void callNativeProcessItemEntitiesBinary_ifAvailable() throws Exception {
+        // Ensure native library is loaded
+        try {
+            Class.forName("com.kneaf.core.performance.RustPerformance");
+        } catch (ClassNotFoundException e) {
+            Assumptions.assumeTrue(false, "RustPerformance class not available");
+            return;
+        }
+        
         // Prepare a single item input
         List<ItemEntityData> items = List.of(new ItemEntityData(12345L, 5, 7, "minecraft:stone", 64, 10));
         ByteBuffer input = ManualSerializers.serializeItemInput(42L, items);

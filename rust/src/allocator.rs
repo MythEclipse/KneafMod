@@ -1,5 +1,5 @@
 //! Memory allocator configuration
-//! 
+//!
 //! This module provides conditional compilation for memory allocators.
 //! On Windows with MinGW, we avoid mimalloc due to compatibility issues.
 //! On other platforms, mimalloc is used for better performance.
@@ -15,10 +15,10 @@ static GLOBAL: MiMalloc = MiMalloc;
 pub fn init_allocator() {
     // On Windows, we use the default system allocator
     // to avoid libmimalloc-sys compilation issues with MinGW
-    log::info!("Using system default allocator on Windows");
+    println!("Using system default allocator on Windows");
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn init_allocator() {
-    log::info!("Using mimalloc allocator for better performance");
+    println!("Using mimalloc allocator for better performance");
 }
