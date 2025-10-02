@@ -1072,8 +1072,19 @@ public class PerformanceManager {
 
     private record OptimizationResults(List<Long> toTick, List<Long> blockResult, RustPerformance.ItemProcessResult itemResult, RustPerformance.MobProcessResult mobResult) {}
 
-    // Static initializer to set initial threshold
+    // Static initializer to set initial threshold and initialize Rust allocator
     static {
         currentTpsThreshold = CONFIG.getTpsThresholdForAsync();
+        
+        // Initialize Rust allocator - only on non-Windows platforms
+        try {
+            NativeBridge.initRustAllocator();
+            LOGGER.info("Rust allocator initialized successfully");
+        } catch (UnsatisfiedLinkError e) {
+            // This is expected in test environments or when the native library is not available
+            LOGGER.debug("Rust allocator initialization skipped - native library not available");
+        } catch (Exception e) {
+            LOGGER.warn("Failed to initialize Rust allocator, using system default", e);
+        }
     }
 }

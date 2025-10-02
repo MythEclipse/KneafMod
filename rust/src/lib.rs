@@ -23,6 +23,7 @@ pub mod spatial;
 pub mod parallelism;
 pub mod types;
 pub mod database;
+pub mod allocator;
 
 
 // Re-export commonly used performance helpers at crate root so tests and Java JNI
@@ -35,3 +36,9 @@ pub use crate::performance_monitoring::{
     report_swap_io_performance, report_swap_pool_metrics, report_swap_component_health,
     get_swap_performance_summary, SwapHealthStatus
 };
+
+// Initialize the allocator - should be called once at startup
+#[no_mangle]
+pub extern "C" fn init_rust_allocator() {
+    crate::allocator::init_allocator();
+}

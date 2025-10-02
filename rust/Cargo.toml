@@ -21,7 +21,6 @@ glam = "0.27"
 nalgebra = "0.32"
 ndarray = "0.15"
 memmap2 = "0.5"
-mimalloc = "0.1"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 dashmap = "5.5"
@@ -33,6 +32,9 @@ chrono = { version = "0.4", features = ["serde"] }
 num_cpus = "1.16"
 fastrand = "2.0"
 byteorder = "1.4"
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+mimalloc = "0.1"
 
 [dev-dependencies]
 criterion = "0.5"
