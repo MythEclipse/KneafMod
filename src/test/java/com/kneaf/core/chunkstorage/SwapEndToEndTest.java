@@ -65,6 +65,9 @@ public class SwapEndToEndTest {
         swapManager = getSwapManagerFromStorage(storageManager);
         databaseAdapter = getDatabaseAdapterFromStorage(storageManager);
         
+        System.out.println("Database adapter type: " + (databaseAdapter != null ? databaseAdapter.getClass().getSimpleName() : "null"));
+        System.out.println("Swap manager: " + (swapManager != null ? "initialized" : "null"));
+        
         // Skip test if critical components are null
         if (swapManager == null || databaseAdapter == null) {
             System.out.println("⚠️ Critical components not available - test may be skipped");
@@ -526,9 +529,8 @@ public class SwapEndToEndTest {
             
             // Create a mock chunk and put it in cache
             Object mockChunk = createMockChunk(1, 1);
-            // Note: In real usage, this would be a LevelChunk, but for testing we use Object
-            // The cache should handle this gracefully or we should mock the cache behavior
-            // cache.putChunk(chunkKey, mockChunk); // Commented out due to missing Minecraft classes
+            cache.putChunk(chunkKey, mockChunk);
+            System.out.println("✓ Simulated chunk in cache: " + chunkKey);
         } catch (Exception e) {
             System.err.println("Failed to simulate chunk in cache: " + e.getMessage());
         }

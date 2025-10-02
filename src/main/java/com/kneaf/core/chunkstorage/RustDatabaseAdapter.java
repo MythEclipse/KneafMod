@@ -39,8 +39,38 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
             nativeLibraryAvailable = true;
             LOGGER.info("Rust database library loaded successfully");
         } catch (UnsatisfiedLinkError e) {
-            nativeLibraryAvailable = false;
-            LOGGER.warn("Failed to load Rust database library: {}. Native operations will be disabled.", e.getMessage());
+            // Attempt a few fallback locations for the native library so tests running in
+            // different working directories or forked JVMs can still find the binary.
+            boolean loaded = false;
+            String[] fallbackPaths = new String[] {
+                "run/rustperf.dll",
+                "run/librustperf.dll",
+                "rust/target/release/librustperf.dll",
+                "target/release/librustperf.dll",
+                "./rust/target/release/librustperf.dll",
+                "./run/rustperf.dll"
+            };
+
+            for (String path : fallbackPaths) {
+                try {
+                    java.io.File f = new java.io.File(path);
+                    if (f.exists()) {
+                        System.load(f.getAbsolutePath());
+                        loaded = true;
+                        LOGGER.info("Loaded Rust native library from fallback path: {}", f.getAbsolutePath());
+                        break;
+                    }
+                } catch (UnsatisfiedLinkError ule) {
+                    LOGGER.debug("Fallback load failed for {}: {}", path, ule.getMessage());
+                }
+            }
+
+            if (!loaded) {
+                nativeLibraryAvailable = false;
+                LOGGER.warn("Failed to load Rust database library: {}. Native operations will be disabled.", e.getMessage());
+            } else {
+                nativeLibraryAvailable = true;
+            }
         }
     }
     
@@ -66,8 +96,23 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
         
         this.databaseType = databaseType;
         this.checksumEnabled = checksumEnabled;
-        this.nativePointer = nativeInit(databaseType, checksumEnabled);
-        
+        // Try native initialization a few times to tolerate transient failures
+        long ptr = 0;
+        int attempts = 0;
+        while (ptr == 0 && attempts < 3) {
+            attempts++;
+            ptr = nativeInit(databaseType, checksumEnabled);
+            if (ptr == 0) {
+                try {
+                    Thread.sleep(50 * attempts);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        this.nativePointer = ptr;
+
         if (nativePointer == 0) {
             throw new RustDatabaseException("Failed to initialize Rust database adapter");
         }

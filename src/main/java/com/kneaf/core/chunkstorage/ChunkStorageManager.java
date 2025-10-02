@@ -68,11 +68,14 @@ public class ChunkStorageManager {
             DatabaseAdapter tempDatabase = null;
             if (config.isUseRustDatabase()) {
                 try {
+                    LOGGER.info("Attempting to create RustDatabaseAdapter with type: {}, checksums: {}", config.getDatabaseType(), config.isEnableChecksums());
+                    LOGGER.info("RustDatabaseAdapter.isNativeLibraryAvailable(): {}", RustDatabaseAdapter.isNativeLibraryAvailable());
                     tempDatabase = new RustDatabaseAdapter(config.getDatabaseType(), config.isEnableChecksums());
-                    LOGGER.info("Using Rust database adapter with type: {}", config.getDatabaseType());
+                    LOGGER.info("Successfully created Rust database adapter");
                 } catch (Exception e) {
                     // Fallback to in-memory database if Rust database fails to initialize
-                    LOGGER.warn("Failed to initialize Rust database adapter, falling back to in-memory database: {}", e.getMessage());
+                    LOGGER.error("Failed to initialize Rust database adapter, falling back to in-memory database", e);
+                    LOGGER.warn("Exception details: {}: {}", e.getClass().getSimpleName(), e.getMessage());
                     tempDatabase = new InMemoryDatabaseAdapter("in-memory-" + worldName);
                     LOGGER.info("Using in-memory database adapter as fallback");
                 }

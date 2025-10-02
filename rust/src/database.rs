@@ -134,8 +134,13 @@ pub struct RustDatabaseAdapter {
 
 impl RustDatabaseAdapter {
     pub fn new(database_type: &str, checksum_enabled: bool) -> Result<Self, String> {
-        let db_path = format!("./kneaf_db_{}", database_type);
-        Self::with_path(&db_path, database_type, checksum_enabled)
+        // Use absolute path to ensure consistent database location
+        let current_dir = std::env::current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?;
+        let db_path = current_dir.join(format!("kneaf_db_{}", database_type));
+        let db_path_str = db_path.to_str()
+            .ok_or("Failed to convert path to string")?;
+        Self::with_path(db_path_str, database_type, checksum_enabled)
     }
     
     pub fn with_path(db_path: &str, database_type: &str, checksum_enabled: bool) -> Result<Self, String> {
@@ -752,8 +757,28 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
     match RustDatabaseAdapter::new(&database_type_str, checksum) {
         Ok(adapter) => Box::into_raw(Box::new(adapter)) as jlong,
         Err(e) => {
-            error!("Failed to initialize database adapter: {}", e);
-            0
+            error!("Failed to initialize database adapter at CWD: {}. Attempting temp-dir fallback", e);
+
+            // Try to initialize using a temp directory as a fallback to increase robustness
+            match std::env::temp_dir().to_str() {
+                Some(tmp) => {
+                    let fallback_path = format!("{}/kneaf_db_{}_fallback", tmp, database_type_str);
+                    match RustDatabaseAdapter::with_path(&fallback_path, &database_type_str, checksum) {
+                        Ok(fallback_adapter) => {
+                            info!("Initialized fallback RustDatabaseAdapter at: {}", fallback_path);
+                            Box::into_raw(Box::new(fallback_adapter)) as jlong
+                        }
+                        Err(e2) => {
+                            error!("Failed to initialize fallback adapter: {}", e2);
+                            0
+                        }
+                    }
+                }
+                None => {
+                    error!("Failed to determine temp dir for fallback initialization");
+                    0
+                }
+            }
         }
     }
 }

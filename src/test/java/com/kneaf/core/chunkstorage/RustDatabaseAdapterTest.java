@@ -112,9 +112,9 @@ public class RustDatabaseAdapterTest {
         try {
             int initialCount = (int) adapter.getChunkCount();
             
-            // Add some chunks
+            // Add some chunks with unique keys for this test
             for (int i = 0; i < 5; i++) {
-                String key = "test:chunk:" + i + ":" + i;
+                String key = "test:chunk:count:" + i + ":" + System.nanoTime();
                 byte[] data = ("Chunk " + i).getBytes();
                 adapter.putChunk(key, data);
             }
