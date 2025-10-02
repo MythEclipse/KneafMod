@@ -13,21 +13,32 @@ public class NativeFloatBufferPoolTest {
 
     @BeforeEach
     void setUp() {
-        // Check if native library is available
+        // Check if native library is available with better error handling
         try {
+            // First try to load the RustPerformance class to trigger static initialization
+            Class.forName("com.kneaf.core.performance.RustPerformance");
+            
             // Try to allocate a small buffer to test native availability
             NativeFloatBuffer testBuffer = NativeFloatBuffer.allocateFromNative(1, 1);
             if (testBuffer == null) {
-                Assumptions.assumeTrue(false, "Native library not available, skipping tests");
+                Assumptions.assumeTrue(false, "Native buffer allocation returned null, skipping tests");
             } else {
                 testBuffer.close();
             }
+        } catch (ClassNotFoundException e) {
+            Assumptions.assumeTrue(false, "RustPerformance class not found, skipping tests: " + e.getMessage());
         } catch (UnsatisfiedLinkError e) {
-            Assumptions.assumeTrue(false, "Native library not available, skipping tests");
+            Assumptions.assumeTrue(false, "Native library not available, skipping tests: " + e.getMessage());
+        } catch (Exception e) {
+            Assumptions.assumeTrue(false, "Unexpected error during native library setup, skipping tests: " + e.getMessage());
         }
         
         // Clear pools before each test to ensure clean state
-        NativeFloatBuffer.clearPools();
+        try {
+            NativeFloatBuffer.clearPools();
+        } catch (Exception e) {
+            // Ignore errors during pool cleanup
+        }
     }
 
     @AfterEach

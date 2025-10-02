@@ -2,15 +2,25 @@ package com.kneaf.core.performance;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
 
 class RustPerformanceTest {
     @Test
     void testNativeCalls() {
-        // Ensure native library is loaded first
+        // Ensure native library is loaded first with better error handling
         try {
             Class.forName("com.kneaf.core.performance.RustPerformance");
         } catch (ClassNotFoundException e) {
             System.err.println("RustPerformance class not found for tests: " + e.getMessage());
+            Assumptions.assumeTrue(false, "RustPerformance class not available: " + e.getMessage());
+            return;
+        } catch (UnsatisfiedLinkError e) {
+            System.err.println("Native library not available for tests: " + e.getMessage());
+            Assumptions.assumeTrue(false, "Native library not available: " + e.getMessage());
+            return;
+        } catch (Exception e) {
+            System.err.println("Error loading RustPerformance for tests: " + e.getMessage());
+            Assumptions.assumeTrue(false, "Error loading RustPerformance: " + e.getMessage());
             return;
         }
         

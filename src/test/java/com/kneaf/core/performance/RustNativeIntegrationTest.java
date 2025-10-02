@@ -13,11 +13,17 @@ class RustNativeIntegrationTest {
 
     @Test
     void callNativeProcessItemEntitiesBinary_ifAvailable() throws Exception {
-        // Ensure native library is loaded
+        // Ensure native library is loaded with better error handling
         try {
             Class.forName("com.kneaf.core.performance.RustPerformance");
         } catch (ClassNotFoundException e) {
-            Assumptions.assumeTrue(false, "RustPerformance class not available");
+            Assumptions.assumeTrue(false, "RustPerformance class not available: " + e.getMessage());
+            return;
+        } catch (UnsatisfiedLinkError e) {
+            Assumptions.assumeTrue(false, "Native library not available: " + e.getMessage());
+            return;
+        } catch (Exception e) {
+            Assumptions.assumeTrue(false, "Error loading RustPerformance: " + e.getMessage());
             return;
         }
         

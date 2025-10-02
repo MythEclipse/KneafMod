@@ -164,8 +164,15 @@ test {
         // Explicitly declare the JUnit Jupiter engine to avoid Gradle deprecation
         includeEngines 'junit-jupiter'
     }
-    // Set java.library.path via provider to be configuration-cache friendly
-    systemProperty 'java.library.path', layout.buildDirectory.dir('generated/resources/natives').map { it.asFile.absolutePath }
+    
+    // Ensure native libraries are built before running tests
+    dependsOn 'copyRustLib'
+    
+    // Set java.library.path for native library loading
+    systemProperty 'java.library.path', file("$buildDir/generated/resources/natives").absolutePath
+    
+    // Add JVM argument to help with native library loading
+    jvmArgs '-Djava.awt.headless=true'
     
     // Configure JaCoCo test execution
     finalizedBy jacocoTestReport
