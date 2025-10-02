@@ -4,7 +4,7 @@ use jni::sys::{jbyteArray, jstring};
 use crate::item::processing::process_item_entities;
 use crate::binary::conversions::{deserialize_item_input, serialize_item_result};
 use crate::logging::JniLogger;
-use crate::{jni_log_debug, jni_log_error};
+use crate::jni_log_error;
 use std::sync::OnceLock;
 
 static LOGGER: OnceLock<JniLogger> = OnceLock::new();
@@ -20,7 +20,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processIt
     input_buffer: JObject<'local>,
 ) -> jbyteArray {
     let logger = get_logger();
-    jni_log_debug!(logger, &mut env, "JNI", "processItemEntitiesBinaryNative called");
+    // Removed debug log to reduce noise - only log errors
 
     // Get direct access to the ByteBuffer data
     let input_buffer = JByteBuffer::from(input_buffer);
@@ -42,16 +42,16 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processIt
         }
     };
 
-    jni_log_debug!(logger, &mut env, "JNI", &format!("ByteBuffer capacity: {}", capacity));
+    // Removed debug log to reduce noise - only log errors
     let slice = unsafe {
         std::slice::from_raw_parts(data, capacity)
     };
 
-    jni_log_debug!(logger, &mut env, "JNI", &format!("Processing binary data with slice length: {}", slice.len()));
+    // Removed debug log to reduce noise - only log errors
     // Process binary data in batches for better JNI performance
     match process_item_entities_binary_batch(slice) {
         Ok(result) => {
-            jni_log_debug!(logger, &mut env, "JNI", &format!("process_item_entities_binary_batch succeeded, result length: {}", result.len()));
+            // Removed debug log to reduce noise - only log errors
             match env.byte_array_from_slice(&result) {
                 Ok(arr) => arr.into_raw(),
                 Err(e) => {
@@ -96,7 +96,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processIt
     json_input: JString,
 ) -> jstring {
     let logger = get_logger();
-    jni_log_debug!(logger, &mut env, "JNI", "processItemEntitiesNative called");
+    // Removed debug log to reduce noise - only log errors
 
     let input_str = match env.get_string(&json_input) {
         Ok(s) => match s.to_str() {
@@ -114,10 +114,10 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processIt
         }
     };
 
-    jni_log_debug!(logger, &mut env, "JNI", &format!("Processing item entities JSON with input length: {}", input_str.len()));
+    // Removed debug log to reduce noise - only log errors
     match crate::item::processing::process_item_entities_json(&input_str) {
         Ok(result_json) => {
-            jni_log_debug!(logger, &mut env, "JNI", &format!("process_item_entities_json succeeded, result length: {}", result_json.len()));
+            // Removed debug log to reduce noise - only log errors
             match env.new_string(result_json) {
                 Ok(s) => s.into_raw(),
                 Err(e) => {

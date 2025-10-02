@@ -3,7 +3,7 @@ use jni::objects::{JClass, JString, JByteBuffer, JObject};
 use jni::sys::{jstring, jbyteArray};
 use crate::entity::processing::process_entities_json;
 use crate::logging::JniLogger;
-use crate::{jni_log_debug, jni_log_warn, jni_log_error, jni_log_trace};
+use crate::{jni_log_warn, jni_log_error, jni_log_trace};
 use std::sync::OnceLock;
 // Generated FlatBuffers bindings are not used; the manual converters in
 // `crate::binary::conversions` are the canonical path for binary data.
@@ -21,7 +21,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
     json_input: JString,
 ) -> jstring {
     let logger = get_logger();
-    jni_log_debug!(logger, &mut env, "JNI", "processEntitiesNative called");
+    // Removed debug log to reduce noise - only log errors
 
     if json_input.is_null() {
         jni_log_error!(logger, &mut env, "JNI", "json_input is null");
@@ -35,7 +35,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
     let input_str: String = match env.get_string(&json_input) {
         Ok(s) => {
             let str_val: String = s.into();
-            jni_log_debug!(logger, &mut env, "JNI", &format!("Successfully converted JString to Rust String, length: {}", str_val.len()));
+            // Removed debug log to reduce noise - only log warnings/errors
             if str_val.is_empty() {
                 jni_log_warn!(logger, &mut env, "JNI", "Input string is empty");
             } else if str_val.len() > 1000000 {
@@ -58,10 +58,10 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
         }
     };
 
-    jni_log_debug!(logger, &mut env, "JNI", &format!("Calling process_entities_json with input length: {}", input_str.len()));
+    // Removed debug log to reduce noise - only log errors
     match process_entities_json(&input_str) {
         Ok(result_json) => {
-            jni_log_debug!(logger, &mut env, "JNI", &format!("process_entities_json succeeded, result length: {}", result_json.len()));
+            // Removed debug log to reduce noise - only log errors
             match env.new_string(result_json) {
                 Ok(s) => s.into_raw(),
                 Err(e) => {
