@@ -7,6 +7,7 @@
 pub mod arena;
 pub mod entity;
 pub mod item;
+pub mod villager;
 pub mod mob;
 pub mod block;
 pub mod binary;

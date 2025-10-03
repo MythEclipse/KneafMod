@@ -1234,6 +1234,7 @@ public class RustPerformance {
     private static native byte[] processEntitiesBinaryNative(java.nio.ByteBuffer input);
     private static native byte[] processItemEntitiesBinaryNative(java.nio.ByteBuffer input);
     private static native byte[] processMobAiBinaryNative(java.nio.ByteBuffer input);
+    private static native byte[] processVillagerAiBinaryNative(java.nio.ByteBuffer input);
     private static native byte[] processBlockEntitiesBinaryNative(java.nio.ByteBuffer input);
     // numeric utilities exposed from Rust
     public static native String parallelSumNative(String arrJson);
@@ -1365,6 +1366,52 @@ public class RustPerformance {
             }
             totalMobsProcessed += mobs.size();
             return new MobProcessResult(disableList, simplifyList);
+        }
+        return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
+    }
+
+    // Villager processing methods
+    public static VillagerProcessResult processVillagerAI(List<com.kneaf.core.data.VillagerData> villagers) {
+        try {
+            // Use binary protocol if available, fallback to JSON
+            if (nativeAvailable) {
+                VillagerProcessResult binaryResult = processVillagerAIBinary(villagers);
+                if (binaryResult != null) {
+                    return binaryResult;
+                }
+            }
+            
+            // JSON fallback would go here if needed
+            return new VillagerProcessResult(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+        } catch (Exception e) {
+            KneafCore.LOGGER.error("Error calling Rust for villager AI processing: {}", e.getMessage(), e);
+        }
+        // Fallback: no optimization
+        return new VillagerProcessResult(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+    }
+
+    private static VillagerProcessResult processVillagerAIBinary(List<com.kneaf.core.data.VillagerData> villagers) {
+        try {
+            // Serialize to ByteBuffer binary format
+            java.nio.ByteBuffer inputBuffer = ManualSerializers.serializeVillagerInput(
+                tickCount, villagers);
+            
+            // Call binary native method (returns byte[] from Rust)
+            byte[] resultBytes = processVillagerAiBinaryNative(inputBuffer);
+
+            if (resultBytes != null) {
+                java.nio.ByteBuffer resultBuffer = java.nio.ByteBuffer.wrap(resultBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                // For now, return a simplified result - full deserialization would be implemented
+                List<Long> disableList = new ArrayList<>();
+                List<Long> simplifyList = new ArrayList<>();
+                List<Long> reducePathfindList = new ArrayList<>();
+                List<VillagerGroup> groups = new ArrayList<>();
+                
+                // Basic deserialization logic would go here
+                return new VillagerProcessResult(disableList, simplifyList, reducePathfindList, groups);
+            }
+        } catch (Exception binaryEx) {
+            KneafCore.LOGGER.debug(BINARY_FALLBACK_MESSAGE, binaryEx.getMessage());
         }
         return null;
     }

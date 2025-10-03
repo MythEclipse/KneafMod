@@ -2,6 +2,7 @@
 use crate::mob::types::{MobInput, MobProcessResult};
 use crate::block::types::{BlockInput, BlockProcessResult};
 use crate::entity::types::{Input as EntityInput, EntityData as REntityData, PlayerData as RPlayerData};
+use crate::villager::types::{VillagerInput, VillagerProcessResult, VillagerData, PlayerData as VillagerPlayerData};
 use crate::item::types::{ItemInput, ItemEntityData as RItemEntityData};
 
 use std::io::{Cursor, Read};
@@ -187,6 +188,102 @@ pub fn serialize_item_result(result: &crate::item::ItemProcessResult) -> Result<
     // Also append merged/despawned counts at the end for compatibility, though Java code currently ignores these
     out.write_i64::<LittleEndian>(result.merged_count as i64).map_err(|e| e.to_string())?;
     out.write_i64::<LittleEndian>(result.despawned_count as i64).map_err(|e| e.to_string())?;
+    
+    Ok(out)
+}
 
+// Villager conversions
+pub fn deserialize_villager_input(data: &[u8]) -> Result<VillagerInput, String> {
+    let mut cur = Cursor::new(data);
+    let tick_count = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
+    let num = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+    let mut villagers = Vec::with_capacity(num);
+    
+    for _ in 0..num {
+        let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
+        let x = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
+        let y = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
+        let z = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
+        let distance = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
+        let profession_len = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+        let mut profession = String::new();
+        if profession_len > 0 {
+            let mut buf = vec![0u8; profession_len];
+            cur.read_exact(&mut buf).map_err(|e| e.to_string())?;
+            profession = String::from_utf8(buf).map_err(|e| e.to_string())?;
+        }
+        let level = cur.read_u8().map_err(|e| e.to_string())?;
+        let has_workstation = cur.read_u8().map_err(|e| e.to_string())? != 0;
+        let is_resting = cur.read_u8().map_err(|e| e.to_string())? != 0;
+        let is_breeding = cur.read_u8().map_err(|e| e.to_string())? != 0;
+        let last_pathfind_tick = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
+        let pathfind_frequency = cur.read_u8().map_err(|e| e.to_string())?;
+        let ai_complexity = cur.read_u8().map_err(|e| e.to_string())?;
+        
+        villagers.push(VillagerData {
+            id, x, y, z, distance, profession, level, has_workstation, is_resting, is_breeding,
+            last_pathfind_tick, pathfind_frequency, ai_complexity
+        });
+    }
+    
+    // Read players
+    let num_players = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+    let mut players = Vec::with_capacity(num_players);
+    for _ in 0..num_players {
+        let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
+        let x = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
+        let y = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
+        let z = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
+        players.push(VillagerPlayerData { id, x, y, z });
+    }
+    
+    Ok(VillagerInput { tick_count, villagers, players })
+}
+
+pub fn serialize_villager_result(result: &VillagerProcessResult) -> Result<Vec<u8>, String> {
+    // Format: [tickCount:u64][disable_len:i32][disable_ids...][simplify_len:i32][simplify_ids...][reduce_pathfind_len:i32][reduce_pathfind_ids...][num_groups:i32][groups...]
+    let mut out: Vec<u8> = Vec::new();
+    
+    // Placeholder tickCount
+    out.write_u64::<LittleEndian>(0u64).map_err(|e| e.to_string())?;
+    
+    // Villagers to disable AI
+    out.write_i32::<LittleEndian>(result.villagers_to_disable_ai.len() as i32).map_err(|e| e.to_string())?;
+    for id in &result.villagers_to_disable_ai {
+        out.write_u64::<LittleEndian>(*id).map_err(|e| e.to_string())?;
+    }
+    
+    // Villagers to simplify AI
+    out.write_i32::<LittleEndian>(result.villagers_to_simplify_ai.len() as i32).map_err(|e| e.to_string())?;
+    for id in &result.villagers_to_simplify_ai {
+        out.write_u64::<LittleEndian>(*id).map_err(|e| e.to_string())?;
+    }
+    
+    // Villagers to reduce pathfinding
+    out.write_i32::<LittleEndian>(result.villagers_to_reduce_pathfinding.len() as i32).map_err(|e| e.to_string())?;
+    for id in &result.villagers_to_reduce_pathfinding {
+        out.write_u64::<LittleEndian>(*id).map_err(|e| e.to_string())?;
+    }
+    
+    // Villager groups
+    out.write_i32::<LittleEndian>(result.villager_groups.len() as i32).map_err(|e| e.to_string())?;
+    for group in &result.villager_groups {
+        out.write_u32::<LittleEndian>(group.group_id).map_err(|e| e.to_string())?;
+        out.write_f32::<LittleEndian>(group.center_x).map_err(|e| e.to_string())?;
+        out.write_f32::<LittleEndian>(group.center_y).map_err(|e| e.to_string())?;
+        out.write_f32::<LittleEndian>(group.center_z).map_err(|e| e.to_string())?;
+        
+        let group_type_len = group.group_type.len() as i32;
+        out.write_i32::<LittleEndian>(group_type_len).map_err(|e| e.to_string())?;
+        out.extend_from_slice(group.group_type.as_bytes());
+        
+        out.write_u8(group.ai_tick_rate).map_err(|e| e.to_string())?;
+        
+        out.write_i32::<LittleEndian>(group.villager_ids.len() as i32).map_err(|e| e.to_string())?;
+        for id in &group.villager_ids {
+            out.write_u64::<LittleEndian>(*id).map_err(|e| e.to_string())?;
+        }
+    }
+    
     Ok(out)
 }

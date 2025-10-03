@@ -214,4 +214,33 @@ public final class ManualSerializers {
         buf.flip();
         return buf;
     }
+
+    public static ByteBuffer serializeVillagerInput(long tickCount, List<com.kneaf.core.data.VillagerData> villagers) {
+        int base = 8 + 4 + 32; // tick + num + config (8 floats)
+        int payload = 0;
+        for (com.kneaf.core.data.VillagerData v : villagers) {
+            payload += 8 + 4 + 4 + 4 + 4 + 1 + 1 + 4; // id + x + y + z + distance + profession + level + typeLen
+            String t = v.getProfession(); if (t != null) payload += t.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        }
+        ByteBuffer buf = ByteBuffer.allocateDirect(base + payload).order(ByteOrder.LITTLE_ENDIAN);
+        buf.putLong(tickCount);
+        buf.putInt(villagers.size());
+        for (com.kneaf.core.data.VillagerData v : villagers) {
+            buf.putLong(v.getId());
+            buf.putFloat((float) v.getX());
+            buf.putFloat((float) v.getY());
+            buf.putFloat((float) v.getZ());
+            buf.putFloat((float) v.getDistance());
+            buf.put((byte) v.getLevel());
+            buf.put((byte) (v.hasWorkstation() ? 1 : 0));
+            byte[] typeBytes = v.getProfession() != null ? v.getProfession().getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
+            buf.putInt(typeBytes.length);
+            if (typeBytes.length > 0) buf.put(typeBytes);
+        }
+        // Config: disableDistance, simplifyDistance, reducePathfindDistance, pathfindFrequency, aiTickRate, maxGroupSize, spatialChunkSize, processingBudget
+        buf.putFloat(150.0f); buf.putFloat(80.0f); buf.putFloat(40.0f); buf.putFloat(0.5f);
+        buf.putFloat(1.0f); buf.putFloat(8.0f); buf.putFloat(16.0f); buf.putFloat(100.0f);
+        buf.flip();
+        return buf;
+    }
 }
