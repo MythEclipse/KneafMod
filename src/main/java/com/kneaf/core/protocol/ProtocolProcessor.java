@@ -269,11 +269,9 @@ public class ProtocolProcessor {
             if (resultBytes.length >= 4) {
                 ByteBuffer buffer = ByteBuffer.wrap(resultBytes).order(ByteOrder.LITTLE_ENDIAN);
                 int int0 = buffer.getInt(0);
-                LOGGER.debug("[BINARY] First int: {}", int0);
                 
                 if (resultBytes.length >= 8) {
                     long long0 = buffer.getLong(0);
-                    LOGGER.debug("[BINARY] First long: {}", long0);
                 }
             }
         } catch (Exception e) {

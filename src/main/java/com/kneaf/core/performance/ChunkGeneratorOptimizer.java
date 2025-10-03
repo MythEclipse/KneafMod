@@ -107,9 +107,6 @@ public class ChunkGeneratorOptimizer {
             int chunkX = event.getChunk().getPos().x;
             int chunkZ = event.getChunk().getPos().z;
             int generated = RustPerformance.preGenerateNearbyChunks(chunkX, chunkZ, 1);
-            if (generated > 0) {
-                LOGGER.debug("Pre-generated {} chunks around ({}, {})", generated, chunkX, chunkZ);
-            }
         }
     }
     
