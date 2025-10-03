@@ -23,6 +23,7 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 
 import com.kneaf.core.compatibility.ModCompatibility;
 import com.kneaf.core.performance.PerformanceManager;
+import com.kneaf.core.performance.NeoForgeEventIntegration;
 
 /**
  * Main mod class for KneafCore.
@@ -60,6 +61,9 @@ public class KneafCore {
 
         // Register ourselves for server and other game events we are interested in.
         NeoForge.EVENT_BUS.register(this);
+        
+        // Register the new NeoForge event integration for Rust optimizations
+        NeoForge.EVENT_BUS.register(NeoForgeEventIntegration.class);
 
         // Register commands - handled by @SubscribeEvent since class is registered
         LOGGER.info("Commands listener will be registered via @SubscribeEvent on class registration");
