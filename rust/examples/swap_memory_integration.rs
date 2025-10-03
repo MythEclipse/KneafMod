@@ -1,5 +1,4 @@
 use rustperf::memory_pool::*;
-use rustperf::database::*;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -37,15 +36,15 @@ fn simulate_chunk_swap_operations(manager: &Arc<EnhancedMemoryPoolManager>) -> R
     let swap_pool = manager.get_swap_pool();
     
     // Allocate memory for chunk data
-    let chunk_data = swap_pool.allocate_compressed_data(64 * 1024)?; // 64KB chunk
+    let _chunk_data = swap_pool.allocate_compressed_data(64 * 1024)?; // 64KB chunk
     println!("✓ Allocated 64KB for compressed chunk data");
     
     // Allocate metadata
-    let metadata = swap_pool.allocate_chunk_metadata(1024)?; // 1KB metadata
+    let _metadata = swap_pool.allocate_chunk_metadata(1024)?; // 1KB metadata
     println!("✓ Allocated 1KB for chunk metadata");
     
     // Allocate temporary buffer for processing
-    let temp_buffer = swap_pool.allocate_temporary_buffer(16 * 1024)?; // 16KB temp buffer
+    let _temp_buffer = swap_pool.allocate_temporary_buffer(16 * 1024)?; // 16KB temp buffer
     println!("✓ Allocated 16KB for temporary processing buffer");
     
     // Simulate some processing
@@ -65,7 +64,7 @@ fn simulate_metadata_operations(manager: &Arc<EnhancedMemoryPoolManager>) -> Res
     
     // Simulate multiple metadata allocations for different chunks
     for i in 0..5 {
-        let metadata = swap_pool.allocate_chunk_metadata(512)?; // 512 bytes each
+        let _metadata = swap_pool.allocate_chunk_metadata(512)?; // 512 bytes each
         println!("✓ Allocated metadata for chunk {}", i);
         
         // Simulate metadata processing
@@ -87,13 +86,13 @@ fn simulate_concurrent_swap_operations(manager: &Arc<EnhancedMemoryPoolManager>)
             let swap_pool = manager_clone.get_swap_pool();
             
             // Each thread performs different types of allocations
-            let chunk_data = swap_pool.allocate_compressed_data(32 * 1024)?; // 32KB
+            let _chunk_data = swap_pool.allocate_compressed_data(32 * 1024)?; // 32KB
             thread::sleep(Duration::from_millis(10));
             
-            let metadata = swap_pool.allocate_chunk_metadata(256)?; // 256 bytes
+            let _metadata = swap_pool.allocate_chunk_metadata(256)?; // 256 bytes
             thread::sleep(Duration::from_millis(10));
             
-            let temp_buffer = swap_pool.allocate_temporary_buffer(8 * 1024)?; // 8KB
+            let _temp_buffer = swap_pool.allocate_temporary_buffer(8 * 1024)?; // 8KB
             thread::sleep(Duration::from_millis(10));
             
             // Record operation

@@ -33,11 +33,12 @@ public final class NativeFloatBuffer implements AutoCloseable {
         }
     }
     
-    // Buffer pooling configuration
-    private static final int MAX_POOL_SIZE_PER_BUCKET = 10;
+    // Optimized buffer pooling configuration
+    private static final int MAX_POOL_SIZE_PER_BUCKET = 20; // Increased from 10 to 20 for better reuse
     private static final int BUCKET_SIZE_POWER = 12; // 4096 byte buckets
-    private static final int MAX_BUCKET_SIZE = 20; // Maximum bucket index (2^20 = 1MB)
-    private static final long CLEANUP_INTERVAL_MS = 30000; // 30 seconds
+    private static final int MAX_BUCKET_SIZE = 22; // Increased from 20 to 22 (4MB max)
+    private static final long CLEANUP_INTERVAL_MS = 60000; // Increased from 30s to 60s for less frequent cleanup
+    private static final int PREFETCH_BUCKET_COUNT = 5; // Pre-allocate buffers for common sizes
     
     // Pool management
     private static final ConcurrentHashMap<Integer, ConcurrentLinkedQueue<PooledBuffer>> bufferPools = new ConcurrentHashMap<>();
@@ -259,6 +260,33 @@ public final class NativeFloatBuffer implements AutoCloseable {
      * Allocate a native float buffer via the Rust native helper and wrap it.
      * Returns null if the native allocation failed or native library missing.
      */
+    /**
+     * Pre-allocate common buffer sizes to improve performance
+     */
+    public static void preallocateBuffers() {
+        // Pre-allocate buffers for common sizes (4KB, 16KB, 64KB, 256KB, 1MB)
+        int[] commonSizes = {4096, 16384, 65536, 262144, 1048576};
+        
+        for (int size : commonSizes) {
+            int bucketIndex = getBucketIndex(size);
+            int preallocateCount = Math.min(PREFETCH_BUCKET_COUNT, MAX_POOL_SIZE_PER_BUCKET / 2);
+            
+            for (int i = 0; i < preallocateCount; i++) {
+                try {
+                    ByteBuffer buffer = RustPerformance.generateFloatBufferNative(size / 4, 1); // size/4 for float count
+                    if (buffer != null) {
+                        PooledBuffer pooled = new PooledBuffer(buffer, bucketIndex);
+                        bufferPools.computeIfAbsent(bucketIndex, k -> new ConcurrentLinkedQueue<>()).offer(pooled);
+                        poolSizes.computeIfAbsent(bucketIndex, k -> new AtomicInteger(0)).incrementAndGet();
+                        totalAllocations.incrementAndGet();
+                    }
+                } catch (Exception e) {
+                    // Ignore pre-allocation failures
+                }
+            }
+        }
+    }
+    
     /**
      * Allocate via native helper that returns both buffer and shape. Falls back
      * to older generateFloatBufferNative if the new native is unavailable.

@@ -128,7 +128,7 @@ fn test_concurrent_allocations() {
     
     let mut handles = vec![];
     
-    for i in 0..10 {
+    for _i in 0..10 {
         let pool_clone = Arc::clone(&pool);
         let handle = thread::spawn(move || {
             // Each thread allocates different types of memory

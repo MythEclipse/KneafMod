@@ -2,7 +2,7 @@ use rustperf::performance_monitoring::*;
 use rustperf::{
     record_swap_in, record_swap_out, record_swap_failure, record_swap_io_operation,
     record_memory_pressure, record_swap_pool_usage, record_swap_cache_hit, record_swap_cache_miss,
-    update_swap_metrics, report_swap_operation, report_memory_pressure, report_swap_cache_statistics,
+    update_swap_metrics, report_swap_operation, report_swap_cache_statistics,
     report_swap_io_performance, report_swap_pool_metrics, report_swap_component_health,
     get_swap_performance_summary, SwapHealthStatus
 };

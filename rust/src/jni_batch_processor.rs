@@ -171,7 +171,7 @@ impl PriorityBatchQueue {
 
 /// Enhanced batch processor with adaptive sizing and pressure management
 pub struct EnhancedBatchProcessor {
-config: EnhancedBatchConfig,
+_config: EnhancedBatchConfig,
 queues: Arc<Vec<PriorityBatchQueue>>,
 metrics: Arc<EnhancedBatchMetrics>,
 worker_handles: Vec<thread::JoinHandle<()>>,
@@ -206,7 +206,7 @@ impl EnhancedBatchProcessor {
         }
         
         Self {
-            config,
+            _config: config,
             queues,
             metrics,
             worker_handles,

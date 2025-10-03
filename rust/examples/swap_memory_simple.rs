@@ -37,15 +37,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn test_basic_allocations(pool: &SwapMemoryPool) -> Result<(), Box<dyn std::error::Error>> {
     // Allocate chunk metadata
-    let metadata = pool.allocate_chunk_metadata(1024)?;
+    let _metadata = pool.allocate_chunk_metadata(1024)?;
     println!("✓ Allocated 1KB for chunk metadata");
     
     // Allocate compressed data
-    let compressed = pool.allocate_compressed_data(4096)?;
+    let _compressed = pool.allocate_compressed_data(4096)?;
     println!("✓ Allocated 4KB for compressed data");
     
     // Allocate temporary buffer
-    let temp_buffer = pool.allocate_temporary_buffer(2048)?;
+    let _temp_buffer = pool.allocate_temporary_buffer(2048)?;
     println!("✓ Allocated 2KB for temporary buffer");
     
     // Check metrics
@@ -63,7 +63,7 @@ fn test_memory_tracking(pool: &SwapMemoryPool) -> Result<(), Box<dyn std::error:
     
     // Allocate some memory
     {
-        let buffer = pool.allocate_chunk_metadata(8192)?;
+        let _buffer = pool.allocate_chunk_metadata(8192)?;
         println!("✓ Allocated 8KB buffer");
         
         let during_metrics = pool.get_metrics();

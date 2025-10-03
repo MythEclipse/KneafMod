@@ -32,6 +32,7 @@ import com.kneaf.core.async.AsyncProcessor;
 import com.kneaf.core.protocol.ProtocolProcessor;
 import com.kneaf.core.exceptions.NativeLibraryException;
 import com.kneaf.core.exceptions.AsyncProcessingException;
+import com.kneaf.core.exceptions.OptimizedProcessingException;
 
 public class RustPerformance {
     private RustPerformance() {}
@@ -56,8 +57,8 @@ public class RustPerformance {
     }
 
     // JNI call batching configuration - optimized for server performance
-    private static final int BATCH_SIZE = 50; // Increased batch size for better throughput (doubled from 25)
-    private static final long BATCH_TIMEOUT_MS = 35; // Slightly increased timeout to accommodate larger batches
+    private static final int BATCH_SIZE = NativeBridge.getOptimalBatchSize(100); // Use optimized batch size
+    private static final long BATCH_TIMEOUT_MS = 50; // Increased timeout for larger batches
     private static final ConcurrentLinkedQueue<BatchRequest> pendingRequests = new ConcurrentLinkedQueue<>();
     private static volatile boolean batchProcessorRunning = false;
     private static final Object batchLock = new Object();
@@ -272,7 +273,7 @@ public class RustPerformance {
         }
     }
 
-    // Batch processing methods
+    // Batch processing methods - optimized with NativeBridge
     private static void startBatchProcessor() {
         synchronized (batchLock) {
             if (batchProcessorRunning) return;
@@ -281,16 +282,213 @@ public class RustPerformance {
             CompletableFuture.runAsync(() -> {
                 while (batchProcessorRunning) {
                     try {
-                        processBatch();
-                        Thread.sleep(10); // Small delay to prevent busy waiting
+                        processBatchOptimized();
+                        Thread.sleep(5); // Reduced delay for better throughput
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         break;
+                    } catch (OptimizedProcessingException e) {
+                        KneafCore.LOGGER.error("Optimized processing error in batch processor: {}", e.getMessage(), e);
                     } catch (Exception e) {
-                        KneafCore.LOGGER.error("Error in batch processor", e);
+                        KneafCore.LOGGER.error("Unexpected error in batch processor", e);
                     }
                 }
             });
+        }
+    }
+    
+    /**
+     * Optimized batch processing using NativeBridge
+     */
+    private static void processBatchOptimized() {
+        List<BatchRequest> batch = collectBatch();
+        
+        if (batch.isEmpty()) return;
+        
+        // Use NativeBridge for optimized batch processing if available
+        if (nativeAvailable && batch.size() >= NativeBridge.getOptimalBatchSize(1)) {
+            try {
+                processBatchWithNativeBridge(batch);
+                return;
+            } catch (OptimizedProcessingException e) {
+                KneafCore.LOGGER.warn("NativeBridge batch processing failed, falling back to regular processing: {}", e.getMessage());
+                // Fall through to regular processing
+            }
+        }
+        
+        // Regular batch processing
+        Map<String, List<BatchRequest>> batchedByType = new HashMap<>();
+        for (BatchRequest req : batch) {
+            batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
+        }
+        processBatchedRequests(batchedByType);
+    }
+    
+    /**
+     * Process batch using optimized NativeBridge
+     */
+    private static void processBatchWithNativeBridge(List<BatchRequest> batch) throws OptimizedProcessingException {
+        Map<String, List<BatchRequest>> batchedByType = new HashMap<>();
+        for (BatchRequest req : batch) {
+            batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
+        }
+        
+        // Process each type batch using NativeBridge
+        for (Map.Entry<String, List<BatchRequest>> entry : batchedByType.entrySet()) {
+            String type = entry.getKey();
+            List<BatchRequest> typeBatch = entry.getValue();
+            
+            try {
+                switch (type) {
+                    case ENTITIES_KEY:
+                        processEntityBatchOptimized(typeBatch);
+                        break;
+                    case ITEMS_KEY:
+                        processItemBatchOptimized(typeBatch);
+                        break;
+                    case MOBS_KEY:
+                        processMobBatchOptimized(typeBatch);
+                        break;
+                    case BLOCKS_KEY:
+                        processBlockBatchOptimized(typeBatch);
+                        break;
+                    default:
+                        // Fallback to individual processing
+                        for (BatchRequest req : typeBatch) {
+                            req.future.complete(processIndividualRequest());
+                        }
+                }
+            } catch (OptimizedProcessingException e) {
+                KneafCore.LOGGER.error("Error processing {} batch of size {} with NativeBridge", type, typeBatch.size(), e);
+                // Complete all futures with exception
+                for (BatchRequest req : typeBatch) {
+                    req.future.completeExceptionally(e);
+                }
+            }
+        }
+    }
+    
+    private static void processEntityBatchOptimized(List<BatchRequest> batch) throws OptimizedProcessingException {
+        if (batch.isEmpty()) return;
+        
+        try {
+            // Pre-size collections to avoid resizing
+            int totalEntities = 0;
+            int totalPlayers = 0;
+            for (BatchRequest req : batch) {
+                Map<String, Object> data = (Map<String, Object>) req.data;
+                List<EntityData> entities = (List<EntityData>) data.get(ENTITIES_KEY);
+                List<PlayerData> players = (List<PlayerData>) data.get(PLAYERS_KEY);
+                totalEntities += entities.size();
+                totalPlayers += players.size();
+            }
+            
+            // Extract data from all requests in batch
+            List<EntityData> allEntities = new ArrayList<>(totalEntities);
+            List<PlayerData> allPlayers = new ArrayList<>(totalPlayers);
+            
+            for (BatchRequest req : batch) {
+                Map<String, Object> data = (Map<String, Object>) req.data;
+                List<EntityData> entities = (List<EntityData>) data.get(ENTITIES_KEY);
+                List<PlayerData> players = (List<PlayerData>) data.get(PLAYERS_KEY);
+                
+                allEntities.addAll(entities);
+                allPlayers.addAll(players);
+            }
+            
+            // Process combined data using optimized method
+            List<Long> results = processEntitiesDirect(allEntities, allPlayers);
+            
+            // Create a Set for faster lookup
+            Set<Long> resultSet = new HashSet<>(results);
+            
+            // Distribute results back to individual futures
+            for (BatchRequest req : batch) {
+                Map<String, Object> data = (Map<String, Object>) req.data;
+                List<EntityData> entities = (List<EntityData>) data.get(ENTITIES_KEY);
+                
+                // Find results for this request
+                List<Long> requestResults = new ArrayList<>();
+                for (EntityData entity : entities) {
+                    if (resultSet.contains(entity.id())) {
+                        requestResults.add(entity.id());
+                    }
+                }
+                
+                req.future.complete(requestResults);
+            }
+        } catch (Exception e) {
+            throw OptimizedProcessingException.batchProcessingError("processEntityBatchOptimized",
+                "Failed to process entity batch of size " + batch.size(), e);
+        }
+    }
+    
+    private static void processItemBatchOptimized(List<BatchRequest> batch) throws OptimizedProcessingException {
+        if (batch.isEmpty()) return;
+        
+        try {
+            List<ItemEntityData> allItems = new ArrayList<>();
+            for (BatchRequest req : batch) {
+                @SuppressWarnings("unchecked")
+                List<ItemEntityData> items = (List<ItemEntityData>) req.data;
+                allItems.addAll(items);
+            }
+            
+            ItemProcessResult result = processItemEntitiesDirect(allItems);
+            
+            // For simplicity, distribute results equally among batch requests
+            for (BatchRequest req : batch) {
+                req.future.complete(result);
+            }
+        } catch (Exception e) {
+            throw OptimizedProcessingException.batchProcessingError("processItemBatchOptimized",
+                "Failed to process item batch of size " + batch.size(), e);
+        }
+    }
+    
+    private static void processMobBatchOptimized(List<BatchRequest> batch) throws OptimizedProcessingException {
+        if (batch.isEmpty()) return;
+        
+        try {
+            List<MobData> allMobs = new ArrayList<>();
+            for (BatchRequest req : batch) {
+                @SuppressWarnings("unchecked")
+                List<MobData> mobs = (List<MobData>) req.data;
+                allMobs.addAll(mobs);
+            }
+            
+            MobProcessResult result = processMobAIDirect(allMobs);
+            
+            // Distribute results equally among batch requests
+            for (BatchRequest req : batch) {
+                req.future.complete(result);
+            }
+        } catch (Exception e) {
+            throw OptimizedProcessingException.batchProcessingError("processMobBatchOptimized",
+                "Failed to process mob batch of size " + batch.size(), e);
+        }
+    }
+    
+    private static void processBlockBatchOptimized(List<BatchRequest> batch) throws OptimizedProcessingException {
+        if (batch.isEmpty()) return;
+        
+        try {
+            List<BlockEntityData> allBlocks = new ArrayList<>();
+            for (BatchRequest req : batch) {
+                @SuppressWarnings("unchecked")
+                List<BlockEntityData> blocks = (List<BlockEntityData>) req.data;
+                allBlocks.addAll(blocks);
+            }
+            
+            List<Long> results = getBlockEntitiesToTickDirect(allBlocks);
+            
+            // Distribute results equally among batch requests
+            for (BatchRequest req : batch) {
+                req.future.complete(results);
+            }
+        } catch (Exception e) {
+            throw OptimizedProcessingException.batchProcessingError("processBlockBatchOptimized",
+                "Failed to process block batch of size " + batch.size(), e);
         }
     }
 
