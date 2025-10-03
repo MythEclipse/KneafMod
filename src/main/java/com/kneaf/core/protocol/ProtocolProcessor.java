@@ -193,7 +193,7 @@ public class ProtocolProcessor {
             }
             
             // Log binary result for debugging
-            logBinaryResult(operationName, resultBytes);
+            // logBinaryResult(operationName, resultBytes);
             
             // Deserialize result
             R result = binaryDeserializer.deserialize(resultBytes);

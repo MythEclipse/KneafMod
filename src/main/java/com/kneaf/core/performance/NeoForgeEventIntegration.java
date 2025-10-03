@@ -153,7 +153,7 @@ public class NeoForgeEventIntegration {
             predictedChunks.remove(chunkPos);
             
             // Update chunk loading metrics
-            LOGGER.debug("Chunk loaded at {}", chunkPos);
+            // LOGGER.debug("Chunk loaded at {}", chunkPos);
         }
     }
     
