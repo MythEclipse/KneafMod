@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class NativeBridgePanicTest {
     @Test
     void testPanicReturnsErrorEnvelope() throws Exception {
-        try { System.loadLibrary("kneaf"); } catch (Throwable t) { Assumptions.assumeTrue(false); }
+    try { System.loadLibrary("rustperf"); } catch (Throwable t) { Assumptions.assumeTrue(false); }
 
         long h = NativeBridge.nativeCreateWorker(1);
         assertNotEquals(0L, h);
