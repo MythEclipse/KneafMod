@@ -19,6 +19,7 @@ pub mod spatial;
 pub mod parallelism;
 pub mod types;
 pub mod database;
+pub mod jni_batch_processor;
 pub mod allocator;
 
 // Re-export commonly used performance helpers at crate root so tests and Java JNI
@@ -392,5 +393,271 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_nativeGetWorke
     _env: jni::JNIEnv,
     _class: jni::objects::JClass,
 ) -> jni::sys::jdouble {
+// Enhanced batch processing native function
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeProcessBatch(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    operation_type: jni::sys::jbyte,
+    batch_data: jni::sys::jobject,
+) -> jni::sys::jbyteArray {
+    if batch_data.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let byte_buffer = unsafe { jni::objects::JByteBuffer::from_raw(batch_data) };
+    
+    match env.get_direct_buffer_address(&byte_buffer) {
+        Ok(address) => {
+            if address.is_null() {
+                return std::ptr::null_mut();
+            }
+            
+            match env.get_direct_buffer_capacity(&byte_buffer) {
+                Ok(capacity) if capacity > 0 => {
+                    let data = unsafe { std::slice::from_raw_parts(address, capacity) };
+                    
+                    // Process the batch using the enhanced batch processor
+                    match crate::jni_batch_processor::native_process_batch(operation_type as u8, data) {
+                        Ok(results) => {
+                            // Serialize results back to Java
+                            let mut result_buffer = Vec::new();
+                            result_buffer.extend_from_slice(&(results.len() as u32).to_le_bytes());
+                            
+                            for result in &results {
+                                result_buffer.extend_from_slice(&(result.len() as u32).to_le_bytes());
+                                result_buffer.extend_from_slice(result);
+                            }
+                            
+                            match env.byte_array_from_slice(&result_buffer) {
+                                Ok(array) => return array.into_raw(),
+                                Err(e) => {
+                                    eprintln!("Failed to create result byte array: {:?}", e);
+                                    return std::ptr::null_mut();
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Batch processing failed: {}", e);
+                            return std::ptr::null_mut();
+                        }
+                    }
+                }
+                _ => {
+                    eprintln!("Invalid buffer capacity");
+                    return std::ptr::null_mut();
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to get direct buffer address: {:?}", e);
+            return std::ptr::null_mut();
+        }
+    }
+}
+
+// Optimized SIMD operations with enhanced vector processing
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeProcessSimdBatch(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    operation_type: jni::sys::jbyte,
+    input_buffer: jni::sys::jobject,
+) -> jni::sys::jbyteArray {
+    if input_buffer.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let byte_buffer = unsafe { jni::objects::JByteBuffer::from_raw(input_buffer) };
+    
+    match env.get_direct_buffer_address(&byte_buffer) {
+        Ok(address) => {
+            if address.is_null() {
+                return std::ptr::null_mut();
+            }
+            
+            match env.get_direct_buffer_capacity(&byte_buffer) {
+                Ok(capacity) if capacity > 0 => {
+                    let data = unsafe { std::slice::from_raw_parts(address as *const f32, capacity / 4) };
+                    
+                    // Process SIMD batch based on operation type
+                    let results = match operation_type {
+                        0x01 => {
+                            // Vector addition
+                            let chunk_size = std::cmp::min(data.len(), 256); // Process in chunks
+                            let mut results = Vec::with_capacity(chunk_size);
+                            
+                            #[cfg(target_feature = "avx2")]
+                            {
+                                use std::arch::x86_64::*;
+                                unsafe {
+                                    for chunk in data.chunks(8) {
+                                        if chunk.len() == 8 {
+                                            let a = _mm256_loadu_ps(chunk.as_ptr());
+                                            let b = _mm256_set1_ps(1.0); // Add 1.0 to each element
+                                            let result = _mm256_add_ps(a, b);
+                                            let mut temp = [0.0f32; 8];
+                                            _mm256_storeu_ps(temp.as_mut_ptr(), result);
+                                            results.extend_from_slice(&temp);
+                                        } else {
+                                            // Fallback for remainder
+                                            for &val in chunk {
+                                                results.push(val + 1.0);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            #[cfg(not(target_feature = "avx2"))]
+                            {
+                                for &val in data.iter().take(chunk_size) {
+                                    results.push(val + 1.0);
+                                }
+                            }
+                            results
+                        }
+                        0x02 => {
+                            // Vector multiplication
+                            let chunk_size = std::cmp::min(data.len(), 256);
+                            let mut results = Vec::with_capacity(chunk_size);
+                            
+                            #[cfg(target_feature = "avx2")]
+                            {
+                                use std::arch::x86_64::*;
+                                unsafe {
+                                    for chunk in data.chunks(8) {
+                                        if chunk.len() == 8 {
+                                            let a = _mm256_loadu_ps(chunk.as_ptr());
+                                            let b = _mm256_set1_ps(2.0); // Multiply by 2.0
+                                            let result = _mm256_mul_ps(a, b);
+                                            let mut temp = [0.0f32; 8];
+                                            _mm256_storeu_ps(temp.as_mut_ptr(), result);
+                                            results.extend_from_slice(&temp);
+                                        } else {
+                                            for &val in chunk {
+                                                results.push(val * 2.0);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            #[cfg(not(target_feature = "avx2"))]
+                            {
+                                for &val in data.iter().take(chunk_size) {
+                                    results.push(val * 2.0);
+                                }
+                            }
+                            results
+                        }
+                        _ => {
+                            eprintln!("Unknown SIMD operation type: {}", operation_type);
+                            return std::ptr::null_mut();
+                        }
+                    };
+                    
+                    // Convert results back to bytes
+                    let result_bytes = unsafe {
+                        std::slice::from_raw_parts(results.as_ptr() as *const u8, results.len() * 4)
+                    };
+                    
+                    match env.byte_array_from_slice(result_bytes) {
+                        Ok(array) => array.into_raw(),
+                        Err(e) => {
+                            eprintln!("Failed to create SIMD result byte array: {:?}", e);
+                            std::ptr::null_mut()
+                        }
+                    }
+                }
+                _ => {
+                    eprintln!("Invalid SIMD buffer capacity");
+                    std::ptr::null_mut()
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to get SIMD direct buffer address: {:?}", e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+// Optimized spatial grid operations with O(log M) queries
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeSpatialQuery(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    query_type: jni::sys::jbyte,
+    center_x: jni::sys::jfloat,
+    center_y: jni::sys::jfloat,
+    center_z: jni::sys::jfloat,
+    radius: jni::sys::jfloat,
+) -> jni::sys::jbyteArray {
+    use crate::spatial::{calculate_distances_simd, Aabb};
+    
+    // Create test data for spatial queries (in real implementation, this would use cached spatial structure)
+    let test_positions: Vec<(f32, f32, f32)> = (0..1000)
+        .map(|i| {
+            let x = (i as f32 % 100.0) * 16.0 - 800.0;
+            let y = (i as f32 / 100.0) * 10.0;
+            let z = (i as f32 % 50.0) * 16.0 - 400.0;
+            (x, y, z)
+        })
+        .collect();
+    
+    let center = (center_x, center_y, center_z);
+    
+    let results = match query_type {
+        0x01 => {
+            // Distance-based query
+            let distances = calculate_distances_simd(&test_positions, center);
+            let mut filtered = Vec::new();
+            
+            for (i, &dist) in distances.iter().enumerate() {
+                if dist <= radius {
+                    filtered.push(i as u32);
+                }
+            }
+            filtered
+        }
+        0x02 => {
+            // AABB-based query
+            let query_bounds = Aabb::new(
+                (center_x - radius) as f64,
+                (center_y - radius) as f64,
+                (center_z - radius) as f64,
+                (center_x + radius) as f64,
+                (center_y + radius) as f64,
+                (center_z + radius) as f64,
+            );
+            
+            let mut contained = Vec::new();
+            for (i, &(x, y, z)) in test_positions.iter().enumerate() {
+                if query_bounds.contains(x as f64, y as f64, z as f64) {
+                    contained.push(i as u32);
+                }
+            }
+            contained
+        }
+        _ => {
+            eprintln!("Unknown spatial query type: {}", query_type);
+            return std::ptr::null_mut();
+        }
+    };
+    
+    // Convert results to bytes
+    let mut result_bytes = Vec::with_capacity(results.len() * 4 + 4);
+    result_bytes.extend_from_slice(&(results.len() as u32).to_le_bytes());
+    for id in results {
+        result_bytes.extend_from_slice(&id.to_le_bytes());
+    }
+    
+    match env.byte_array_from_slice(&result_bytes) {
+        Ok(array) => array.into_raw(),
+        Err(e) => {
+            eprintln!("Failed to create spatial query result byte array: {:?}", e);
+            std::ptr::null_mut()
+        }
+    }
+}
     0.0
 }

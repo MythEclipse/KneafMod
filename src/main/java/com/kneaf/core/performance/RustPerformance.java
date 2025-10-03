@@ -28,6 +28,10 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import com.kneaf.core.binary.ManualSerializers;
+import com.kneaf.core.async.AsyncProcessor;
+import com.kneaf.core.protocol.ProtocolProcessor;
+import com.kneaf.core.exceptions.NativeLibraryException;
+import com.kneaf.core.exceptions.AsyncProcessingException;
 
 public class RustPerformance {
     private RustPerformance() {}
@@ -41,12 +45,15 @@ public class RustPerformance {
     private static final String BINARY_FALLBACK_MESSAGE = "Binary protocol failed, falling back to JSON: {}";
 
     // Async processing executor
-    private static final ExecutorService asyncExecutor = Executors.newCachedThreadPool(r -> {
-        Thread t = new Thread(r);
-        t.setName("Kneaf-Async-Processor");
-        t.setDaemon(true);
-        return t;
-    });
+    private static final AsyncProcessor asyncProcessor;
+    
+    static {
+        AsyncProcessor.AsyncConfig config = new AsyncProcessor.AsyncConfig();
+        config.processorName("RustPerformance")
+              .enableLogging(true)
+              .enableMetrics(true);
+        asyncProcessor = AsyncProcessor.create(config);
+    }
 
     // JNI call batching configuration - optimized for server performance
     private static final int BATCH_SIZE = 50; // Increased batch size for better throughput (doubled from 25)
@@ -68,12 +75,6 @@ public class RustPerformance {
         }
     }
 
-    // Custom exception for batch request interruptions
-    public static class BatchRequestInterruptedException extends RuntimeException {
-        public BatchRequestInterruptedException(String message, Throwable cause) {
-            super(message, cause);
-        }
-    }
 
     // Connection Pooling (for future database interactions)
     private static final ConcurrentLinkedQueue<Connection> connectionPool = new ConcurrentLinkedQueue<>();
@@ -277,7 +278,7 @@ public class RustPerformance {
             if (batchProcessorRunning) return;
             batchProcessorRunning = true;
             
-            asyncExecutor.submit(() -> {
+            CompletableFuture.runAsync(() -> {
                 while (batchProcessorRunning) {
                     try {
                         processBatch();
@@ -512,7 +513,7 @@ public class RustPerformance {
             return result;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new BatchRequestInterruptedException("Batch request interrupted", e);
+            throw AsyncProcessingException.batchRequestInterrupted(type, e);
         } catch (Exception e) {
             KneafCore.LOGGER.error("Batch request timeout or error for type: {}", type, e);
             // Fallback to direct processing
@@ -551,7 +552,10 @@ public class RustPerformance {
         R parseResult(String jsonResult);
     }
 
-    // Template method for try-binary-catch-fallback-JSON pattern
+    // Protocol processor for binary/JSON fallback patterns
+    private static final ProtocolProcessor protocolProcessor = ProtocolProcessor.createAuto(nativeAvailable);
+    
+    // Template method for try-binary-catch-fallback-JSON pattern (replaced with ProtocolProcessor)
     private static <T, R> R processWithBinaryFallback(
             T input,
             BinarySerializer<T, R> binarySerializer,
@@ -563,109 +567,53 @@ public class RustPerformance {
             R fallbackResult,
             String operationName) {
         
-        // Use binary protocol if available, fallback to JSON
-        if (nativeAvailable) {
-            try {
-                // Serialize to FlatBuffers binary format
-                java.nio.ByteBuffer inputBuffer = binarySerializer.serialize(input);
-
-                // Call binary native method (returns byte[] from Rust)
-                byte[] resultBytes = null;
-                try {
-                    resultBytes = binaryNativeCaller.callNative(inputBuffer);
-                } catch (Exception callEx) {
-                    // Log native call failure with stacktrace and fall through to JSON fallback
-                    KneafCore.LOGGER.debug(BINARY_FALLBACK_MESSAGE + " (native call failed)", callEx.getMessage(), callEx);
-                    resultBytes = null;
+        // Use ProtocolProcessor for unified binary/JSON processing
+        ProtocolProcessor.ProtocolResult<R> result = protocolProcessor.processWithFallback(
+            input,
+            operationName,
+            new ProtocolProcessor.BinarySerializer<T>() {
+                @Override
+                public java.nio.ByteBuffer serialize(T binaryInput) throws Exception {
+                    return binarySerializer.serialize(binaryInput);
                 }
-
-                if (resultBytes != null) {
-                    // Always log the raw bytes we received from native for easier debugging of protocol mismatches
-                    try {
-                        String recvPrefix = bytesPrefixHex(resultBytes, 64);
-                        KneafCore.LOGGER.debug("[BINARY] Received {} bytes from native; prefix={}", resultBytes.length, recvPrefix);
-                    } catch (Throwable t) {
-                        // Swallow logging failures to avoid interfering with normal fallback behavior
-                        KneafCore.LOGGER.debug("[BINARY] Failed to compute prefix for native result: {}", t.getMessage());
-                    }
-                    try {
-                        // Deserialize result
-                        // Additional numeric diagnostics: interpret raw bytes as little-endian int/long at offsets 0 and 8
-                        try {
-                            int lenBytes = resultBytes != null ? resultBytes.length : 0;
-                            java.nio.ByteBuffer dbgBuf = java.nio.ByteBuffer.wrap(resultBytes == null ? new byte[0] : resultBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-                            int parsedCount = -1;
-                            String tickPrefix = "";
-                            java.util.List<Long> previewIds = new java.util.ArrayList<>();
-
-                            // Try primary format: [len:i32][ids...]
-                            if (lenBytes >= 4) {
-                                int candidate = dbgBuf.getInt(0);
-                                if (candidate >= 0 && 4 + (long)candidate * 8 <= lenBytes) {
-                                    parsedCount = candidate;
-                                    int to = Math.min(candidate, 8);
-                                    for (int i = 0; i < to; i++) {
-                                        previewIds.add(dbgBuf.getLong(4 + i * 8));
-                                    }
-                                }
-                            }
-
-                            // If primary didn't match, try tickCount-prefixed: [tick:u64][num:i32][ids...]
-                            if (parsedCount < 0 && lenBytes >= 12) {
-                                long maybeTick = dbgBuf.getLong(0);
-                                int numItems = dbgBuf.getInt(8);
-                                if (numItems >= 0 && 12 + (long)numItems * 8 <= lenBytes) {
-                                    parsedCount = numItems;
-                                    tickPrefix = "tick=" + maybeTick + " ";
-                                    int to = Math.min(numItems, 8);
-                                    for (int i = 0; i < to; i++) {
-                                        previewIds.add(dbgBuf.getLong(12 + i * 8));
-                                    }
-                                }
-                            }
-
-                            if (parsedCount >= 0) {
-                                KneafCore.LOGGER.debug("[BINARY] result preview: len={} parsedCount={} {}ids={}", lenBytes, parsedCount, tickPrefix, previewIds);
-                            } else {
-                                // Fallback to the old numeric view if we couldn't parse a list
-                                int int0 = Integer.MIN_VALUE;
-                                long long0 = Long.MIN_VALUE;
-                                int int8 = Integer.MIN_VALUE;
-                                if (lenBytes >= 4) int0 = dbgBuf.getInt(0);
-                                if (lenBytes >= 8) long0 = dbgBuf.getLong(0);
-                                if (lenBytes >= 12) int8 = dbgBuf.getInt(8);
-                                KneafCore.LOGGER.debug("[BINARY] resultBytes numeric view: len={} int0={} long0={} int8={}", lenBytes, int0, long0, int8);
-                            }
-                        } catch (Throwable t) {
-                            KneafCore.LOGGER.debug("[BINARY] Failed to compute numeric diagnostics for native result: {}", t.getMessage());
-                        }
-
-                        R result = binaryDeserializer.deserialize(resultBytes);
-                        return result;
-                    } catch (Exception deserEx) {
-                        // Log detailed diagnostics to help find protocol/format mismatches
-                        String prefix = bytesPrefixHex(resultBytes, 64);
-                        KneafCore.LOGGER.error("Binary protocol deserialization failed: {} ; resultBytes.length={} ; prefix={}", deserEx.getMessage(),
-                            resultBytes.length, prefix, deserEx);
-                        // Fall through to JSON fallback
-                    }
+            },
+            new ProtocolProcessor.BinaryNativeCaller<byte[]>() {
+                @Override
+                public byte[] callNative(java.nio.ByteBuffer inputBuffer) throws Exception {
+                    return binaryNativeCaller.callNative(inputBuffer);
                 }
-            } catch (Exception binaryEx) {
-                KneafCore.LOGGER.debug(BINARY_FALLBACK_MESSAGE, binaryEx.getMessage());
-                // Fall through to JSON fallback
-            }
-        }
+            },
+            new ProtocolProcessor.BinaryDeserializer<R>() {
+                @Override
+                public R deserialize(byte[] resultBytes) throws Exception {
+                    if (resultBytes != null) {
+                        return binaryDeserializer.deserialize(resultBytes);
+                    }
+                    return fallbackResult;
+                }
+            },
+            new ProtocolProcessor.JsonInputPreparer<T>() {
+                @Override
+                public Map<String, Object> prepareInput(T jsonInput) {
+                    return jsonInputPreparer.prepareInput(jsonInput);
+                }
+            },
+            new ProtocolProcessor.JsonNativeCaller<String>() {
+                @Override
+                public String callNative(String jsonInput) throws Exception {
+                    return jsonNativeCaller.callNative(jsonInput);
+                }
+            },
+            new ProtocolProcessor.JsonResultParser<R>() {
+                @Override
+                public R parseResult(String jsonResult) throws Exception {
+                    return jsonResultParser.parseResult(jsonResult);
+                }
+            },
+            fallbackResult
+        );
         
-        // JSON fallback
-        Map<String, Object> jsonInputMap = jsonInputPreparer.prepareInput(input);
-        String jsonInput = gson.toJson(jsonInputMap);
-        String jsonResult = jsonNativeCaller.callNative(jsonInput);
-        if (jsonResult != null) {
-            return jsonResultParser.parseResult(jsonResult);
-        } else {
-            KneafCore.LOGGER.warn("{} returned null, returning fallback result", operationName);
-            return fallbackResult;
-        }
+        return result.getDataOrThrow();
     }
 
     // Direct processing fallback methods
@@ -1381,7 +1329,7 @@ public class RustPerformance {
 
     // Async Chunk Loading
     public static CompletableFuture<Integer> preGenerateNearbyChunksAsync(int centerX, int centerZ, int radius) {
-        return CompletableFuture.supplyAsync(() -> preGenerateNearbyChunks(centerX, centerZ, radius), asyncExecutor);
+        return asyncProcessor.supplyAsync(() -> preGenerateNearbyChunks(centerX, centerZ, radius), 30000, "preGenerateNearbyChunks");
     }
 
     public static void startValenceServer() {
