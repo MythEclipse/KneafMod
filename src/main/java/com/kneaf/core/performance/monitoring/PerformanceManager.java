@@ -868,8 +868,9 @@ public class PerformanceManager {
                 // Sum counts and keep smallest age to represent the merged group
                 int newCount = cur.getCount() + it.getCount();
                 int newAge = Math.min(cur.getAgeSeconds(), it.getAgeSeconds());
-                // Reuse existing object to reduce allocation
-                agg.put(key, new ItemEntityData(-1, it.getChunkX(), it.getChunkZ(), it.getItemType(), newCount, newAge));
+                // Preserve a valid entity id from one of the merged items (use the existing entry's id)
+                long preservedId = cur.getId();
+                agg.put(key, new ItemEntityData(preservedId, it.getChunkX(), it.getChunkZ(), it.getItemType(), newCount, newAge));
             }
         }
         

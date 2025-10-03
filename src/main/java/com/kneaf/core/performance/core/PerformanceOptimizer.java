@@ -77,9 +77,10 @@ public class PerformanceOptimizer {
             // Process entities using appropriate method
             List<Long> result;
             if (shouldUseBatchProcessing(entitiesToProcess.size())) {
+                // Pass the typed EntityInput expected by EntityProcessor when processing batches
                 result = batchProcessor.submitBatchRequest(
                     PerformanceConstants.ENTITIES_KEY,
-                    Map.of("entities", entitiesToProcess, "players", players));
+                    new com.kneaf.core.performance.core.EntityProcessor.EntityInput(entitiesToProcess, players));
             } else {
                 result = entityProcessor.processEntities(entitiesToProcess, players);
             }

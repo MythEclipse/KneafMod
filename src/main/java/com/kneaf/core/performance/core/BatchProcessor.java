@@ -195,7 +195,7 @@ public class BatchProcessor {
                 allItems.addAll(items);
             }
             
-            PerformanceProcessor.ItemProcessResult result = processItemEntitiesDirect(allItems);
+            ItemProcessResult result = processItemEntitiesDirect(allItems);
             
             // For simplicity, distribute results equally among batch requests
             for (BatchRequest req : batch) {
@@ -221,7 +221,7 @@ public class BatchProcessor {
                 allMobs.addAll(mobs);
             }
             
-            PerformanceProcessor.MobProcessResult result = processMobAIDirect(allMobs);
+            MobProcessResult result = processMobAIDirect(allMobs);
             
             // Distribute results equally among batch requests
             for (BatchRequest req : batch) {
@@ -345,7 +345,7 @@ public class BatchProcessor {
             allItems.addAll(items);
         }
         
-        PerformanceProcessor.ItemProcessResult result = processItemEntitiesDirect(allItems);
+    ItemProcessResult result = processItemEntitiesDirect(allItems);
         
         // For simplicity, distribute results equally among batch requests
         for (BatchRequest req : batch) {
@@ -366,7 +366,7 @@ public class BatchProcessor {
             allMobs.addAll(mobs);
         }
         
-        PerformanceProcessor.MobProcessResult result = processMobAIDirect(allMobs);
+    MobProcessResult result = processMobAIDirect(allMobs);
         
         // Distribute results equally among batch requests
         for (BatchRequest req : batch) {
@@ -398,7 +398,7 @@ public class BatchProcessor {
     /**
      * Process item entities directly.
      */
-    private PerformanceProcessor.ItemProcessResult processItemEntitiesDirect(List<ItemEntityData> items) {
+    private ItemProcessResult processItemEntitiesDirect(List<ItemEntityData> items) {
         long startTime = System.currentTimeMillis();
         
         try {
@@ -424,8 +424,7 @@ public class BatchProcessor {
                         }
                     }
                     
-                    PerformanceProcessor.ItemProcessResult result = 
-                        new PerformanceProcessor.ItemProcessResult(removeList, updates.size(), removeList.size(), updates);
+                    ItemProcessResult result = new ItemProcessResult(removeList, updates.size(), removeList.size(), updates);
                     
                     monitor.recordItemProcessing(items.size(), updates.size(), removeList.size(), 
                                                System.currentTimeMillis() - startTime);
@@ -446,8 +445,7 @@ public class BatchProcessor {
                     updates.add(new PerformanceProcessor.ItemUpdate(update.getId(), update.getNewCount()));
                 }
                 
-                PerformanceProcessor.ItemProcessResult result = 
-                    new PerformanceProcessor.ItemProcessResult(
+                ItemProcessResult result = new ItemProcessResult(
                         parseResult.getItemsToRemove(), 
                         parseResult.getMergedCount(), 
                         parseResult.getDespawnedCount(), 
@@ -465,13 +463,13 @@ public class BatchProcessor {
         
         // Fallback: no optimization
         monitor.recordItemProcessing(items.size(), 0, 0, System.currentTimeMillis() - startTime);
-        return new PerformanceProcessor.ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>());
+    return new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>());
     }
     
     /**
      * Process mob AI directly.
      */
-    private PerformanceProcessor.MobProcessResult processMobAIDirect(List<MobData> mobs) {
+    private MobProcessResult processMobAIDirect(List<MobData> mobs) {
         long startTime = System.currentTimeMillis();
         
         try {
@@ -491,8 +489,7 @@ public class BatchProcessor {
                         simplifyList.add(mob.getId());
                     }
                     
-                    PerformanceProcessor.MobProcessResult result = 
-                        new PerformanceProcessor.MobProcessResult(new ArrayList<>(), simplifyList);
+                    MobProcessResult result = new MobProcessResult(new ArrayList<>(), simplifyList);
                     
                     monitor.recordMobProcessing(mobs.size(), 0, simplifyList.size(), 
                                               System.currentTimeMillis() - startTime);
@@ -507,8 +504,7 @@ public class BatchProcessor {
             if (NativeBridgeUtils.isValidJsonResult(jsonResult)) {
                 PerformanceUtils.MobParseResult parseResult = PerformanceUtils.parseMobResultFromJson(jsonResult);
                 
-                PerformanceProcessor.MobProcessResult result = 
-                    new PerformanceProcessor.MobProcessResult(
+                MobProcessResult result = new MobProcessResult(
                         parseResult.getDisableList(), 
                         parseResult.getSimplifyList());
                 
@@ -524,7 +520,7 @@ public class BatchProcessor {
         
         // Fallback: no optimization
         monitor.recordMobProcessing(mobs.size(), 0, 0, System.currentTimeMillis() - startTime);
-        return new PerformanceProcessor.MobProcessResult(new ArrayList<>(), new ArrayList<>());
+    return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
     }
     
     /**
