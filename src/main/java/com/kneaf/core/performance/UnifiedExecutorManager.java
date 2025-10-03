@@ -9,12 +9,17 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.slf4j.Logger;
+import com.mojang.logging.LogUtils;
+
 /**
  * Unified executor management system to reduce thread pool contention
  * Implements adaptive thread pooling, work stealing, and load balancing
  */
 public final class UnifiedExecutorManager {
     private static final UnifiedExecutorManager INSTANCE = new UnifiedExecutorManager();
+    
+    private static final Logger LOGGER = LogUtils.getLogger();
     
     // Configuration constants
     private static final int CORE_THREADS = Math.max(4, Runtime.getRuntime().availableProcessors());
@@ -477,13 +482,31 @@ public final class UnifiedExecutorManager {
             double loadFactor = (double) activeCount / poolSize;
             double queueLoadFactor = (double) queueSize / QUEUE_CAPACITY;
             
-            // Adaptive scaling based on load
-            if (loadFactor > HIGH_LOAD_THRESHOLD || queueLoadFactor > 0.7) {
+            // Adaptive scaling based on load or slow server ticks
+            boolean slowTick = false;
+            try {
+                // Check last tick duration from PerformanceManager; if >50ms consider scaling up
+                long lastTickMs = com.kneaf.core.performance.PerformanceManager.getLastTickDurationMs();
+                slowTick = lastTickMs > 50L;
+            } catch (Throwable t) {
+                // If PerformanceManager isn't available for some reason, ignore and proceed with other checks
+                slowTick = false;
+            }
+
+            if (loadFactor > HIGH_LOAD_THRESHOLD || queueLoadFactor > 0.7 || slowTick) {
                 // Scale up
                 int newCoreSize = Math.min(currentCoreThreads.get() + THREAD_SCALING_FACTOR, MAX_THREADS);
                 int newMaxSize = Math.min(currentMaxThreads.get() + THREAD_SCALING_FACTOR, MAX_THREADS * 2);
                 
                 if (newCoreSize > currentCoreThreads.get() || newMaxSize > currentMaxThreads.get()) {
+                    if (slowTick) {
+                        try {
+                            long lastTickMs = com.kneaf.core.performance.PerformanceManager.getLastTickDurationMs();
+                            LOGGER.info("Scaling up threads due to slow tick: {} ms", lastTickMs);
+                        } catch (Throwable t) {
+                            // Ignore if can't get the value
+                        }
+                    }
                     primaryExecutor.setCorePoolSize(newCoreSize);
                     primaryExecutor.setMaximumPoolSize(newMaxSize);
                     currentCoreThreads.set(newCoreSize);

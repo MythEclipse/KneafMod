@@ -43,6 +43,8 @@ public class PerformanceManager {
 
     private static int tickCounter = 0;
     private static long lastTickTime = 0;
+    // Last tick duration in nanoseconds (volatile because read from other threads)
+    private static volatile long lastTickDurationNanos = 0;
 
     // Configuration (loaded from config/kneaf-performance.properties)
     private static final PerformanceConfig CONFIG = PerformanceConfig.load();
@@ -582,6 +584,8 @@ public class PerformanceManager {
         long currentTime = System.nanoTime();
         if (lastTickTime != 0) {
             long delta = currentTime - lastTickTime;
+            // record last tick duration for external consumers (e.g. thread-scaling decisions)
+            lastTickDurationNanos = delta;
             double tps = 1_000_000_000.0 / delta;
             double capped = Math.min(tps, 20.0);
             RustPerformance.setCurrentTPS(capped);
@@ -589,7 +593,17 @@ public class PerformanceManager {
             tpsWindow[tpsWindowIndex % TPS_WINDOW] = capped;
             tpsWindowIndex = (tpsWindowIndex + 1) % TPS_WINDOW;
         }
+        // If this is the first tick, ensure lastTickDurationNanos is zeroed
+        if (lastTickTime == 0) lastTickDurationNanos = 0;
         lastTickTime = currentTime;
+    }
+
+    /**
+     * Return the most recently measured tick duration in milliseconds.
+     * Returns 0 if no previous tick was measured yet.
+     */
+    public static long getLastTickDurationMs() {
+        return lastTickDurationNanos / 1_000_000L;
     }
 
     private static double getRollingAvgTPS() {
