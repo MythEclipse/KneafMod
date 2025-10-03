@@ -8,7 +8,7 @@ class ManualSerializersItemTest {
 
     @Test
     void serializeAndDeserializeItem_roundtrip() {
-        var items = List.of(new com.kneaf.core.data.ItemEntityData(12345L, 5, 7, "minecraft:stone", 64, 10));
+        var items = List.of(new com.kneaf.core.data.item.ItemEntityData(12345L, 5, 7, "minecraft:stone", 64, 10));
         ByteBuffer buf = ManualSerializers.serializeItemInput(42L, items);
         // Ensure little-endian ordering and non-empty
         buf.order(java.nio.ByteOrder.LITTLE_ENDIAN);

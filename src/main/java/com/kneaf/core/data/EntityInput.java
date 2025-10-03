@@ -1,8 +1,0 @@
-package com.kneaf.core.data;
-
-import java.util.List;
-
-/**
- * Data structure for deserialized entity input.
- */
-public record EntityInput(long tickCount, List<EntityData> entities, List<PlayerData> players, float[] config) {}

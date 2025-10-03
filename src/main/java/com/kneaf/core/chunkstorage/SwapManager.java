@@ -40,7 +40,7 @@ public class SwapManager {
     
     // Component references
     private ChunkCache chunkCache;
-    private RustDatabaseAdapter databaseAdapter;
+    private com.kneaf.core.chunkstorage.database.RustDatabaseAdapter databaseAdapter;
     private ExecutorService swapExecutor;
     private ScheduledExecutorService monitorExecutor;
     
@@ -338,7 +338,7 @@ public class SwapManager {
      * @param chunkCache The chunk cache
      * @param databaseAdapter The database adapter
      */
-    public void initializeComponents(ChunkCache chunkCache, RustDatabaseAdapter databaseAdapter) {
+    public void initializeComponents(ChunkCache chunkCache, com.kneaf.core.chunkstorage.database.RustDatabaseAdapter databaseAdapter) {
         if (!enabled.get()) {
             return;
         }

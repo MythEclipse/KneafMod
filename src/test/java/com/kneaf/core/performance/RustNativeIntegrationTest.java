@@ -1,7 +1,7 @@
 package com.kneaf.core.performance;
 
 import com.kneaf.core.binary.ManualSerializers;
-import com.kneaf.core.data.ItemEntityData;
+import com.kneaf.core.data.item.ItemEntityData;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assumptions;
 

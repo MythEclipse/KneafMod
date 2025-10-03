@@ -179,10 +179,18 @@ public final class NativeFloatBuffer implements AutoCloseable {
         ConcurrentLinkedQueue<PooledBuffer> pool = bufferPools.get(bucketIndex);
         if (pool != null) {
             PooledBuffer pooled = pool.poll();
-            if (pooled != null) {
-                poolSizes.get(bucketIndex).decrementAndGet();
-                totalReuses.incrementAndGet();
-                return pooled;
+            while (pooled != null) {
+                // Ensure the pooled buffer is large enough for the requested capacity
+                if (pooled.buffer != null && pooled.buffer.capacity() >= byteCapacity) {
+                    poolSizes.get(bucketIndex).decrementAndGet();
+                    totalReuses.incrementAndGet();
+                    return pooled;
+                }
+                // Discard buffers that are too small and try next
+                pooled = pool.poll();
+                if (pooled != null) {
+                    poolSizes.get(bucketIndex).decrementAndGet();
+                }
             }
         }
         
@@ -191,10 +199,17 @@ public final class NativeFloatBuffer implements AutoCloseable {
             pool = bufferPools.get(i);
             if (pool != null) {
                 PooledBuffer pooled = pool.poll();
-                if (pooled != null) {
-                    poolSizes.get(i).decrementAndGet();
-                    totalReuses.incrementAndGet();
-                    return pooled;
+                while (pooled != null) {
+                    if (pooled.buffer != null && pooled.buffer.capacity() >= byteCapacity) {
+                        poolSizes.get(i).decrementAndGet();
+                        totalReuses.incrementAndGet();
+                        return pooled;
+                    }
+                    // discard too-small buffer
+                    pooled = pool.poll();
+                    if (pooled != null) {
+                        poolSizes.get(i).decrementAndGet();
+                    }
                 }
             }
         }
@@ -323,7 +338,7 @@ public final class NativeFloatBuffer implements AutoCloseable {
             } catch (UnsatisfiedLinkError e) {
                 // Fallback to older API
                 try {
-                    ByteBuffer b = RustPerformance.generateFloatBufferNative(rows, cols);
+                    ByteBuffer b = RustPerformance.generateFloatBufferNative((int)rows, (int)cols);
                     if (b == null) return null;
                     
                     totalAllocations.incrementAndGet();

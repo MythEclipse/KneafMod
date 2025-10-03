@@ -8,7 +8,7 @@ class ManualSerializersMobTest {
 
     @Test
     void serializeAndDeserializeMob_roundtrip() {
-        var mobs = List.of(new com.kneaf.core.data.MobData(555L, 12.5f, false, "zombie"));
+        var mobs = List.of(new com.kneaf.core.data.entity.MobData(555L, 12.5f, false, "zombie"));
         ByteBuffer buf = ManualSerializers.serializeMobInput(100L, mobs);
         buf.order(java.nio.ByteOrder.LITTLE_ENDIAN);
         org.junit.jupiter.api.Assertions.assertTrue(buf.capacity() > 0);

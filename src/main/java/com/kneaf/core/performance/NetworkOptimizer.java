@@ -34,7 +34,7 @@ public class NetworkOptimizer {
             synchronized (NetworkOptimizer.class) {
                 exec = networkExecutor.get();
                 if (exec == null) {
-                    int pool = PerformanceConfig.load().getNetworkExecutorPoolSize();
+                    int pool = com.kneaf.core.performance.monitoring.PerformanceConfig.load().getNetworkExecutorPoolSize();
                     exec = java.util.concurrent.Executors.newScheduledThreadPool(Math.max(1, pool));
                     networkExecutor.set(exec);
                     // add a shutdown hook to ensure we don't leak threads in environments that load/unload mods

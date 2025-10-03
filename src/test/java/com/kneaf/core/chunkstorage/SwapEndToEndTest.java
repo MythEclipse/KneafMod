@@ -1,5 +1,9 @@
 package com.kneaf.core.chunkstorage;
 
+import com.kneaf.core.chunkstorage.cache.ChunkCache;
+import com.kneaf.core.chunkstorage.common.ChunkStorageConfig;
+import com.kneaf.core.chunkstorage.database.RustDatabaseAdapter;
+import com.kneaf.core.chunkstorage.swap.SwapManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;

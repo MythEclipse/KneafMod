@@ -393,7 +393,7 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
             } catch (UnsatisfiedLinkError e) {
                 // Fallback to older API
                 try {
-                    ByteBuffer b = RustPerformance.generateFloatBufferNative(rows, cols);
+                    ByteBuffer b = RustPerformance.generateFloatBufferNative((int)rows, (int)cols);
                     if (b == null) {
                         allocationFailures.incrementAndGet();
                         return null;

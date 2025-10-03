@@ -1,5 +1,13 @@
 package com.kneaf.core.chunkstorage;
 
+import com.kneaf.core.chunkstorage.cache.ChunkCache;
+import com.kneaf.core.chunkstorage.common.ChunkStorageConfig;
+import com.kneaf.core.chunkstorage.database.DatabaseAdapter;
+import com.kneaf.core.chunkstorage.database.InMemoryDatabaseAdapter;
+import com.kneaf.core.chunkstorage.database.RustDatabaseAdapter;
+import com.kneaf.core.chunkstorage.serialization.ChunkSerializer;
+import com.kneaf.core.chunkstorage.serialization.NbtChunkSerializer;
+import com.kneaf.core.chunkstorage.swap.SwapManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -349,8 +357,8 @@ public class ChunkStorageManager {
         }
         
         try {
-            DatabaseAdapter.DatabaseStats dbStats = database.getStats();
-            ChunkCache.CacheStats cacheStats = cache.getStats();
+            Object dbStatsObj = database.getStats();
+            Object cacheStatsObj = cache.getStats();
             
             // Get swap statistics if available
             SwapManager.MemoryPressureLevel pressureLevel = SwapManager.MemoryPressureLevel.NORMAL;
@@ -366,14 +374,42 @@ public class ChunkStorageManager {
                 swapEnabled = swapStats.isEnabled();
             }
             
+            // Extract statistics safely from database and cache objects
+            long totalChunks = 0;
+            long readLatency = 0;
+            long writeLatency = 0;
+            int cachedChunks = 0;
+            double cacheHitRate = 0.0;
+            
+            if (dbStatsObj != null) {
+                // Try to extract database stats using reflection
+                try {
+                    totalChunks = (long) dbStatsObj.getClass().getMethod("getTotalChunks").invoke(dbStatsObj);
+                    readLatency = (long) dbStatsObj.getClass().getMethod("getReadLatencyMs").invoke(dbStatsObj);
+                    writeLatency = (long) dbStatsObj.getClass().getMethod("getWriteLatencyMs").invoke(dbStatsObj);
+                } catch (Exception e) {
+                    LOGGER.warn("Failed to extract database statistics", e);
+                }
+            }
+            
+            if (cacheStatsObj != null) {
+                // Try to extract cache stats using reflection
+                try {
+                    cachedChunks = (int) cacheStatsObj.getClass().getMethod("getCacheSize").invoke(cacheStatsObj);
+                    cacheHitRate = (double) cacheStatsObj.getClass().getMethod("getHitRate").invoke(cacheStatsObj);
+                } catch (Exception e) {
+                    LOGGER.warn("Failed to extract cache statistics", e);
+                }
+            }
+            
             return StorageStats.builder()
                 .enabled(true)
-                .totalChunksInDb(dbStats.getTotalChunks())
-                .cachedChunks(cacheStats.getCacheSize())
-                .avgReadLatencyMs(dbStats.getReadLatencyMs())
-                .avgWriteLatencyMs(dbStats.getWriteLatencyMs())
-                .cacheHitRate(cacheStats.getHitRate())
-                .overallHitRate(cacheStats.getHitRate()) // Using cache hit rate for overall hit rate
+                .totalChunksInDb(totalChunks)
+                .cachedChunks(cachedChunks)
+                .avgReadLatencyMs(readLatency)
+                .avgWriteLatencyMs(writeLatency)
+                .cacheHitRate(cacheHitRate)
+                .overallHitRate(cacheHitRate) // Using cache hit rate for overall hit rate
                 .status("storage-manager")
                 .swapEnabled(swapEnabled)
                 .memoryPressureLevel(pressureLevel.toString())

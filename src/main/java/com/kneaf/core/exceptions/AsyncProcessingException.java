@@ -1,74 +1,90 @@
 package com.kneaf.core.exceptions;
 
 /**
- * Exception thrown for async processing operation failures.
- * Replaces BatchRequestInterruptedException and handles async processing specific errors.
+ * Legacy compatibility wrapper for AsyncProcessingException.
+ * Extends the new enhanced exception class to maintain backward compatibility.
+ * 
+ * @deprecated Use com.kneaf.core.exceptions.processing.AsyncProcessingException instead
  */
-public class AsyncProcessingException extends KneafCoreException {
+@Deprecated
+public class AsyncProcessingException extends RuntimeException {
     
-    public enum AsyncErrorType {
-        BATCH_REQUEST_INTERRUPTED("Batch request interrupted"),
-        TIMEOUT_EXCEEDED("Async operation timeout exceeded"),
-        EXECUTOR_SHUTDOWN("Async executor shutdown"),
-        TASK_REJECTED("Async task rejected"),
-        COMPLETION_EXCEPTION("Async completion exception"),
-        SUPPLY_ASYNC_FAILED("Supply async operation failed");
-        
-        private final String description;
-        
-        AsyncErrorType(String description) {
-            this.description = description;
-        }
-        
-        public String getDescription() {
-            return description;
-        }
-    }
-    
-    private final AsyncErrorType errorType;
+    private final com.kneaf.core.exceptions.processing.AsyncProcessingException delegate;
     private final String taskType;
     private final long timeoutMs;
     
     public AsyncProcessingException(AsyncErrorType errorType, String message) {
-        super(ErrorCategory.ASYNC_PROCESSING, message);
-        this.errorType = errorType;
+        super(message);
+        this.delegate = com.kneaf.core.exceptions.processing.AsyncProcessingException.builder()
+            .errorType(convertErrorType(errorType))
+            .message(message)
+            .build();
         this.taskType = null;
         this.timeoutMs = -1;
     }
     
     public AsyncProcessingException(AsyncErrorType errorType, String message, Throwable cause) {
-        super(ErrorCategory.ASYNC_PROCESSING, message, cause);
-        this.errorType = errorType;
+        super(message, cause);
+        this.delegate = com.kneaf.core.exceptions.processing.AsyncProcessingException.builder()
+            .errorType(convertErrorType(errorType))
+            .message(message)
+            .cause(cause)
+            .build();
         this.taskType = null;
         this.timeoutMs = -1;
     }
     
     public AsyncProcessingException(AsyncErrorType errorType, String taskType, String message, Throwable cause) {
-        super(ErrorCategory.ASYNC_PROCESSING, taskType, message, 
-              String.format("Task: %s", taskType), cause);
-        this.errorType = errorType;
+        super(message, cause);
+        this.delegate = com.kneaf.core.exceptions.processing.AsyncProcessingException.builder()
+            .errorType(convertErrorType(errorType))
+            .taskType(taskType)
+            .message(message)
+            .cause(cause)
+            .build();
         this.taskType = taskType;
         this.timeoutMs = -1;
     }
     
     public AsyncProcessingException(AsyncErrorType errorType, String taskType, long timeoutMs, String message, Throwable cause) {
-        super(ErrorCategory.ASYNC_PROCESSING, taskType, message, 
-              String.format("Task: %s, Timeout: %dms", taskType, timeoutMs), cause);
-        this.errorType = errorType;
+        super(message, cause);
+        this.delegate = com.kneaf.core.exceptions.processing.AsyncProcessingException.builder()
+            .errorType(convertErrorType(errorType))
+            .taskType(taskType)
+            .timeoutMs(timeoutMs)
+            .message(message)
+            .cause(cause)
+            .build();
         this.taskType = taskType;
         this.timeoutMs = timeoutMs;
     }
     
+    /**
+     * Gets the error type
+     */
     public AsyncErrorType getErrorType() {
-        return errorType;
+        return convertErrorTypeBack(delegate.getErrorType());
     }
     
+    /**
+     * Gets the task type
+     */
     public String getTaskType() {
-        return taskType;
+        return taskType != null ? taskType : delegate.getTaskType();
     }
     
+    /**
+     * Gets the timeout in milliseconds
+     */
     public long getTimeoutMs() {
-        return timeoutMs;
+        return timeoutMs != -1 ? timeoutMs : delegate.getTimeoutMs();
+    }
+    
+    /**
+     * Gets the delegate exception for access to new functionality
+     */
+    public com.kneaf.core.exceptions.processing.AsyncProcessingException getDelegate() {
+        return delegate;
     }
     
     /**
@@ -93,5 +109,69 @@ public class AsyncProcessingException extends KneafCoreException {
     public static AsyncProcessingException supplyAsyncFailed(String operation, String key, Throwable cause) {
         return new AsyncProcessingException(AsyncErrorType.SUPPLY_ASYNC_FAILED, operation,
                                            String.format("Supply async operation failed for %s: %s", operation, key), cause);
+    }
+    
+    private static com.kneaf.core.exceptions.processing.AsyncProcessingException.AsyncErrorType convertErrorType(AsyncErrorType errorType) {
+        if (errorType == null) return null;
+        
+        switch (errorType) {
+            case BATCH_REQUEST_INTERRUPTED:
+                return com.kneaf.core.exceptions.processing.AsyncProcessingException.AsyncErrorType.BATCH_REQUEST_INTERRUPTED;
+            case TIMEOUT_EXCEEDED:
+                return com.kneaf.core.exceptions.processing.AsyncProcessingException.AsyncErrorType.TIMEOUT_EXCEEDED;
+            case EXECUTOR_SHUTDOWN:
+                return com.kneaf.core.exceptions.processing.AsyncProcessingException.AsyncErrorType.EXECUTOR_SHUTDOWN;
+            case TASK_REJECTED:
+                return com.kneaf.core.exceptions.processing.AsyncProcessingException.AsyncErrorType.TASK_REJECTED;
+            case COMPLETION_EXCEPTION:
+                return com.kneaf.core.exceptions.processing.AsyncProcessingException.AsyncErrorType.COMPLETION_EXCEPTION;
+            case SUPPLY_ASYNC_FAILED:
+                return com.kneaf.core.exceptions.processing.AsyncProcessingException.AsyncErrorType.SUPPLY_ASYNC_FAILED;
+            default:
+                return com.kneaf.core.exceptions.processing.AsyncProcessingException.AsyncErrorType.SUPPLY_ASYNC_FAILED;
+        }
+    }
+    
+    private static AsyncErrorType convertErrorTypeBack(com.kneaf.core.exceptions.processing.AsyncProcessingException.AsyncErrorType errorType) {
+        if (errorType == null) return null;
+        
+        switch (errorType) {
+            case BATCH_REQUEST_INTERRUPTED:
+                return AsyncErrorType.BATCH_REQUEST_INTERRUPTED;
+            case TIMEOUT_EXCEEDED:
+                return AsyncErrorType.TIMEOUT_EXCEEDED;
+            case EXECUTOR_SHUTDOWN:
+                return AsyncErrorType.EXECUTOR_SHUTDOWN;
+            case TASK_REJECTED:
+                return AsyncErrorType.TASK_REJECTED;
+            case COMPLETION_EXCEPTION:
+                return AsyncErrorType.COMPLETION_EXCEPTION;
+            case SUPPLY_ASYNC_FAILED:
+                return AsyncErrorType.SUPPLY_ASYNC_FAILED;
+            default:
+                return AsyncErrorType.SUPPLY_ASYNC_FAILED;
+        }
+    }
+    
+    /**
+     * Async error types for backward compatibility
+     */
+    public enum AsyncErrorType {
+        BATCH_REQUEST_INTERRUPTED("Batch request interrupted"),
+        TIMEOUT_EXCEEDED("Async operation timeout exceeded"),
+        EXECUTOR_SHUTDOWN("Async executor shutdown"),
+        TASK_REJECTED("Async task rejected"),
+        COMPLETION_EXCEPTION("Async completion exception"),
+        SUPPLY_ASYNC_FAILED("Supply async operation failed");
+        
+        private final String description;
+        
+        AsyncErrorType(String description) {
+            this.description = description;
+        }
+        
+        public String getDescription() {
+            return description;
+        }
     }
 }

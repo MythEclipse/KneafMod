@@ -12,13 +12,13 @@ import java.util.List;
 public final class ManualSerializers {
     private ManualSerializers() {}
 
-    public static ByteBuffer serializeEntityInput(long tickCount, List<com.kneaf.core.data.EntityData> entities,
-                                                   List<com.kneaf.core.data.PlayerData> players) {
+    public static ByteBuffer serializeEntityInput(long tickCount, List<com.kneaf.core.data.entity.EntityData> entities,
+                                                   List<com.kneaf.core.data.entity.PlayerData> players) {
         int baseSize = 8 + 4 + 4 + 20; // tick + numEntities + numPlayers + 5 config floats
         int entitySize = 0;
-        for (com.kneaf.core.data.EntityData e : entities) {
+        for (com.kneaf.core.data.entity.EntityData e : entities) {
             entitySize += 8 + 4*4 + 1 + 4; // id + x/y/z/distance + isBlockEntity + etypeLen
-            String entityType = e.entityType();
+            String entityType = e.getType();
             if (entityType != null) entitySize += entityType.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         }
         int playerSize = players.size() * (8 + 4*3);
@@ -26,23 +26,23 @@ public final class ManualSerializers {
         ByteBuffer buf = ByteBuffer.allocateDirect(totalSize).order(ByteOrder.LITTLE_ENDIAN);
         buf.putLong(tickCount);
         buf.putInt(entities.size());
-        for (com.kneaf.core.data.EntityData e : entities) {
-            buf.putLong(e.id());
-            buf.putFloat((float) e.x());
-            buf.putFloat((float) e.y());
-            buf.putFloat((float) e.z());
-            buf.putFloat((float) e.distance());
+        for (com.kneaf.core.data.entity.EntityData e : entities) {
+            buf.putLong(e.getId());
+            buf.putFloat((float) e.getX());
+            buf.putFloat((float) e.getY());
+            buf.putFloat((float) e.getZ());
+            buf.putFloat((float) e.getDistance());
             buf.put((byte) (e.isBlockEntity() ? 1 : 0));
-            byte[] etype = e.entityType() != null ? e.entityType().getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
+            byte[] etype = e.getType() != null ? e.getType().getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
             buf.putInt(etype.length);
             if (etype.length > 0) buf.put(etype);
         }
         buf.putInt(players.size());
-        for (com.kneaf.core.data.PlayerData p : players) {
-            buf.putLong(p.id());
-            buf.putFloat((float) p.x());
-            buf.putFloat((float) p.y());
-            buf.putFloat((float) p.z());
+        for (com.kneaf.core.data.entity.PlayerData p : players) {
+            buf.putLong(p.getId());
+            buf.putFloat((float) p.getX());
+            buf.putFloat((float) p.getY());
+            buf.putFloat((float) p.getZ());
         }
         float[] cfg = new float[]{16.0f, 32.0f, 1.0f, 0.5f, 0.1f};
         for (float f : cfg) buf.putFloat(f);
@@ -86,25 +86,25 @@ public final class ManualSerializers {
         return List.of();
     }
 
-    public static ByteBuffer serializeItemInput(long tickCount, List<com.kneaf.core.data.ItemEntityData> items) {
+    public static ByteBuffer serializeItemInput(long tickCount, List<com.kneaf.core.data.item.ItemEntityData> items) {
         int baseSize = 8 + 4 + 16; // tick + num + config
         int payload = 0;
-        for (com.kneaf.core.data.ItemEntityData it : items) {
+        for (com.kneaf.core.data.item.ItemEntityData it : items) {
             payload += 8 + 4 + 4 + 4 + 4 + 4; // id + chunkX + chunkZ + itemTypeLen + count + age
-            String t = it.itemType(); if (t != null) payload += t.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            String t = it.getItemType(); if (t != null) payload += t.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         }
         ByteBuffer buf = ByteBuffer.allocateDirect(baseSize + payload).order(ByteOrder.LITTLE_ENDIAN);
         buf.putLong(tickCount);
         buf.putInt(items.size());
-        for (com.kneaf.core.data.ItemEntityData it : items) {
-            buf.putLong(it.id());
-            buf.putInt(it.chunkX());
-            buf.putInt(it.chunkZ());
-            byte[] name = it.itemType() != null ? it.itemType().getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
+        for (com.kneaf.core.data.item.ItemEntityData it : items) {
+            buf.putLong(it.getId());
+            buf.putInt(it.getChunkX());
+            buf.putInt(it.getChunkZ());
+            byte[] name = it.getItemType() != null ? it.getItemType().getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
             buf.putInt(name.length);
             if (name.length > 0) buf.put(name);
-            buf.putInt(it.count());
-            buf.putInt(it.ageSeconds());
+            buf.putInt(it.getCount());
+            buf.putInt(it.getAgeSeconds());
         }
         buf.putFloat(0.98f); buf.putFloat(0.98f);
         buf.putInt(6000); buf.putInt(20);
@@ -112,14 +112,14 @@ public final class ManualSerializers {
         return buf;
     }
 
-    public static List<com.kneaf.core.data.ItemEntityData> deserializeItemProcessResult(ByteBuffer buffer) {
+    public static List<com.kneaf.core.data.item.ItemEntityData> deserializeItemProcessResult(ByteBuffer buffer) {
         buffer.order(ByteOrder.LITTLE_ENDIAN);
         buffer.rewind();
         if (buffer.remaining() < 8 + 4) return List.of();
         buffer.getLong(); // consume tickCount header
         int num = buffer.getInt();
         if (num < 0 || num > 1_000_000) return List.of();
-        List<com.kneaf.core.data.ItemEntityData> out = new ArrayList<>(Math.max(0, num));
+        List<com.kneaf.core.data.item.ItemEntityData> out = new ArrayList<>(Math.max(0, num));
         for (int i = 0; i < num; i++) {
             if (buffer.remaining() < 8 + 4 + 4 + 4 + 4) break;
             long id = buffer.getLong();
@@ -136,26 +136,26 @@ public final class ManualSerializers {
             }
             int count = buffer.remaining() >= 4 ? buffer.getInt() : 0;
             int ageSeconds = buffer.remaining() >= 4 ? buffer.getInt() : 0;
-            out.add(new com.kneaf.core.data.ItemEntityData(id, chunkX, chunkZ, name, count, ageSeconds));
+            out.add(new com.kneaf.core.data.item.ItemEntityData(id, chunkX, chunkZ, name, count, ageSeconds));
         }
         return out;
     }
 
-    public static ByteBuffer serializeMobInput(long tickCount, List<com.kneaf.core.data.MobData> mobs) {
+    public static ByteBuffer serializeMobInput(long tickCount, List<com.kneaf.core.data.entity.MobData> mobs) {
         int base = 8 + 4 + 16; // tick + num + config
         int payload = 0;
-        for (com.kneaf.core.data.MobData m : mobs) {
+        for (com.kneaf.core.data.entity.MobData m : mobs) {
             payload += 8 + 4 + 1 + 4; // id + distance + passive byte + entityTypeLen
-            String t = m.entityType(); if (t != null) payload += t.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            String t = m.getType(); if (t != null) payload += t.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         }
         ByteBuffer buf = ByteBuffer.allocateDirect(base + payload).order(ByteOrder.LITTLE_ENDIAN);
         buf.putLong(tickCount);
         buf.putInt(mobs.size());
-        for (com.kneaf.core.data.MobData m : mobs) {
-            buf.putLong(m.id());
-            buf.putFloat((float) m.distance());
+        for (com.kneaf.core.data.entity.MobData m : mobs) {
+            buf.putLong(m.getId());
+            buf.putFloat((float) m.getDistance());
             buf.put((byte) (m.isPassive() ? 1 : 0));
-            byte[] nm = m.entityType() != null ? m.entityType().getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
+            byte[] nm = m.getType() != null ? m.getType().getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
             buf.putInt(nm.length);
             if (nm.length > 0) buf.put(nm);
         }
@@ -164,14 +164,14 @@ public final class ManualSerializers {
         return buf;
     }
 
-    public static List<com.kneaf.core.data.MobData> deserializeMobProcessResult(ByteBuffer buffer) {
+    public static List<com.kneaf.core.data.entity.MobData> deserializeMobProcessResult(ByteBuffer buffer) {
         buffer.order(ByteOrder.LITTLE_ENDIAN);
         buffer.rewind();
         if (buffer.remaining() < 8 + 4) return List.of();
         buffer.getLong(); // consume tickCount header
         int num = buffer.getInt();
         if (num < 0 || num > 1_000_000) return List.of();
-        List<com.kneaf.core.data.MobData> out = new ArrayList<>(Math.max(0, num));
+        List<com.kneaf.core.data.entity.MobData> out = new ArrayList<>(Math.max(0, num));
         for (int i = 0; i < num; i++) {
             if (buffer.remaining() < 8 + 4 + 1 + 4) break;
             long id = buffer.getLong();
@@ -187,27 +187,27 @@ public final class ManualSerializers {
             } else if (typeLen > 0) {
                 buffer.position(buffer.limit());
             }
-            out.add(new com.kneaf.core.data.MobData(id, distance, isPassive, type));
+            out.add(new com.kneaf.core.data.entity.MobData(id, distance, isPassive, type));
         }
         return out;
     }
 
-    public static ByteBuffer serializeBlockInput(long tickCount, List<com.kneaf.core.data.BlockEntityData> blocks) {
+    public static ByteBuffer serializeBlockInput(long tickCount, List<com.kneaf.core.data.block.BlockEntityData> blocks) {
         int base = 8 + 4 + 24; // tick + num + config
         int payload = 0;
-        for (com.kneaf.core.data.BlockEntityData b : blocks) {
+        for (com.kneaf.core.data.block.BlockEntityData b : blocks) {
             payload += 8 + 4 + 4 + 4 + 4 + 4; // id + distance + blockTypeLen + x + y + z
-            String t = b.blockType(); if (t != null) payload += t.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            String t = b.getBlockType(); if (t != null) payload += t.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         }
         ByteBuffer buf = ByteBuffer.allocateDirect(base + payload).order(ByteOrder.LITTLE_ENDIAN);
         buf.putLong(tickCount);
         buf.putInt(blocks.size());
-        for (com.kneaf.core.data.BlockEntityData b : blocks) {
-            buf.putLong(b.id());
-            buf.putFloat((float) b.distance());
-            byte[] nm = b.blockType() != null ? b.blockType().getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
+        for (com.kneaf.core.data.block.BlockEntityData b : blocks) {
+            buf.putLong(b.getId());
+            buf.putFloat((float) b.getDistance());
+            byte[] nm = b.getBlockType() != null ? b.getBlockType().getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
             buf.putInt(nm.length); if (nm.length > 0) buf.put(nm);
-            buf.putInt(b.x()); buf.putInt(b.y()); buf.putInt(b.z());
+            buf.putInt((int) b.getX()); buf.putInt((int) b.getY()); buf.putInt((int) b.getZ());
         }
         buf.putFloat(0.1f); buf.putFloat(0.05f);
         buf.putInt(8); buf.putInt(16);
@@ -215,17 +215,17 @@ public final class ManualSerializers {
         return buf;
     }
 
-    public static ByteBuffer serializeVillagerInput(long tickCount, List<com.kneaf.core.data.VillagerData> villagers) {
+    public static ByteBuffer serializeVillagerInput(long tickCount, List<com.kneaf.core.data.entity.VillagerData> villagers) {
         int base = 8 + 4 + 32; // tick + num + config (8 floats)
         int payload = 0;
-        for (com.kneaf.core.data.VillagerData v : villagers) {
+        for (com.kneaf.core.data.entity.VillagerData v : villagers) {
             payload += 8 + 4 + 4 + 4 + 4 + 1 + 1 + 4; // id + x + y + z + distance + profession + level + typeLen
             String t = v.getProfession(); if (t != null) payload += t.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         }
         ByteBuffer buf = ByteBuffer.allocateDirect(base + payload).order(ByteOrder.LITTLE_ENDIAN);
         buf.putLong(tickCount);
         buf.putInt(villagers.size());
-        for (com.kneaf.core.data.VillagerData v : villagers) {
+        for (com.kneaf.core.data.entity.VillagerData v : villagers) {
             buf.putLong(v.getId());
             buf.putFloat((float) v.getX());
             buf.putFloat((float) v.getY());

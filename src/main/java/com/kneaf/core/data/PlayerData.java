@@ -1,3 +1,0 @@
-package com.kneaf.core.data;
-
-public record PlayerData(long id, double x, double y, double z) {}

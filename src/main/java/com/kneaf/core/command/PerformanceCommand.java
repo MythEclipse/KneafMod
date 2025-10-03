@@ -6,7 +6,8 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 
-import com.kneaf.core.performance.PerformanceManager;
+import com.kneaf.core.performance.monitoring.PerformanceManager;
+import com.kneaf.core.performance.monitoring.PerformanceMetricsLogger;
 import com.kneaf.core.performance.RustPerformance;
 
 public class PerformanceCommand {
@@ -52,7 +53,7 @@ public class PerformanceCommand {
 
     private static int rotateLog(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
-        com.kneaf.core.performance.PerformanceMetricsLogger.rotateNow();
+        PerformanceMetricsLogger.rotateNow();
         source.sendSuccess(() -> Component.literal("Kneaf performance log rotated."), false);
         return 1;
     }

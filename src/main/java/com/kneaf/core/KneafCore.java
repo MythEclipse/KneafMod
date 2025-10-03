@@ -22,8 +22,8 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
 import com.kneaf.core.compatibility.ModCompatibility;
-import com.kneaf.core.performance.PerformanceManager;
-import com.kneaf.core.performance.NeoForgeEventIntegration;
+import com.kneaf.core.performance.monitoring.PerformanceManager;
+import com.kneaf.core.performance.integration.NeoForgeEventIntegration;
 
 /**
  * Main mod class for KneafCore.
@@ -112,7 +112,7 @@ public class KneafCore {
     public void onServerStopping(ServerStoppingEvent event) {
         LOGGER.info("Server stopping - shutting down PerformanceManager");
         try {
-            com.kneaf.core.performance.PerformanceManager.shutdown();
+            com.kneaf.core.performance.monitoring.PerformanceManager.shutdown();
         } catch (Exception e) {
             LOGGER.warn("Error while shutting down PerformanceManager", e);
         }
