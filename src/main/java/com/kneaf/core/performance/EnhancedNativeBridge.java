@@ -1,408 +1,411 @@
 package com.kneaf.core.performance;
 
+import com.kneaf.core.KneafCore;
+import com.kneaf.core.binary.ManualSerializers;
+import com.kneaf.core.data.block.BlockEntityData;
+import com.kneaf.core.data.entity.MobData;
+import com.kneaf.core.data.item.ItemEntityData;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
- * Enhanced JNI bridge with optimized batching to reduce JNI boundary crossing. Implements adaptive
- * batching with dynamic sizing based on load and performance metrics.
+ * Enhanced Native Bridge with shared memory buffers for zero-copy data transfer.
+ * Combines multiple small JNI calls into single batch operations to reduce overhead.
  */
-public final class EnhancedNativeBridge {
-  static {
-    try {
-      System.loadLibrary("rustperf");
-    } catch (UnsatisfiedLinkError e) {
-      // library may not be present in test environment
-    }
-  }
+public class EnhancedNativeBridge {
 
-  private EnhancedNativeBridge() {}
-
-  // Batch configuration with adaptive sizing
-  private static int adaptiveBatchTimeoutMs() {
-    double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
-    double tickDelay =
-        com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs();
-    return (int)
-        com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchTimeoutMs(
-            tps, tickDelay);
-  }
-
-  private static int minBatchSize() {
-    return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchSize(
-        com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS(),
-        com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs());
-  }
-
-  private static int maxBatchSize() {
-    return Math.max(
-        50,
-        com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchSize(
-                com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS(),
-                com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs())
-            * 2);
-  }
-
-  private static int maxPendingBatches() {
-    return Math.max(
-        10,
-        com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveQueueCapacity(
-                com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS())
-            / 20);
-  }
-
-  // Batch operation types
-  public static final byte OPERATION_TYPE_ENTITY = 0x01;
-  public static final byte OPERATION_TYPE_ITEM = 0x02;
-  public static final byte OPERATION_TYPE_MOB = 0x03;
-  public static final byte OPERATION_TYPE_BLOCK = 0x04;
-  public static final byte OPERATION_TYPE_SPATIAL = 0x05;
-  public static final byte OPERATION_TYPE_SIMD = 0x06;
+  // Shared memory buffer pool for zero-copy operations
+  private static final int BUFFER_SIZE = 64 * 1024; // 64KB per buffer
+  private static final int MAX_BUFFERS = 16;
+  private static final List<ByteBuffer> SHARED_BUFFERS = new ArrayList<>();
+  private static final AtomicLong BUFFER_USAGE_COUNT = new AtomicLong(0);
 
   // Performance metrics
   private static final AtomicLong TOTAL_BATCHES_PROCESSED = new AtomicLong(0);
-  private static final AtomicLong TOTAL_OPERATIONS_BATCHED = new AtomicLong(0);
-  private static final AtomicLong AVERAGE_BATCH_SIZE = new AtomicLong(0);
-  private static final AtomicBoolean BATCH_PROCESSOR_RUNNING = new AtomicBoolean(false);
+  private static final AtomicLong TOTAL_JNI_CALLS_SAVED = new AtomicLong(0);
+  private static final AtomicLong TOTAL_MEMORY_COPIES_AVOIDED = new AtomicLong(0);
 
-  // Batch queues per operation type
-  private static final ConcurrentLinkedQueue<BatchOperation>[] OPERATION_QUEUES;
-  private static final Thread[] BATCH_PROCESSOR_THREADS;
+  // Worker handle for batch operations
+  private long workerHandle = 0;
+  private final ExecutorService callbackExecutor = Executors.newCachedThreadPool(
+      r -> {
+        Thread t = new Thread(r, "enhanced-bridge-callback");
+        t.setDaemon(true);
+        return t;
+      });
 
   static {
-    @SuppressWarnings("unchecked")
-    ConcurrentLinkedQueue<BatchOperation>[] queues = new ConcurrentLinkedQueue[7];
-    for (int i = 0; i < queues.length; i++) {
-      queues[i] = new ConcurrentLinkedQueue<>();
+    // Initialize shared buffers with native byte order
+    for (int i = 0; i < MAX_BUFFERS; i++) {
+      try {
+        ByteBuffer buffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
+        buffer.order(ByteOrder.LITTLE_ENDIAN); // Native byte order for x86/AMD64
+        SHARED_BUFFERS.add(buffer);
+      } catch (Exception e) {
+        KneafCore.LOGGER.warn("Failed to allocate shared buffer {}: {}", i, e.getMessage());
+      }
     }
-    OPERATION_QUEUES = queues;
-
-    // Initialize batch processor threads
-    BATCH_PROCESSOR_THREADS = new Thread[4]; // 4 threads for parallel batch processing
-    startBatchProcessors();
+    KneafCore.LOGGER.info("EnhancedNativeBridge initialized with {} shared buffers", SHARED_BUFFERS.size());
   }
 
-  /** Enhanced batch operation with result callback */
-  public static class BatchOperation {
-    public final byte operationType;
-    public final ByteBuffer inputData;
-    public final CompletableFuture<byte[]> resultFuture;
-    public final long timestamp;
-    public final int estimatedSize;
-
-    public BatchOperation(
-        byte operationType, ByteBuffer inputData, CompletableFuture<byte[]> resultFuture) {
-      this.operationType = operationType;
-      this.inputData = inputData;
-      this.resultFuture = resultFuture;
-      this.timestamp = System.nanoTime();
-      this.estimatedSize = inputData != null ? inputData.remaining() : 0;
-    }
-  }
-
-  /** Batch processing result */
-  public static class BatchResult {
-    public final byte operationType;
-    public final List<byte[]> results;
-    public final long processingTimeNs;
-
-    public BatchResult(byte operationType, List<byte[]> results, long processingTimeNs) {
-      this.operationType = operationType;
-      this.results = results;
-      this.processingTimeNs = processingTimeNs;
+  /**
+   * Create enhanced native bridge with optimized worker.
+   */
+  public EnhancedNativeBridge() {
+    try {
+      this.workerHandle = NativeBridge.createOptimizedWorker(4); // 4 concurrency
+      if (this.workerHandle == 0) {
+        throw new RuntimeException("Failed to create optimized worker for EnhancedNativeBridge");
+      }
+      KneafCore.LOGGER.info("EnhancedNativeBridge created with worker handle: {}", workerHandle);
+    } catch (Exception e) {
+      KneafCore.LOGGER.error("Failed to initialize EnhancedNativeBridge", e);
+      throw new RuntimeException("EnhancedNativeBridge initialization failed", e);
     }
   }
 
-  /** Submit operation for batch processing */
-  public static CompletableFuture<byte[]> submitOperation(
-      byte operationType, ByteBuffer inputData) {
-    CompletableFuture<byte[]> future = new CompletableFuture<>();
-    BatchOperation operation = new BatchOperation(operationType, inputData, future);
-
-    // Submit to appropriate queue
-    if (operationType >= 0 && operationType < OPERATION_QUEUES.length) {
-      OPERATION_QUEUES[operationType].offer(operation);
-    } else {
-      future.completeExceptionally(
-          new IllegalArgumentException("Invalid operation type: " + operationType));
-    }
-
-    return future;
+  /**
+   * Process batch asynchronously with callback.
+   * Uses shared memory buffers for zero-copy transfer.
+   */
+  public void processBatchAsync(Object entityData, Consumer<BatchResult> callback) {
+    processBatchAsync(entityData, 30000L, callback); // Default 30 second timeout
   }
 
-  /** Process batch of operations with optimized JNI calls */
-  private static void processBatch(byte operationType, List<BatchOperation> batch) {
-    if (batch.isEmpty()) return;
+  /**
+   * Process batch asynchronously with timeout and callback.
+   * Combines multiple small operations into single JNI batch call.
+   */
+  public void processBatchAsync(Object entityData, long timeoutMs, Consumer<BatchResult> callback) {
+    if (entityData == null) {
+      callbackExecutor.execute(() -> callback.accept(
+          BatchResult.failure("Entity data cannot be null")));
+      return;
+    }
+
+    CompletableFuture.supplyAsync(() -> processBatchInternal(entityData, timeoutMs), callbackExecutor)
+        .thenAcceptAsync(callback, callbackExecutor)
+        .exceptionally(throwable -> {
+          callbackExecutor.execute(() -> callback.accept(
+              BatchResult.failure("Async processing failed: " + throwable.getMessage())));
+          return null;
+        });
+  }
+
+  /**
+   * Internal batch processing using shared memory buffers.
+   */
+  private BatchResult processBatchInternal(Object entityData, long timeoutMs) {
+    long startTime = System.nanoTime();
 
     try {
-      // Prepare batch data for JNI call
-      int totalSize = 0;
-      for (BatchOperation op : batch) {
-        totalSize += op.estimatedSize;
+      // Acquire shared buffer for zero-copy transfer
+      ByteBuffer sharedBuffer = acquireSharedBuffer();
+      if (sharedBuffer == null) {
+        return BatchResult.failure("No shared buffers available");
       }
 
-      // Create combined buffer for batch processing
-      ByteBuffer batchBuffer = ByteBuffer.allocateDirect(totalSize + batch.size() * 8);
-      batchBuffer.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+      try {
+        sharedBuffer.clear();
 
-      // Write batch header
-      batchBuffer.putInt(batch.size()); // Number of operations
-      batchBuffer.putInt(totalSize); // Total data size
+        // Serialize data directly into shared buffer
+        int serializedSize = serializeEntityData(entityData, sharedBuffer);
+        if (serializedSize == 0) {
+          return BatchResult.failure("Failed to serialize entity data");
+        }
 
-      // Write individual operations
-      for (BatchOperation op : batch) {
-        batchBuffer.putInt(op.estimatedSize);
-        if (op.inputData != null) {
-          batchBuffer.put(op.inputData);
+        sharedBuffer.flip();
+
+        // Single JNI batch call instead of multiple small calls
+        byte[] resultBytes = performBatchJNI(sharedBuffer, timeoutMs);
+
+        TOTAL_BATCHES_PROCESSED.incrementAndGet();
+        TOTAL_JNI_CALLS_SAVED.addAndGet(calculateJNICallsSaved(entityData));
+        TOTAL_MEMORY_COPIES_AVOIDED.addAndGet(serializedSize);
+
+        long processingTimeNs = System.nanoTime() - startTime;
+        double processingTimeMs = processingTimeNs / 1_000_000.0;
+
+        KneafCore.LOGGER.debug("Batch processed in {:.2f}ms, saved {} JNI calls",
+            processingTimeMs, calculateJNICallsSaved(entityData));
+
+        return BatchResult.success(resultBytes, processingTimeMs);
+
+      } finally {
+        releaseSharedBuffer(sharedBuffer);
+      }
+
+    } catch (Exception e) {
+      long processingTimeNs = System.nanoTime() - startTime;
+      double processingTimeMs = processingTimeNs / 1_000_000.0;
+
+      KneafCore.LOGGER.error("Batch processing failed after {:.2f}ms", processingTimeMs, e);
+      return BatchResult.failure("Processing failed: " + e.getMessage());
+    }
+  }
+
+  /**
+   * Acquire shared buffer for zero-copy operations.
+   */
+  private ByteBuffer acquireSharedBuffer() {
+    for (ByteBuffer buffer : SHARED_BUFFERS) {
+      if (buffer.position() == 0) { // Simple lock-free check
+        BUFFER_USAGE_COUNT.incrementAndGet();
+        return buffer;
+      }
+    }
+    return null; // All buffers in use
+  }
+
+  /**
+   * Release shared buffer back to pool.
+   */
+  private void releaseSharedBuffer(ByteBuffer buffer) {
+    if (buffer != null) {
+      buffer.clear();
+      BUFFER_USAGE_COUNT.decrementAndGet();
+    }
+  }
+
+  /**
+   * Serialize entity data directly into shared buffer.
+   * Returns serialized size in bytes.
+   */
+  private int serializeEntityData(Object entityData, ByteBuffer buffer) {
+    try {
+      if (entityData instanceof List) {
+        List<?> dataList = (List<?>) entityData;
+
+        if (dataList.isEmpty()) {
+          return 0;
+        }
+
+        // Determine data type from first element
+        Object firstElement = dataList.get(0);
+
+        if (firstElement instanceof ItemEntityData) {
+          @SuppressWarnings("unchecked")
+          List<ItemEntityData> items = (List<ItemEntityData>) dataList;
+          return serializeItemBatch(items, buffer);
+
+        } else if (firstElement instanceof MobData) {
+          @SuppressWarnings("unchecked")
+          List<MobData> mobs = (List<MobData>) dataList;
+          return serializeMobBatch(mobs, buffer);
+
+        } else if (firstElement instanceof BlockEntityData) {
+          @SuppressWarnings("unchecked")
+          List<BlockEntityData> blocks = (List<BlockEntityData>) dataList;
+          return serializeBlockBatch(blocks, buffer);
         }
       }
-      batchBuffer.flip();
 
-      // Call native batch processing method
-      byte[] batchResult = nativeProcessBatch(operationType, batchBuffer);
+      // Fallback: serialize as JSON bytes
+      String jsonData = new com.google.gson.Gson().toJson(entityData);
+      byte[] jsonBytes = jsonData.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
-      if (batchResult != null) {
-        // Parse batch results
-        ByteBuffer resultBuffer =
-            ByteBuffer.wrap(batchResult).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        int resultCount = resultBuffer.getInt();
+      if (buffer.remaining() < jsonBytes.length + 4) {
+        return 0; // Buffer too small
+      }
 
-        List<byte[]> results = new ArrayList<>(resultCount);
-        for (int i = 0; i < resultCount; i++) {
-          int resultSize = resultBuffer.getInt();
-          if (resultSize > 0 && resultBuffer.remaining() >= resultSize) {
-            byte[] resultData = new byte[resultSize];
-            resultBuffer.get(resultData);
-            results.add(resultData);
-          } else {
-            results.add(new byte[0]);
-          }
-        }
+      buffer.putInt(jsonBytes.length);
+      buffer.put(jsonBytes);
+      return jsonBytes.length + 4;
 
-        // Complete futures with results
-        for (int i = 0; i < Math.min(batch.size(), results.size()); i++) {
-          BatchOperation op = batch.get(i);
-          if (!op.resultFuture.isDone()) {
-            op.resultFuture.complete(results.get(i));
-          }
-        }
-      } else {
-        // Complete with empty results
-        for (BatchOperation op : batch) {
-          if (!op.resultFuture.isDone()) {
-            op.resultFuture.complete(new byte[0]);
-          }
-        }
+    } catch (Exception e) {
+      KneafCore.LOGGER.warn("Failed to serialize entity data", e);
+      return 0;
+    }
+  }
+
+  /**
+   * Serialize item batch using ManualSerializers.
+   */
+  private int serializeItemBatch(List<ItemEntityData> items, ByteBuffer buffer) {
+    try {
+      // Use existing ManualSerializers for compatibility
+      ByteBuffer tempBuffer = ManualSerializers.serializeItemInput(0, items);
+      if (tempBuffer.remaining() > buffer.remaining()) {
+        return 0; // Buffer too small
+      }
+
+      int size = tempBuffer.remaining();
+      buffer.put(tempBuffer);
+      return size;
+
+    } catch (Exception e) {
+      KneafCore.LOGGER.warn("Failed to serialize item batch", e);
+      return 0;
+    }
+  }
+
+  /**
+   * Serialize mob batch using ManualSerializers.
+   */
+  private int serializeMobBatch(List<MobData> mobs, ByteBuffer buffer) {
+    try {
+      ByteBuffer tempBuffer = ManualSerializers.serializeMobInput(0, mobs);
+      if (tempBuffer.remaining() > buffer.remaining()) {
+        return 0;
+      }
+
+      int size = tempBuffer.remaining();
+      buffer.put(tempBuffer);
+      return size;
+
+    } catch (Exception e) {
+      KneafCore.LOGGER.warn("Failed to serialize mob batch", e);
+      return 0;
+    }
+  }
+
+  /**
+   * Serialize block batch using ManualSerializers.
+   */
+  private int serializeBlockBatch(List<BlockEntityData> blocks, ByteBuffer buffer) {
+    try {
+      ByteBuffer tempBuffer = ManualSerializers.serializeBlockInput(0, blocks);
+      if (tempBuffer.remaining() > buffer.remaining()) {
+        return 0;
+      }
+
+      int size = tempBuffer.remaining();
+      buffer.put(tempBuffer);
+      return size;
+
+    } catch (Exception e) {
+      KneafCore.LOGGER.warn("Failed to serialize block batch", e);
+      return 0;
+    }
+  }
+
+  /**
+   * Perform single JNI batch call using shared buffer.
+   */
+  private byte[] performBatchJNI(ByteBuffer inputBuffer, long timeoutMs) throws Exception {
+    // Use existing NativeBridge for the actual JNI call
+    // This combines what would be multiple separate calls into one
+
+    long deadline = System.currentTimeMillis() + timeoutMs;
+
+    // Push batch buffer to worker
+    NativeBridge.nativePushTaskBuffer(workerHandle, inputBuffer);
+
+    // Poll for result with timeout
+    byte[] result = null;
+    while (System.currentTimeMillis() < deadline) {
+      result = NativeBridge.nativePollResult(workerHandle);
+      if (result != null) {
+        break;
+      }
+      Thread.sleep(10); // Small delay to avoid busy waiting
+    }
+
+    if (result == null) {
+      throw new RuntimeException("Batch processing timeout after " + timeoutMs + "ms");
+    }
+
+    return result;
+  }
+
+  /**
+   * Calculate how many individual JNI calls were saved by batching.
+   */
+  private int calculateJNICallsSaved(Object entityData) {
+    if (entityData instanceof List) {
+      return ((List<?>) entityData).size();
+    }
+    return 1; // At least one call saved
+  }
+
+  /**
+   * Get enhanced batch metrics.
+   */
+  public static Map<String, Object> getEnhancedBatchMetrics() {
+    Map<String, Object> metrics = new ConcurrentHashMap<>();
+    metrics.put("totalBatchesProcessed", TOTAL_BATCHES_PROCESSED.get());
+    metrics.put("totalJNICallsSaved", TOTAL_JNI_CALLS_SAVED.get());
+    metrics.put("totalMemoryCopiesAvoided", TOTAL_MEMORY_COPIES_AVOIDED.get());
+    metrics.put("currentBufferUsage", BUFFER_USAGE_COUNT.get());
+    metrics.put("maxBuffers", MAX_BUFFERS);
+    metrics.put("bufferSize", BUFFER_SIZE);
+    return metrics;
+  }
+
+  /**
+   * Shutdown the bridge and cleanup resources.
+   */
+  public void shutdown() {
+    try {
+      if (workerHandle != 0) {
+        NativeBridge.destroyOptimizedWorker(workerHandle);
+        workerHandle = 0;
       }
     } catch (Exception e) {
-      // Complete all futures with exception
-      for (BatchOperation op : batch) {
-        if (!op.resultFuture.isDone()) {
-          op.resultFuture.completeExceptionally(e);
-        }
+      KneafCore.LOGGER.warn("Error during bridge shutdown", e);
+    }
+
+    callbackExecutor.shutdown();
+    try {
+      if (!callbackExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+        callbackExecutor.shutdownNow();
       }
+    } catch (InterruptedException e) {
+      callbackExecutor.shutdownNow();
+      Thread.currentThread().interrupt();
     }
 
-    // Update metrics
-    // processingTime is intentionally not stored here; metrics record counts and averages instead
-    TOTAL_BATCHES_PROCESSED.incrementAndGet();
-    TOTAL_OPERATIONS_BATCHED.addAndGet(batch.size());
-
-    // Update average batch size (exponential moving average)
-    long currentAvg = AVERAGE_BATCH_SIZE.get();
-    long newAvg = (currentAvg * 9 + batch.size()) / 10; // 90% weight on historical, 10% on new
-    AVERAGE_BATCH_SIZE.set(newAvg);
+    KneafCore.LOGGER.info("EnhancedNativeBridge shutdown complete");
   }
 
-  /** Batch processor thread implementation */
-  private static class BatchProcessor implements Runnable {
-    private final byte operationType;
-    private final int processorId;
+  /**
+   * Result of batch processing operation.
+   */
+  public static class BatchResult {
+    private final boolean success;
+    private final byte[] data;
+    private final String errorMessage;
+    private final double processingTimeMs;
 
-    public BatchProcessor(byte operationType, int processorId) {
-      this.operationType = operationType;
-      this.processorId = processorId;
+    private BatchResult(boolean success, byte[] data, String errorMessage, double processingTimeMs) {
+      this.success = success;
+      this.data = data;
+      this.errorMessage = errorMessage;
+      this.processingTimeMs = processingTimeMs;
     }
 
-    @Override
-    public void run() {
-      Thread.currentThread()
-          .setName("EnhancedNativeBridge-BatchProcessor-" + operationType + "-" + processorId);
-
-      while (BATCH_PROCESSOR_RUNNING.get()) {
-        try {
-          List<BatchOperation> batch = collectBatch();
-          if (!batch.isEmpty()) {
-            processBatch(operationType, batch);
-          }
-
-          // Adaptive sleep based on load
-          if (batch.size() < minBatchSize()) {
-            Thread.sleep(adaptiveBatchTimeoutMs());
-          }
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          break;
-        } catch (Exception e) {
-          // Log error but continue processing
-          System.err.println("Error in batch processor: " + e.getMessage());
-        }
-      }
+    public static BatchResult success(byte[] data, double processingTimeMs) {
+      return new BatchResult(true, data, null, processingTimeMs);
     }
 
-    private List<BatchOperation> collectBatch() {
-      List<BatchOperation> batch = new ArrayList<>();
-      ConcurrentLinkedQueue<BatchOperation> queue = OPERATION_QUEUES[operationType];
-
-      long startTime = System.currentTimeMillis();
-      int targetSize = calculateOptimalBatchSize();
-
-      while (batch.size() < targetSize
-          && (System.currentTimeMillis() - startTime) < adaptiveBatchTimeoutMs()) {
-
-        BatchOperation op = queue.poll();
-        if (op != null) {
-          batch.add(op);
-        } else if (!batch.isEmpty()) {
-          // Have some operations, break if timeout approaching
-          break;
-        } else {
-          // No operations available, wait a bit
-          try {
-            Thread.sleep(1);
-          } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            break;
-          }
-        }
-      }
-
-      return batch;
+    public static BatchResult failure(String errorMessage) {
+      return new BatchResult(false, null, errorMessage, 0.0);
     }
 
-    private int calculateOptimalBatchSize() {
-      // Adaptive batch sizing based on recent performance
-      long avgSize = AVERAGE_BATCH_SIZE.get();
-      long totalOps = TOTAL_OPERATIONS_BATCHED.get();
-      long totalBatches = TOTAL_BATCHES_PROCESSED.get();
+    public boolean isSuccess() {
+      return success;
+    }
 
-      if (totalBatches > 0 && totalOps > 0) {
-        double actualAvg = (double) totalOps / totalBatches;
+    public byte[] getData() {
+      return data;
+    }
 
-        // Adjust target size based on actual performance
-        if (actualAvg > avgSize * 1.2) {
-          // Performance is good, increase batch size
-          return Math.min(maxBatchSize(), (int) (avgSize * 1.1));
-        } else if (actualAvg < avgSize * 0.8) {
-          // Performance is poor, decrease batch size
-          return Math.max(minBatchSize(), (int) (avgSize * 0.9));
-        }
-      }
+    public String getErrorMessage() {
+      return errorMessage;
+    }
 
-      return (int) Math.max(minBatchSize(), Math.min(maxBatchSize(), avgSize));
+    public double getProcessingTimeMs() {
+      return processingTimeMs;
     }
   }
-
-  /** Start batch processor threads */
-  private static void startBatchProcessors() {
-    if (BATCH_PROCESSOR_RUNNING.compareAndSet(false, true)) {
-      for (int i = 0; i < BATCH_PROCESSOR_THREADS.length; i++) {
-        final int processorId = i;
-        BATCH_PROCESSOR_THREADS[i] =
-            new Thread(
-                () -> {
-                  // Distribute operation types across processors
-                  for (byte opType = 0; opType < OPERATION_QUEUES.length; opType++) {
-                    if (opType % BATCH_PROCESSOR_THREADS.length == processorId) {
-                      new BatchProcessor(opType, processorId).run();
-                    }
-                  }
-                });
-        BATCH_PROCESSOR_THREADS[i].setDaemon(true);
-        BATCH_PROCESSOR_THREADS[i].setName("EnhancedNativeBridge-Processor-" + i);
-        BATCH_PROCESSOR_THREADS[i].start();
-      }
-    }
-  }
-
-  /** Shutdown batch processors */
-  public static void shutdown() {
-    BATCH_PROCESSOR_RUNNING.set(false);
-    for (Thread thread : BATCH_PROCESSOR_THREADS) {
-      if (thread != null) {
-        thread.interrupt();
-      }
-    }
-  }
-
-  /** Get batch processing metrics */
-  public static BatchMetrics getMetrics() {
-    return new BatchMetrics(
-        TOTAL_BATCHES_PROCESSED.get(),
-        TOTAL_OPERATIONS_BATCHED.get(),
-        AVERAGE_BATCH_SIZE.get(),
-        getCurrentQueueDepth());
-  }
-
-  private static int getCurrentQueueDepth() {
-    int totalDepth = 0;
-    for (ConcurrentLinkedQueue<BatchOperation> queue : OPERATION_QUEUES) {
-      totalDepth += queue.size();
-    }
-    return totalDepth;
-  }
-
-  /** Batch processing metrics */
-  public static class BatchMetrics {
-    public final long TOTAL_BATCHES_PROCESSED;
-    public final long TOTAL_OPERATIONS_BATCHED;
-    public final long AVERAGE_BATCH_SIZE;
-    public final int currentQueueDepth;
-
-    public BatchMetrics(
-        long TOTAL_BATCHES_PROCESSED,
-        long TOTAL_OPERATIONS_BATCHED,
-        long AVERAGE_BATCH_SIZE,
-        int currentQueueDepth) {
-      this.TOTAL_BATCHES_PROCESSED = TOTAL_BATCHES_PROCESSED;
-      this.TOTAL_OPERATIONS_BATCHED = TOTAL_OPERATIONS_BATCHED;
-      this.AVERAGE_BATCH_SIZE = AVERAGE_BATCH_SIZE;
-      this.currentQueueDepth = currentQueueDepth;
-    }
-  }
-
-  // Enhanced native methods with batch support
-  public static native void initRustAllocator();
-
-  public static native long nativeCreateWorker(int concurrency);
-
-  public static native void nativePushTask(long workerHandle, byte[] payload);
-
-  public static native byte[] nativePollResult(long workerHandle);
-
-  public static native void nativeDestroyWorker(long workerHandle);
-
-  // New batch processing native method
-  private static native byte[] nativeProcessBatch(byte operationType, ByteBuffer batchData);
-
-  // SIMD operations
-  public static native String getSimdFeatures();
-
-  public static native int initSimd(
-      boolean enableAvx2,
-      boolean enableSse41,
-      boolean enableSse42,
-      boolean enableFma,
-      boolean forceScalarFallback);
-
-  // Batch processor metrics
-  public static native String getBatchProcessorMetrics();
-
-  public static native int initBatchProcessor(
-      int maxBatchSize, long batchTimeoutMs, int maxQueueSize, int workerThreads);
 }

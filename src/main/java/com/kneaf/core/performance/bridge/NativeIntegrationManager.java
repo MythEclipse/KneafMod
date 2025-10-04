@@ -375,13 +375,8 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
 
   /** Generate float buffer with shape native. */
   public NativeFloatBufferAllocation generateFloatBufferWithShape(long rows, long cols) {
-    // Placeholder implementation - actual would use native code
-    int count = (int) (rows * cols);
-    ByteBuffer buffer =
-        ByteBuffer.allocateDirect(count * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-    java.nio.FloatBuffer fb = buffer.asFloatBuffer();
-    for (int i = 0; i < count; i++) fb.put(i, (float) i);
-    return new NativeFloatBufferAllocation(buffer, rows, cols);
+    // Use optimized memory pool with adaptive sizing and LRU eviction
+    return NativeFloatBufferAllocation.allocate(rows, cols);
   }
 
   /** Free float buffer native. */
