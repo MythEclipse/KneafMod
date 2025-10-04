@@ -6,7 +6,7 @@ import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.PlayerData;
 import com.kneaf.core.data.entity.VillagerData;
 // cleaned: removed some unused imports
-import com.kneaf.core.protocol.ProtocolProcessor;
+import com.kneaf.core.protocol.core.EnhancedProtocolProcessor;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -17,10 +17,9 @@ import java.util.Map;
 import java.util.Set;
 
 /** Handles entity processing operations including batch processing and optimization. */
-@SuppressWarnings({"deprecation", "unused"})
 public class EntityProcessor {
 
-  private final ProtocolProcessor protocolProcessor;
+  private final EnhancedProtocolProcessor protocolProcessor;
   private final PerformanceMonitor monitor;
   private final NativeBridgeProvider bridgeProvider;
   private long tickCount = 0;
@@ -28,7 +27,7 @@ public class EntityProcessor {
   public EntityProcessor(NativeBridgeProvider bridgeProvider, PerformanceMonitor monitor) {
     this.bridgeProvider = bridgeProvider;
     this.monitor = monitor;
-    this.protocolProcessor = new ProtocolProcessor();
+  this.protocolProcessor = EnhancedProtocolProcessor.createDefault();
   }
 
   /** Process entities and return list of entity IDs that should be ticked. */
@@ -37,24 +36,24 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-      ProtocolProcessor.ProtocolResult<List<Long>> result =
-          protocolProcessor.processWithFallback(
+    EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
+      protocolProcessor.processWithFallback(
               new EntityInput(entities, players),
               "Entity processing",
-              new ProtocolProcessor.BinarySerializer<EntityInput>() {
+              new EnhancedProtocolProcessor.BinarySerializer<EntityInput>() {
                 @Override
                 public ByteBuffer serialize(EntityInput input) throws Exception {
                   return ManualSerializers.serializeEntityInput(
                       tickCount++, input.entities, input.players);
                 }
               },
-              new ProtocolProcessor.BinaryNativeCaller<byte[]>() {
+              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
                 @Override
                 public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
                   return bridgeProvider.processEntitiesBinary(inputBuffer);
                 }
               },
-              new ProtocolProcessor.BinaryDeserializer<List<Long>>() {
+              new EnhancedProtocolProcessor.BinaryDeserializer<List<Long>>() {
                 @Override
                 public List<Long> deserialize(byte[] resultBytes) throws Exception {
                   if (resultBytes != null) {
@@ -63,19 +62,19 @@ public class EntityProcessor {
                   return new ArrayList<>();
                 }
               },
-              new ProtocolProcessor.JsonInputPreparer<EntityInput>() {
+              new EnhancedProtocolProcessor.JsonInputPreparer<EntityInput>() {
                 @Override
                 public Map<String, Object> prepareInput(EntityInput jsonInput) {
                   return prepareEntityJsonInput(jsonInput);
                 }
               },
-              new ProtocolProcessor.JsonNativeCaller<String>() {
+              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
                 @Override
                 public String callNative(String jsonInput) throws Exception {
                   return bridgeProvider.processEntitiesJson(jsonInput);
                 }
               },
-              new ProtocolProcessor.JsonResultParser<List<Long>>() {
+              new EnhancedProtocolProcessor.JsonResultParser<List<Long>>() {
                 @Override
                 public List<Long> parseResult(String jsonResult) throws Exception {
                   return PerformanceUtils.parseEntityResultFromJson(jsonResult);
@@ -248,11 +247,11 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-      ProtocolProcessor.ProtocolResult<ItemProcessResult> result =
-          protocolProcessor.processWithFallback(
+    EnhancedProtocolProcessor.ProtocolResult<ItemProcessResult> result =
+      protocolProcessor.processWithFallback(
               items,
               "Item processing",
-              new ProtocolProcessor.BinarySerializer<
+              new EnhancedProtocolProcessor.BinarySerializer<
                   List<com.kneaf.core.data.item.ItemEntityData>>() {
                 @Override
                 public ByteBuffer serialize(List<com.kneaf.core.data.item.ItemEntityData> input)
@@ -260,13 +259,13 @@ public class EntityProcessor {
                   return ManualSerializers.serializeItemInput(tickCount, input);
                 }
               },
-              new ProtocolProcessor.BinaryNativeCaller<byte[]>() {
+              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
                 @Override
                 public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
                   return bridgeProvider.processItemEntitiesBinary(inputBuffer);
                 }
               },
-              new ProtocolProcessor.BinaryDeserializer<ItemProcessResult>() {
+              new EnhancedProtocolProcessor.BinaryDeserializer<ItemProcessResult>() {
                 @Override
                 public ItemProcessResult deserialize(byte[] resultBytes) throws Exception {
                   if (resultBytes != null) {
@@ -293,7 +292,7 @@ public class EntityProcessor {
                   return new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>());
                 }
               },
-              new ProtocolProcessor.JsonInputPreparer<
+              new EnhancedProtocolProcessor.JsonInputPreparer<
                   List<com.kneaf.core.data.item.ItemEntityData>>() {
                 @Override
                 public Map<String, Object> prepareInput(
@@ -304,13 +303,13 @@ public class EntityProcessor {
                   return input;
                 }
               },
-              new ProtocolProcessor.JsonNativeCaller<String>() {
+              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
                 @Override
                 public String callNative(String jsonInput) throws Exception {
                   return bridgeProvider.processItemEntitiesJson(jsonInput);
                 }
               },
-              new ProtocolProcessor.JsonResultParser<ItemProcessResult>() {
+              new EnhancedProtocolProcessor.JsonResultParser<ItemProcessResult>() {
                 @Override
                 public ItemProcessResult parseResult(String jsonResult) throws Exception {
                   PerformanceUtils.ItemParseResult parseResult =
@@ -354,24 +353,24 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-      ProtocolProcessor.ProtocolResult<MobProcessResult> result =
-          protocolProcessor.processWithFallback(
+    EnhancedProtocolProcessor.ProtocolResult<MobProcessResult> result =
+      protocolProcessor.processWithFallback(
               mobs,
               "Mob processing",
-              new ProtocolProcessor.BinarySerializer<List<com.kneaf.core.data.entity.MobData>>() {
+              new EnhancedProtocolProcessor.BinarySerializer<List<com.kneaf.core.data.entity.MobData>>() {
                 @Override
                 public ByteBuffer serialize(List<com.kneaf.core.data.entity.MobData> input)
                     throws Exception {
                   return ManualSerializers.serializeMobInput(tickCount, input);
                 }
               },
-              new ProtocolProcessor.BinaryNativeCaller<byte[]>() {
+              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
                 @Override
                 public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
                   return bridgeProvider.processMobAiBinary(inputBuffer);
                 }
               },
-              new ProtocolProcessor.BinaryDeserializer<MobProcessResult>() {
+              new EnhancedProtocolProcessor.BinaryDeserializer<MobProcessResult>() {
                 @Override
                 public MobProcessResult deserialize(byte[] resultBytes) throws Exception {
                   if (resultBytes != null) {
@@ -391,7 +390,7 @@ public class EntityProcessor {
                   return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
                 }
               },
-              new ProtocolProcessor.JsonInputPreparer<List<com.kneaf.core.data.entity.MobData>>() {
+              new EnhancedProtocolProcessor.JsonInputPreparer<List<com.kneaf.core.data.entity.MobData>>() {
                 @Override
                 public Map<String, Object> prepareInput(
                     List<com.kneaf.core.data.entity.MobData> jsonInput) {
@@ -401,13 +400,13 @@ public class EntityProcessor {
                   return input;
                 }
               },
-              new ProtocolProcessor.JsonNativeCaller<String>() {
+              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
                 @Override
                 public String callNative(String jsonInput) throws Exception {
                   return bridgeProvider.processMobAiJson(jsonInput);
                 }
               },
-              new ProtocolProcessor.JsonResultParser<MobProcessResult>() {
+              new EnhancedProtocolProcessor.JsonResultParser<MobProcessResult>() {
                 @Override
                 public MobProcessResult parseResult(String jsonResult) throws Exception {
                   PerformanceUtils.MobParseResult parseResult =
@@ -439,23 +438,23 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-      ProtocolProcessor.ProtocolResult<List<Long>> result =
-          protocolProcessor.processWithFallback(
+    EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
+      protocolProcessor.processWithFallback(
               villagers,
               "Villager processing",
-              new ProtocolProcessor.BinarySerializer<List<VillagerData>>() {
+              new EnhancedProtocolProcessor.BinarySerializer<List<VillagerData>>() {
                 @Override
                 public ByteBuffer serialize(List<VillagerData> input) throws Exception {
                   return ManualSerializers.serializeVillagerInput(tickCount, input);
                 }
               },
-              new ProtocolProcessor.BinaryNativeCaller<byte[]>() {
+              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
                 @Override
                 public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
                   return bridgeProvider.processVillagerAiBinary(inputBuffer);
                 }
               },
-              new ProtocolProcessor.BinaryDeserializer<List<Long>>() {
+              new EnhancedProtocolProcessor.BinaryDeserializer<List<Long>>() {
                 @Override
                 public List<Long> deserialize(byte[] resultBytes) throws Exception {
                   if (resultBytes != null) {
@@ -470,7 +469,7 @@ public class EntityProcessor {
                   return new ArrayList<>();
                 }
               },
-              new ProtocolProcessor.JsonInputPreparer<List<VillagerData>>() {
+              new EnhancedProtocolProcessor.JsonInputPreparer<List<VillagerData>>() {
                 @Override
                 public Map<String, Object> prepareInput(List<VillagerData> jsonInput) {
                   Map<String, Object> input = new HashMap<>();
@@ -479,13 +478,13 @@ public class EntityProcessor {
                   return input;
                 }
               },
-              new ProtocolProcessor.JsonNativeCaller<String>() {
+              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
                 @Override
                 public String callNative(String jsonInput) throws Exception {
                   return bridgeProvider.processVillagerAiJson(jsonInput);
                 }
               },
-              new ProtocolProcessor.JsonResultParser<List<Long>>() {
+              new EnhancedProtocolProcessor.JsonResultParser<List<Long>>() {
                 @Override
                 public List<Long> parseResult(String jsonResult) throws Exception {
                   // For now, return all villagers
@@ -526,25 +525,25 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-      ProtocolProcessor.ProtocolResult<List<Long>> result =
-          protocolProcessor.processWithFallback(
+    EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
+      protocolProcessor.processWithFallback(
               blockEntities,
               "Block processing",
-              new ProtocolProcessor.BinarySerializer<
-                  List<com.kneaf.core.data.block.BlockEntityData>>() {
+        new EnhancedProtocolProcessor.BinarySerializer<
+          List<com.kneaf.core.data.block.BlockEntityData>>() {
                 @Override
                 public ByteBuffer serialize(List<com.kneaf.core.data.block.BlockEntityData> input)
                     throws Exception {
                   return ManualSerializers.serializeBlockInput(tickCount++, input);
                 }
               },
-              new ProtocolProcessor.BinaryNativeCaller<byte[]>() {
+              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
                 @Override
                 public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
                   return bridgeProvider.processBlockEntitiesBinary(inputBuffer);
                 }
               },
-              new ProtocolProcessor.BinaryDeserializer<List<Long>>() {
+              new EnhancedProtocolProcessor.BinaryDeserializer<List<Long>>() {
                 @Override
                 public List<Long> deserialize(byte[] resultBytes) throws Exception {
                   if (resultBytes != null) {
@@ -559,8 +558,8 @@ public class EntityProcessor {
                   return new ArrayList<>();
                 }
               },
-              new ProtocolProcessor.JsonInputPreparer<
-                  List<com.kneaf.core.data.block.BlockEntityData>>() {
+        new EnhancedProtocolProcessor.JsonInputPreparer<
+          List<com.kneaf.core.data.block.BlockEntityData>>() {
                 @Override
                 public Map<String, Object> prepareInput(
                     List<com.kneaf.core.data.block.BlockEntityData> jsonInput) {
@@ -570,13 +569,13 @@ public class EntityProcessor {
                   return input;
                 }
               },
-              new ProtocolProcessor.JsonNativeCaller<String>() {
+              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
                 @Override
                 public String callNative(String jsonInput) throws Exception {
                   return bridgeProvider.processBlockEntitiesJson(jsonInput);
                 }
               },
-              new ProtocolProcessor.JsonResultParser<List<Long>>() {
+              new EnhancedProtocolProcessor.JsonResultParser<List<Long>>() {
                 @Override
                 public List<Long> parseResult(String jsonResult) throws Exception {
                   return PerformanceUtils.parseBlockResultFromJson(jsonResult);

@@ -240,7 +240,6 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
   @SuppressWarnings("unused")
   private final int bucketIndex;
 
-  @SuppressWarnings("unused")
   private final long creationTime;
 
   private EnhancedNativeFloatBuffer(
