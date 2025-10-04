@@ -4,6 +4,7 @@ import com.kneaf.core.data.entity.VillagerData;
 import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.performance.monitoring.PerformanceManager;
 import java.util.*;
+import com.kneaf.core.performance.RustPerformance;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.server.MinecraftServer;
@@ -248,15 +249,43 @@ public class NeoForgeEventIntegration {
       Set<ChunkPos> chunksToGenerate = getPredictedChunks(server);
 
       if (!chunksToGenerate.isEmpty()) {
-        // Use Rust native chunk generation
-        List<ChunkPos> chunkList = new ArrayList<>(chunksToGenerate);
+        // Determine adaptive batch limits based on current performance
+        double tps = PerformanceManager.getAverageTPS();
+        int adaptiveRadius =
+            com.kneaf.core.performance.core.PerformanceConstants.getAdaptivePredictiveRadius(
+                tps);
+        int adaptiveMax =
+            com.kneaf.core.performance.core.PerformanceConstants
+                .getAdaptiveMaxPredictiveChunksPerTick(tps);
 
-        // Process chunks using PerformanceManager
+        // Process chunks in deterministic order to avoid oscillation
+        List<ChunkPos> chunkList = new ArrayList<>(chunksToGenerate);
+        chunkList.sort(Comparator.comparingInt((ChunkPos p) -> p.x).thenComparingInt(p -> p.z));
+
+        int generated = 0;
+        Set<ChunkPos> attempted = new HashSet<>();
+
         for (ChunkPos chunkPos : chunkList) {
-          LOGGER.debug("Predicted chunk generation for { }", chunkPos);
+          if (generated >= adaptiveMax) break;
+
+          // Skip far-away predictions to bound work
+          if (Math.abs(chunkPos.x) > adaptiveRadius * 256 || Math.abs(chunkPos.z) > adaptiveRadius * 256) {
+            continue;
+          }
+
+          if (attempted.contains(chunkPos)) continue;
+          attempted.add(chunkPos);
+
+          // If chunk is already generated, skip
+          if (RustPerformance.isChunkGenerated(chunkPos.x, chunkPos.z)) continue;
+
+          // Pre-generate chunk (Rust native) - ask for a single chunk neighborhood
+          int actuallyGenerated = RustPerformance.preGenerateNearbyChunks(chunkPos.x, chunkPos.z, 0);
+          if (actuallyGenerated > 0) {
+            generated += actuallyGenerated;
+          }
         }
 
-        LOGGER.debug("Processed { } predicted chunks", chunkList.size());
       }
 
     } catch (Exception e) {
@@ -483,9 +512,7 @@ public class NeoForgeEventIntegration {
     double memoryUsagePercent = (double) usedMemory / totalMemory * 100;
 
     if (memoryUsagePercent > 85) {
-      LOGGER.warn("High memory usage detected: { }%", String.format("%.1f", memoryUsagePercent));
-
-      // Trigger memory optimization
+      // High memory usage detected - suppressing noisy WARN logs. Optimization will run silently.
       optimizeMemoryUsage(server);
     }
   }
@@ -495,13 +522,11 @@ public class NeoForgeEventIntegration {
       // Clear unused caches
       PREDICTED_CHUNKS.clear();
 
-      // Suggest garbage collection
-      System.gc();
+  // Suggest garbage collection
+  System.gc();
 
-      // Reduce villager processing frequency
-      VILLAGER_PROCESSING_TRACKER.values().forEach(data -> data.reduceProcessingFrequency());
-
-      LOGGER.info("Memory optimization triggered");
+  // Reduce villager processing frequency
+  VILLAGER_PROCESSING_TRACKER.values().forEach(data -> data.reduceProcessingFrequency());
 
     } catch (Exception e) {
       LOGGER.error("Memory optimization failed", e);
