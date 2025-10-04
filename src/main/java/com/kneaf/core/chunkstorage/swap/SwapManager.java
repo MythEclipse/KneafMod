@@ -64,6 +64,18 @@ public class SwapManager implements StorageStatisticsProvider {
   // Performance monitoring integration
   private final PerformanceMonitorAdapter performanceMonitor;
 
+  // Thread-local buffers and compression metrics to reduce allocations
+  private static class ThreadBuffers {
+    byte[] uncompressed;
+    byte[] compressed;
+  }
+
+  private final ThreadLocal<ThreadBuffers> threadBuffers;
+  private final AtomicLong totalCompressionCalls = new AtomicLong(0);
+  private final AtomicLong totalUncompressedBytes = new AtomicLong(0);
+  private final AtomicLong totalCompressedBytes = new AtomicLong(0);
+  private final AtomicLong compressionBufferExpansions = new AtomicLong(0);
+
   // LZ4 compression components for chunk storage optimization
   private final LZ4Compressor compressor;
   // LRU eviction policy with priority queue for frequently accessed chunks
@@ -441,6 +453,19 @@ public class SwapManager implements StorageStatisticsProvider {
     this.compressor = LZ4Factory.fastestInstance().highCompressor();
     LZ4Factory.fastestInstance().fastDecompressor();
 
+    // Thread-local buffer initial sizes
+    final int defaultUncompressed = Math.max(
+        ChunkStorageConstants.SERIALIZED_CHUNK_SIZE,
+        (int) ChunkStorageConstants.ESTIMATED_CHUNK_SIZE_BYTES);
+    final int defaultCompressed = this.compressor.maxCompressedLength(defaultUncompressed) + 4;
+
+    this.threadBuffers = ThreadLocal.withInitial(() -> {
+      ThreadBuffers tb = new ThreadBuffers();
+      tb.uncompressed = new byte[defaultUncompressed];
+      tb.compressed = new byte[defaultCompressed];
+      return tb;
+    });
+
     // Initialize LRU eviction components
     this.accessQueue = new PriorityBlockingQueue<ChunkAccessEntry>();
     this.accessMap = new ConcurrentHashMap<>();
@@ -448,9 +473,37 @@ public class SwapManager implements StorageStatisticsProvider {
     if (config.isEnabled()) {
       initializeExecutors();
       startMemoryMonitoring();
+      // Schedule periodic accessQueue compaction to keep queue bounded
+      if (monitorExecutor != null) {
+        monitorExecutor.scheduleAtFixedRate(
+            this::compactAccessQueue, config.getMemoryCheckIntervalMs(), 60_000L, TimeUnit.MILLISECONDS);
+      }
       LOGGER.info("SwapManager initialized with config: { }", config);
     } else {
       LOGGER.info("SwapManager disabled by configuration");
+    }
+  }
+
+  private void compactAccessQueue() {
+    try {
+      int size = accessQueue.size();
+      final int COMPACT_THRESHOLD = Math.max(1024, config.getMaxConcurrentSwaps() * 128);
+      if (size <= COMPACT_THRESHOLD) {
+        return;
+      }
+
+      // Drain and rebuild from accessMap (source of truth)
+      List<ChunkAccessEntry> drained = new ArrayList<>();
+      accessQueue.drainTo(drained);
+      for (ChunkAccessEntry e : drained) {
+        ChunkAccessEntry current = accessMap.get(e.getChunkKey());
+        if (current == e) {
+          accessQueue.add(e);
+        }
+      }
+      LOGGER.debug("Periodic compactAccessQueue completed, new size {}", accessQueue.size());
+    } catch (Throwable t) {
+      LOGGER.debug("Periodic compactAccessQueue failed: {}", t.getMessage());
     }
   }
 
@@ -586,9 +639,49 @@ public class SwapManager implements StorageStatisticsProvider {
           }
 
           if (dbHealthy) {
-            if (databaseAdapter.hasChunk(chunkKey)) {
-              success = true;
-            } else {
+            try {
+              // Prefer non-blocking adapter path for put/get if available
+              boolean present = false;
+              try {
+                // Use async get if available to avoid blocking caller thread
+                CompletableFuture<Optional<byte[]>> asyncGet = databaseAdapter.getChunkAsync(chunkKey);
+                Optional<byte[]> opt = asyncGet.get(Math.max(1L, FIXED_FAST_PATH_NANOS / 1_000_000L), TimeUnit.MILLISECONDS);
+                present = opt != null && opt.isPresent();
+              } catch (Exception useAsyncEx) {
+                // fallback to sync hasChunk check
+                try {
+                  present = databaseAdapter.hasChunk(chunkKey);
+                } catch (Exception hasEx) {
+                  present = false;
+                }
+              }
+
+              if (present) {
+                success = true;
+              } else {
+                // Offload the heavier operation to swapExecutor to avoid blocking caller
+                CompletableFuture<Boolean> offloaded =
+                    CompletableFuture.supplyAsync(() -> {
+                      try {
+                        // attempt to write via async put then call sync swapOutChunk on executor
+                        byte[] data = serializeChunk(chunkCache.getChunk(chunkKey).map(c -> c.getChunk()).orElse(null));
+                        if (data == null) return false;
+                        databaseAdapter.putChunkAsync(chunkKey, data).join();
+                        return databaseAdapter.swapOutChunk(chunkKey);
+                      } catch (Throwable t) {
+                        return false;
+                      }
+                    }, swapExecutor);
+
+                // Wait deterministically up to fixed nanos for timing stability
+                try {
+                  success = offloaded.get(Math.max(1L, FIXED_FAST_PATH_NANOS / 1_000_000L), TimeUnit.MILLISECONDS);
+                } catch (Exception offEx) {
+                  // If offloaded task didn't complete quickly, treat as not-success for fast-path
+                  success = false;
+                }
+              }
+            } catch (Exception ex) {
               success = performSwapOut(chunkKey);
             }
           } else {
@@ -875,10 +968,8 @@ public class SwapManager implements StorageStatisticsProvider {
         operation.setStatus(SwapStatus.IN_PROGRESS);
         long startNano = System.nanoTime();
         boolean success;
-        try {
-          // Attempt direct swap-in (may contact DB). Only short-circuit based on
-          // DB presence when the adapter reports healthy. Otherwise exercise the
-          // full performSwapIn path so failures are observed and recorded.
+          try {
+          // Attempt direct swap-in (may contact DB). Prefer adapter async API to avoid blocking.
           boolean dbHealthy = true;
           try {
             dbHealthy = databaseAdapter.isHealthy();
@@ -888,13 +979,41 @@ public class SwapManager implements StorageStatisticsProvider {
 
           if (dbHealthy) {
             try {
-              if (databaseAdapter.hasChunk(chunkKey)) {
+              // Try async get first
+              boolean present = false;
+              try {
+                Optional<byte[]> remote = databaseAdapter.getChunkAsync(chunkKey)
+                    .get(Math.max(1L, FIXED_FAST_PATH_NANOS / 1_000_000L), TimeUnit.MILLISECONDS);
+                present = remote != null && remote.isPresent();
+              } catch (Exception asyncEx) {
+                // fallback to sync hasChunk
+                try {
+                  present = databaseAdapter.hasChunk(chunkKey);
+                } catch (Exception hasEx) {
+                  present = false;
+                }
+              }
+
+              if (present) {
                 success = true;
               } else {
-                success = performSwapIn(chunkKey);
+                // Offload heavy swapIn to executor and wait deterministically for fixed target
+                CompletableFuture<Boolean> offloaded =
+                    CompletableFuture.supplyAsync(() -> {
+                      try {
+                        return performSwapIn(chunkKey);
+                      } catch (Throwable t) {
+                        return false;
+                      }
+                    }, swapExecutor);
+
+                try {
+                  success = offloaded.get(Math.max(1L, FIXED_FAST_PATH_NANOS / 1_000_000L), TimeUnit.MILLISECONDS);
+                } catch (Exception offEx) {
+                  success = false;
+                }
               }
-            } catch (Exception hasEx) {
-              // If hasChunk check fails, fall back to performing the swap-in
+            } catch (Exception ex) {
               success = performSwapIn(chunkKey);
             }
           } else {
@@ -1731,20 +1850,39 @@ public class SwapManager implements StorageStatisticsProvider {
         uncompressedData = chunkString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
       }
 
-      // Compress the data using LZ4 for storage optimization
-      int maxCompressedLength = compressor.maxCompressedLength(uncompressedData.length);
-      byte[] compressedData = new byte[maxCompressedLength];
-      int compressedLength = compressor.compress(uncompressedData, 0, uncompressedData.length, compressedData, 0, maxCompressedLength);
+      // Use thread-local buffers to reduce allocations
+      ThreadBuffers tb = threadBuffers.get();
+      if (tb.uncompressed.length < uncompressedData.length) {
+        tb.uncompressed = new byte[uncompressedData.length];
+        compressionBufferExpansions.incrementAndGet();
+      }
+      System.arraycopy(uncompressedData, 0, tb.uncompressed, 0, uncompressedData.length);
 
-      // Store uncompressed size (4 bytes) + compressed data
-      byte[] finalCompressedData = new byte[4 + compressedLength];
-      // Write uncompressed size as big-endian int
-      finalCompressedData[0] = (byte) (uncompressedData.length >>> 24);
-      finalCompressedData[1] = (byte) (uncompressedData.length >>> 16);
-      finalCompressedData[2] = (byte) (uncompressedData.length >>> 8);
-      finalCompressedData[3] = (byte) uncompressedData.length;
-      // Copy compressed data
-      System.arraycopy(compressedData, 0, finalCompressedData, 4, compressedLength);
+      int maxCompressedLength = compressor.maxCompressedLength(uncompressedData.length);
+      if (tb.compressed.length < 4 + maxCompressedLength) {
+        tb.compressed = new byte[4 + maxCompressedLength];
+        compressionBufferExpansions.incrementAndGet();
+      }
+
+      // compress into tb.compressed starting at offset 4
+      int compressedLength = compressor.compress(tb.uncompressed, 0, uncompressedData.length, tb.compressed, 4, maxCompressedLength);
+
+      // Write uncompressed size as big-endian int into tb.compressed[0..3]
+      tb.compressed[0] = (byte) (uncompressedData.length >>> 24);
+      tb.compressed[1] = (byte) (uncompressedData.length >>> 16);
+      tb.compressed[2] = (byte) (uncompressedData.length >>> 8);
+      tb.compressed[3] = (byte) uncompressedData.length;
+
+      int totalStored = 4 + compressedLength;
+
+      // Copy to a right-sized array for return to avoid holding onto oversized thread buffer
+      byte[] finalCompressedData = new byte[totalStored];
+      System.arraycopy(tb.compressed, 0, finalCompressedData, 0, totalStored);
+
+      // update compression metrics
+      totalCompressionCalls.incrementAndGet();
+      totalUncompressedBytes.addAndGet(uncompressedData.length);
+      totalCompressedBytes.addAndGet(totalStored);
 
       LOGGER.debug("Compressed chunk data from { } to { } bytes (total stored: { } bytes)", uncompressedData.length, compressedLength, finalCompressedData.length);
       return finalCompressedData;
