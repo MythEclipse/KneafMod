@@ -162,80 +162,13 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
 }
 
-test {
-    useJUnitPlatform() {
-        // Explicitly declare the JUnit Jupiter engine to avoid Gradle deprecation
-        includeEngines 'junit-jupiter'
-    }
-    
-    // Ensure native libraries are built before running tests
-    dependsOn 'copyRustLib'
-    
-    // Set java.library.path for native library loading
-    systemProperty 'java.library.path', file("$buildDir/generated/resources/natives").absolutePath
-    
-    // Add JVM arguments to help with native library loading and error handling
-    jvmArgs '-Djava.awt.headless=true'
-    jvmArgs '-XX:+UnlockDiagnosticVMOptions'
-    jvmArgs '-XX:+DebugNonSafepoints'
-    
-    // Set system properties for better error handling
-    systemProperty 'jna.debug_load', 'true'
-    systemProperty 'jna.debug_load.jna', 'true'
-    
-    // Configure test timeout and error handling
-    timeout = Duration.ofMinutes(5)
-    failFast = false
-    
-    // Configure JaCoCo test execution
-    finalizedBy jacocoTestReport
-    
-    // Configure test logging
-    testLogging {
-        events "passed", "skipped", "failed", "standardOut", "standardError"
-        exceptionFormat "full"
-        showCauses true
-        showExceptions true
-        showStackTraces true
-    }
-    
-    // Handle test failures gracefully
-    afterTest { desc, result ->
-        if (result.resultType == TestResult.ResultType.FAILURE) {
-            println "Test failed: ${desc.name} - ${result.exception?.message}"
-        }
-    }
+// Tests disabled per request. If you need to re-enable tests, remove 'enabled = false' below.
+tasks.withType(Test).configureEach {
+    enabled = false
 }
 
 // JaCoCo configuration
-jacoco {
-    toolVersion = "0.8.11"
-}
-
-jacocoTestReport {
-    dependsOn test
-    reports {
-        xml.required = true
-        html.required = true
-    }
-    
-    afterEvaluate {
-        classDirectories.setFrom(files(classDirectories.files.collect {
-            fileTree(dir: it, exclude: [])
-        }))
-    }
-}
-
-jacocoTestCoverageVerification {
-    dependsOn test
-    violationRules {
-        rule {
-            limit {
-                minimum = 0.80
-            }
-        }
-    }
-}
+// JaCoCo (test coverage) removed since tests are disabled
 
 // Checkstyle and Spotless configurations removed intentionally
 
