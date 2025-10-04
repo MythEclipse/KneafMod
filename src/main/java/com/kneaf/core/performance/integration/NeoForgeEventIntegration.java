@@ -1,10 +1,10 @@
 package com.kneaf.core.performance.integration;
 
 import com.kneaf.core.data.entity.VillagerData;
+import com.kneaf.core.performance.RustPerformance;
 import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.performance.monitoring.PerformanceManager;
 import java.util.*;
-import com.kneaf.core.performance.RustPerformance;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.server.MinecraftServer;
@@ -252,8 +252,7 @@ public class NeoForgeEventIntegration {
         // Determine adaptive batch limits based on current performance
         double tps = PerformanceManager.getAverageTPS();
         int adaptiveRadius =
-            com.kneaf.core.performance.core.PerformanceConstants.getAdaptivePredictiveRadius(
-                tps);
+            com.kneaf.core.performance.core.PerformanceConstants.getAdaptivePredictiveRadius(tps);
         int adaptiveMax =
             com.kneaf.core.performance.core.PerformanceConstants
                 .getAdaptiveMaxPredictiveChunksPerTick(tps);
@@ -269,7 +268,8 @@ public class NeoForgeEventIntegration {
           if (generated >= adaptiveMax) break;
 
           // Skip far-away predictions to bound work
-          if (Math.abs(chunkPos.x) > adaptiveRadius * 256 || Math.abs(chunkPos.z) > adaptiveRadius * 256) {
+          if (Math.abs(chunkPos.x) > adaptiveRadius * 256
+              || Math.abs(chunkPos.z) > adaptiveRadius * 256) {
             continue;
           }
 
@@ -280,12 +280,12 @@ public class NeoForgeEventIntegration {
           if (RustPerformance.isChunkGenerated(chunkPos.x, chunkPos.z)) continue;
 
           // Pre-generate chunk (Rust native) - ask for a single chunk neighborhood
-          int actuallyGenerated = RustPerformance.preGenerateNearbyChunks(chunkPos.x, chunkPos.z, 0);
+          int actuallyGenerated =
+              RustPerformance.preGenerateNearbyChunks(chunkPos.x, chunkPos.z, 0);
           if (actuallyGenerated > 0) {
             generated += actuallyGenerated;
           }
         }
-
       }
 
     } catch (Exception e) {
@@ -522,11 +522,11 @@ public class NeoForgeEventIntegration {
       // Clear unused caches
       PREDICTED_CHUNKS.clear();
 
-  // Suggest garbage collection
-  System.gc();
+      // Suggest garbage collection
+      System.gc();
 
-  // Reduce villager processing frequency
-  VILLAGER_PROCESSING_TRACKER.values().forEach(data -> data.reduceProcessingFrequency());
+      // Reduce villager processing frequency
+      VILLAGER_PROCESSING_TRACKER.values().forEach(data -> data.reduceProcessingFrequency());
 
     } catch (Exception e) {
       LOGGER.error("Memory optimization failed", e);

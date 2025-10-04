@@ -262,13 +262,13 @@ public class PerformanceOptimizer {
         currentOptimizationLevel = newLevel;
         lastOptimizationLevelChange = currentTime;
 
-    // Log suppressed to avoid excessive console output in production; use debug if needed
-    KneafCore.LOGGER.debug(
-      "Optimization level changed to {} (tickTime={}ms, memory={}%, load={})",
-      newLevel,
-      String.format("%.1f", avgTickTime),
-      String.format("%.1f", memoryUsage),
-      String.format("%.1f", loadFactor));
+        // Log suppressed to avoid excessive console output in production; use debug if needed
+        KneafCore.LOGGER.debug(
+            "Optimization level changed to {} (tickTime={}ms, memory={}%, load={})",
+            newLevel,
+            String.format("%.1f", avgTickTime),
+            String.format("%.1f", memoryUsage),
+            String.format("%.1f", loadFactor));
       }
     }
 
