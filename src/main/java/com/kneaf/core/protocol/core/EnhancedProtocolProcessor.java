@@ -4,9 +4,14 @@ import com.kneaf.core.protocol.utils.ProtocolContext;
 import com.kneaf.core.protocol.utils.ProtocolLoggerImpl;
 import com.kneaf.core.protocol.utils.ProtocolValidatorImpl;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -20,6 +25,18 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
   private final String protocolVersion;
   private final long defaultTimeoutMs;
 
+  // Batching configuration
+  private final boolean batchingEnabled;
+  private final int batchSizeThreshold;
+  private final long batchTimeThresholdMs;
+
+  // Batching state
+  private final List<Object> packetBuffer;
+  private final ScheduledExecutorService batchScheduler;
+  private volatile long lastFlushTime;
+  private volatile java.util.concurrent.ScheduledFuture<?> batchFlushTask;
+  private final Map<Object, CompletableFuture<Object>> pendingResults;
+
   /**
    * Create a new enhanced protocol processor.
    *
@@ -29,9 +46,36 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
    */
   public EnhancedProtocolProcessor(
       ProtocolLogger logger, String protocolVersion, long defaultTimeoutMs) {
+    this(logger, protocolVersion, defaultTimeoutMs, false, 10, 1000L);
+  }
+
+  /**
+   * Create a new enhanced protocol processor with batching configuration.
+   *
+   * @param logger the protocol logger
+   * @param protocolVersion the supported protocol version
+   * @param defaultTimeoutMs default timeout in milliseconds
+   * @param batchingEnabled whether batching is enabled
+   * @param batchSizeThreshold maximum number of packets in a batch
+   * @param batchTimeThresholdMs maximum time to wait before flushing batch in milliseconds
+   */
+  public EnhancedProtocolProcessor(
+      ProtocolLogger logger,
+      String protocolVersion,
+      long defaultTimeoutMs,
+      boolean batchingEnabled,
+      int batchSizeThreshold,
+      long batchTimeThresholdMs) {
     this.logger = logger;
     this.protocolVersion = protocolVersion;
     this.defaultTimeoutMs = defaultTimeoutMs;
+    this.batchingEnabled = batchingEnabled;
+    this.batchSizeThreshold = batchSizeThreshold;
+    this.batchTimeThresholdMs = batchTimeThresholdMs;
+    this.packetBuffer = new ArrayList<>();
+    this.batchScheduler = batchingEnabled ? Executors.newSingleThreadScheduledExecutor() : null;
+    this.lastFlushTime = System.currentTimeMillis();
+    this.pendingResults = new ConcurrentHashMap<>();
   }
 
   /**
@@ -96,6 +140,11 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
 
   @Override
   public Object processWithFallback(Object input) throws Exception {
+    if (batchingEnabled) {
+      // Use batching: add to batch and wait for result
+      return addToBatch(input).get();
+    }
+
     String traceId = logger.generateTraceId();
     String detectedFormat = ProtocolUtils.detectFormat(null, input);
 
@@ -155,6 +204,9 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
 
   @Override
   public CompletableFuture<Object> processAsync(Object input) {
+    if (batchingEnabled) {
+      return addToBatch(input);
+    }
     return CompletableFuture.supplyAsync(
         () -> {
           try {
@@ -336,6 +388,87 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new Exception("Operation was interrupted", e);
+    }
+  }
+
+  /**
+   * Add packet to batch for processing.
+   *
+   * @param packet the packet to add
+   * @return future that completes with processing result
+   */
+  private synchronized CompletableFuture<Object> addToBatch(Object packet) {
+    if (!batchingEnabled) {
+      throw new IllegalStateException("Batching not enabled");
+    }
+    CompletableFuture<Object> future = new CompletableFuture<>();
+    pendingResults.put(packet, future);
+    packetBuffer.add(packet);
+    if (packetBuffer.size() >= batchSizeThreshold) {
+      flushBatch();
+    } else {
+      scheduleFlush();
+    }
+    return future;
+  }
+
+  /**
+   * Schedule batch flush based on time threshold.
+   */
+  private void scheduleFlush() {
+    if (batchFlushTask != null && !batchFlushTask.isDone()) {
+      batchFlushTask.cancel(false);
+    }
+    batchFlushTask = batchScheduler.schedule(this::flushBatch, batchTimeThresholdMs, TimeUnit.MILLISECONDS);
+  }
+
+  /**
+   * Flush the current batch by processing all buffered packets.
+   */
+  private synchronized void flushBatch() {
+    if (packetBuffer.isEmpty()) return;
+    List<Object> batch = new ArrayList<>(packetBuffer);
+    packetBuffer.clear();
+    lastFlushTime = System.currentTimeMillis();
+    if (batchFlushTask != null) {
+      batchFlushTask.cancel(false);
+      batchFlushTask = null;
+    }
+    // Process batch asynchronously
+    CompletableFuture.runAsync(() -> {
+      for (Object packet : batch) {
+        try {
+          Object result = processWithFallback(packet);
+          CompletableFuture<Object> future = pendingResults.remove(packet);
+          if (future != null) {
+            future.complete(result);
+          }
+        } catch (Exception e) {
+          CompletableFuture<Object> future = pendingResults.remove(packet);
+          if (future != null) {
+            future.completeExceptionally(e);
+          }
+          logger.logError("batch_processing", e, logger.generateTraceId(),
+              Map.of("packet_type", packet.getClass().getSimpleName()));
+        }
+      }
+    });
+  }
+
+  /**
+   * Shutdown the batch scheduler.
+   */
+  public void shutdown() {
+    if (batchScheduler != null) {
+      batchScheduler.shutdown();
+      try {
+        if (!batchScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+          batchScheduler.shutdownNow();
+        }
+      } catch (InterruptedException e) {
+        batchScheduler.shutdownNow();
+        Thread.currentThread().interrupt();
+      }
     }
   }
 
