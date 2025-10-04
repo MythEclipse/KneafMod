@@ -6,8 +6,7 @@ plugins {
     id 'net.neoforged.moddev' version '2.0.107'
     id 'idea'
     id 'jacoco'
-    id 'checkstyle'
-    id 'com.diffplug.spotless' version '6.25.0'
+    // Checkstyle and Spotless removed per request
 }
 
 tasks.named('wrapper', Wrapper).configure {
@@ -238,29 +237,7 @@ jacocoTestCoverageVerification {
     }
 }
 
-// Checkstyle configuration
-checkstyle {
-    toolVersion = '10.12.4'
-    configFile = file('checkstyle.xml')
-}
-
-tasks.withType(Checkstyle).configureEach {
-    reports {
-        xml.required = true
-        html.required = true
-    }
-    
-    // Include only main source set for now
-    source = sourceSets.main.allJava
-    classpath = sourceSets.main.compileClasspath
-}
-
-// Spotless configuration for code formatting
-spotless {
-    java {
-        googleJavaFormat()
-    }
-}
+// Checkstyle and Spotless configurations removed intentionally
 
 // This block of code expands all declared replace properties in the specified resource targets.
 // A missing property will result in an error. Properties are expanded using ${} Groovy notation.
