@@ -11,6 +11,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ArrayBlockingQueue;
+
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -20,6 +23,7 @@ import java.nio.channels.AsynchronousFileChannel;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.io.IOException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -55,8 +59,7 @@ public class SwapManager {
   // I/O resources
   private AsynchronousFileChannel swapFileChannel;
   private static final Path SWAP_FILE_PATH = Paths.get("swap_data.lz4");
-  private final ByteBuffer readBuffer = ByteBuffer.allocateDirect(64 * 1024);
-  private final ByteBuffer writeBuffer = ByteBuffer.allocateDirect(64 * 1024);
+  // Per-operation buffers are allocated for async I/O to avoid concurrent access issues
 
   // Spatial prefetching
  private final Map<String, List<String>> spatialNeighbors = new ConcurrentHashMap<>();
@@ -388,7 +391,7 @@ public class SwapManager {
     public void recordSwapFailure(String operationType, String error) {
       if (enabled) {
         // Integration with Rust performance monitoring would go here
-        LOGGER.error("Recording swap failure: { } - { }", operationType, error);
+  LOGGER.error("Recording swap failure: {} - {}", operationType, error);
       }
     }
 
@@ -440,7 +443,7 @@ public class SwapManager {
     if (config.isEnabled() && this.enabled.get()) {
       initializeExecutors();
       startMemoryMonitoring();
-      LOGGER.info("SwapManager initialized with config: { }", config);
+      LOGGER.info("SwapManager initialized with config: {}", config);
     } else {
       LOGGER.info("SwapManager disabled by configuration");
     }
@@ -498,12 +501,10 @@ public class SwapManager {
    * @return CompletableFuture that completes when swap-out is done
    */
   public CompletableFuture<Boolean> swapOutChunk(String chunkKey) {
-    LOGGER.debug("SwapManager.swapOutChunk called for: { }", chunkKey);
-    System.out.println("DEBUG: SwapManager.swapOutChunk called for: " + chunkKey);
+    LOGGER.debug("SwapManager.swapOutChunk called for: {}", chunkKey);
 
     if (!enabled.get() || shutdown.get()) {
       LOGGER.debug("SwapManager is disabled or shutdown");
-      System.out.println("DEBUG: SwapManager is disabled or shutdown");
       // Record as a failed operation for visibility
       swapStats.recordFailure();
       failedSwapOperations.incrementAndGet();
@@ -512,16 +513,13 @@ public class SwapManager {
     }
 
     if (!isValidChunkKey(chunkKey)) {
-      LOGGER.debug("Invalid chunk key: { }", chunkKey);
-      System.out.println("DEBUG: Invalid chunk key: " + chunkKey);
+      LOGGER.debug("Invalid chunk key: {}", chunkKey);
       // Record invalid key as failure
       swapStats.recordFailure();
       failedSwapOperations.incrementAndGet();
       performanceMonitor.recordSwapFailure("swap_out", "invalid_chunk_key");
       return CompletableFuture.completedFuture(false);
     }
-
-    System.out.println("DEBUG: Chunk key is valid, proceeding with swap out");
     // If configured timeout is extremely small, treat operations as immediate failures
     // so tests that set tiny timeouts (e.g. 1ms) can reliably exercise timeout paths.
     if (config != null && config.getSwapTimeoutMs() > 0 && config.getSwapTimeoutMs() <= 1) {
@@ -533,7 +531,7 @@ public class SwapManager {
 
     // Check if swap is already in progress
     if (activeSwaps.containsKey(chunkKey)) {
-      LOGGER.debug("Swap already in progress for chunk: { }", chunkKey);
+  LOGGER.debug("Swap already in progress for chunk: {}", chunkKey);
       return activeSwaps.get(chunkKey).getFuture();
     }
 
@@ -609,7 +607,6 @@ public class SwapManager {
         try {
           // Busy-spin until the fixed target is reached for tighter timing
           while (System.nanoTime() - startNano < FIXED_FAST_PATH_NANOS) {
-            // Hint to the runtime that we are in a spin-wait loop
             Thread.onSpinWait();
           }
         } catch (Throwable t) {
@@ -637,10 +634,10 @@ public class SwapManager {
       }
     } catch (Exception e) {
       // If fast-path fails for any reason, fall back to async path below
-      LOGGER.warn(
-          "Fast-path swap-out failed for { }: { }. Falling back to async execution.",
-          chunkKey,
-          e.getMessage());
+    LOGGER.warn(
+      "Fast-path swap-out failed for {}: {}. Falling back to async execution.",
+      chunkKey,
+      e.getMessage());
       // ensure we don't leave operation in activeSwaps if it failed here
       activeSwaps.remove(chunkKey);
       // create a new operation to use for async path without reassigning 'operation'
@@ -650,7 +647,6 @@ public class SwapManager {
       CompletableFuture<Boolean> swapFuture =
           CompletableFuture.supplyAsync(
               () -> {
-                System.out.println("DEBUG: Starting async swap out operation for: " + chunkKey);
                 try {
                   fallbackOperation.setStatus(SwapStatus.IN_PROGRESS);
                   long startTime = System.currentTimeMillis();
@@ -665,17 +661,14 @@ public class SwapManager {
                     fallbackOperation.setStatus(SwapStatus.COMPLETED);
                     swapStats.recordSwapOut(duration, estimateChunkSize(chunkKey));
                     performanceMonitor.recordSwapOut(estimateChunkSize(chunkKey), duration);
-                    LOGGER.debug(
-                        "Successfully swapped out chunk: { } in { }ms", chunkKey, duration);
-                    System.out.println("DEBUG: Successfully swapped out chunk: " + chunkKey);
+                    LOGGER.debug("Successfully swapped out chunk: {} in {}ms", chunkKey, duration);
                   } else {
                     fallbackOperation.setStatus(SwapStatus.FAILED);
                     fallbackOperation.setErrorMessage("Swap-out operation failed");
                     swapStats.recordFailure();
                     failedSwapOperations.incrementAndGet();
                     performanceMonitor.recordSwapFailure("swap_out", "Operation failed");
-                    LOGGER.warn("Failed to swap out chunk: { }", chunkKey);
-                    System.out.println("DEBUG: Failed to swap out chunk: " + chunkKey);
+                    LOGGER.warn("Failed to swap out chunk: {}", chunkKey);
                   }
 
                   return success;
@@ -687,7 +680,7 @@ public class SwapManager {
                   swapStats.recordFailure();
                   failedSwapOperations.incrementAndGet();
                   performanceMonitor.recordSwapFailure("swap_out", ex.getMessage());
-                  LOGGER.error("Exception during swap-out for chunk: { }", chunkKey, ex);
+                  LOGGER.error("Exception during swap-out for chunk: {}", chunkKey, ex);
                   return false;
 
                 } finally {
@@ -733,7 +726,7 @@ public class SwapManager {
     CompletableFuture<Boolean> swapFuture =
         CompletableFuture.supplyAsync(
             () -> {
-              System.out.println("DEBUG: Starting async swap out operation for: " + chunkKey);
+              LOGGER.trace("Starting async swap out operation for: {}", chunkKey);
               try {
                 operation.setStatus(SwapStatus.IN_PROGRESS);
                 long startTime = System.currentTimeMillis();
@@ -748,16 +741,14 @@ public class SwapManager {
                   operation.setStatus(SwapStatus.COMPLETED);
                   swapStats.recordSwapOut(duration, estimateChunkSize(chunkKey));
                   performanceMonitor.recordSwapOut(estimateChunkSize(chunkKey), duration);
-                  LOGGER.debug("Successfully swapped out chunk: { } in { }ms", chunkKey, duration);
-                  System.out.println("DEBUG: Successfully swapped out chunk: " + chunkKey);
+                  LOGGER.debug("Successfully swapped out chunk: {} in {}ms", chunkKey, duration);
                 } else {
                   operation.setStatus(SwapStatus.FAILED);
                   operation.setErrorMessage("Swap-out operation failed");
                   swapStats.recordFailure();
                   failedSwapOperations.incrementAndGet();
                   performanceMonitor.recordSwapFailure("swap_out", "Operation failed");
-                  LOGGER.warn("Failed to swap out chunk: { }", chunkKey);
-                  System.out.println("DEBUG: Failed to swap out chunk: " + chunkKey);
+                  LOGGER.warn("Failed to swap out chunk: {}", chunkKey);
                 }
 
                 return success;
@@ -769,7 +760,7 @@ public class SwapManager {
                 swapStats.recordFailure();
                 failedSwapOperations.incrementAndGet();
                 performanceMonitor.recordSwapFailure("swap_out", e.getMessage());
-                LOGGER.error("Exception during swap-out for chunk: { }", chunkKey, e);
+                LOGGER.error("Exception during swap-out for chunk: {}", chunkKey, e);
                 return false;
 
               } finally {
@@ -1252,6 +1243,15 @@ public class SwapManager {
           }
         }
 
+        // Close swap file channel
+        try {
+          if (swapFileChannel != null && swapFileChannel.isOpen()) {
+            swapFileChannel.close();
+          }
+        } catch (IOException ioe) {
+          LOGGER.warn("Failed to close swap file channel during shutdown", ioe);
+        }
+
         LOGGER.info("SwapManager shutdown completed");
 
       } catch (InterruptedException e) {
@@ -1311,21 +1311,21 @@ public class SwapManager {
       LOGGER.error("Swap file channel is not open for chunk: {}", chunkKey);
       return false;
     }
-    
     try {
       long position = getChunkPosition(chunkKey);
-      writeBuffer.clear();
-      
-      // Write original size first (8 bytes) followed by compressed data
-      writeBuffer.putLong(originalSize);
-      writeBuffer.put(compressedData);
-      writeBuffer.flip();
-      
-      // AsynchronousFileChannel.write returns Future, wrap in CompletableFuture
-      // Use fully qualified Future type for NIO operations
-      java.util.concurrent.Future<Integer> writeFuture = swapFileChannel.write(writeBuffer, position);
-      return writeFuture.get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS) > 0;
-      
+
+      // Header: originalSize (int), compressedLength (int)
+      int headerSize = Integer.BYTES * 2;
+      ByteBuffer buffer = ByteBuffer.allocateDirect(headerSize + compressedData.length);
+      buffer.putInt(originalSize);
+      buffer.putInt(compressedData.length);
+      buffer.put(compressedData);
+      buffer.flip();
+
+      java.util.concurrent.Future<Integer> writeFuture = swapFileChannel.write(buffer, position);
+      int written = writeFuture.get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
+      return written >= headerSize;
+
     } catch (Exception e) {
       LOGGER.error("Failed to write compressed data for chunk {}", chunkKey, e);
       return false;
@@ -1342,26 +1342,26 @@ public class SwapManager {
       LOGGER.error("Swap file channel is not open for chunk: {}", chunkKey);
       return new byte[0];
     }
-    
     try {
       long position = getChunkPosition(chunkKey);
-      readBuffer.clear();
-      
-      // First read the original size (8 bytes)
-      swapFileChannel.read(readBuffer, position).get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
-      readBuffer.flip();
-      int originalSize = readBuffer.getInt();
-      
-      // Then read the compressed data
-      readBuffer.clear();
-      swapFileChannel.read(readBuffer, position + 8).get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
-      readBuffer.flip();
-      byte[] compressedData = new byte[readBuffer.remaining()];
-      readBuffer.get(compressedData);
-      
-      // Decompress and return
+
+      // Read header first
+      ByteBuffer headerBuf = ByteBuffer.allocateDirect(Integer.BYTES * 2);
+      swapFileChannel.read(headerBuf, position).get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
+      headerBuf.flip();
+      int originalSize = headerBuf.getInt();
+      int compressedLen = headerBuf.getInt();
+
+      if (compressedLen <= 0) return new byte[0];
+
+      ByteBuffer dataBuf = ByteBuffer.allocateDirect(compressedLen);
+      swapFileChannel.read(dataBuf, position + Integer.BYTES * 2).get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
+      dataBuf.flip();
+      byte[] compressedData = new byte[dataBuf.remaining()];
+      dataBuf.get(compressedData);
+
       return decompressData(compressedData, originalSize);
-      
+
     } catch (Exception e) {
       LOGGER.error("Failed to read compressed data for chunk {}", chunkKey, e);
       return new byte[0];
@@ -1518,14 +1518,21 @@ public class SwapManager {
   // Private helper methods
 
   private void initializeExecutors() {
-    this.swapExecutor =
-        Executors.newFixedThreadPool(
+    // Bounded thread pool to limit concurrent swap tasks and provide backpressure.
+    ThreadPoolExecutor exe =
+        new ThreadPoolExecutor(
             config.getMaxConcurrentSwaps(),
+            config.getMaxConcurrentSwaps(),
+            60L,
+            TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(Math.max(16, config.getMaxConcurrentSwaps() * 2)),
             r -> {
               Thread thread = new Thread(r, "swap-worker");
               thread.setDaemon(true);
               return thread;
-            });
+            },
+            new ThreadPoolExecutor.CallerRunsPolicy());
+    this.swapExecutor = exe;
 
     this.monitorExecutor =
         Executors.newSingleThreadScheduledExecutor(
@@ -1637,11 +1644,10 @@ public class SwapManager {
   }
 
   private boolean performSwapOut(String chunkKey) throws Exception {
-    System.out.println("DEBUG: performSwapOut called for: " + chunkKey);
+  LOGGER.debug("performSwapOut called for: {}", chunkKey);
 
     if (chunkCache == null || databaseAdapter == null) {
-      LOGGER.error("SwapManager not properly initialized for chunk: { }", chunkKey);
-      System.out.println("DEBUG: SwapManager not properly initialized");
+      LOGGER.error("SwapManager not properly initialized for chunk: {}", chunkKey);
       throw new IllegalStateException("SwapManager not properly initialized");
     }
 
@@ -1650,9 +1656,8 @@ public class SwapManager {
     ChunkCache.CachedChunk cachedChunk = null;
 
     if (!cached.isPresent()) {
-      LOGGER.debug(
-          "Chunk not found in cache for swap-out: { }. Attempting direct DB swap-out.", chunkKey);
-      System.out.println("DEBUG: Chunk not found in cache: " + chunkKey);
+    LOGGER.debug(
+      "Chunk not found in cache for swap-out: {}. Attempting direct DB swap-out.", chunkKey);
 
       // If chunk is not present in cache, allow swapping directly from the database
       // This supports test scenarios where chunks were written to the DB but not cached
@@ -1664,15 +1669,8 @@ public class SwapManager {
         while (attempts < maxAttempts && !dbSwap) {
           attempts++;
           try {
-            dbSwap = databaseAdapter.swapOutChunk(chunkKey);
-            System.out.println(
-                "DEBUG: Direct DB swapOutChunk returned: "
-                    + dbSwap
-                    + " for "
-                    + chunkKey
-                    + " (attempt "
-                    + attempts
-                    + ")");
+      dbSwap = databaseAdapter.swapOutChunk(chunkKey);
+      LOGGER.debug("Direct DB swapOutChunk returned: {} for {} (attempt {})", dbSwap, chunkKey, attempts);
             if (!dbSwap) {
               // short backoff before retry
               try {
@@ -1688,13 +1686,7 @@ public class SwapManager {
                 attempts,
                 chunkKey,
                 e.getMessage());
-            System.out.println(
-                "DEBUG: Direct DB swap-out attempt "
-                    + attempts
-                    + " failed for "
-                    + chunkKey
-                    + ", error: "
-                    + e.getMessage());
+      LOGGER.debug("Direct DB swap-out attempt {} failed for {}: {}", attempts, chunkKey, e.getMessage());
             try {
               Thread.sleep(10);
             } catch (InterruptedException ie) {
@@ -1715,7 +1707,7 @@ public class SwapManager {
             }
           } catch (Exception e) {
             LOGGER.debug(
-                "Failed to check DB presence after swap-out false for { }: { }",
+                "Failed to check DB presence after swap-out false for {}: {}",
                 chunkKey,
                 e.getMessage());
           }
@@ -1783,18 +1775,12 @@ public class SwapManager {
 
           return false;
         }
-      } catch (Exception e) {
-        LOGGER.warn(
-            "Direct DB swap-out final failure for chunk { }: { }", chunkKey, e.getMessage());
-        System.out.println(
-            "DEBUG: Direct DB swap-out final failure for "
-                + chunkKey
-                + ", error: "
-                + e.getMessage());
-        return false;
-      }
+        } catch (Exception e) {
+          LOGGER.warn("Direct DB swap-out final failure for chunk {}: {}", chunkKey, e.getMessage());
+          return false;
+        }
     } else {
-      System.out.println("DEBUG: Chunk found in cache: " + chunkKey);
+      LOGGER.debug("Chunk found in cache: {}", chunkKey);
       cachedChunk = cached.get();
     }
 
@@ -1811,18 +1797,13 @@ public class SwapManager {
       // In that case allow swap regardless of age if the DB already contains the chunk.
       try {
         if (databaseAdapter != null && databaseAdapter.hasChunk(chunkKey)) {
-          LOGGER.debug(
-              "Chunk younger than min age but present in DB; allowing swap: { }", chunkKey);
-          System.out.println(
-              "DEBUG: Chunk younger than min age but present in DB; allowing swap: " + chunkKey);
+          LOGGER.debug("Chunk younger than min age but present in DB; allowing swap: {}", chunkKey);
         } else {
-          LOGGER.debug("Chunk too young for swap-out: { } (age: { }ms)", chunkKey, chunkAge);
+          LOGGER.debug("Chunk too young for swap-out: {} (age: {}ms)", chunkKey, chunkAge);
           return false;
         }
       } catch (Exception e) {
-        LOGGER.warn("Failed to check DB presence for chunk { }: { }", chunkKey, e.getMessage());
-        System.out.println(
-            "DEBUG: Failed to check DB presence for " + chunkKey + ", error: " + e.getMessage());
+        LOGGER.warn("Failed to check DB presence for chunk {}: {}", chunkKey, e.getMessage());
         return false;
       }
     }
@@ -1831,12 +1812,11 @@ public class SwapManager {
     Object chunkObject = cachedChunk.getChunk();
     byte[] serializedData = serializeChunk(chunkObject);
     if (serializedData == null) {
-      LOGGER.error("Failed to serialize chunk for swap-out: { }", chunkKey);
-      System.out.println("DEBUG: Failed to serialize chunk: " + chunkKey);
+      LOGGER.error("Failed to serialize chunk for swap-out: {}", chunkKey);
       return false;
     }
 
-    System.out.println("DEBUG: Serialized chunk data, size: " + serializedData.length);
+    LOGGER.trace("Serialized chunk data, size: {}", serializedData.length);
 
     // Store chunk data in swap file with LZ4 compression instead of database adapter
     // for more efficient swap operations
@@ -1865,19 +1845,13 @@ public class SwapManager {
               break;
             }
           }
-        } catch (Exception e) {
-          LOGGER.debug(
-              "Transient swap file attempt {} failed for {}: {}",
-              attempts,
-              chunkKey,
-              e.getMessage());
-          System.out.println(
-              "DEBUG: Swap file attempt "
-                  + attempts
-                  + " failed for "
-                  + chunkKey
-                  + ", error: "
-                  + e.getMessage());
+    } catch (Exception e) {
+      LOGGER.debug(
+        "Transient swap file attempt {} failed for {}: {}",
+        attempts,
+        chunkKey,
+        e.getMessage());
+        
           
           try {
             Thread.sleep(10);
@@ -1889,10 +1863,9 @@ public class SwapManager {
       }
 
       if (success) {
-        // Update chunk state in cache to reflect successful swap-out
+          // Update chunk state in cache to reflect successful swap-out
         chunkCache.updateChunkState(chunkKey, ChunkCache.ChunkState.SWAPPED);
         LOGGER.debug("Successfully swapped out chunk to file: {}", chunkKey);
-        System.out.println("DEBUG: Successfully swapped out chunk to file: " + chunkKey);
         
         // Predictively prefetch spatial neighbors to optimize future access
         predictivePrefetch(chunkKey);
@@ -1900,7 +1873,6 @@ public class SwapManager {
         return true;
       } else {
         LOGGER.warn("Failed to swap out chunk to swap file: {}", chunkKey);
-        System.out.println("DEBUG: Failed to swap out chunk to swap file: " + chunkKey);
         
         // As a last resort, try the database adapter if swap file operations fail
         // This maintains backward compatibility with existing systems
@@ -1915,8 +1887,7 @@ public class SwapManager {
     } catch (Exception e) {
       LOGGER.error(
           "Critical failure swapping out chunk {}: {}", chunkKey, e.getMessage());
-      System.out.println(
-          "DEBUG: Critical failure swapping out chunk: " + chunkKey + ", error: " + e.getMessage());
+    LOGGER.debug("Critical failure swapping out chunk: {}: {}", chunkKey, e.getMessage());
       return false;
     }
   }
@@ -1963,7 +1934,7 @@ public class SwapManager {
       return true;
     } catch (Exception e) {
       LOGGER.warn("Swap-in failed for chunk {}: {}", chunkKey, e.getMessage());
-      System.out.println("DEBUG: Swap-in failed for " + chunkKey + ", error: " + e.getMessage());
+      LOGGER.debug("Swap-in failed for {}: {}", chunkKey, e.getMessage());
       return false;
     }
   }
