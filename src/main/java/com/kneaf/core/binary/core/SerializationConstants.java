@@ -1,4 +1,4 @@
-package com.kneaf.core.flatbuffers.core;
+package com.kneaf.core.binary.core;
 
 /**
  * Constants used throughout the flatbuffers serialization system. These constants define buffer

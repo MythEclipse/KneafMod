@@ -1,4 +1,4 @@
-package com.kneaf.core.flatbuffers.utils;
+package com.kneaf.core.binary.utils;
 
 import com.kneaf.core.exceptions.core.KneafCoreException;
 

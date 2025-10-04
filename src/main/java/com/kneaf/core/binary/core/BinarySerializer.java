@@ -1,13 +1,13 @@
-package com.kneaf.core.flatbuffers.core;
+package com.kneaf.core.binary.core;
 
-import com.kneaf.core.flatbuffers.utils.SerializationException;
+import com.kneaf.core.binary.utils.SerializationException;
 import java.nio.ByteBuffer;
 
 /**
- * Base interface for all flatbuffer serializers. Defines the contract for serializing and
- * deserializing data using flatbuffer format.
+ * Base interface for all binary serializers. Defines the contract for serializing and deserializing
+ * data using binary format.
  */
-public interface FlatBufferSerializer<T, R> {
+public interface BinarySerializer<T, R> {
 
   /**
    * Serialize input data to binary format.

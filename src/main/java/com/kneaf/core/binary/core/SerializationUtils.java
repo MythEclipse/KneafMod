@@ -1,6 +1,6 @@
-package com.kneaf.core.flatbuffers.core;
+package com.kneaf.core.binary.core;
 
-import com.kneaf.core.flatbuffers.utils.SerializationException;
+import com.kneaf.core.binary.utils.SerializationException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.Charset;

@@ -1,13 +1,13 @@
-package com.kneaf.core.flatbuffers;
+package com.kneaf.core.binary;
 
 /**
  * Deprecated stub. Serialization was moved to manual ByteBuffer implementations in
  * com.kneaf.core.performance.RustPerformance. This class remains as a stub so any accidental
  * references will fail fast with a clear message.
  */
-public final class BlockFlatBuffers {
-  private BlockFlatBuffers() {
+public final class MobFlatBuffers {
+  private MobFlatBuffers() {
     throw new UnsupportedOperationException(
-        "BlockFlatBuffers removed; use RustPerformance manual serializers");
+        "MobFlatBuffers removed; use RustPerformance manual serializers");
   }
 }

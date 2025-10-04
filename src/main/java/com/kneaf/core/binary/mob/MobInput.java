@@ -1,4 +1,4 @@
-package com.kneaf.core.flatbuffers.mob;
+package com.kneaf.core.binary.mob;
 
 import com.kneaf.core.data.entity.MobData;
 import java.util.List;

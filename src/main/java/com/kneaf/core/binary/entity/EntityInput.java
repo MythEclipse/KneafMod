@@ -1,4 +1,4 @@
-package com.kneaf.core.flatbuffers.entity;
+package com.kneaf.core.binary.entity;
 
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.PlayerData;

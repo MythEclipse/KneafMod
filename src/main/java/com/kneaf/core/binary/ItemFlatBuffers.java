@@ -1,4 +1,4 @@
-package com.kneaf.core.flatbuffers;
+package com.kneaf.core.binary;
 
 /**
  * Deprecated stub. Serialization was moved to manual ByteBuffer implementations in

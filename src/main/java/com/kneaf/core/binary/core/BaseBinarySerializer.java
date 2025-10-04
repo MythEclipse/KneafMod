@@ -1,15 +1,15 @@
-package com.kneaf.core.flatbuffers.core;
+package com.kneaf.core.binary.core;
 
-import com.kneaf.core.flatbuffers.utils.BufferPool;
-import com.kneaf.core.flatbuffers.utils.SchemaValidator;
-import com.kneaf.core.flatbuffers.utils.SerializationException;
+import com.kneaf.core.binary.utils.BufferPool;
+import com.kneaf.core.binary.utils.SchemaValidator;
+import com.kneaf.core.binary.utils.SerializationException;
 import java.nio.ByteBuffer;
 
 /**
- * Abstract base class for flatbuffer serializers. Provides common functionality and buffer
- * management for all serializers.
+ * Abstract base class for binary serializers. Provides common functionality and buffer management
+ * for all serializers.
  */
-public abstract class BaseFlatBufferSerializer<T, R> implements FlatBufferSerializer<T, R> {
+public abstract class BaseBinarySerializer<T, R> implements BinarySerializer<T, R> {
 
   protected final BufferPool bufferPool;
   protected final SchemaValidator<T> validator;
@@ -22,7 +22,7 @@ public abstract class BaseFlatBufferSerializer<T, R> implements FlatBufferSerial
    * @param serializerType the type identifier for this serializer
    * @param schemaVersion the schema version this serializer supports
    */
-  protected BaseFlatBufferSerializer(String serializerType, String schemaVersion) {
+  protected BaseBinarySerializer(String serializerType, String schemaVersion) {
     this(serializerType, schemaVersion, new BufferPool(), null);
   }
 
@@ -33,7 +33,7 @@ public abstract class BaseFlatBufferSerializer<T, R> implements FlatBufferSerial
    * @param schemaVersion the schema version this serializer supports
    * @param bufferPool the buffer pool to use
    */
-  protected BaseFlatBufferSerializer(
+  protected BaseBinarySerializer(
       String serializerType, String schemaVersion, BufferPool bufferPool) {
     this(serializerType, schemaVersion, bufferPool, null);
   }
@@ -46,7 +46,7 @@ public abstract class BaseFlatBufferSerializer<T, R> implements FlatBufferSerial
    * @param bufferPool the buffer pool to use
    * @param validator the schema validator to use
    */
-  protected BaseFlatBufferSerializer(
+  protected BaseBinarySerializer(
       String serializerType,
       String schemaVersion,
       BufferPool bufferPool,

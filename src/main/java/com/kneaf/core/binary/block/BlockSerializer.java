@@ -1,12 +1,12 @@
-package com.kneaf.core.flatbuffers.block;
+package com.kneaf.core.binary.block;
 
+import com.kneaf.core.binary.core.BaseBinarySerializer;
+import com.kneaf.core.binary.core.SerializationConstants;
+import com.kneaf.core.binary.core.SerializationUtils;
+import com.kneaf.core.binary.utils.BufferPool;
+import com.kneaf.core.binary.utils.SchemaValidator;
+import com.kneaf.core.binary.utils.SerializationException;
 import com.kneaf.core.data.block.BlockEntityData;
-import com.kneaf.core.flatbuffers.core.BaseFlatBufferSerializer;
-import com.kneaf.core.flatbuffers.core.SerializationConstants;
-import com.kneaf.core.flatbuffers.core.SerializationUtils;
-import com.kneaf.core.flatbuffers.utils.BufferPool;
-import com.kneaf.core.flatbuffers.utils.SchemaValidator;
-import com.kneaf.core.flatbuffers.utils.SerializationException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,7 +15,7 @@ import java.util.List;
  * Serializer for block entity data using flatbuffer format. Handles serialization and
  * deserialization of block entity processing results.
  */
-public class BlockSerializer extends BaseFlatBufferSerializer<BlockInput, List<Long>> {
+public class BlockSerializer extends BaseBinarySerializer<BlockInput, List<Long>> {
 
   /** Create a new block serializer with default configuration. */
   public BlockSerializer() {

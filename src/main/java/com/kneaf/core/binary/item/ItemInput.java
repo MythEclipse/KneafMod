@@ -1,4 +1,4 @@
-package com.kneaf.core.flatbuffers.item;
+package com.kneaf.core.binary.item;
 
 import com.kneaf.core.data.item.ItemEntityData;
 import java.util.List;

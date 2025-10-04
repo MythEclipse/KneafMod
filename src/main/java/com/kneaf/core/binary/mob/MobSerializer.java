@@ -1,12 +1,12 @@
-package com.kneaf.core.flatbuffers.mob;
+package com.kneaf.core.binary.mob;
 
+import com.kneaf.core.binary.core.BaseBinarySerializer;
+import com.kneaf.core.binary.core.SerializationConstants;
+import com.kneaf.core.binary.core.SerializationUtils;
+import com.kneaf.core.binary.utils.BufferPool;
+import com.kneaf.core.binary.utils.SchemaValidator;
+import com.kneaf.core.binary.utils.SerializationException;
 import com.kneaf.core.data.entity.MobData;
-import com.kneaf.core.flatbuffers.core.BaseFlatBufferSerializer;
-import com.kneaf.core.flatbuffers.core.SerializationConstants;
-import com.kneaf.core.flatbuffers.core.SerializationUtils;
-import com.kneaf.core.flatbuffers.utils.BufferPool;
-import com.kneaf.core.flatbuffers.utils.SchemaValidator;
-import com.kneaf.core.flatbuffers.utils.SerializationException;
 import com.kneaf.core.performance.core.MobProcessResult;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -16,7 +16,7 @@ import java.util.List;
  * Serializer for mob data using flatbuffer format. Handles serialization and deserialization of mob
  * AI processing results.
  */
-public class MobSerializer extends BaseFlatBufferSerializer<MobInput, MobProcessResult> {
+public class MobSerializer extends BaseBinarySerializer<MobInput, MobProcessResult> {
 
   /** Create a new mob serializer with default configuration. */
   public MobSerializer() {

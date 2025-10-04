@@ -1,12 +1,12 @@
-package com.kneaf.core.flatbuffers.item;
+package com.kneaf.core.binary.item;
 
+import com.kneaf.core.binary.core.BaseBinarySerializer;
+import com.kneaf.core.binary.core.SerializationConstants;
+import com.kneaf.core.binary.core.SerializationUtils;
+import com.kneaf.core.binary.utils.BufferPool;
+import com.kneaf.core.binary.utils.SchemaValidator;
+import com.kneaf.core.binary.utils.SerializationException;
 import com.kneaf.core.data.item.ItemEntityData;
-import com.kneaf.core.flatbuffers.core.BaseFlatBufferSerializer;
-import com.kneaf.core.flatbuffers.core.SerializationConstants;
-import com.kneaf.core.flatbuffers.core.SerializationUtils;
-import com.kneaf.core.flatbuffers.utils.BufferPool;
-import com.kneaf.core.flatbuffers.utils.SchemaValidator;
-import com.kneaf.core.flatbuffers.utils.SerializationException;
 import com.kneaf.core.performance.core.ItemProcessResult;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -16,7 +16,7 @@ import java.util.List;
  * Serializer for item entity data using flatbuffer format. Handles serialization and
  * deserialization of item processing results.
  */
-public class ItemSerializer extends BaseFlatBufferSerializer<ItemInput, ItemProcessResult> {
+public class ItemSerializer extends BaseBinarySerializer<ItemInput, ItemProcessResult> {
 
   /** Create a new item serializer with default configuration. */
   public ItemSerializer() {

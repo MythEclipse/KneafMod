@@ -1,6 +1,6 @@
-package com.kneaf.core.flatbuffers.utils;
+package com.kneaf.core.binary.utils;
 
-import com.kneaf.core.flatbuffers.core.SerializationConstants;
+import com.kneaf.core.binary.core.SerializationConstants;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.concurrent.ConcurrentLinkedQueue;

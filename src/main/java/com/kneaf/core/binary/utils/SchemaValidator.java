@@ -1,4 +1,4 @@
-package com.kneaf.core.flatbuffers.utils;
+package com.kneaf.core.binary.utils;
 
 /**
  * Interface for validating flatbuffer schemas and data. Implementations should provide

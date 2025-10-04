@@ -1,13 +1,13 @@
-package com.kneaf.core.flatbuffers.entity;
+package com.kneaf.core.binary.entity;
 
+import com.kneaf.core.binary.core.BaseBinarySerializer;
+import com.kneaf.core.binary.core.SerializationConstants;
+import com.kneaf.core.binary.core.SerializationUtils;
+import com.kneaf.core.binary.utils.BufferPool;
+import com.kneaf.core.binary.utils.SchemaValidator;
+import com.kneaf.core.binary.utils.SerializationException;
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.PlayerData;
-import com.kneaf.core.flatbuffers.core.BaseFlatBufferSerializer;
-import com.kneaf.core.flatbuffers.core.SerializationConstants;
-import com.kneaf.core.flatbuffers.core.SerializationUtils;
-import com.kneaf.core.flatbuffers.utils.BufferPool;
-import com.kneaf.core.flatbuffers.utils.SchemaValidator;
-import com.kneaf.core.flatbuffers.utils.SerializationException;
 import java.nio.ByteBuffer;
 import java.util.List;
 
@@ -15,7 +15,7 @@ import java.util.List;
  * Serializer for entity data using flatbuffer format. Handles serialization and deserialization of
  * entity lists with player context.
  */
-public class EntitySerializer extends BaseFlatBufferSerializer<EntityInput, List<Long>> {
+public class EntitySerializer extends BaseBinarySerializer<EntityInput, List<Long>> {
 
   /** Create a new entity serializer with default configuration. */
   public EntitySerializer() {
