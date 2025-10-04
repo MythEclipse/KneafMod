@@ -2,6 +2,9 @@ package com.kneaf.core.performance.spatial;
 
 import com.kneaf.core.data.entity.PlayerData;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Spatial grid for efficient player position queries. Divides the world into grid cells and
@@ -9,6 +12,8 @@ import java.util.*;
  * M) for nearby queries.
  */
 public class SpatialGrid {
+  private static final Logger LOGGER = LoggerFactory.getLogger(SpatialGrid.class);
+
   private final double cellSize;
   private final Map<Long, Set<PlayerData>> gridCells;
   private final Map<Long, PlayerData> playerPositionCache;
@@ -21,8 +26,8 @@ public class SpatialGrid {
 
   public SpatialGrid(double cellSize) {
     this.cellSize = cellSize;
-    this.gridCells = new HashMap<>();
-    this.playerPositionCache = new HashMap<>();
+    this.gridCells = new ConcurrentHashMap<>();
+    this.playerPositionCache = new ConcurrentHashMap<>();
   }
 
   /** Update or insert a player position in the spatial grid. */
@@ -36,6 +41,8 @@ public class SpatialGrid {
     // Add to new position
     playerPositionCache.put(player.getId(), player);
     addPlayerToGrid(player);
+
+    LOGGER.debug("Updated player { } in spatial grid at ({ }, { }, { })", player.getId(), player.getX(), player.getY(), player.getZ());
   }
 
   /** Remove a player from the spatial grid. */
@@ -43,6 +50,7 @@ public class SpatialGrid {
     PlayerData player = playerPositionCache.remove(playerId);
     if (player != null) {
       removePlayerFromGrid(player);
+      LOGGER.debug("Removed player { } from spatial grid", playerId);
     }
   }
 
@@ -73,6 +81,8 @@ public class SpatialGrid {
     // Sort by distance and return
     List<PlayerDistance> result = new ArrayList<>(nearbyPlayers);
     result.sort(Comparator.comparingDouble(PlayerDistance::distance));
+
+    LOGGER.debug("Found { } nearby players within radius { } at ({ }, { }, { })", result.size(), radius, x, y, z);
     return result;
   }
 
@@ -207,8 +217,21 @@ public class SpatialGrid {
   }
 
   private long getCellKey(int cellX, int cellZ) {
-    // Pack cell coordinates into a single long for efficient hashing
-    return (((long) cellX) << 32) | (cellZ & 0xFFFFFFFFL);
+    // Use Z-order curve (Morton code) for better spatial distribution and query performance
+    return mortonCode(cellX, cellZ);
+  }
+
+  /**
+   * Compute Morton code (Z-order curve) for spatial hashing.
+   * Interleaves bits of x and z coordinates for better locality.
+   */
+  private long mortonCode(int x, int z) {
+    long morton = 0;
+    // Process 16 bits for reasonable world coordinates
+    for (int i = 0; i < 16; i++) {
+      morton |= ((long) (x & (1 << i)) << (2 * i)) | ((long) (z & (1 << i)) << (2 * i + 1));
+    }
+    return morton;
   }
 
   /** Represents a player with their distance from a query point. */

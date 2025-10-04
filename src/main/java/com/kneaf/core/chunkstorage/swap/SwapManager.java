@@ -12,12 +12,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
+import net.jpountz.lz4.LZ4Compressor;
+import net.jpountz.lz4.LZ4Factory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,6 +63,12 @@ public class SwapManager implements StorageStatisticsProvider {
 
   // Performance monitoring integration
   private final PerformanceMonitorAdapter performanceMonitor;
+
+  // LZ4 compression components for chunk storage optimization
+  private final LZ4Compressor compressor;
+  // LRU eviction policy with priority queue for frequently accessed chunks
+  private final PriorityBlockingQueue<ChunkAccessEntry> accessQueue;
+  private final Map<String, ChunkAccessEntry> accessMap;
 
   /** Memory pressure levels for intelligent swap decisions. */
   public enum MemoryPressureLevel {
@@ -377,6 +386,26 @@ public class SwapManager implements StorageStatisticsProvider {
     }
   }
 
+  /** Entry for LRU access tracking. */
+  private static class ChunkAccessEntry implements Comparable<ChunkAccessEntry> {
+    private final String chunkKey;
+    private final long accessTime;
+
+    public ChunkAccessEntry(String chunkKey, long accessTime) {
+      this.chunkKey = chunkKey;
+      this.accessTime = accessTime;
+    }
+
+    public String getChunkKey() {
+      return chunkKey;
+    }
+
+    @Override
+    public int compareTo(ChunkAccessEntry other) {
+      return Long.compare(this.accessTime, other.accessTime);
+    }
+  }
+
   /**
    * Create a new SwapManager with the given configuration.
    *
@@ -399,6 +428,14 @@ public class SwapManager implements StorageStatisticsProvider {
     this.swapStats = new SwapStatistics();
     this.activeSwaps = new ConcurrentHashMap<>();
     this.performanceMonitor = new PerformanceMonitorAdapter(config.isEnablePerformanceMonitoring());
+
+    // Initialize LZ4 compression components
+    this.compressor = LZ4Factory.fastestInstance().highCompressor();
+    LZ4Factory.fastestInstance().fastDecompressor();
+
+    // Initialize LRU eviction components
+    this.accessQueue = new PriorityBlockingQueue<ChunkAccessEntry>();
+    this.accessMap = new ConcurrentHashMap<>();
 
     if (config.isEnabled()) {
       initializeExecutors();
@@ -1353,8 +1390,26 @@ public class SwapManager implements StorageStatisticsProvider {
           targetSwaps,
           level);
 
-      int swapped = chunkCache.performSwapAwareEviction(targetSwaps);
-      LOGGER.info("Automatically initiated swap for { } chunks", swapped);
+      int swapped = 0;
+      // Use LRU eviction based on access queue
+      for (int i = 0; i < targetSwaps; i++) {
+        ChunkAccessEntry entry = accessQueue.poll();
+        if (entry != null) {
+          String chunkKey = entry.getChunkKey();
+          // Check if chunk can be evicted
+          if (chunkCache.canEvict(chunkKey)) {
+            // Initiate swap-out
+            swapOutChunk(chunkKey);
+            swapped++;
+            // Remove from accessMap
+            accessMap.remove(chunkKey);
+          }
+        } else {
+          break; // No more entries
+        }
+      }
+
+      LOGGER.info("Automatically initiated LRU-based swap for { } chunks", swapped);
     }
   }
 
@@ -1657,6 +1712,8 @@ public class SwapManager implements StorageStatisticsProvider {
       if (swappedData.isPresent()) {
         // Update chunk state in cache
         chunkCache.updateChunkState(chunkKey, ChunkCache.ChunkState.HOT);
+        // Update LRU access tracking
+        updateAccess(chunkKey);
         LOGGER.debug("Successfully swapped in chunk: { }", chunkKey);
         return true;
       } else {
@@ -1680,6 +1737,7 @@ public class SwapManager implements StorageStatisticsProvider {
     }
 
     try {
+      byte[] uncompressedData;
       // Detect LevelChunk if available and treat specially (placeholder size)
       try {
         Class<?> levelChunkClass = Class.forName(ChunkStorageConstants.MINECRAFT_LEVEL_CHUNK_CLASS);
@@ -1687,15 +1745,35 @@ public class SwapManager implements StorageStatisticsProvider {
           // When a LevelChunk-like object is detected but the project's
           // Minecraft classes are not present at runtime, return a
           // deterministic byte array to simulate serialized content for tests.
-          return new byte[ChunkStorageConstants.SERIALIZED_CHUNK_SIZE];
+          uncompressedData = new byte[ChunkStorageConstants.SERIALIZED_CHUNK_SIZE];
+        } else {
+          // Generic fallback for mock chunks and other objects used in tests
+          String chunkString = chunk.toString();
+          uncompressedData = chunkString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
       } catch (ClassNotFoundException cnfe) {
         // Minecraft classes not on classpath; fall back to generic handling below.
+        String chunkString = chunk.toString();
+        uncompressedData = chunkString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
       }
 
-      // Generic fallback for mock chunks and other objects used in tests
-      String chunkString = chunk.toString();
-      return chunkString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      // Compress the data using LZ4 for storage optimization
+      int maxCompressedLength = compressor.maxCompressedLength(uncompressedData.length);
+      byte[] compressedData = new byte[maxCompressedLength];
+      int compressedLength = compressor.compress(uncompressedData, 0, uncompressedData.length, compressedData, 0, maxCompressedLength);
+
+      // Store uncompressed size (4 bytes) + compressed data
+      byte[] finalCompressedData = new byte[4 + compressedLength];
+      // Write uncompressed size as big-endian int
+      finalCompressedData[0] = (byte) (uncompressedData.length >>> 24);
+      finalCompressedData[1] = (byte) (uncompressedData.length >>> 16);
+      finalCompressedData[2] = (byte) (uncompressedData.length >>> 8);
+      finalCompressedData[3] = (byte) uncompressedData.length;
+      // Copy compressed data
+      System.arraycopy(compressedData, 0, finalCompressedData, 4, compressedLength);
+
+      LOGGER.debug("Compressed chunk data from { } to { } bytes (total stored: { } bytes)", uncompressedData.length, compressedLength, finalCompressedData.length);
+      return finalCompressedData;
 
     } catch (Exception e) {
       // Any unexpected error should be logged but we return an empty array to avoid failing tests
@@ -1704,9 +1782,22 @@ public class SwapManager implements StorageStatisticsProvider {
     }
   }
 
+
   private long estimateChunkSize(String chunkKey) {
     // Rough estimate of chunk size in bytes used for statistics and tests.
     return ChunkStorageConstants.ESTIMATED_CHUNK_SIZE_BYTES;
+  }
+
+  private void updateAccess(String chunkKey) {
+    long now = System.currentTimeMillis();
+    ChunkAccessEntry entry = accessMap.get(chunkKey);
+    if (entry != null) {
+      accessQueue.remove(entry); // Remove old entry
+    }
+    entry = new ChunkAccessEntry(chunkKey, now);
+    accessMap.put(chunkKey, entry);
+    accessQueue.add(entry);
+    LOGGER.debug("Updated access time for chunk: { }", chunkKey);
   }
 
   /**
