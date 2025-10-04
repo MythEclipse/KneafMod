@@ -506,27 +506,25 @@ impl RustDatabaseAdapter {
 
             // Prune old backups according to simple retention: keep latest N backups if present
             // We'll keep up to 10 backups by default to avoid unbounded growth
-            if let Some(parent_dir) = base.to_str() {
-                if let Ok(entries) = std::fs::read_dir(base) {
-                    let mut backups: Vec<_> = entries
-                        .filter_map(|e| e.ok())
-                        .filter(|e| e.path().is_dir())
-                        .collect();
+            if let Ok(entries) = std::fs::read_dir(base) {
+                let mut backups: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .collect();
 
-                    // Sort by modified time ascending
-                    backups.sort_by_key(|d| d.metadata().and_then(|m| m.modified()).ok());
+                // Sort by modified time ascending
+                backups.sort_by_key(|d| d.metadata().and_then(|m| m.modified()).ok());
 
-                    // Maximum backups to keep
-                    let max_backups = 10usize;
-                    while backups.len() > max_backups {
-                        // remove the oldest (first) entry and delete its directory
-                        let oldest = backups.remove(0);
-                        let old_path = oldest.path();
-                        if let Err(e) = std::fs::remove_dir_all(&old_path) {
-                            error!("Failed to prune old backup {:?}: {}", old_path, e);
-                        } else {
-                            info!("Pruned old backup: {:?}", old_path);
-                        }
+                // Maximum backups to keep
+                let max_backups = 10usize;
+                while backups.len() > max_backups {
+                    // remove the oldest (first) entry and delete its directory
+                    let oldest = backups.remove(0);
+                    let old_path = oldest.path();
+                    if let Err(e) = std::fs::remove_dir_all(&old_path) {
+                        error!("Failed to prune old backup {:?}: {}", old_path, e);
+                    } else {
+                        info!("Pruned old backup: {:?}", old_path);
                     }
                 }
             }

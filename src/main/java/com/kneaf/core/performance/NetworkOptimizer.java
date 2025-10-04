@@ -59,8 +59,12 @@ public class NetworkOptimizer {
     return exec;
   }
 
-  // Packet batching
-  private static final List<Packet<?>> PACKET_BATCH = new ArrayList<>();
+  // Packet batching using a lock-free queue to avoid blocking server threads
+  private static final java.util.concurrent.ConcurrentLinkedQueue<Packet<?>> PACKET_BATCH =
+    new java.util.concurrent.ConcurrentLinkedQueue<>();
+  // approximate size counter to avoid O(n) size() calls on the queue
+  private static final java.util.concurrent.atomic.AtomicInteger PACKET_BATCH_SIZE =
+    new java.util.concurrent.atomic.AtomicInteger(0);
 
   private static int getPacketBatchSize() {
     double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
@@ -93,8 +97,8 @@ public class NetworkOptimizer {
   @SubscribeEvent(priority = EventPriority.LOW)
   public static void onServerTick(ServerTickEvent.Post event) {
     // Process batched packets
-    if (!PACKET_BATCH.isEmpty()) {
-      getNetworkExecutor().submit(() -> sendBatchedPackets());
+    if (PACKET_BATCH_SIZE.get() > 0) {
+      getNetworkExecutor().submit(NetworkOptimizer::sendBatchedPackets);
     }
   }
 
@@ -109,28 +113,26 @@ public class NetworkOptimizer {
 
   /** Adds a packet to the batch for optimized sending. */
   public static void addPacketToBatch(Packet<?> packet) {
-    synchronized (PACKET_BATCH) {
-      PACKET_BATCH.add(packet);
-      int batchSize = getPacketBatchSize();
-      double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
-      double flushFraction =
-          com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchFlushFraction(tps);
-      int flushThreshold = Math.max(1, (int) Math.ceil(batchSize * flushFraction));
-      if (PACKET_BATCH.size() >= batchSize) {
-        // schedule immediate execution on executor instead of submit to allow delayed rate-limited
-        // tasks
-        getNetworkExecutor().execute(NetworkOptimizer::sendBatchedPackets);
-      } else if (PACKET_BATCH.size() >= flushThreshold) {
-        // Schedule batch processing for partially-full batches to prevent excessive delays
-        int scheduleMs =
-            com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveNetworkBatchScheduleMs(
-                tps);
-        getNetworkExecutor()
-            .schedule(
-                NetworkOptimizer::sendBatchedPackets,
-                scheduleMs,
-                java.util.concurrent.TimeUnit.MILLISECONDS);
-      }
+    // Lock-free enqueue
+    PACKET_BATCH.add(packet);
+    int newSize = PACKET_BATCH_SIZE.incrementAndGet();
+    int batchSize = getPacketBatchSize();
+    double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+    double flushFraction =
+        com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchFlushFraction(tps);
+    int flushThreshold = Math.max(1, (int) Math.ceil(batchSize * flushFraction));
+
+    if (newSize >= batchSize) {
+      // schedule immediate execution on executor instead of submit to allow delayed rate-limited
+      // tasks
+      getNetworkExecutor().execute(NetworkOptimizer::sendBatchedPackets);
+    } else if (newSize >= flushThreshold) {
+      // Schedule batch processing for partially-full batches to prevent excessive delays
+      int scheduleMs =
+          com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveNetworkBatchScheduleMs(
+              tps);
+      getNetworkExecutor()
+          .schedule(NetworkOptimizer::sendBatchedPackets, scheduleMs, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
   }
 
@@ -159,11 +161,14 @@ public class NetworkOptimizer {
 
   private static void sendBatchedPackets() {
     double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
-    List<Packet<?>> batch;
-    synchronized (PACKET_BATCH) {
-      batch = new ArrayList<>(PACKET_BATCH);
-      PACKET_BATCH.clear();
+    // Swap queue contents into a local list to minimize time spent in global structures
+    List<Packet<?>> batch = new ArrayList<>();
+    Packet<?> p;
+    while ((p = PACKET_BATCH.poll()) != null) {
+      batch.add(p);
     }
+    // Reset size counter conservatively (may be slightly lower if concurrent enqueues occur)
+    PACKET_BATCH_SIZE.addAndGet(-batch.size());
     // Process batch with rate limiting and compression
     for (Packet<?> packet : batch) {
       // Estimate size without heavy toString(); try packet's serialized size if available, else

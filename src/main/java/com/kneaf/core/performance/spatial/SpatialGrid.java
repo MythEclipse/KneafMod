@@ -3,8 +3,7 @@ package com.kneaf.core.performance.spatial;
 import com.kneaf.core.data.entity.PlayerData;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+// Logging removed for this class to avoid high-volume debug spam
 
 /**
  * Spatial grid for efficient player position queries. Divides the world into grid cells and
@@ -12,7 +11,6 @@ import org.slf4j.LoggerFactory;
  * M) for nearby queries.
  */
 public class SpatialGrid {
-  private static final Logger LOGGER = LoggerFactory.getLogger(SpatialGrid.class);
 
   private final double cellSize;
   private final Map<Long, Set<PlayerData>> gridCells;
@@ -42,7 +40,7 @@ public class SpatialGrid {
     playerPositionCache.put(player.getId(), player);
     addPlayerToGrid(player);
 
-    LOGGER.debug("Updated player { } in spatial grid at ({ }, { }, { })", player.getId(), player.getX(), player.getY(), player.getZ());
+    // Removed noisy debug logs to avoid spamming server logs during frequent player updates
   }
 
   /** Remove a player from the spatial grid. */
@@ -50,7 +48,7 @@ public class SpatialGrid {
     PlayerData player = playerPositionCache.remove(playerId);
     if (player != null) {
       removePlayerFromGrid(player);
-      LOGGER.debug("Removed player { } from spatial grid", playerId);
+      // Intentionally silent to avoid log spam
     }
   }
 
@@ -82,7 +80,6 @@ public class SpatialGrid {
     List<PlayerDistance> result = new ArrayList<>(nearbyPlayers);
     result.sort(Comparator.comparingDouble(PlayerDistance::distance));
 
-    LOGGER.debug("Found { } nearby players within radius { } at ({ }, { }, { })", result.size(), radius, x, y, z);
     return result;
   }
 
