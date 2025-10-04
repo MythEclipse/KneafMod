@@ -33,6 +33,7 @@ public final class PerformanceConfig {
     private final boolean profilingEnabled;
     private final long slowTickThresholdMs;
     private final int profilingSampleRate;
+    private final boolean broadcastToClient;
     
     // Advanced parallelism configuration
     private final int minThreadPoolSize;
@@ -73,6 +74,7 @@ public final class PerformanceConfig {
         this.profilingEnabled = b.profilingEnabled;
         this.slowTickThresholdMs = b.slowTickThresholdMs;
         this.profilingSampleRate = b.profilingSampleRate;
+    this.broadcastToClient = b.broadcastToClient;
         
         // Advanced parallelism configuration
         this.minThreadPoolSize = b.minThreadPoolSize;
@@ -137,6 +139,7 @@ public final class PerformanceConfig {
         private boolean profilingEnabled;
         private long slowTickThresholdMs;
         private int profilingSampleRate;
+    private boolean broadcastToClient;
         
         // Advanced parallelism configuration
         private int minThreadPoolSize;
@@ -173,6 +176,7 @@ public final class PerformanceConfig {
     public Builder profilingEnabled(boolean v) { this.profilingEnabled = v; return this; }
     public Builder slowTickThresholdMs(long v) { this.slowTickThresholdMs = v; return this; }
     public Builder profilingSampleRate(int v) { this.profilingSampleRate = v; return this; }
+    public Builder broadcastToClient(boolean v) { this.broadcastToClient = v; return this; }
     
     // Advanced parallelism configuration
     public Builder minThreadPoolSize(int v) { this.minThreadPoolSize = v; return this; }
@@ -291,6 +295,8 @@ public final class PerformanceConfig {
             this.profilingEnabled = true;
             this.slowTickThresholdMs = 50L;
             this.profilingSampleRate = 100; // 1% sampling rate (1 out of 100 ticks)
+        // Default: do not broadcast performance logs to players (console only)
+        this.broadcastToClient = false;
             
         // Advanced parallelism defaults
         this.minThreadPoolSize = 2;
@@ -332,6 +338,7 @@ public final class PerformanceConfig {
     public boolean isProfilingEnabled() { return profilingEnabled; }
     public long getSlowTickThresholdMs() { return slowTickThresholdMs; }
     public int getProfilingSampleRate() { return profilingSampleRate; }
+    public boolean isBroadcastToClient() { return broadcastToClient; }
     
     // Advanced parallelism getters
     public int getMinThreadPoolSize() { return minThreadPoolSize; }
@@ -387,6 +394,7 @@ public final class PerformanceConfig {
         boolean profilingEnabled = Boolean.parseBoolean(props.getProperty("profilingEnabled", "true"));
         long slowTickThresholdMs = parseLongOrDefault(props.getProperty("slowTickThresholdMs"), 50L);
         int profilingSampleRate = parseIntOrDefault(props.getProperty("profilingSampleRate"), 1);
+    boolean broadcastToClient = Boolean.parseBoolean(props.getProperty("broadcastToClient", "false"));
 
     long maxLogBytes = parseLongOrDefault(props.getProperty("maxLogBytes"), 10L * 1024 * 1024); // 10MB default
 
@@ -407,6 +415,8 @@ public final class PerformanceConfig {
     .profilingEnabled(profilingEnabled)
     .slowTickThresholdMs(slowTickThresholdMs)
     .profilingSampleRate(profilingSampleRate);
+    // Apply broadcastToClient property
+    b.broadcastToClient(broadcastToClient);
 
     return b.build();
     }

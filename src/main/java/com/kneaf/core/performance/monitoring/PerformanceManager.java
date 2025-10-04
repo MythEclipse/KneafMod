@@ -35,6 +35,7 @@ import com.kneaf.core.data.entity.PlayerData;
 import com.kneaf.core.performance.spatial.SpatialGrid;
 import com.kneaf.core.performance.RustPerformance;
 // cleaned: removed unused performance imports
+import net.minecraft.network.chat.Component;
 
 /**
  * Manages performance optimizations for the Minecraft server.
@@ -475,7 +476,7 @@ public class PerformanceManager {
         
         // Log slow ticks with detailed profiling
         if (shouldProfile && profile != null && profile.isSlowTick()) {
-            logSlowTick(profile);
+            logSlowTick(server, profile);
         }
         
         if (PROFILING_ENABLED) profileData.remove();
@@ -550,7 +551,7 @@ public class PerformanceManager {
                     profile.optimizationApplicationTime = System.nanoTime() - applicationStart;
                 }
             }
-            if (tickCounter % CONFIG.getLogIntervalTicks() == 0) logOptimizations(results);
+            if (tickCounter % CONFIG.getLogIntervalTicks() == 0) logOptimizations(server, results);
             removeItems(server, results.itemResult());
         } catch (Exception e) {
             LOGGER.warn("Error applying optimizations on server thread", e);
@@ -577,7 +578,7 @@ public class PerformanceManager {
                 }
             }
             
-            if (tickCounter % CONFIG.getLogIntervalTicks() == 0) logOptimizations(results);
+            if (tickCounter % CONFIG.getLogIntervalTicks() == 0) logOptimizations(server, results);
             removeItems(server, results.itemResult());
         } catch (Exception ex) {
             LOGGER.warn("Error processing optimizations synchronously", ex);
@@ -955,34 +956,36 @@ public class PerformanceManager {
         }
     }
 
-    private static void logOptimizations(OptimizationResults results) {
+    private static void logOptimizations(MinecraftServer server, OptimizationResults results) {
         // Human-readable logs for meaningful changes (less frequent)
         if (tickCounter % 100 == 0 && hasMeaningfulOptimizations(results)) {
-            logReadableOptimizations(results);
+            logReadableOptimizations(server, results);
         }
 
         // Log spatial grid statistics periodically for performance monitoring
         if (tickCounter % 1000 == 0) {
-            logSpatialGridStats();
+            logSpatialGridStats(server);
         }
 
         // Compact metrics line periodically
         if (tickCounter % CONFIG.getLogIntervalTicks() == 0 && hasMeaningfulOptimizations(results)) {
             String summary = buildOptimizationSummary(results);
+            // Persist to file and broadcast to players if enabled
             com.kneaf.core.performance.monitoring.PerformanceMetricsLogger.logOptimizations(summary);
+            broadcastPerformanceLine(server, "OPTIMIZATIONS " + summary);
         }
     }
 
-    private static void logReadableOptimizations(OptimizationResults results) {
+    private static void logReadableOptimizations(MinecraftServer server, OptimizationResults results) {
         if (results == null) return;
         if (results.itemResult() != null) {
             long merged = results.itemResult().getMergedCount();
             long despawned = results.itemResult().getDespawnedCount();
             if (merged > 0 || despawned > 0) {
-                LOGGER.info("Item optimization: {} merged, {} despawned", merged, despawned);
+                broadcastPerformanceLine(server, String.format("Item optimization: %d merged, %d despawned", merged, despawned));
             }
             if (!results.itemResult().getItemsToRemove().isEmpty()) {
-                LOGGER.info("Items removed: {}", results.itemResult().getItemsToRemove().size());
+                broadcastPerformanceLine(server, String.format("Items removed: %d", results.itemResult().getItemsToRemove().size()));
             }
         }
 
@@ -990,16 +993,16 @@ public class PerformanceManager {
             int disabled = results.mobResult().getDisableList().size();
             int simplified = results.mobResult().getSimplifyList().size();
             if (disabled > 0 || simplified > 0) {
-                LOGGER.info("Mob AI optimization: {} disabled, {} simplified", disabled, simplified);
+                broadcastPerformanceLine(server, String.format("Mob AI optimization: %d disabled, %d simplified", disabled, simplified));
             }
         }
 
         if (results.blockResult() != null && !results.blockResult().isEmpty()) {
-            LOGGER.info("Block entities to tick (reduced): {}", results.blockResult().size());
+            broadcastPerformanceLine(server, String.format("Block entities to tick (reduced): %d", results.blockResult().size()));
         }
     }
 
-    private static void logSpatialGridStats() {
+    private static void logSpatialGridStats(MinecraftServer server) {
         synchronized (spatialGridLock) {
             int totalLevels = levelSpatialGrids.size();
             int totalPlayers = 0;
@@ -1010,12 +1013,14 @@ public class PerformanceManager {
                 totalPlayers += stats.totalPlayers();
                 totalCells += stats.totalCells();
             }
-            
-            if (totalLevels > 0 && LOGGER.isDebugEnabled()) {
-                LOGGER.debug("SpatialGrid stats: {} levels, {} players, {} cells, avg {} players/cell",
-                    totalLevels, totalPlayers, totalCells,
-                    totalCells > 0 ? (double) totalPlayers / totalCells : 0.0);
-            }
+
+            String summary = String.format("SpatialGrid stats: %d levels, %d players, %d cells, avg %s players/cell",
+                totalLevels, totalPlayers, totalCells,
+                totalCells > 0 ? String.format("%.2f", (double) totalPlayers / totalCells) : "0.00");
+
+            // Persist to file and broadcast if configured (avoid console spam)
+            com.kneaf.core.performance.monitoring.PerformanceMetricsLogger.logLine(summary);
+            if (CONFIG.isBroadcastToClient()) broadcastPerformanceLine(server, summary);
         }
     }
 
@@ -1023,14 +1028,58 @@ public class PerformanceManager {
      * Log slow ticks with detailed timing breakdown in JSON format for structured logging.
      */
     private static void logSlowTick(ProfileData profile) {
+        // kept for backward compatibility; server-aware overload implemented below
         if (profile == null) return;
-        
         String jsonProfile = profile.toJson();
         String message = String.format("SLOW_TICK: tick=%d avgTps=%.2f threshold=%.2f %s",
             tickCounter, getRollingAvgTPS(), currentTpsThreshold, jsonProfile);
-        
-        LOGGER.warn(message);
+        // Persist to performance log file
         com.kneaf.core.performance.monitoring.PerformanceMetricsLogger.logLine("SLOW_TICK " + message);
+    }
+
+    private static void logSlowTick(MinecraftServer server, ProfileData profile) {
+        if (profile == null) return;
+        String jsonProfile = profile.toJson();
+        String message = String.format("SLOW_TICK: tick=%d avgTps=%.2f threshold=%.2f %s",
+            tickCounter, getRollingAvgTPS(), currentTpsThreshold, jsonProfile);
+        // Persist to performance log file
+        com.kneaf.core.performance.monitoring.PerformanceMetricsLogger.logLine("SLOW_TICK " + message);
+
+        // Broadcast to connected players if enabled in config
+        if (CONFIG.isBroadcastToClient()) {
+            try {
+                for (ServerLevel level : server.getAllLevels()) {
+                    for (ServerPlayer player : level.players()) {
+                        // Use system message (not action bar) so it appears in chat/debug overlay for vanilla clients
+                        player.displayClientMessage(Component.literal(message), false);
+                    }
+                }
+            } catch (Exception e) {
+                // Ensure broadcasting doesn't crash server; just log at debug level
+                LOGGER.debug("Failed to broadcast performance message to players", e);
+            }
+        }
+    }
+
+    /**
+     * Broadcast a performance line to connected players (when enabled) and persist to file.
+     * This replaces console logging for performance telemetry per user request.
+     */
+    public static void broadcastPerformanceLine(MinecraftServer server, String line) {
+        // Persist to performance log
+        com.kneaf.core.performance.monitoring.PerformanceMetricsLogger.logLine(line);
+
+        if (!CONFIG.isBroadcastToClient()) return;
+
+        try {
+            for (ServerLevel level : server.getAllLevels()) {
+                for (ServerPlayer player : level.players()) {
+                    player.displayClientMessage(Component.literal(line), false);
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.debug("Failed to broadcast performance line to players", e);
+        }
     }
 
     private static String buildOptimizationSummary(OptimizationResults results) {

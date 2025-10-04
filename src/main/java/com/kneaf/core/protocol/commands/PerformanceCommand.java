@@ -11,6 +11,9 @@ import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
+import com.kneaf.core.network.NetworkHandler;
+import net.minecraft.server.MinecraftServer;
+import com.mojang.brigadier.arguments.StringArgumentType;
 
 /**
  * Standardized performance command with consistent error handling and logging.
@@ -48,6 +51,9 @@ public class PerformanceCommand extends BaseCommand {
                     .executes(context -> mainCommand.executeStatus(context)))
                 .then(Commands.literal("metrics")
                     .executes(context -> mainCommand.executeMetrics(context)))
+                .then(Commands.literal("broadcast")
+                    .then(Commands.argument("message", StringArgumentType.greedyString())
+                        .executes(context -> mainCommand.executeBroadcast(context))))
                 .then(Commands.literal("rotatelog")
                     .executes(context -> mainCommand.executeRotateLog(context)))
                 .then(Commands.literal("help")
@@ -192,6 +198,27 @@ public class PerformanceCommand extends BaseCommand {
             
         } catch (Exception e) {
             sendFailureFormatted(context, "Failed to rotate performance log: %s", e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * Execute broadcast subcommand - send a test performance line to all players.
+     */
+    private int executeBroadcast(CommandContext<CommandSourceStack> context) {
+        try {
+            String message = StringArgumentType.getString(context, "message");
+            CommandSourceStack src = context.getSource();
+            MinecraftServer server = src.getServer();
+            if (server == null) {
+                sendFailureFormatted(context, "Server instance not available");
+                return 0;
+            }
+            NetworkHandler.broadcastPerformanceLine(server, message);
+            sendSuccess(context, "Broadcasted performance line: " + message);
+            return 1;
+        } catch (Exception e) {
+            sendFailureFormatted(context, "Failed to broadcast message: %s", e.getMessage());
             return 0;
         }
     }

@@ -150,7 +150,7 @@ public class NeoForgeEventIntegration {
             processSIMDOperations(server);
             
             // Update performance metrics
-            updatePerformanceMetrics(tickStartTime);
+            updatePerformanceMetrics(server, tickStartTime);
             
             // Check for performance issues
             checkPerformanceIssues(server, tickStartTime);
@@ -187,7 +187,7 @@ public class NeoForgeEventIntegration {
             LOGGER.info("KneafCore server stopping - final performance report:");
             
             // Generate final performance report
-            generateFinalReport();
+            generateFinalReport(event.getServer());
             
         } catch (Exception e) {
             LOGGER.error("Error during server stopping event", e);
@@ -366,7 +366,7 @@ public class NeoForgeEventIntegration {
         );
     }
     
-    private static void updatePerformanceMetrics(long tickStartTime) {
+    private static void updatePerformanceMetrics(MinecraftServer server, long tickStartTime) {
         long tickTime = System.nanoTime() - tickStartTime;
         
         tickCounter.incrementAndGet();
@@ -376,14 +376,15 @@ public class NeoForgeEventIntegration {
         maxTickTime.updateAndGet(current -> Math.max(current, tickTime));
         minTickTime.updateAndGet(current -> Math.min(current, tickTime));
         
-        // Log performance metrics every 100 ticks
+        // Log performance metrics every 100 ticks (persist to file and optionally broadcast to players)
         if (tickCounter.get() % 100 == 0) {
             long avgTickTime = totalTickTime.get() / tickCounter.get();
-            LOGGER.info("Performance - Avg: {}ms, Max: {}ms, Min: {}ms, TPS: {}", 
+            String line = String.format("Performance - Avg: %dms, Max: %dms, Min: %dms, TPS: %.2f",
                 avgTickTime / 1_000_000,
                 maxTickTime.get() / 1_000_000,
                 minTickTime.get() == Long.MAX_VALUE ? 0 : minTickTime.get() / 1_000_000,
                 calculateTPS(avgTickTime));
+            PerformanceManager.broadcastPerformanceLine(server, line);
         }
     }
     
@@ -565,29 +566,30 @@ public class NeoForgeEventIntegration {
         }
     }
     
-    private static void generateFinalReport() {
+    private static void generateFinalReport(MinecraftServer server) {
         try {
             long totalTicks = tickCounter.get();
             if (totalTicks == 0) return;
-            
+
             long avgTickTime = totalTickTime.get() / totalTicks;
             double avgTPS = calculateTPS(avgTickTime);
-            
-            LOGGER.info("=== KneafCore Final Performance Report ===");
-            LOGGER.info("Total Ticks: {}", totalTicks);
-            LOGGER.info("Average Tick Time: {}ms", avgTickTime / 1_000_000);
-            LOGGER.info("Maximum Tick Time: {}ms", maxTickTime.get() / 1_000_000);
-            LOGGER.info("Minimum Tick Time: {}ms", minTickTime.get() == Long.MAX_VALUE ? 0 : minTickTime.get() / 1_000_000);
-            LOGGER.info("Average TPS: {}", String.format("%.1f", avgTPS));
-            LOGGER.info("Target Achieved: {}", avgTickTime <= getTargetTickTimeNanos() ? "YES" : "NO");
+
+            // Build final report lines and broadcast/persist instead of writing to console
+            PerformanceManager.broadcastPerformanceLine(server, "=== KneafCore Final Performance Report ===");
+            PerformanceManager.broadcastPerformanceLine(server, String.format("Total Ticks: %d", totalTicks));
+            PerformanceManager.broadcastPerformanceLine(server, String.format("Average Tick Time: %dms", avgTickTime / 1_000_000));
+            PerformanceManager.broadcastPerformanceLine(server, String.format("Maximum Tick Time: %dms", maxTickTime.get() / 1_000_000));
+            PerformanceManager.broadcastPerformanceLine(server, String.format("Minimum Tick Time: %dms", minTickTime.get() == Long.MAX_VALUE ? 0 : minTickTime.get() / 1_000_000));
+            PerformanceManager.broadcastPerformanceLine(server, String.format("Average TPS: %.1f", avgTPS));
+            PerformanceManager.broadcastPerformanceLine(server, String.format("Target Achieved: %s", avgTickTime <= getTargetTickTimeNanos() ? "YES" : "NO"));
 
             if (avgTickTime > getTargetTickTimeNanos()) {
                 long improvementNeeded = (avgTickTime - getTargetTickTimeNanos()) / 1_000_000;
-                LOGGER.info("Improvement Needed: {}ms", improvementNeeded);
+                PerformanceManager.broadcastPerformanceLine(server, String.format("Improvement Needed: %dms", improvementNeeded));
             }
-            
-            LOGGER.info("=========================================");
-            
+
+            PerformanceManager.broadcastPerformanceLine(server, "=========================================");
+
         } catch (Exception e) {
             LOGGER.error("Failed to generate final report", e);
         }

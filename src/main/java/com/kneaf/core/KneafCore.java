@@ -128,6 +128,12 @@ public class KneafCore {
             // Some client setup code
             LOGGER.info("HELLO FROM CLIENT SETUP");
             LOGGER.info("MINECRAFT NAME >> {}", Minecraft.getInstance().getUser().getName());
+            // Register the performance overlay client receiver and renderer
+            try {
+                com.kneaf.core.client.PerformanceOverlayClient.registerClient(event);
+            } catch (Throwable t) {
+                LOGGER.debug("Performance overlay registration failed: {}", t.getMessage());
+            }
         }
     }
 }

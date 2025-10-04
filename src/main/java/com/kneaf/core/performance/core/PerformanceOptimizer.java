@@ -115,11 +115,7 @@ public class PerformanceOptimizer {
                                   result.size(),
                                   System.currentTimeMillis() - startTime);
             
-            // Monitor entity optimization (include dynamic tick delay and average TPS)
-            long tickDelayMs = PerformanceManager.getLastTickDurationMs();
-            double avgTps = PerformanceManager.getAverageTPS();
-            KneafCore.LOGGER.debug("Optimized {} entities (toProcess {}), resultSize {}, tickDelayMs={}ms, avgTps={}",
-                                  entities.size(), entitiesToProcess.size(), result.size(), tickDelayMs, String.format("%.2f", avgTps));
+            // Monitoring: detailed entity optimization logging removed to reduce server log spam
             
             return result;
             
