@@ -51,7 +51,7 @@ public class ChunkCache implements StorageStatisticsProvider {
    */
   public static class CachedChunk {
     private final Object chunk;
-    private final long lastAccessTime;
+  private volatile long lastAccessTime;
     private final long creationTime;
     private final AtomicInteger accessCount;
     private volatile ChunkState state;
@@ -136,7 +136,9 @@ public class ChunkCache implements StorageStatisticsProvider {
     }
 
     public void markAccessed() {
-      // Note: lastAccessTime is intentionally not updated to maintain immutability
+      // Update last access time and access counter. Making lastAccessTime mutable
+      // allows eviction policies to reflect recent activity.
+      lastAccessTime = System.currentTimeMillis();
       accessCount.incrementAndGet();
     }
 

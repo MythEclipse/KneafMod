@@ -63,10 +63,15 @@ public class SwapManager {
 
   // Spatial prefetching
  private final Map<String, List<String>> spatialNeighbors = new ConcurrentHashMap<>();
- private final Set<String> recentlyAccessed = Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+  // Use a bounded deque to track recent accesses in LRU order for deterministic eviction/prefetch
+  private final java.util.concurrent.ConcurrentLinkedDeque<String> recentlyAccessed = new java.util.concurrent.ConcurrentLinkedDeque<>();
  private final Map<String, Integer> accessFrequency = new ConcurrentHashMap<>();
+  // Map to track assigned positions in swap file to avoid overwriting
+  private final Map<String, Long> chunkPositions = new ConcurrentHashMap<>();
+  private final AtomicLong nextWritePosition = new AtomicLong(0);
  private static final int PREFETCH_LIMIT = 3;
  private static final int RECENT_ACCESS_THRESHOLD = 100;
+  private static final String SWAP_INDEX_FILE = "swap_index.properties";
 
   // Component references
   private ChunkCache chunkCache;
@@ -185,6 +190,7 @@ public class SwapManager {
     private int swapBatchSize = 50;
     private long swapTimeoutMs = 30000; // 30 seconds
     private boolean enableAutomaticSwapping = true;
+  private boolean enableDeterministicTiming = true;
     private double criticalMemoryThreshold = CRITICAL_MEMORY_THRESHOLD;
     private double highMemoryThreshold = HIGH_MEMORY_THRESHOLD;
     private double elevatedMemoryThreshold = ELEVATED_MEMORY_THRESHOLD;
@@ -285,6 +291,14 @@ public class SwapManager {
       return enablePerformanceMonitoring;
     }
 
+    public boolean isEnableDeterministicTiming() {
+      return enableDeterministicTiming;
+    }
+
+    public void setEnableDeterministicTiming(boolean enableDeterministicTiming) {
+      this.enableDeterministicTiming = enableDeterministicTiming;
+    }
+
     public void setEnablePerformanceMonitoring(boolean enablePerformanceMonitoring) {
       this.enablePerformanceMonitoring = enablePerformanceMonitoring;
     }
@@ -377,14 +391,14 @@ public class SwapManager {
     public void recordSwapIn(long bytes, long durationMs) {
       if (enabled) {
         // Integration with Rust performance monitoring would go here
-        LOGGER.debug("Recording swap-in: { } bytes in { }ms", bytes, durationMs);
+        LOGGER.debug("Recording swap-in: {} bytes in {}ms", bytes, durationMs);
       }
     }
 
     public void recordSwapOut(long bytes, long durationMs) {
       if (enabled) {
         // Integration with Rust performance monitoring would go here
-        LOGGER.debug("Recording swap-out: { } bytes in { }ms", bytes, durationMs);
+        LOGGER.debug("Recording swap-out: {} bytes in {}ms", bytes, durationMs);
       }
     }
 
@@ -398,7 +412,7 @@ public class SwapManager {
     public void recordMemoryPressure(String level, boolean triggeredCleanup) {
       if (enabled) {
         // Integration with Rust performance monitoring would go here
-        LOGGER.info("Recording memory pressure: { } (cleanup: { })", level, triggeredCleanup);
+        LOGGER.info("Recording memory pressure: {} (cleanup: {})", level, triggeredCleanup);
       }
     }
   }
@@ -442,6 +456,12 @@ public class SwapManager {
 
     if (config.isEnabled() && this.enabled.get()) {
       initializeExecutors();
+      // Load persistent index if available
+      try {
+        loadSwapIndex();
+      } catch (Exception e) {
+        LOGGER.warn("Failed to load swap index: {}", e.getMessage());
+      }
       startMemoryMonitoring();
       LOGGER.info("SwapManager initialized with config: {}", config);
     } else {
@@ -606,8 +626,10 @@ public class SwapManager {
         // around swapOutChunk(...).get() see a deterministic value.
         try {
           // Busy-spin until the fixed target is reached for tighter timing
-          while (System.nanoTime() - startNano < FIXED_FAST_PATH_NANOS) {
-            Thread.onSpinWait();
+          if (config == null || config.isEnableDeterministicTiming()) {
+            while (System.nanoTime() - startNano < FIXED_FAST_PATH_NANOS) {
+              Thread.onSpinWait();
+            }
           }
         } catch (Throwable t) {
           Thread.currentThread().interrupt();
@@ -894,8 +916,10 @@ public class SwapManager {
 
         // Busy-spin until the fixed target is reached for tighter timing
         try {
-          while (System.nanoTime() - startNano < FIXED_FAST_PATH_NANOS) {
-            Thread.onSpinWait();
+          if (config == null || config.isEnableDeterministicTiming()) {
+            while (System.nanoTime() - startNano < FIXED_FAST_PATH_NANOS) {
+              Thread.onSpinWait();
+            }
           }
         } catch (Throwable t) {
           Thread.currentThread().interrupt();
@@ -1252,6 +1276,13 @@ public class SwapManager {
           LOGGER.warn("Failed to close swap file channel during shutdown", ioe);
         }
 
+        // Persist swap index on shutdown
+        try {
+          saveSwapIndex();
+        } catch (Exception e) {
+          LOGGER.warn("Failed to save swap index during shutdown: {}", e.getMessage());
+        }
+
         LOGGER.info("SwapManager shutdown completed");
 
       } catch (InterruptedException e) {
@@ -1296,7 +1327,25 @@ public class SwapManager {
    * @return Position in swap file
    */
   private long getChunkPosition(String chunkKey) {
-    return Math.abs(chunkKey.hashCode()) % (1024 * 1024 * 1024); // 1GB max file
+    // Allocate an append-only position for each chunk to avoid accidental overwrites.
+    Long pos = chunkPositions.get(chunkKey);
+    if (pos != null) {
+      return pos;
+    }
+
+    // Each record will be placed sequentially. Reserve a block equal to estimated chunk size + header.
+    long estimatedBlock = (estimateChunkSize(chunkKey) + Integer.BYTES * 2 + 256);
+    long newPos = nextWritePosition.getAndAdd(estimatedBlock);
+    // Ensure position wraps within 1GB region for this simplified approach
+    newPos = newPos % (1024L * 1024L * 1024L);
+    chunkPositions.put(chunkKey, newPos);
+    // Persist index so mapping survives restarts
+    try {
+      saveSwapIndex();
+    } catch (Exception e) {
+      LOGGER.debug("Failed to persist swap index for {}: {}", chunkKey, e.getMessage());
+    }
+    return newPos;
   }
   
   /**
@@ -1312,18 +1361,26 @@ public class SwapManager {
       return false;
     }
     try {
-      long position = getChunkPosition(chunkKey);
+  long position = getChunkPosition(chunkKey);
 
-      // Header: originalSize (int), compressedLength (int)
-      int headerSize = Integer.BYTES * 2;
-      ByteBuffer buffer = ByteBuffer.allocateDirect(headerSize + compressedData.length);
-      buffer.putInt(originalSize);
-      buffer.putInt(compressedData.length);
-      buffer.put(compressedData);
-      buffer.flip();
+  // Header: originalSize (int), compressedLength (int)
+  int headerSize = Integer.BYTES * 2;
+  byte[] out = new byte[headerSize + compressedData.length];
+  ByteBuffer buffer = ByteBuffer.wrap(out);
+  buffer.putInt(originalSize);
+  buffer.putInt(compressedData.length);
+  buffer.put(compressedData);
+  buffer.flip();
 
-      java.util.concurrent.Future<Integer> writeFuture = swapFileChannel.write(buffer, position);
+  java.util.concurrent.Future<Integer> writeFuture = swapFileChannel.write(buffer, position);
       int written = writeFuture.get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
+      // If deterministic timing is enabled, optionally yield/short-sleep to avoid tight caller spin
+      if (config != null && !config.isEnableDeterministicTiming()) {
+        // no-op: allow fast return
+      } else {
+        // small yield to give other threads time (avoids aggressive busy-spin in some environments)
+        Thread.yield();
+      }
       return written >= headerSize;
 
     } catch (Exception e) {
@@ -1343,24 +1400,38 @@ public class SwapManager {
       return new byte[0];
     }
     try {
-      long position = getChunkPosition(chunkKey);
+      Long pos = chunkPositions.get(chunkKey);
+      if (pos == null) {
+        LOGGER.debug("No position recorded for chunk {} in swap file", chunkKey);
+        return new byte[0];
+      }
+      long position = pos;
 
-      // Read header first
-      ByteBuffer headerBuf = ByteBuffer.allocateDirect(Integer.BYTES * 2);
-      swapFileChannel.read(headerBuf, position).get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
-      headerBuf.flip();
-      int originalSize = headerBuf.getInt();
-      int compressedLen = headerBuf.getInt();
+  // Read header first
+  byte[] headerBytes = new byte[Integer.BYTES * 2];
+  ByteBuffer headerBuf = ByteBuffer.wrap(headerBytes);
+  java.util.concurrent.Future<Integer> headerRead = swapFileChannel.read(headerBuf, position);
+  int headerReadBytes = headerRead.get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
+  if (headerReadBytes < Integer.BYTES * 2) {
+    LOGGER.debug("Incomplete header read for chunk {}: {} bytes", chunkKey, headerReadBytes);
+    return new byte[0];
+  }
+  headerBuf.flip();
+  int originalSize = headerBuf.getInt();
+  int compressedLen = headerBuf.getInt();
 
-      if (compressedLen <= 0) return new byte[0];
+  if (compressedLen <= 0) return new byte[0];
 
-      ByteBuffer dataBuf = ByteBuffer.allocateDirect(compressedLen);
-      swapFileChannel.read(dataBuf, position + Integer.BYTES * 2).get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
-      dataBuf.flip();
-      byte[] compressedData = new byte[dataBuf.remaining()];
-      dataBuf.get(compressedData);
+  byte[] compressedData = new byte[compressedLen];
+  ByteBuffer dataBuf = ByteBuffer.wrap(compressedData);
+  java.util.concurrent.Future<Integer> dataRead = swapFileChannel.read(dataBuf, position + Integer.BYTES * 2);
+  int dataReadBytes = dataRead.get(config.getSwapTimeoutMs(), TimeUnit.MILLISECONDS);
+  if (dataReadBytes < compressedLen) {
+    LOGGER.debug("Incomplete data read for chunk {}: expected {} got {}", chunkKey, compressedLen, dataReadBytes);
+    return new byte[0];
+  }
 
-      return decompressData(compressedData, originalSize);
+  return decompressData(compressedData, originalSize);
 
     } catch (Exception e) {
       LOGGER.error("Failed to read compressed data for chunk {}", chunkKey, e);
@@ -1401,14 +1472,79 @@ public class SwapManager {
   private void updateAccessTracking(String chunkKey) {
     // Update frequency map
     accessFrequency.merge(chunkKey, 1, Integer::sum);
-    
-    // Update recent access tracking with LRU eviction
-    recentlyAccessed.add(chunkKey);
-    if (recentlyAccessed.size() > RECENT_ACCESS_THRESHOLD) {
-      String oldest = recentlyAccessed.iterator().next();
-      recentlyAccessed.remove(oldest);
+
+    // Maintain bounded LRU deque for recent accesses
+    // Remove existing occurrence to move it to front
+    recentlyAccessed.remove(chunkKey);
+    recentlyAccessed.addFirst(chunkKey);
+    while (recentlyAccessed.size() > RECENT_ACCESS_THRESHOLD) {
+      String oldest = recentlyAccessed.pollLast();
+      if (oldest == null) break;
       // Optional: Decay frequency for less recent chunks
       accessFrequency.computeIfPresent(oldest, (k, v) -> v > 1 ? v - 1 : 0);
+    }
+  }
+
+  /**
+   * Load swap index from properties file if present.
+   */
+  private void loadSwapIndex() {
+    Path idx = Paths.get(SWAP_INDEX_FILE);
+    if (!java.nio.file.Files.exists(idx)) return;
+
+    Properties props = new Properties();
+    try (java.io.InputStream in = java.nio.file.Files.newInputStream(idx)) {
+      props.load(in);
+    } catch (IOException e) {
+      LOGGER.warn("Failed to read swap index file: {}", e.getMessage());
+      return;
+    }
+
+    for (String name : props.stringPropertyNames()) {
+      if ("nextWritePosition".equals(name)) {
+        try {
+          long v = Long.parseLong(props.getProperty(name));
+          nextWritePosition.set(v);
+        } catch (NumberFormatException ignored) {
+        }
+      } else {
+        try {
+          long p = Long.parseLong(props.getProperty(name));
+          chunkPositions.put(name, p);
+        } catch (NumberFormatException ignored) {
+        }
+      }
+    }
+    LOGGER.info("Loaded swap index entries: {}", chunkPositions.size());
+  }
+
+  /**
+   * Persist swap index to properties file atomically.
+   */
+  private void saveSwapIndex() {
+    Path idx = Paths.get(SWAP_INDEX_FILE);
+    Path tmp = Paths.get(SWAP_INDEX_FILE + ".tmp");
+    Properties props = new Properties();
+    props.setProperty("nextWritePosition", Long.toString(nextWritePosition.get()));
+    for (Map.Entry<String, Long> e : chunkPositions.entrySet()) {
+      props.setProperty(e.getKey(), Long.toString(e.getValue()));
+    }
+
+    try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(tmp)) {
+      props.store(out, "Swap index (chunkKey=position)");
+    } catch (IOException e) {
+      LOGGER.warn("Failed to write swap index temp file: {}", e.getMessage());
+      return;
+    }
+
+    try {
+      java.nio.file.Files.move(tmp, idx, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+    } catch (IOException e) {
+      try {
+        java.nio.file.Files.move(tmp, idx, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      } catch (IOException ex) {
+        LOGGER.warn("Failed to atomically replace swap index: {}", ex.getMessage());
+      }
     }
   }
 
@@ -1926,7 +2062,7 @@ public class SwapManager {
       // Add chunk to cache (will evict if needed based on capacity)
       chunkCache.putChunk(chunkKey, deserializedChunk);
       chunkCache.updateChunkState(chunkKey, ChunkCache.ChunkState.HOT);
-      LOGGER.debug("Successfully swapped in chunk: {} (size: {} bytes)", chunkKey, decompressedData.length);
+  LOGGER.debug("Successfully swapped in chunk: {} (size: {} bytes)", chunkKey, decompressedData.length);
 
       // Predictively prefetch spatial neighbors based on access pattern
       predictivePrefetch(chunkKey);
@@ -1934,7 +2070,7 @@ public class SwapManager {
       return true;
     } catch (Exception e) {
       LOGGER.warn("Swap-in failed for chunk {}: {}", chunkKey, e.getMessage());
-      LOGGER.debug("Swap-in failed for {}: {}", chunkKey, e.getMessage());
+      LOGGER.debug("Swap-in exception for chunk {}", chunkKey, e);
       return false;
     }
   }

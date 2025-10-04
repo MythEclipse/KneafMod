@@ -390,10 +390,13 @@ public class SwapManager implements StorageStatisticsProvider {
   private static class ChunkAccessEntry implements Comparable<ChunkAccessEntry> {
     private final String chunkKey;
     private final long accessTime;
+    // sequence provides tie-breaker and monotonic ordering for entries
+    private final long seq;
 
     public ChunkAccessEntry(String chunkKey, long accessTime) {
       this.chunkKey = chunkKey;
       this.accessTime = accessTime;
+      this.seq = ACCESS_SEQ.getAndIncrement();
     }
 
     public String getChunkKey() {
@@ -402,9 +405,14 @@ public class SwapManager implements StorageStatisticsProvider {
 
     @Override
     public int compareTo(ChunkAccessEntry other) {
-      return Long.compare(this.accessTime, other.accessTime);
+      int c = Long.compare(this.accessTime, other.accessTime);
+      if (c != 0) return c;
+      return Long.compare(this.seq, other.seq);
     }
   }
+
+  // Sequence generator for access entries to ensure deterministic ordering
+  private static final AtomicLong ACCESS_SEQ = new AtomicLong(0);
 
   /**
    * Create a new SwapManager with the given configuration.
@@ -526,14 +534,14 @@ public class SwapManager implements StorageStatisticsProvider {
       return CompletableFuture.completedFuture(false);
     }
 
-    // Check if swap is already in progress
-    if (activeSwaps.containsKey(chunkKey)) {
-      LOGGER.debug("Swap already in progress for chunk: { }", chunkKey);
-      return activeSwaps.get(chunkKey).getFuture();
+    // Atomically check/insert to avoid races between containsKey + put.
+    SwapOperation newOp = new SwapOperation(chunkKey, SwapOperationType.SWAP_OUT);
+    SwapOperation existing = activeSwaps.putIfAbsent(chunkKey, newOp);
+    final SwapOperation operation = existing != null ? existing : newOp;
+    if (existing != null) {
+      LOGGER.debug("Swap already in progress for chunk: {}", chunkKey);
+      return existing.getFuture();
     }
-
-    SwapOperation operation = new SwapOperation(chunkKey, SwapOperationType.SWAP_OUT);
-    activeSwaps.put(chunkKey, operation);
     totalSwapOperations.incrementAndGet();
 
     // Fast-path: if chunk is not present in cache and a database adapter exists,
@@ -834,14 +842,14 @@ public class SwapManager implements StorageStatisticsProvider {
       return CompletableFuture.completedFuture(false);
     }
 
-    // Check if swap is already in progress
-    if (activeSwaps.containsKey(chunkKey)) {
-      LOGGER.debug("Swap already in progress for chunk: { }", chunkKey);
-      return activeSwaps.get(chunkKey).getFuture();
+    // Atomically check/insert to avoid races between containsKey + put.
+    SwapOperation newOp = new SwapOperation(chunkKey, SwapOperationType.SWAP_IN);
+    SwapOperation existing = activeSwaps.putIfAbsent(chunkKey, newOp);
+    final SwapOperation operation = existing != null ? existing : newOp;
+    if (existing != null) {
+      LOGGER.debug("Swap already in progress for chunk: {}", chunkKey);
+      return existing.getFuture();
     }
-
-    SwapOperation operation = new SwapOperation(chunkKey, SwapOperationType.SWAP_IN);
-    activeSwaps.put(chunkKey, operation);
     totalSwapOperations.incrementAndGet();
 
     // Fast-path: if a database adapter exists and the chunk is not present in cache,
@@ -1383,21 +1391,33 @@ public class SwapManager implements StorageStatisticsProvider {
           level);
 
       int swapped = 0;
-      // Use LRU eviction based on access queue
-      for (int i = 0; i < targetSwaps; i++) {
+      // Use LRU eviction based on access queue. Since we don't remove old
+      // entries from the queue on update (to avoid O(n) remove), we lazily
+      // skip stale entries here by comparing to the current accessMap entry.
+      int attempts = 0;
+      while (swapped < targetSwaps) {
         ChunkAccessEntry entry = accessQueue.poll();
-        if (entry != null) {
-          String chunkKey = entry.getChunkKey();
-          // Check if chunk can be evicted
-          if (chunkCache.canEvict(chunkKey)) {
-            // Initiate swap-out
-            swapOutChunk(chunkKey);
-            swapped++;
-            // Remove from accessMap
-            accessMap.remove(chunkKey);
+        if (entry == null) break;
+        attempts++;
+        // Drop obviously stale entries: if accessMap doesn't point to this entry
+        ChunkAccessEntry current = accessMap.get(entry.getChunkKey());
+        if (current != entry) {
+          // stale entry - skip
+          if (attempts > targetSwaps * 4) {
+            // avoid unbounded loops if queue is full of stale entries
+            break;
           }
-        } else {
-          break; // No more entries
+          continue;
+        }
+
+        String chunkKey = entry.getChunkKey();
+        // Check if chunk can be evicted
+        if (chunkCache.canEvict(chunkKey)) {
+          // Initiate swap-out
+          swapOutChunk(chunkKey);
+          swapped++;
+          // Remove from accessMap (so future stale queue entries will be skipped)
+          accessMap.remove(chunkKey);
         }
       }
 
@@ -1744,14 +1764,36 @@ public class SwapManager implements StorageStatisticsProvider {
 
   private void updateAccess(String chunkKey) {
     long now = System.currentTimeMillis();
-    ChunkAccessEntry entry = accessMap.get(chunkKey);
-    if (entry != null) {
-      accessQueue.remove(entry); // Remove old entry
-    }
-    entry = new ChunkAccessEntry(chunkKey, now);
+    ChunkAccessEntry entry = new ChunkAccessEntry(chunkKey, now);
+    // put latest entry into map and queue. We avoid removing the previous
+    // entry from the PriorityBlockingQueue because remove() is O(n) and can
+    // be expensive under load. Instead we do lazy validation when polling.
     accessMap.put(chunkKey, entry);
     accessQueue.add(entry);
-    LOGGER.debug("Updated access time for chunk: { }", chunkKey);
+    LOGGER.debug("Updated access time for chunk: {} (seq={})", chunkKey, entry.seq);
+
+    // Periodically compact the queue to remove obvious stale entries when it grows
+    // beyond a reasonable bound. This keeps memory bounded under high churn.
+    try {
+      final int COMPACT_THRESHOLD = Math.max(1024, config.getMaxConcurrentSwaps() * 128);
+      if (accessQueue.size() > COMPACT_THRESHOLD) {
+        // Create a temporary small buffer of current valid entries and rebuild
+        List<ChunkAccessEntry> kept = new ArrayList<>();
+        accessQueue.drainTo(kept);
+
+        // Use the accessMap as the source of truth - keep only latest entries
+        for (ChunkAccessEntry e : kept) {
+          ChunkAccessEntry current = accessMap.get(e.getChunkKey());
+          if (current == e) {
+            accessQueue.add(e);
+          }
+        }
+        LOGGER.debug("Compacted accessQueue, new size {}", accessQueue.size());
+      }
+    } catch (Throwable t) {
+      // Don't allow compaction failures to impact normal access updates
+      LOGGER.debug("Access queue compaction failed: {}", t.getMessage());
+    }
   }
 
   /**

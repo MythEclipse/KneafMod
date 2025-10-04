@@ -49,7 +49,7 @@ public class ChunkCache {
    */
   public static class CachedChunk {
     private final Object chunk;
-    private final long lastAccessTime;
+  private volatile long lastAccessTime;
     private final long creationTime;
     private final AtomicInteger accessCount;
     private volatile ChunkState state;
@@ -134,8 +134,9 @@ public class ChunkCache {
     }
 
     public void markAccessed() {
-      // Note: lastAccessTime is intentionally not updated to maintain immutability
+      // Update last access time for proper LRU behavior
       accessCount.incrementAndGet();
+      this.lastAccessTime = System.currentTimeMillis();
     }
 
     public void markDirty() {
