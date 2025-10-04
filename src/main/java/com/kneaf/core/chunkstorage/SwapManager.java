@@ -414,8 +414,8 @@ public class SwapManager {
     this.memoryBean = ManagementFactory.getMemoryMXBean();
     this.enabled = new AtomicBoolean(config.isEnabled());
     this.shutdown = new AtomicBoolean(false);
-    this.compressor = LZ4Factory.fastestInstance().fastCompressor();
-    this.decompressor = LZ4Factory.fastestInstance().fastDecompressor();
+  this.compressor = lz4Factory.fastCompressor();
+  this.decompressor = lz4Factory.fastDecompressor();
     this.CURRENT_PRESSURELevel = MemoryPressureLevel.NORMAL;
     this.lastPressureCheck = new AtomicLong(System.currentTimeMillis());
     this.pressureTriggerCount = new AtomicInteger(0);
