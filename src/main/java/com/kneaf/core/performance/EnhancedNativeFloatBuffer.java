@@ -20,12 +20,8 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
     private static final Cleaner CLEANER = Cleaner.create();
     
     // Enhanced pooling configuration with adaptive sizing
-    private static final int MIN_POOL_SIZE_PER_BUCKET = 5;
-    private static final int MAX_POOL_SIZE_PER_BUCKET = 50;
     private static final int BUCKET_SIZE_POWER = 12; // 4096 byte buckets
-    private static final int MAX_BUCKET_SIZE = 24; // Maximum bucket index (2^24 = 16MB)
-    private static final long CLEANUP_INTERVAL_MS = 15000; // 15 seconds
-    private static final long ADAPTIVE_CHECK_INTERVAL_MS = 5000; // 5 seconds
+    // Default powers remain; intervals are adaptive via PerformanceConstants
     
     // Memory pressure levels
     private static final int MEMORY_PRESSURE_LOW = 0;
@@ -186,7 +182,8 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
         
         private void returnToPool() {
             if (reuseCount < 10 && System.currentTimeMillis() - creationTime < 300000) { // 5 minutes max age
-                int bucket = Math.max(0, Math.min(MAX_BUCKET_SIZE, bucketIndex));
+                int maxBucket = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+                int bucket = Math.max(0, Math.min(maxBucket, bucketIndex));
                 LockFreePool pool = bufferPools.computeIfAbsent(bucket, k -> new LockFreePool(bucket));
                 
                 PooledBuffer pooled = new PooledBuffer(buf, bucketIndex, creationTime, reuseCount + 1);
@@ -262,7 +259,8 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
         int bucket = 0;
         int size = 1 << BUCKET_SIZE_POWER; // Start with minimum bucket size (4096)
         
-        while (size < byteCapacity && bucket < MAX_BUCKET_SIZE) {
+        int maxBucket = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+        while (size < byteCapacity && bucket < maxBucket) {
             size <<= 1;
             bucket++;
         }
@@ -286,7 +284,8 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
         }
         
         // Try larger buckets for better memory utilization
-        for (int i = bucketIndex + 1; i <= Math.min(bucketIndex + 2, MAX_BUCKET_SIZE); i++) {
+        int maxBucket = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+        for (int i = bucketIndex + 1; i <= Math.min(bucketIndex + 2, maxBucket); i++) {
             LockFreePool largerPool = bufferPools.get(i);
             if (largerPool != null) {
                 PooledBuffer pooled = largerPool.poll();
@@ -329,8 +328,9 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
             }
             
             // Update pressure level if significant change or timeout
+            long adaptiveCheckInterval = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveEnhancedCheckIntervalMs(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
             if (newPressureLevel != currentLevel.level || 
-                currentTime - currentLevel.timestamp > ADAPTIVE_CHECK_INTERVAL_MS) {
+                currentTime - currentLevel.timestamp > adaptiveCheckInterval) {
                 currentPressure.set(new MemoryPressureLevel(newPressureLevel, currentTime));
                 adaptiveResizes.incrementAndGet();
             }
@@ -638,7 +638,8 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
         Thread adaptiveThread = new Thread(() -> {
             while (true) {
                 try {
-                    Thread.sleep(CLEANUP_INTERVAL_MS);
+                    long cleanupInterval = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBufferCleanupIntervalMs(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+                    Thread.sleep(cleanupInterval);
                     performAdaptivePoolManagement();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();

@@ -24,12 +24,19 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ChunkGeneratorOptimizer {
     private static final Logger LOGGER = LogUtils.getLogger();
     
-    // Predictive loading configuration
-    private static final int PREDICTIVE_RADIUS = 3; // Pre-generate chunks within 3 chunks of predicted position
-    private static final int MAX_PREDICTIVE_CHUNKS_PER_TICK = 8; // Limit chunks generated per tick
-    private static final int PLAYER_MOVEMENT_HISTORY_SIZE = 10; // Track last 10 positions for prediction
-    private static final double MIN_VELOCITY_THRESHOLD = 0.1; // Minimum velocity to consider for prediction
-    private static final long PREDICTION_VALIDITY_MS = 5000; // How long predictions remain valid
+    // Predictive loading configuration (adaptive) - values computed at runtime
+    // Movement prediction tuning is now adaptive based on server performance
+    private static int getPlayerMovementHistorySize() {
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptivePlayerMovementHistorySize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+    }
+
+    private static double getMinVelocityThreshold() {
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMinVelocityThreshold(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+    }
+
+    private static long getPredictionValidityMs() {
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptivePredictionValidityMs(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+    }
     
     // Player movement tracking for predictive loading
     private static final Map<UUID, PlayerMovementData> playerMovementData = new ConcurrentHashMap<>();
@@ -42,8 +49,8 @@ public class ChunkGeneratorOptimizer {
      * Player movement data for predictive loading
      */
     private static class PlayerMovementData {
-        private final Queue<BlockPos> recentPositions = new ArrayDeque<>(PLAYER_MOVEMENT_HISTORY_SIZE);
-        private final Queue<Long> timestamps = new ArrayDeque<>(PLAYER_MOVEMENT_HISTORY_SIZE);
+    private final Queue<BlockPos> recentPositions = new ArrayDeque<>(getPlayerMovementHistorySize());
+    private final Queue<Long> timestamps = new ArrayDeque<>(getPlayerMovementHistorySize());
         private BlockPos lastPredictedPosition = null;
         private long lastPredictionTime = 0;
         
@@ -51,7 +58,7 @@ public class ChunkGeneratorOptimizer {
             long currentTime = System.currentTimeMillis();
             
             // Maintain history size
-            if (recentPositions.size() >= PLAYER_MOVEMENT_HISTORY_SIZE) {
+            if (recentPositions.size() >= getPlayerMovementHistorySize()) {
                 recentPositions.poll();
                 timestamps.poll();
             }
@@ -79,7 +86,8 @@ public class ChunkGeneratorOptimizer {
             int deltaZ = currentChunk.z - previousChunk.z;
             
             // Only predict if movement is significant
-            if (Math.abs(deltaX) < MIN_VELOCITY_THRESHOLD && Math.abs(deltaZ) < MIN_VELOCITY_THRESHOLD) {
+            double minVel = getMinVelocityThreshold();
+            if (Math.abs(deltaX) < minVel && Math.abs(deltaZ) < minVel) {
                 return null;
             }
             
@@ -91,7 +99,7 @@ public class ChunkGeneratorOptimizer {
         }
         
         public boolean isPredictionValid() {
-            return System.currentTimeMillis() - lastPredictionTime < PREDICTION_VALIDITY_MS;
+            return System.currentTimeMillis() - lastPredictionTime < getPredictionValidityMs();
         }
         
         public void updatePrediction(BlockPos predictedPos) {
@@ -145,8 +153,10 @@ public class ChunkGeneratorOptimizer {
                 // Generate chunks around predicted position
                 ChunkPos predictedChunk = new ChunkPos(predictedPos);
                 
-                for (int dx = -PREDICTIVE_RADIUS; dx <= PREDICTIVE_RADIUS && chunksGeneratedThisTick < MAX_PREDICTIVE_CHUNKS_PER_TICK; dx++) {
-                    for (int dz = -PREDICTIVE_RADIUS; dz <= PREDICTIVE_RADIUS && chunksGeneratedThisTick < MAX_PREDICTIVE_CHUNKS_PER_TICK; dz++) {
+            int tpsAdaptiveRadius = com.kneaf.core.performance.core.PerformanceConstants.getAdaptivePredictiveRadius(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+            int tpsAdaptiveMax = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxPredictiveChunksPerTick(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+            for (int dx = -tpsAdaptiveRadius; dx <= tpsAdaptiveRadius && chunksGeneratedThisTick < tpsAdaptiveMax; dx++) {
+                for (int dz = -tpsAdaptiveRadius; dz <= tpsAdaptiveRadius && chunksGeneratedThisTick < tpsAdaptiveMax; dz++) {
                         int chunkX = predictedChunk.x + dx;
                         int chunkZ = predictedChunk.z + dz;
                         
@@ -181,7 +191,7 @@ public class ChunkGeneratorOptimizer {
         playerMovementData.entrySet().removeIf(entry -> {
             // Remove players who haven't been updated in a while
             PlayerMovementData data = entry.getValue();
-            return currentTime - data.lastPredictionTime > PREDICTION_VALIDITY_MS * 2;
+            return currentTime - data.lastPredictionTime > getPredictionValidityMs() * 2;
         });
     }
     

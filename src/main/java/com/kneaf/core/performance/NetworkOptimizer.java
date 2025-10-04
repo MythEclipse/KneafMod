@@ -56,7 +56,12 @@ public class NetworkOptimizer {
 
     // Packet batching
     private static final List<Packet<?>> packetBatch = new ArrayList<>();
-    private static final int BATCH_SIZE = 25; // Increased batch size for better throughput (was 10)
+
+    private static int getPacketBatchSize() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        double tickDelay = com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs();
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchSize(tps, tickDelay);
+    }
 
     // Compression: use thread-local Deflater to be thread-safe
     private static final ThreadLocal<Deflater> DEFLATER_LOCAL = ThreadLocal.withInitial(() -> new Deflater(Deflater.BEST_SPEED));
@@ -97,12 +102,17 @@ public class NetworkOptimizer {
     public static void addPacketToBatch(Packet<?> packet) {
         synchronized (packetBatch) {
             packetBatch.add(packet);
-            if (packetBatch.size() >= BATCH_SIZE) {
+            int batchSize = getPacketBatchSize();
+            double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+            double flushFraction = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchFlushFraction(tps);
+            int flushThreshold = Math.max(1, (int) Math.ceil(batchSize * flushFraction));
+            if (packetBatch.size() >= batchSize) {
                 // schedule immediate execution on executor instead of submit to allow delayed rate-limited tasks
                 getNetworkExecutor().execute(NetworkOptimizer::sendBatchedPackets);
-            } else if (packetBatch.size() >= BATCH_SIZE / 2) {
-                // Schedule batch processing for half-full batches to prevent excessive delays
-                getNetworkExecutor().schedule(NetworkOptimizer::sendBatchedPackets, 10, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } else if (packetBatch.size() >= flushThreshold) {
+                // Schedule batch processing for partially-full batches to prevent excessive delays
+                int scheduleMs = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveNetworkBatchScheduleMs(tps);
+                getNetworkExecutor().schedule(NetworkOptimizer::sendBatchedPackets, scheduleMs, java.util.concurrent.TimeUnit.MILLISECONDS);
             }
         }
     }
@@ -133,6 +143,7 @@ public class NetworkOptimizer {
     }
 
     private static void sendBatchedPackets() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
         List<Packet<?>> batch;
         synchronized (packetBatch) {
             batch = new ArrayList<>(packetBatch);
@@ -151,8 +162,9 @@ public class NetworkOptimizer {
                 estSize = packet.getClass().getSimpleName().length() * 10; // conservative estimate
             }
 
-            // Apply compression if packet appears large
-            if (estSize > 1000) {
+            // Apply compression if packet appears large (adaptive threshold)
+            int compressionThreshold = com.kneaf.core.performance.core.PerformanceConstants.getAdaptivePacketCompressionThreshold(tps);
+            if (estSize > compressionThreshold) {
                 byte[] raw = packet.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 byte[] compressed = compressPacketData(raw);
                 LOGGER.debug("Compressed packet {} est {} -> {} bytes", packet.getClass().getSimpleName(), raw.length, compressed.length);
@@ -182,14 +194,12 @@ public class NetworkOptimizer {
             size = packetType.length() * 10;
         }
 
-        int baseDelay = 2;
-        if (packetType.contains("Chunk")) baseDelay = 5;
-        else if (packetType.contains("Move") || packetType.contains("Entity")) baseDelay = 1;
+        int baseDelay = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveRateLimitBaseDelayMs(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+        if (packetType.contains("Chunk")) baseDelay = Math.max(baseDelay, 5);
+        else if (packetType.contains("Move") || packetType.contains("Entity")) baseDelay = Math.min(baseDelay, 1);
 
-        int sizeDelay = 0;
-        if (size > 5000) sizeDelay = 10;
-        else if (size > 1000) sizeDelay = 5;
+        int sizeExtra = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveRateLimitExtraForSize(size, com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
 
-        return baseDelay + sizeDelay;
+        return baseDelay + sizeExtra;
     }
 }

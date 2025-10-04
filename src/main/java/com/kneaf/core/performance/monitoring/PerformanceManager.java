@@ -678,7 +678,7 @@ public class PerformanceManager {
         AABB searchBounds = createSearchBounds(context.players(), context.distanceCutoff());
         
         // Use asynchronous distance calculations every N ticks to reduce CPU load
-        if (tickCounter % DISTANCE_CALCULATION_INTERVAL == 0) {
+    if (tickCounter % com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveDistanceCalculationInterval(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS()) == 0) {
             // Full synchronous distance calculation with optimized entity processing
             List<Entity> entityList = level.getEntities(null, searchBounds);
             int entityCount = entityList.size();

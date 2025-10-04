@@ -21,13 +21,13 @@ public final class UnifiedExecutorManager {
     
     private static final Logger LOGGER = LogUtils.getLogger();
     
-    // Configuration constants
-    private static final int CORE_THREADS = Math.max(4, Runtime.getRuntime().availableProcessors());
-    private static final int MAX_THREADS = Math.max(8, CORE_THREADS * 2);
-    private static final long KEEP_ALIVE_TIME = 60L;
-    private static final TimeUnit KEEP_ALIVE_UNIT = TimeUnit.SECONDS;
-    private static final int QUEUE_CAPACITY = 1000;
-    private static final int ADAPTIVE_CHECK_INTERVAL_MS = 5000;
+    // Configuration bases (will be computed per-instance using adaptive getters)
+    private final int baseCoreThreads;
+    private final int baseMaxThreads;
+    private final long keepAliveTimeSeconds;
+    private final TimeUnit KEEP_ALIVE_UNIT = TimeUnit.SECONDS;
+    private final int baseQueueCapacity;
+    // adaptive interval for executor management is computed at runtime
     
     // Performance thresholds
     private static final double HIGH_LOAD_THRESHOLD = 0.8;
@@ -48,8 +48,8 @@ public final class UnifiedExecutorManager {
     private final AtomicLong adaptiveResizes = new AtomicLong(0);
     
     // Adaptive configuration
-    private final AtomicInteger currentCoreThreads = new AtomicInteger(CORE_THREADS);
-    private final AtomicInteger currentMaxThreads = new AtomicInteger(MAX_THREADS);
+    private final AtomicInteger currentCoreThreads;
+    private final AtomicInteger currentMaxThreads;
     private final StampedLock configLock = new StampedLock();
     
     // Task tracking
@@ -201,14 +201,25 @@ public final class UnifiedExecutorManager {
     }
     
     private UnifiedExecutorManager() {
-        // Initialize priority queues
-        this.highPriorityQueue = new PriorityBlockingQueue<>();
-        this.normalQueue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
-        this.backgroundQueue = new LinkedBlockingQueue<>(QUEUE_CAPACITY * 2);
+        // Compute adaptive base sizes from PerformanceManager metrics
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        this.baseCoreThreads = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveCoreThreads(tps);
+        this.baseMaxThreads = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxThreads(tps);
+        this.keepAliveTimeSeconds = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveThreadKeepAliveSeconds(tps);
+        this.baseQueueCapacity = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveQueueCapacity(tps);
+
+    // Initialize priority queues
+    this.highPriorityQueue = new PriorityBlockingQueue<>();
+    this.normalQueue = new LinkedBlockingQueue<>(baseQueueCapacity);
+    this.backgroundQueue = new LinkedBlockingQueue<>(baseQueueCapacity * 2);
+
+    // Initialize adaptive current thread counters
+    this.currentCoreThreads = new AtomicInteger(baseCoreThreads);
+    this.currentMaxThreads = new AtomicInteger(baseMaxThreads);
         
         // Create fallback executor for rejected tasks
         this.forkJoinPool = new ForkJoinPool(
-            CORE_THREADS,
+            Math.max(1, baseCoreThreads),
             ForkJoinPool.defaultForkJoinWorkerThreadFactory,
             (t, e) -> System.err.println("ForkJoinPool exception in thread " + t.getName() + ": " + e.getMessage()),
             true
@@ -216,20 +227,20 @@ public final class UnifiedExecutorManager {
         
         // Create IO-optimized executor
         this.ioExecutor = new ThreadPoolExecutor(
-            CORE_THREADS / 2,
-            MAX_THREADS,
-            KEEP_ALIVE_TIME,
+            Math.max(1, baseCoreThreads / 2),
+            Math.max(baseCoreThreads + 1, baseMaxThreads),
+            keepAliveTimeSeconds,
             KEEP_ALIVE_UNIT,
-            new LinkedBlockingQueue<>(QUEUE_CAPACITY),
+            new LinkedBlockingQueue<>(baseQueueCapacity),
             new EnhancedThreadFactory("UnifiedExecutor-IO-", true),
             new ThreadPoolExecutor.CallerRunsPolicy()
         );
         
         // Create primary executor with enhanced queue
         this.primaryExecutor = new ThreadPoolExecutor(
-            CORE_THREADS,
-            MAX_THREADS,
-            KEEP_ALIVE_TIME,
+            baseCoreThreads,
+            baseMaxThreads,
+            keepAliveTimeSeconds,
             KEEP_ALIVE_UNIT,
             new EnhancedBlockingQueue(),
             new EnhancedThreadFactory("UnifiedExecutor-Primary-", true),
@@ -448,14 +459,14 @@ public final class UnifiedExecutorManager {
      * Start adaptive management
      */
     private void startAdaptiveManagement() {
-        // Adaptive thread pool sizing
+        // Adaptive thread pool sizing (interval adapts to TPS)
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 performAdaptiveThreadSizing();
             } catch (Exception e) {
                 System.err.println("Error in adaptive thread sizing: " + e.getMessage());
             }
-        }, ADAPTIVE_CHECK_INTERVAL_MS, ADAPTIVE_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        }, 0,  getAdaptiveExecutorInterval(), TimeUnit.MILLISECONDS);
         
         // Performance monitoring
         scheduler.scheduleAtFixedRate(() -> {
@@ -465,6 +476,11 @@ public final class UnifiedExecutorManager {
                 System.err.println("Error in performance monitoring: " + e.getMessage());
             }
         }, 30000, 30000, TimeUnit.MILLISECONDS); // Every 30 seconds
+    }
+
+    private long getAdaptiveExecutorInterval() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveExecutorCheckIntervalMs(tps);
     }
     
     /**
@@ -480,7 +496,8 @@ public final class UnifiedExecutorManager {
             if (poolSize == 0) return;
             
             double loadFactor = (double) activeCount / poolSize;
-            double queueLoadFactor = (double) queueSize / QUEUE_CAPACITY;
+            double adaptiveQueueCapacity = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveQueueCapacity(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+            double queueLoadFactor = adaptiveQueueCapacity > 0 ? (double) queueSize / adaptiveQueueCapacity : 0.0;
             
             // Adaptive scaling based on load or slow server ticks
             boolean slowTick = false;
@@ -495,8 +512,8 @@ public final class UnifiedExecutorManager {
 
             if (loadFactor > HIGH_LOAD_THRESHOLD || queueLoadFactor > 0.7 || slowTick) {
                 // Scale up
-                int newCoreSize = Math.min(currentCoreThreads.get() + THREAD_SCALING_FACTOR, MAX_THREADS);
-                int newMaxSize = Math.min(currentMaxThreads.get() + THREAD_SCALING_FACTOR, MAX_THREADS * 2);
+                    int newCoreSize = Math.min(currentCoreThreads.get() + THREAD_SCALING_FACTOR, baseMaxThreads);
+                    int newMaxSize = Math.min(currentMaxThreads.get() + THREAD_SCALING_FACTOR, baseMaxThreads * 2);
                 
                 if (newCoreSize > currentCoreThreads.get() || newMaxSize > currentMaxThreads.get()) {
                     if (slowTick) {
@@ -515,8 +532,8 @@ public final class UnifiedExecutorManager {
                 }
             } else if (loadFactor < LOW_LOAD_THRESHOLD && queueLoadFactor < 0.2) {
                 // Scale down
-                int newCoreSize = Math.max(CORE_THREADS, currentCoreThreads.get() - THREAD_SCALING_FACTOR);
-                int newMaxSize = Math.max(MAX_THREADS, currentMaxThreads.get() - THREAD_SCALING_FACTOR);
+                int newCoreSize = Math.max(baseCoreThreads, currentCoreThreads.get() - THREAD_SCALING_FACTOR);
+                int newMaxSize = Math.max(baseMaxThreads, currentMaxThreads.get() - THREAD_SCALING_FACTOR);
                 
                 if (newCoreSize < currentCoreThreads.get() || newMaxSize < currentMaxThreads.get()) {
                     primaryExecutor.setCorePoolSize(newCoreSize);

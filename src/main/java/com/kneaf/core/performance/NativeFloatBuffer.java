@@ -34,11 +34,7 @@ public final class NativeFloatBuffer implements AutoCloseable {
     }
     
     // Optimized buffer pooling configuration
-    private static final int MAX_POOL_SIZE_PER_BUCKET = 20; // Increased from 10 to 20 for better reuse
     private static final int BUCKET_SIZE_POWER = 12; // 4096 byte buckets
-    private static final int MAX_BUCKET_SIZE = 22; // Increased from 20 to 22 (4MB max)
-    private static final long CLEANUP_INTERVAL_MS = 60000; // Increased from 30s to 60s for less frequent cleanup
-    private static final int PREFETCH_BUCKET_COUNT = 5; // Pre-allocate buffers for common sizes
     
     // Pool management
     private static final ConcurrentHashMap<Integer, ConcurrentLinkedQueue<PooledBuffer>> bufferPools = new ConcurrentHashMap<>();
@@ -91,7 +87,8 @@ public final class NativeFloatBuffer implements AutoCloseable {
             poolSizes.computeIfAbsent(bucketIndex, k -> new AtomicInteger(0));
             
             int currentSize = poolSizes.get(bucketIndex).get();
-            if (currentSize < MAX_POOL_SIZE_PER_BUCKET) {
+            int maxPerBucket = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxPoolPerBucket(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+            if (currentSize < maxPerBucket) {
                 PooledBuffer pooled = new PooledBuffer(buf, bucketIndex);
                 bufferPools.get(bucketIndex).offer(pooled);
                 poolSizes.get(bucketIndex).incrementAndGet();
@@ -100,11 +97,11 @@ public final class NativeFloatBuffer implements AutoCloseable {
                 freeBuffer();
             }
             
-            // Periodic cleanup
+            // Periodic cleanup (adaptive interval)
             long now = System.currentTimeMillis();
             long lastCleanup = lastCleanupTime.get();
-            
-            if (now - lastCleanup > CLEANUP_INTERVAL_MS && lastCleanupTime.compareAndSet(lastCleanup, now)) {
+            long interval = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBufferCleanupIntervalMs(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+            if (now - lastCleanup > interval && lastCleanupTime.compareAndSet(lastCleanup, now)) {
                 performCleanup();
             }
         }
@@ -162,7 +159,8 @@ public final class NativeFloatBuffer implements AutoCloseable {
         int bucket = 0;
         int size = 1 << BUCKET_SIZE_POWER; // Start with minimum bucket size (4096)
         
-        while (size < byteCapacity && bucket < MAX_BUCKET_SIZE) {
+        int maxBucket = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+        while (size < byteCapacity && bucket < maxBucket) {
             size <<= 1;
             bucket++;
         }
@@ -195,7 +193,8 @@ public final class NativeFloatBuffer implements AutoCloseable {
         }
         
         // Try larger buckets if exact match not available
-        for (int i = bucketIndex + 1; i <= MAX_BUCKET_SIZE; i++) {
+    int maxBucket = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+    for (int i = bucketIndex + 1; i <= maxBucket; i++) {
             pool = bufferPools.get(i);
             if (pool != null) {
                 PooledBuffer pooled = pool.poll();
@@ -245,7 +244,8 @@ public final class NativeFloatBuffer implements AutoCloseable {
     }
 
     private static int cleanupBucket(ConcurrentLinkedQueue<PooledBuffer> pool, AtomicInteger size) {
-        int targetSize = MAX_POOL_SIZE_PER_BUCKET / 2;
+    int maxPerBucket = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxPoolPerBucket(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+    int targetSize = maxPerBucket / 2;
         int currentSize = size.get();
         
         while (currentSize > targetSize) {
@@ -282,9 +282,12 @@ public final class NativeFloatBuffer implements AutoCloseable {
         // Pre-allocate buffers for common sizes (4KB, 16KB, 64KB, 256KB, 1MB)
         int[] commonSizes = {4096, 16384, 65536, 262144, 1048576};
         
+        int prefetch = com.kneaf.core.performance.core.PerformanceConstants.getAdaptivePrefetchCount(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+        int maxPerBucket = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxPoolPerBucket(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
+
         for (int size : commonSizes) {
             int bucketIndex = getBucketIndex(size);
-            int preallocateCount = Math.min(PREFETCH_BUCKET_COUNT, MAX_POOL_SIZE_PER_BUCKET / 2);
+            int preallocateCount = Math.min(prefetch, maxPerBucket / 2);
             
             for (int i = 0; i < preallocateCount; i++) {
                 try {

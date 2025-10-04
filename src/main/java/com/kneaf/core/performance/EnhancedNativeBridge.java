@@ -24,10 +24,14 @@ public final class EnhancedNativeBridge {
     private EnhancedNativeBridge() {}
 
     // Batch configuration with adaptive sizing
-    private static final int MIN_BATCH_SIZE = 10;
-    private static final int MAX_BATCH_SIZE = 200;
-    private static final int ADAPTIVE_BATCH_TIMEOUT_MS = 2; // Reduced from 5ms to 2ms for lower latency
-    private static final int MAX_PENDING_BATCHES = 50;
+    private static int adaptiveBatchTimeoutMs() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        double tickDelay = com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs();
+    return (int) com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchTimeoutMs(tps, tickDelay);
+    }
+    private static int minBatchSize() { return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS(), com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs()); }
+    private static int maxBatchSize() { return Math.max(50, com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS(), com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs()) * 2); }
+    private static int maxPendingBatches() { return Math.max(10, com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveQueueCapacity(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS()) / 20); }
 
     // Batch operation types
     public static final byte OPERATION_TYPE_ENTITY = 0x01;
@@ -222,8 +226,8 @@ public final class EnhancedNativeBridge {
                     }
                     
                     // Adaptive sleep based on load
-                    if (batch.size() < MIN_BATCH_SIZE) {
-                        Thread.sleep(ADAPTIVE_BATCH_TIMEOUT_MS);
+                    if (batch.size() < minBatchSize()) {
+                        Thread.sleep(adaptiveBatchTimeoutMs());
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -242,8 +246,8 @@ public final class EnhancedNativeBridge {
             long startTime = System.currentTimeMillis();
             int targetSize = calculateOptimalBatchSize();
             
-            while (batch.size() < targetSize && 
-                   (System.currentTimeMillis() - startTime) < ADAPTIVE_BATCH_TIMEOUT_MS) {
+         while (batch.size() < targetSize && 
+             (System.currentTimeMillis() - startTime) < adaptiveBatchTimeoutMs()) {
                 
                 BatchOperation op = queue.poll();
                 if (op != null) {
@@ -277,14 +281,14 @@ public final class EnhancedNativeBridge {
                 // Adjust target size based on actual performance
                 if (actualAvg > avgSize * 1.2) {
                     // Performance is good, increase batch size
-                    return Math.min(MAX_BATCH_SIZE, (int)(avgSize * 1.1));
+                    return Math.min(maxBatchSize(), (int)(avgSize * 1.1));
                 } else if (actualAvg < avgSize * 0.8) {
                     // Performance is poor, decrease batch size
-                    return Math.max(MIN_BATCH_SIZE, (int)(avgSize * 0.9));
+                    return Math.max(minBatchSize(), (int)(avgSize * 0.9));
                 }
             }
             
-            return (int)Math.max(MIN_BATCH_SIZE, Math.min(MAX_BATCH_SIZE, avgSize));
+            return (int)Math.max(minBatchSize(), Math.min(maxBatchSize(), avgSize));
         }
     }
 

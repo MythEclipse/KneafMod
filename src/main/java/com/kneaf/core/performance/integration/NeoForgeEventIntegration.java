@@ -48,11 +48,31 @@ public class NeoForgeEventIntegration {
     private static long benchmarkStartTime;
     private static long lastMemoryCheck = 0;
     
-    // Performance thresholds
-    private static final long TARGET_TICK_TIME = 20_000_000; // 20ms in nanoseconds
-    private static final long CRITICAL_TICK_TIME = 50_000_000; // 50ms in nanoseconds
-    private static final int PREDICTIVE_CHUNK_RADIUS = 3;
-    private static final int MAX_VILLAGERS_PER_TICK = 50;
+    // Performance thresholds (computed dynamically)
+    private static long getTargetTickTimeNanos() {
+        // Derive target tick time from rolling TPS (ms per tick)
+        double avgTps = PerformanceManager.getAverageTPS();
+        double msPerTick = 1000.0 / Math.max(0.1, avgTps);
+        return (long) (msPerTick * 1_000_000.0);
+    }
+
+    private static long getCriticalTickTimeNanos() {
+        // Critical threshold is 2x target by default
+        return getTargetTickTimeNanos() * 2L;
+    }
+
+    private static int getPredictiveChunkRadius() {
+        // Scale prediction radius with TPS: higher TPS -> larger radius
+        double tps = PerformanceManager.getAverageTPS();
+        return Math.max(1, (int) Math.round(Math.min(6.0, Math.max(1.0, tps / 6.0))));
+    }
+
+    private static int getMaxVillagersPerTick() {
+        PerformanceConfig cfg = PerformanceConfig.load();
+        int base = Math.max(10, cfg.getMaxEntitiesToCollect() / 200);
+        double tpsFactor = Math.max(0.5, Math.min(1.5, PerformanceManager.getAverageTPS() / 20.0));
+        return Math.max(5, (int) (base * tpsFactor));
+    }
     
     @SubscribeEvent
     public static void onServerAboutToStart(ServerAboutToStartEvent event) {
@@ -67,7 +87,7 @@ public class NeoForgeEventIntegration {
             benchmarkMode = config.isProfilingEnabled();
             
             if (optimizationsEnabled) {
-                LOGGER.info("KneafCore optimizations enabled - targeting {}ms tick time", TARGET_TICK_TIME / 1_000_000);
+                LOGGER.info("KneafCore optimizations enabled - targeting {}ms tick time", getTargetTickTimeNanos() / 1_000_000);
                 
                 // Initialize predictive chunk loading
                 initializePredictiveChunkLoading(server);
@@ -304,9 +324,10 @@ public class NeoForgeEventIntegration {
         }
         
         // Limit the number of chunks to generate per tick
-        if (chunksToGenerate.size() > PREDICTIVE_CHUNK_RADIUS * PREDICTIVE_CHUNK_RADIUS) {
+        int radius = getPredictiveChunkRadius();
+        if (chunksToGenerate.size() > radius * radius) {
             return chunksToGenerate.stream()
-                .limit(PREDICTIVE_CHUNK_RADIUS * PREDICTIVE_CHUNK_RADIUS)
+                .limit(radius * radius)
                 .collect(java.util.stream.Collectors.toSet());
         }
         
@@ -368,12 +389,12 @@ public class NeoForgeEventIntegration {
     private static void checkPerformanceIssues(MinecraftServer server, long tickStartTime) {
         long tickTime = System.nanoTime() - tickStartTime;
         
-        if (tickTime > CRITICAL_TICK_TIME) {
+        if (tickTime > getCriticalTickTimeNanos()) {
             LOGGER.warn("CRITICAL: Tick time {}ms exceeds threshold", tickTime / 1_000_000);
             
             // Trigger emergency optimizations
             triggerEmergencyOptimizations(server);
-        } else if (tickTime > TARGET_TICK_TIME) {
+        } else if (tickTime > getTargetTickTimeNanos()) {
             LOGGER.debug("Tick time {}ms above target", tickTime / 1_000_000);
         }
     }
@@ -557,10 +578,10 @@ public class NeoForgeEventIntegration {
             LOGGER.info("Maximum Tick Time: {}ms", maxTickTime.get() / 1_000_000);
             LOGGER.info("Minimum Tick Time: {}ms", minTickTime.get() == Long.MAX_VALUE ? 0 : minTickTime.get() / 1_000_000);
             LOGGER.info("Average TPS: {}", String.format("%.1f", avgTPS));
-            LOGGER.info("Target Achieved: {}", avgTickTime <= TARGET_TICK_TIME ? "YES" : "NO");
-            
-            if (avgTickTime > TARGET_TICK_TIME) {
-                long improvementNeeded = (avgTickTime - TARGET_TICK_TIME) / 1_000_000;
+            LOGGER.info("Target Achieved: {}", avgTickTime <= getTargetTickTimeNanos() ? "YES" : "NO");
+
+            if (avgTickTime > getTargetTickTimeNanos()) {
+                long improvementNeeded = (avgTickTime - getTargetTickTimeNanos()) / 1_000_000;
                 LOGGER.info("Improvement Needed: {}ms", improvementNeeded);
             }
             

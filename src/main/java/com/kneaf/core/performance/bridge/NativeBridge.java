@@ -25,13 +25,13 @@ public final class NativeBridge {
         }
     }
 
-    // Batch processing configuration - increased for better throughput
-    private static final int MAX_BATCH_SIZE = 200; // Maximum batch size for heavy loads
-    private static final int MIN_BATCH_SIZE = 25; // Minimum batch size
-    
+    // Batch processing configuration - adaptive based on TPS/tick delay
+    private static int maxBatchSize() { return Math.max(50, com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS(), com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs()) * 2); }
+    private static int minBatchSize() { return Math.max(5, com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS(), com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs()) / 4); }
+
     // Memory pool configuration
-    private static final int BUFFER_POOL_SIZE = 50;
-    private static final int MAX_BUFFER_SIZE = 1024 * 1024; // 1MB max buffer size
+    private static int bufferPoolSize() { return Math.max(8, com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveQueueCapacity(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS()) / 20); }
+    private static int maxBufferSize() { return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBufferSize(com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS()); }
     
     // Performance metrics
     private static final AtomicLong totalBatchesProcessed = new AtomicLong(0);
@@ -350,8 +350,10 @@ public final class NativeBridge {
             return;
         }
         
-        // Use direct buffer if payload is large to avoid JVM heap copies
-        if (payload.length > 8192) { // 8KB threshold
+        // Use direct buffer if payload is large to avoid JVM heap copies (adaptive threshold)
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        int bufferThreshold = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBufferUseThreshold(tps);
+        if (payload.length > bufferThreshold) {
             ByteBuffer buffer = getPooledBuffer(payload.length);
             try {
                 buffer.clear();
@@ -374,7 +376,7 @@ public final class NativeBridge {
             return;
         }
         
-        int batchSize = Math.min(payloads.length, MAX_BATCH_SIZE);
+    int batchSize = Math.min(payloads.length, maxBatchSize());
         totalBatchesProcessed.incrementAndGet();
         totalTasksProcessed.addAndGet(batchSize);
         
@@ -433,7 +435,7 @@ public final class NativeBridge {
      * Get pooled buffer to minimize allocations
      */
     private static ByteBuffer getPooledBuffer(int size) {
-        if (size > MAX_BUFFER_SIZE) {
+        if (size > maxBufferSize()) {
             return nativeAllocateBuffer(size);
         }
         
@@ -451,14 +453,14 @@ public final class NativeBridge {
      * Return buffer to pool for reuse
      */
     private static void returnPooledBuffer(ByteBuffer buffer) {
-        if (buffer == null || buffer.capacity() > MAX_BUFFER_SIZE) {
+        if (buffer == null || buffer.capacity() > maxBufferSize()) {
             if (buffer != null) {
                 nativeFreeBuffer(buffer);
             }
             return;
         }
         
-        if (pooledBufferCount.get() < BUFFER_POOL_SIZE) {
+    if (pooledBufferCount.get() < bufferPoolSize()) {
             buffer.clear();
             bufferPool.offer(buffer);
             pooledBufferCount.incrementAndGet();
@@ -501,14 +503,14 @@ public final class NativeBridge {
      * Get optimal batch size based on current load
      */
     public static int getOptimalBatchSize(int requestedSize) {
-        if (requestedSize <= MIN_BATCH_SIZE) {
-            return MIN_BATCH_SIZE;
-        } else if (requestedSize >= MAX_BATCH_SIZE) {
-            return MAX_BATCH_SIZE;
+        if (requestedSize <= minBatchSize()) {
+            return minBatchSize();
+        } else if (requestedSize >= maxBatchSize()) {
+            return maxBatchSize();
         } else {
             // Round to nearest optimized size
             int batchSize = Math.round(requestedSize / 25.0f) * 25;
-            return Math.max(MIN_BATCH_SIZE, Math.min(MAX_BATCH_SIZE, batchSize));
+            return Math.max(minBatchSize(), Math.min(maxBatchSize(), batchSize));
         }
     }
 }

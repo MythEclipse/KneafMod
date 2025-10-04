@@ -9,14 +9,14 @@ import java.util.*;
  * to reduce distance calculation complexity from O(M) to O(log M) for nearby queries.
  */
 public class SpatialGrid {
-    private static final double DEFAULT_CELL_SIZE = 32.0; // 32 blocks per cell
-    
     private final double cellSize;
     private final Map<Long, Set<PlayerData>> gridCells;
     private final Map<Long, PlayerData> playerPositionCache;
     
     public SpatialGrid() {
-        this(DEFAULT_CELL_SIZE);
+        this(com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveCellSize(
+            com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS()
+        ));
     }
     
     public SpatialGrid(double cellSize) {

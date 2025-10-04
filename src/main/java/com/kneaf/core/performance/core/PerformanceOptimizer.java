@@ -25,12 +25,7 @@ public class PerformanceOptimizer {
     private final BatchProcessor batchProcessor;
     
     // Optimization configuration (base values). Actual values are computed dynamically
-    private static final int BASE_MAX_ENTITIES = 200;
-    private static final int BASE_MAX_ITEMS = 300;
-    private static final int BASE_MAX_MOBS = 150;
-    private static final int BASE_MAX_BLOCKS = 500;
     private static final double BASE_TARGET_TICK_TIME_MS = 50.0;
-    private static final int BASE_OPTIMIZATION_THRESHOLD = 25;
     
     // Performance tracking
     private final AtomicLong totalOptimizationsApplied = new AtomicLong(0);
@@ -60,45 +55,33 @@ public class PerformanceOptimizer {
     // Dynamic getters - compute actual runtime values based on TPS and tick delay
     private int getMaxEntitiesPerTick() {
         double tps = PerformanceManager.getAverageTPS();
-        long tickDelayMs = PerformanceManager.getLastTickDurationMs();
-        // Scale down entities when TPS is low or tick delay is high
-        double tpsFactor = Math.max(0.5, Math.min(1.5, tps / 20.0));
-        double delayFactor = 1.0;
-        if (tickDelayMs > BASE_TARGET_TICK_TIME_MS) {
-            delayFactor = Math.max(0.5, BASE_TARGET_TICK_TIME_MS / (double) tickDelayMs);
-        }
-        return (int) Math.max(10, BASE_MAX_ENTITIES * tpsFactor * delayFactor);
+        double tickDelayMs = PerformanceManager.getLastTickDurationMs();
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxEntities(tps, tickDelayMs);
     }
 
     private int getMaxItemsPerTick() {
         double tps = PerformanceManager.getAverageTPS();
-        double tpsFactor = Math.max(0.5, Math.min(1.5, tps / 20.0));
-        return (int) Math.max(10, BASE_MAX_ITEMS * tpsFactor);
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxItems(tps);
     }
 
     private int getMaxMobsPerTick() {
         double tps = PerformanceManager.getAverageTPS();
-        double tpsFactor = Math.max(0.4, Math.min(1.2, tps / 20.0));
-        return (int) Math.max(5, BASE_MAX_MOBS * tpsFactor);
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxMobs(tps);
     }
 
     private int getMaxBlocksPerTick() {
         double tps = PerformanceManager.getAverageTPS();
-        double tpsFactor = Math.max(0.6, Math.min(1.3, tps / 20.0));
-        return (int) Math.max(10, BASE_MAX_BLOCKS * tpsFactor);
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBlocks(tps);
     }
 
     private double getTargetTickTimeMs() {
-        // We can slightly adjust target tick time based on rolling TPS
         double tps = PerformanceManager.getAverageTPS();
-        return BASE_TARGET_TICK_TIME_MS * (20.0 / Math.max(0.1, tps));
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveTargetTickTimeMs(tps);
     }
 
     private int getOptimizationThreshold() {
         double tps = PerformanceManager.getAverageTPS();
-        // Lower threshold when TPS is low to engage optimizations earlier
-        double factor = tps >= 20.0 ? 1.0 : Math.max(0.4, tps / 20.0);
-        return (int) Math.max(1, BASE_OPTIMIZATION_THRESHOLD * factor);
+        return com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveOptimizationThreshold(tps);
     }
     
     /**
@@ -197,7 +180,9 @@ public class PerformanceOptimizer {
             // Check if memory optimization is needed
             double memoryUsagePercent = (double) usedMemory / totalMemory * 100;
             
-            if (memoryUsagePercent > 80.0) { // 80% threshold
+            double tps = PerformanceManager.getAverageTPS();
+            double memoryThreshold = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMemoryUsageThreshold(tps);
+            if (memoryUsagePercent > memoryThreshold) {
                 // Force garbage collection
                 System.gc();
                 

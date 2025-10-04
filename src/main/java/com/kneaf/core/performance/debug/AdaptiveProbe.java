@@ -1,8 +1,7 @@
 package com.kneaf.core.performance.debug;
 
 import com.kneaf.core.performance.monitoring.PerformanceManager;
-import com.kneaf.core.performance.core.PerformanceConstants;
-import com.kneaf.core.performance.bridge.NativeBridgeUtils;
+// fully-qualified calls used below; no static imports required
 
 public class AdaptiveProbe {
     public static void main(String[] args) {
@@ -37,13 +36,9 @@ public class AdaptiveProbe {
         System.out.println("  optimizationThreshold=" + (int)Math.max(1, 25 * (tps>=20.0?1.0:Math.max(0.4, tps/20.0))));
 
         // BatchProcessor-like calculations
-        int baseBatch = PerformanceConstants.DEFAULT_BATCH_SIZE;
-        double tpsFactorBatch = Math.max(0.5, Math.min(1.5, tps / 20.0));
-        double delayFactorBatch = 1.0;
-        if (tickDelay > 50) delayFactorBatch = Math.max(0.5, 50.0 / (double) tickDelay);
-        int batchSize = Math.max(1, (int)(NativeBridgeUtils.calculateOptimalBatchSize(baseBatch,25,200) * tpsFactorBatch * delayFactorBatch));
-        long batchTimeout = (tps < 15.0) ? Math.max(20, PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS * 2) : (tps < 18.0 ? Math.max(10, PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS) : PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS);
-        int batchSleep = (tps < 15.0) ? Math.max(1, PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS / 2) : (tps < 18.0 ? PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS : Math.max(1, PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS * 2));
+    int batchSize = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchSize(tps, tickDelay);
+    long batchTimeout = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchTimeoutMs(tps, tickDelay);
+    int batchSleep = com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveBatchProcessorSleepMs(tps);
 
         System.out.println("Adaptive BatchProcessor values:");
         System.out.println("  batchSize=" + batchSize);

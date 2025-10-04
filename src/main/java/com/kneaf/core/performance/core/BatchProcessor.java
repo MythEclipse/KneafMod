@@ -35,7 +35,6 @@ public class BatchProcessor {
     private final Object batchLock = new Object();
     
     // Batch processing configuration (computed dynamically)
-    private int batchRequestTimeoutSeconds;
     
     public BatchProcessor(EntityProcessor entityProcessor, PerformanceMonitor monitor, 
                          NativeBridgeProvider bridgeProvider) {
@@ -43,8 +42,7 @@ public class BatchProcessor {
         this.monitor = monitor;
         this.bridgeProvider = bridgeProvider;
         
-        // Static timeout configuration stays; other values adapt to TPS/tick delay
-        this.batchRequestTimeoutSeconds = PerformanceConstants.BATCH_REQUEST_TIMEOUT_SECONDS;
+    // Timeout is computed dynamically per-request from adaptive batch timeout (ms -> seconds)
     }
     
     /**
@@ -62,8 +60,11 @@ public class BatchProcessor {
         }
         
         try {
+            // Calculate adaptive timeout per-request
+            long timeoutMs = getBatchTimeoutMs();
+            long timeoutSeconds = Math.max(1, TimeUnit.MILLISECONDS.toSeconds(timeoutMs));
             @SuppressWarnings("unchecked")
-            T result = (T) future.get(batchRequestTimeoutSeconds, TimeUnit.SECONDS);
+            T result = (T) future.get(timeoutSeconds, TimeUnit.SECONDS);
             return result;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -291,7 +292,7 @@ public class BatchProcessor {
         // Scale batch size based on TPS and recent tick delay
         double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
         long tickDelay = com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs();
-        int base = PerformanceConstants.DEFAULT_BATCH_SIZE;
+    int base = PerformanceConstants.getAdaptiveBatchSize(tps, tickDelay);
         double tpsFactor = Math.max(0.5, Math.min(1.5, tps / 20.0));
         double delayFactor = 1.0;
         if (tickDelay > 50) delayFactor = Math.max(0.5, 50.0 / (double) tickDelay);
@@ -301,16 +302,17 @@ public class BatchProcessor {
     private long getBatchTimeoutMs() {
         double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
         // If TPS low, wait longer to aggregate more requests
-        if (tps < 15.0) return Math.max(20, PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS * 2);
-        if (tps < 18.0) return Math.max(10, PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS);
-        return PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS;
+        long tickDelay = com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs();
+        if (tps < 15.0) return Math.max(20, PerformanceConstants.getAdaptiveBatchTimeoutMs(tps, tickDelay) * 2);
+        if (tps < 18.0) return Math.max(10, PerformanceConstants.getAdaptiveBatchTimeoutMs(tps, tickDelay));
+        return PerformanceConstants.getAdaptiveBatchTimeoutMs(tps, tickDelay);
     }
 
     private int getBatchProcessorSleepMs() {
         double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
-        if (tps < 15.0) return Math.max(1, PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS / 2);
-        if (tps < 18.0) return PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS;
-        return Math.max(1, PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS * 2);
+    if (tps < 15.0) return Math.max(1, PerformanceConstants.getAdaptiveBatchProcessorSleepMs(tps) / 2);
+    if (tps < 18.0) return PerformanceConstants.getAdaptiveBatchProcessorSleepMs(tps);
+    return Math.max(1, PerformanceConstants.getAdaptiveBatchProcessorSleepMs(tps) * 2);
     }
     
     /**
