@@ -1151,19 +1151,6 @@ public class PerformanceManager {
     }
   }
 
-  /** Log slow ticks with detailed timing breakdown in JSON format for structured logging. */
-  private static void logSlowTick(ProfileData profile) {
-    // kept for backward compatibility; server-aware overload implemented below
-    if (profile == null) return;
-    String jsonProfile = profile.toJson();
-    String message =
-        String.format(
-            "SLOW_TICK: tick=%d avgTps=%.2f threshold=%.2f %s",
-            TICK_COUNTER, getRollingAvgTPS(), currentTpsThreshold, jsonProfile);
-    // Persist to performance log file
-    com.kneaf.core.performance.monitoring.PerformanceMetricsLogger.logLine("SLOW_TICK " + message);
-  }
-
   private static void logSlowTick(MinecraftServer server, ProfileData profile) {
     if (profile == null) return;
     String jsonProfile = profile.toJson();

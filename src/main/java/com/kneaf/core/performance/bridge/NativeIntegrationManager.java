@@ -5,7 +5,6 @@ import com.kneaf.core.KneafCore;
 // structure
 import com.kneaf.core.performance.NativeFloatBufferAllocation;
 import com.kneaf.core.performance.core.NativeBridgeProvider;
-import com.kneaf.core.performance.core.PerformanceMonitor;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,12 +19,10 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   private final Map<Long, WorkerInfo> activeWorkers = new ConcurrentHashMap<>();
   private final AtomicLong nextWorkerId = new AtomicLong(1);
 
-  private final PerformanceMonitor monitor;
   private final int defaultConcurrency;
   private final int maxWorkers;
 
-  public NativeIntegrationManager(PerformanceMonitor monitor) {
-    this.monitor = monitor;
+  public NativeIntegrationManager() {
     this.defaultConcurrency = 4; // Default concurrency
     this.maxWorkers = 8; // Maximum workers
   }
@@ -424,16 +421,12 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
 
   /** Worker information holder. */
   private static class WorkerInfo {
-    private final long id;
     private final long handle;
-    private final int concurrency;
     private final AtomicLong taskCount = new AtomicLong(0);
     private final AtomicLong resultCount = new AtomicLong(0);
 
     public WorkerInfo(long id, long handle, int concurrency) {
-      this.id = id;
       this.handle = handle;
-      this.concurrency = concurrency;
     }
 
     public void incrementTaskCount() {

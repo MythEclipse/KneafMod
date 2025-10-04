@@ -29,7 +29,6 @@ public class SwapManager {
   private static final double CRITICAL_MEMORY_THRESHOLD = 0.95; // 95% of max heap
   private static final double HIGH_MEMORY_THRESHOLD = 0.85; // 85% of max heap
   private static final double ELEVATED_MEMORY_THRESHOLD = 0.75; // 75% of max heap
-  private static final double NORMAL_MEMORY_THRESHOLD = 0.60; // 60% of max heap
 
   // Swap configuration
   private final SwapConfig config;

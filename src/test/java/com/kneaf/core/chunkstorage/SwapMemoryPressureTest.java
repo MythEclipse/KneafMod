@@ -156,7 +156,7 @@ public class SwapMemoryPressureTest {
       try {
         databaseAdapter.putChunk(chunkKey, chunkData);
         // Simulate chunk being in cache by creating a mock chunk
-        Object mockChunk = createMockChunk(i, i);
+        createMockChunk(i, i);
         // Note: In real usage, this would be a LevelChunk, but for testing we use Object
         // The cache should handle this gracefully or we should mock the cache behavior
         // chunkCache.putChunk(chunkKey, mockChunk); // Commented out due to missing Minecraft
@@ -283,7 +283,7 @@ public class SwapMemoryPressureTest {
 
       try {
         databaseAdapter.putChunk(chunkKey, chunkData);
-        Object mockChunk = createMockChunk(i, i);
+        createMockChunk(i, i);
         // Note: In real usage, this would be a LevelChunk, but for testing we use Object
         // The cache should handle this gracefully or we should mock the cache behavior
         // chunkCache.putChunk(chunkKey, mockChunk); // Commented out due to missing Minecraft
@@ -387,7 +387,7 @@ public class SwapMemoryPressureTest {
 
       try {
         databaseAdapter.putChunk(chunkKey, chunkData);
-        Object mockChunk = createMockChunk(i, i);
+        createMockChunk(i, i);
         // Note: In real usage, this would be a LevelChunk, but for testing we use Object
         // The cache should handle this gracefully or we should mock the cache behavior
         // chunkCache.putChunk(chunkKey, mockChunk); // Commented out due to missing Minecraft
@@ -521,14 +521,6 @@ public class SwapMemoryPressureTest {
   private Object createMockChunk(int x, int z) {
     // Create a simple mock object that can be cast to LevelChunk
     // In a real test environment, this would be a proper mock
-    return new Object() {
-      public int getX() {
-        return x;
-      }
-
-      public int getZ() {
-        return z;
-      }
-    };
+    return new Object() {};
   }
 }

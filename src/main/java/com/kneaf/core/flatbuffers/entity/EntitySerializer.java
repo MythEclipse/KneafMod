@@ -89,7 +89,7 @@ public class EntitySerializer extends BaseFlatBufferSerializer<EntityInput, List
       throws SerializationException {
     try {
       // Read tick count (8 bytes)
-      long tickCount = buffer.getLong();
+      buffer.getLong();
 
       // Read entity count (4 bytes)
       int entityCount = buffer.getInt();

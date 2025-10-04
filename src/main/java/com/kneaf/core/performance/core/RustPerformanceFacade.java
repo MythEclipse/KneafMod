@@ -162,7 +162,7 @@ public class RustPerformanceFacade {
             totalItemsDespawned.set(0);
           }
         };
-    this.NATIVE_MANAGER = new NativeIntegrationManager(monitor);
+    this.NATIVE_MANAGER = new NativeIntegrationManager();
     this.entityProcessor = new EntityProcessor(NATIVE_MANAGER, monitor);
     this.batchProcessor = new BatchProcessor(entityProcessor, monitor, NATIVE_MANAGER);
     this.optimizer =

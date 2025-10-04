@@ -1,15 +1,16 @@
 package com.kneaf.core.flatbuffers.utils;
 
-import com.kneaf.core.exceptions.KneafCoreException;
+import com.kneaf.core.exceptions.core.KneafCoreException;
 
 /**
  * Exception thrown when serialization or deserialization operations fail. This exception provides
  * detailed context about the serialization failure.
  */
-public class SerializationException extends KneafCoreException {
+public class SerializationException extends RuntimeException {
 
   private static final long serialVersionUID = 1L;
 
+  private final KneafCoreException delegate;
   private final String serializerType;
   private final String operation;
   private final byte[] data;
@@ -20,7 +21,12 @@ public class SerializationException extends KneafCoreException {
    * @param message the error message
    */
   public SerializationException(String message) {
-    super(KneafCoreException.ErrorCategory.SYSTEM_ERROR, message);
+    super(message);
+    this.delegate =
+        KneafCoreException.builder()
+            .category(KneafCoreException.ErrorCategory.SYSTEM_ERROR)
+            .message(message)
+            .build();
     this.serializerType = "unknown";
     this.operation = "unknown";
     this.data = null;
@@ -34,7 +40,13 @@ public class SerializationException extends KneafCoreException {
    * @param operation the operation that failed (serialize/deserialize)
    */
   public SerializationException(String message, String serializerType, String operation) {
-    super(KneafCoreException.ErrorCategory.SYSTEM_ERROR, message);
+    super(message);
+    this.delegate =
+        KneafCoreException.builder()
+            .category(KneafCoreException.ErrorCategory.SYSTEM_ERROR)
+            .operation(operation)
+            .message(message)
+            .build();
     this.serializerType = serializerType;
     this.operation = operation;
     this.data = null;
@@ -50,7 +62,13 @@ public class SerializationException extends KneafCoreException {
    */
   public SerializationException(
       String message, String serializerType, String operation, byte[] data) {
-    super(KneafCoreException.ErrorCategory.SYSTEM_ERROR, message);
+    super(message);
+    this.delegate =
+        KneafCoreException.builder()
+            .category(KneafCoreException.ErrorCategory.SYSTEM_ERROR)
+            .operation(operation)
+            .message(message)
+            .build();
     this.serializerType = serializerType;
     this.operation = operation;
     this.data = data != null ? data.clone() : null;
@@ -63,7 +81,13 @@ public class SerializationException extends KneafCoreException {
    * @param cause the underlying cause
    */
   public SerializationException(String message, Throwable cause) {
-    super(KneafCoreException.ErrorCategory.SYSTEM_ERROR, message, cause);
+    super(message, cause);
+    this.delegate =
+        KneafCoreException.builder()
+            .category(KneafCoreException.ErrorCategory.SYSTEM_ERROR)
+            .message(message)
+            .cause(cause)
+            .build();
     this.serializerType = "unknown";
     this.operation = "unknown";
     this.data = null;
@@ -80,7 +104,14 @@ public class SerializationException extends KneafCoreException {
    */
   public SerializationException(
       String message, Throwable cause, String serializerType, String operation, byte[] data) {
-    super(KneafCoreException.ErrorCategory.SYSTEM_ERROR, message, cause);
+    super(message, cause);
+    this.delegate =
+        KneafCoreException.builder()
+            .category(KneafCoreException.ErrorCategory.SYSTEM_ERROR)
+            .operation(operation)
+            .message(message)
+            .cause(cause)
+            .build();
     this.serializerType = serializerType;
     this.operation = operation;
     this.data = data != null ? data.clone() : null;
@@ -111,6 +142,15 @@ public class SerializationException extends KneafCoreException {
    */
   public byte[] getData() {
     return data != null ? data.clone() : null;
+  }
+
+  /**
+   * Get the underlying KneafCoreException for access to enhanced functionality.
+   *
+   * @return the delegate KneafCoreException
+   */
+  public KneafCoreException getDelegate() {
+    return delegate;
   }
 
   @Override

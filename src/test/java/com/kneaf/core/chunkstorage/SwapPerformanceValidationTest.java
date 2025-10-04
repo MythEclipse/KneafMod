@@ -573,7 +573,7 @@ public class SwapPerformanceValidationTest {
         databaseAdapter.putChunk(chunkKey, chunkData);
 
         // Add to cache - use a simple mock since we don't have Minecraft classes in test
-        Object mockChunk = createMockChunk(i, i);
+        createMockChunk(i, i);
         // Note: In real usage, this would be a LevelChunk, but for testing we use Object
         // The cache should handle this gracefully or we should mock the cache behavior
       } catch (Exception e) {
@@ -586,15 +586,7 @@ public class SwapPerformanceValidationTest {
 
   private Object createMockChunk(int x, int z) {
     // Create a simple mock object that can be cast to LevelChunk
-    return new Object() {
-      public int getX() {
-        return x;
-      }
-
-      public int getZ() {
-        return z;
-      }
-    };
+    return new Object() {};
   }
 
   private double calculateVariance(List<Long> values) {

@@ -296,7 +296,7 @@ public class SwapEndToEndTest {
     // Test swap in with invalid chunk key
     CompletableFuture<Boolean> invalidSwapIn = swapManager.swapInChunk("");
     Boolean invalidInResult = invalidSwapIn.get(5, TimeUnit.SECONDS);
-    assertFalse(invalidResult, "Swap in with empty key should fail");
+    assertFalse(invalidInResult, "Swap in with empty key should fail");
 
     // Test swap with null key
     CompletableFuture<Boolean> nullSwapOut = swapManager.swapOutChunk(null);
@@ -459,7 +459,7 @@ public class SwapEndToEndTest {
     simulateChunkInCache(chunkKey);
 
     // Start some swap operations
-    CompletableFuture<Boolean> swapFuture = swapManager.swapOutChunk(chunkKey);
+    swapManager.swapOutChunk(chunkKey);
 
     // Shutdown while operation is in progress
     swapManager.shutdown();
@@ -576,20 +576,6 @@ public class SwapEndToEndTest {
 
   // Simple mock chunk class for testing
   private static class MockChunk {
-    private final int x;
-    private final int z;
-
-    public MockChunk(int x, int z) {
-      this.x = x;
-      this.z = z;
-    }
-
-    public int getX() {
-      return x;
-    }
-
-    public int getZ() {
-      return z;
-    }
+    public MockChunk(int x, int z) {}
   }
 }

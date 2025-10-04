@@ -84,7 +84,7 @@ public class VillagerOptimizationTest {
 
       // Measure performance
       long startTime = System.nanoTime();
-      VillagerProcessResult result = RustPerformance.processVillagerAI(villagers);
+      RustPerformance.processVillagerAI(villagers);
       long endTime = System.nanoTime();
       double durationMs = (endTime - startTime) / 1_000_000.0;
 

@@ -83,8 +83,6 @@ public class PerformanceCommand extends BaseCommand {
    * @return command result
    */
   private int executeToggle(CommandContext<CommandSourceStack> context) {
-    CommandSourceStack source = context.getSource();
-
     try {
       boolean newVal = !PerformanceManager.isEnabled();
       PerformanceManager.setEnabled(newVal);
@@ -111,8 +109,6 @@ public class PerformanceCommand extends BaseCommand {
    * @return command result
    */
   private int executeStatus(CommandContext<CommandSourceStack> context) {
-    CommandSourceStack source = context.getSource();
-
     try {
       double tps = RustPerformance.getCurrentTPS();
       String cpu = RustPerformance.getCpuStats();
@@ -147,8 +143,6 @@ public class PerformanceCommand extends BaseCommand {
    * @return command result
    */
   private int executeMetrics(CommandContext<CommandSourceStack> context) {
-    CommandSourceStack source = context.getSource();
-
     try {
       long entitiesProcessed = RustPerformance.getTotalEntitiesProcessed();
       long mobsProcessed = RustPerformance.getTotalMobsProcessed();
@@ -190,8 +184,6 @@ public class PerformanceCommand extends BaseCommand {
    * @return command result
    */
   private int executeRotateLog(CommandContext<CommandSourceStack> context) {
-    CommandSourceStack source = context.getSource();
-
     try {
       PerformanceMetricsLogger.rotateNow();
       sendSuccess(context, "Kneaf performance log rotated.");

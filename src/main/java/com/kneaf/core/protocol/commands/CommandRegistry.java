@@ -229,17 +229,6 @@ public class CommandRegistry {
       return command;
     }
 
-    public synchronized void recordExecution(long duration, boolean success) {
-      executionCount++;
-      totalExecutionTime += duration;
-      lastExecutionTime = System.currentTimeMillis();
-      if (success) {
-        successCount++;
-      } else {
-        errorCount++;
-      }
-    }
-
     public synchronized Map<String, Object> getStatistics() {
       return Map.of(
           "execution_count", executionCount,

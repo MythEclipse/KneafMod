@@ -1,6 +1,6 @@
 package com.kneaf.core.async;
 
-import com.kneaf.core.exceptions.AsyncProcessingException;
+import com.kneaf.core.exceptions.processing.AsyncProcessingException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
@@ -223,11 +223,12 @@ public class AsyncProcessor {
                       e);
                 }
 
-                throw new AsyncProcessingException(
-                    AsyncProcessingException.AsyncErrorType.SUPPLY_ASYNC_FAILED,
-                    operationName,
-                    "Async operation '" + operationName + "' failed: " + e.getMessage(),
-                    e);
+                throw AsyncProcessingException.builder()
+                    .errorType(AsyncProcessingException.AsyncErrorType.SUPPLY_ASYNC_FAILED)
+                    .taskType(operationName)
+                    .message("Async operation '" + operationName + "' failed: " + e.getMessage())
+                    .cause(e)
+                    .build();
               }
             },
             executor);
@@ -338,11 +339,12 @@ public class AsyncProcessor {
                 try {
                   results.add(future.get());
                 } catch (Exception e) {
-                  throw new AsyncProcessingException(
-                      AsyncProcessingException.AsyncErrorType.COMPLETION_EXCEPTION,
-                      "batch-operation",
-                      "Failed to get result from batch operation",
-                      e);
+                  throw AsyncProcessingException.builder()
+                      .errorType(AsyncProcessingException.AsyncErrorType.COMPLETION_EXCEPTION)
+                      .taskType("batch-operation")
+                      .message("Failed to get result from batch operation")
+                      .cause(e)
+                      .build();
                 }
               }
               return results;
@@ -384,11 +386,12 @@ public class AsyncProcessor {
             }
           }
 
-          throw new AsyncProcessingException(
-              AsyncProcessingException.AsyncErrorType.EXECUTOR_SHUTDOWN,
-              operationName,
-              "Operation '" + operationName + "' failed after " + maxRetries + " attempts",
-              lastException);
+          throw AsyncProcessingException.builder()
+              .errorType(AsyncProcessingException.AsyncErrorType.EXECUTOR_SHUTDOWN)
+              .taskType(operationName)
+              .message("Operation '" + operationName + "' failed after " + maxRetries + " attempts")
+              .cause(lastException)
+              .build();
         },
         defaultTimeoutMs * maxRetries,
         operationName);

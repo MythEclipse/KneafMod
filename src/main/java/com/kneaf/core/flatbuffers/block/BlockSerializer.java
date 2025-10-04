@@ -84,7 +84,7 @@ public class BlockSerializer extends BaseFlatBufferSerializer<BlockInput, List<L
       throws SerializationException {
     try {
       // Read tick count (8 bytes) - placeholder, not used in result
-      long tickCount = buffer.getLong();
+      buffer.getLong();
 
       // Read block entity count (4 bytes)
       int blockEntityCount = buffer.getInt();

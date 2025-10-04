@@ -48,7 +48,6 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
 
   @Override
   public Object processBinary(Object input) throws Exception {
-    String traceId = logger.generateTraceId();
     ProtocolContext context =
         ProtocolContext.builder()
             .operation("process_binary")
@@ -73,7 +72,6 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
 
   @Override
   public Object processJson(Object input) throws Exception {
-    String traceId = logger.generateTraceId();
     ProtocolContext context =
         ProtocolContext.builder()
             .operation("process_json")

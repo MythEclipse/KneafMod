@@ -30,12 +30,10 @@ public final class CompileTimeMethodResolver {
 
   // Method signature constants
   private static final MethodType VOID_METHOD = MethodType.methodType(void.class);
-  private static final MethodType OBJECT_METHOD = MethodType.methodType(Object.class);
   private static final MethodType BOOLEAN_METHOD = MethodType.methodType(boolean.class);
   private static final MethodType INT_METHOD = MethodType.methodType(int.class);
   private static final MethodType LONG_METHOD = MethodType.methodType(long.class);
   private static final MethodType FLOAT_METHOD = MethodType.methodType(float.class);
-  private static final MethodType DOUBLE_METHOD = MethodType.methodType(double.class);
 
   // Lookup for method handle creation
   private static final MethodHandles.Lookup LOOKUP = MethodHandles.lookup();
@@ -338,7 +336,6 @@ public final class CompileTimeMethodResolver {
   }
 
   /** Invoke method with parameters */
-  @SuppressWarnings("unchecked")
   public <T, R> R invokeMethodWithParams(
       T target, String className, MethodSignature signature, Object... params) throws Throwable {
     String cacheKey = className + "." + signature.getMethodName();
@@ -426,7 +423,6 @@ public final class CompileTimeMethodResolver {
       // Use method handle
       for (T target : targets) {
         try {
-          @SuppressWarnings("unchecked")
           R result = (R) handle.invoke(target);
           results.put(target, result);
         } catch (Throwable e) {

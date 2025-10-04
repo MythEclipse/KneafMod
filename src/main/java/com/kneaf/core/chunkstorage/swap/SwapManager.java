@@ -34,8 +34,6 @@ public class SwapManager implements StorageStatisticsProvider {
   private static final double HIGH_MEMORY_THRESHOLD = ChunkStorageConstants.HIGH_MEMORY_THRESHOLD;
   private static final double ELEVATED_MEMORY_THRESHOLD =
       ChunkStorageConstants.ELEVATED_MEMORY_THRESHOLD;
-  private static final double NORMAL_MEMORY_THRESHOLD =
-      ChunkStorageConstants.NORMAL_MEMORY_THRESHOLD;
 
   // Swap configuration
   private final SwapConfig config;

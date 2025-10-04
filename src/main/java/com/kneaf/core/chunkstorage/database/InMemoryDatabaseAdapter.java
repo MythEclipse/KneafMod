@@ -1,7 +1,6 @@
 package com.kneaf.core.chunkstorage.database;
 
 import com.kneaf.core.chunkstorage.common.ChunkStorageUtils;
-import com.kneaf.core.chunkstorage.common.StorageStatisticsProvider;
 import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
@@ -22,8 +21,7 @@ import org.slf4j.LoggerFactory;
  * In-memory implementation of DatabaseAdapter for testing and development. Uses ConcurrentHashMap
  * for thread-safe operations.
  */
-public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter
-    implements StorageStatisticsProvider {
+public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
   private static final Logger LOGGER = LoggerFactory.getLogger(InMemoryDatabaseAdapter.class);
 
   /** Exception thrown for database operation failures. */

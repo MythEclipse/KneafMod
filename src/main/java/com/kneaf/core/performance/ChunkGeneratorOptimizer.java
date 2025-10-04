@@ -53,7 +53,6 @@ public class ChunkGeneratorOptimizer {
     private final Queue<BlockPos> recentPositions =
         new ArrayDeque<>(getPlayerMovementHistorySize());
     private final Queue<Long> timestamps = new ArrayDeque<>(getPlayerMovementHistorySize());
-    private BlockPos lastPredictedPosition = null;
     private long lastPredictionTime = 0;
 
     public void addPosition(BlockPos pos) {
@@ -105,7 +104,6 @@ public class ChunkGeneratorOptimizer {
     }
 
     public void updatePrediction(BlockPos predictedPos) {
-      this.lastPredictedPosition = predictedPos;
       this.lastPredictionTime = System.currentTimeMillis();
     }
   }
@@ -116,7 +114,7 @@ public class ChunkGeneratorOptimizer {
       // Pre-generate nearby chunks using Rust
       int chunkX = event.getChunk().getPos().x;
       int chunkZ = event.getChunk().getPos().z;
-      int generated = RustPerformance.preGenerateNearbyChunks(chunkX, chunkZ, 1);
+      RustPerformance.preGenerateNearbyChunks(chunkX, chunkZ, 1);
     }
   }
 

@@ -1,6 +1,6 @@
 package com.kneaf.core.resource;
 
-import com.kneaf.core.exceptions.KneafCoreException;
+import com.kneaf.core.exceptions.core.KneafCoreException;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -152,10 +152,6 @@ public class ResourceManager implements Closeable {
     long getLastHealthCheckTime() {
       return lastHealthCheckTime;
     }
-
-    void setHealthCheckEnabled(boolean enabled) {
-      healthCheckEnabled.set(enabled);
-    }
   }
 
   private final ConcurrentMap<String, ResourceWrapper> resources = new ConcurrentHashMap<>();
@@ -188,11 +184,12 @@ public class ResourceManager implements Closeable {
     } catch (Exception e) {
       resources.remove(resourceName);
       notifyListeners(ResourceLifecycleEvent.Type.REGISTRATION_FAILED, resource);
-      throw new KneafCoreException(
-          KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT,
-          "registerResource",
-          "Failed to register resource: " + resourceName,
-          e);
+      throw KneafCoreException.builder()
+          .category(KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT)
+          .operation("registerResource")
+          .message("Failed to register resource: " + resourceName)
+          .cause(e)
+          .build();
     }
   }
 
@@ -209,11 +206,12 @@ public class ResourceManager implements Closeable {
       LOGGER.info("Started resource: { }", resourceName);
     } catch (Exception e) {
       notifyListeners(ResourceLifecycleEvent.Type.START_FAILED, wrapper.getResource());
-      throw new KneafCoreException(
-          KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT,
-          "startResource",
-          "Failed to start resource: " + resourceName,
-          e);
+      throw KneafCoreException.builder()
+          .category(KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT)
+          .operation("startResource")
+          .message("Failed to start resource: " + resourceName)
+          .cause(e)
+          .build();
     }
   }
 
@@ -230,11 +228,12 @@ public class ResourceManager implements Closeable {
       LOGGER.info("Stopped resource: { }", resourceName);
     } catch (Exception e) {
       notifyListeners(ResourceLifecycleEvent.Type.STOP_FAILED, wrapper.getResource());
-      throw new KneafCoreException(
-          KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT,
-          "stopResource",
-          "Failed to stop resource: " + resourceName,
-          e);
+      throw KneafCoreException.builder()
+          .category(KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT)
+          .operation("stopResource")
+          .message("Failed to stop resource: " + resourceName)
+          .cause(e)
+          .build();
     }
   }
 
@@ -252,11 +251,12 @@ public class ResourceManager implements Closeable {
 
     if (!exceptions.isEmpty()) {
       KneafCoreException aggregated =
-          new KneafCoreException(
-              KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT,
-              "startAll",
-              "Failed to start " + exceptions.size() + " resources",
-              exceptions.get(0));
+          KneafCoreException.builder()
+              .category(KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT)
+              .operation("startAll")
+              .message("Failed to start " + exceptions.size() + " resources")
+              .cause(exceptions.get(0))
+              .build();
       exceptions.subList(1, exceptions.size()).forEach(aggregated::addSuppressed);
       throw aggregated;
     }
@@ -282,11 +282,12 @@ public class ResourceManager implements Closeable {
 
     if (!exceptions.isEmpty()) {
       KneafCoreException aggregated =
-          new KneafCoreException(
-              KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT,
-              "stopAll",
-              "Failed to stop " + exceptions.size() + " resources",
-              exceptions.get(0));
+          KneafCoreException.builder()
+              .category(KneafCoreException.ErrorCategory.RESOURCE_MANAGEMENT)
+              .operation("stopAll")
+              .message("Failed to stop " + exceptions.size() + " resources")
+              .cause(exceptions.get(0))
+              .build();
       exceptions.subList(1, exceptions.size()).forEach(aggregated::addSuppressed);
       throw aggregated;
     }

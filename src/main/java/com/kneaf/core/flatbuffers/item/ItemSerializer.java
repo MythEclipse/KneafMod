@@ -85,7 +85,7 @@ public class ItemSerializer extends BaseFlatBufferSerializer<ItemInput, ItemProc
       throws SerializationException {
     try {
       // Read tick count (8 bytes) - placeholder, not used in result
-      long tickCount = buffer.getLong();
+      buffer.getLong();
 
       // Read item count (4 bytes)
       int itemCount = buffer.getInt();

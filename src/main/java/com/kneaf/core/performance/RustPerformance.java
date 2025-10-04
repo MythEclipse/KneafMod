@@ -10,7 +10,6 @@ import com.kneaf.core.data.item.ItemEntityData;
 import com.kneaf.core.performance.bridge.NativeIntegrationManager;
 import com.kneaf.core.performance.core.ItemProcessResult;
 import com.kneaf.core.performance.core.MobProcessResult;
-import com.kneaf.core.performance.core.PerformanceMonitor;
 import com.kneaf.core.performance.core.RustPerformanceFacade;
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -23,88 +22,8 @@ import java.util.concurrent.CompletableFuture;
 public class RustPerformance {
 
   private static final RustPerformanceFacade FACADE = RustPerformanceFacade.getInstance();
-  private static final PerformanceMonitor SIMPLE_MONITOR =
-      new PerformanceMonitor() {
-        @Override
-        public void recordEntityProcessing(int inputCount, long processingTime) {}
 
-        @Override
-        public void recordItemProcessing(
-            int inputCount, long mergedCount, long despawnedCount, long processingTime) {}
-
-        @Override
-        public void recordMobProcessing(
-            int inputCount, int disableCount, int simplifyCount, long processingTime) {}
-
-        @Override
-        public void recordVillagerProcessing(
-            int inputCount,
-            int disableCount,
-            int simplifyCount,
-            int reducePathfindCount,
-            long processingTime) {}
-
-        @Override
-        public void recordBlockProcessing(int processedCount, long processingTime) {}
-
-        @Override
-        public void recordNativeCall(String methodName, long processingTime, boolean success) {}
-
-        @Override
-        public void recordBatchProcessing(int batchSize, long processingTime) {}
-
-        @Override
-        public long getTotalEntitiesProcessed() {
-          return 0;
-        }
-
-        @Override
-        public long getTotalItemsProcessed() {
-          return 0;
-        }
-
-        @Override
-        public long getTotalMobsProcessed() {
-          return 0;
-        }
-
-        @Override
-        public long getTotalBlocksProcessed() {
-          return 0;
-        }
-
-        @Override
-        public long getTotalItemsMerged() {
-          return 0;
-        }
-
-        @Override
-        public long getTotalItemsDespawned() {
-          return 0;
-        }
-
-        @Override
-        public double getCurrentTPS() {
-          return 20.0;
-        }
-
-        @Override
-        public void setCurrentTPS(double tps) {}
-
-        @Override
-        public java.util.Map<String, Object> getPerformanceStats() {
-          return new java.util.HashMap<>();
-        }
-
-        @Override
-        public void logPerformanceSummary() {}
-
-        @Override
-        public void resetMetrics() {}
-      };
-
-  private static final NativeIntegrationManager NATIVE_MANAGER =
-      new NativeIntegrationManager(SIMPLE_MONITOR);
+  private static final NativeIntegrationManager NATIVE_MANAGER = new NativeIntegrationManager();
   private static boolean initialized = false;
 
   /** Initialize the performance system. */

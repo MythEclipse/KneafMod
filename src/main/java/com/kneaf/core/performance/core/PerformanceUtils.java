@@ -39,7 +39,6 @@ public final class PerformanceUtils {
 
       // Check for error field first
       if (result.has("error")) {
-        String error = result.get("error").getAsString();
         return new ArrayList<>();
       }
 
@@ -152,7 +151,7 @@ public final class PerformanceUtils {
         ByteBuffer altBuf = ByteBuffer.wrap(resultBytes).order(ByteOrder.LITTLE_ENDIAN);
         int len = resultBytes.length;
         if (len >= 12) {
-          long maybeTick = altBuf.getLong(0);
+          altBuf.getLong(0);
           int numItems = altBuf.getInt(8);
           // Sanity checks
           if (numItems >= 0 && numItems <= 1_000_000 && 12 + numItems * 8 <= len) {
