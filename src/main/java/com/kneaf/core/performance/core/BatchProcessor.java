@@ -34,11 +34,8 @@ public class BatchProcessor {
     private volatile boolean batchProcessorRunning = false;
     private final Object batchLock = new Object();
     
-    // Batch processing configuration
-    private final int batchSize;
-    private final long batchTimeoutMs;
-    private final int batchProcessorSleepMs;
-    private final int batchRequestTimeoutSeconds;
+    // Batch processing configuration (computed dynamically)
+    private int batchRequestTimeoutSeconds;
     
     public BatchProcessor(EntityProcessor entityProcessor, PerformanceMonitor monitor, 
                          NativeBridgeProvider bridgeProvider) {
@@ -46,11 +43,7 @@ public class BatchProcessor {
         this.monitor = monitor;
         this.bridgeProvider = bridgeProvider;
         
-        // Use optimized batch size from NativeBridge
-        this.batchSize = NativeBridgeUtils.calculateOptimalBatchSize(
-            PerformanceConstants.DEFAULT_BATCH_SIZE, 25, 200);
-        this.batchTimeoutMs = PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS;
-        this.batchProcessorSleepMs = PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS;
+        // Static timeout configuration stays; other values adapt to TPS/tick delay
         this.batchRequestTimeoutSeconds = PerformanceConstants.BATCH_REQUEST_TIMEOUT_SECONDS;
     }
     
@@ -96,7 +89,7 @@ public class BatchProcessor {
                 while (batchProcessorRunning) {
                     try {
                         processBatchOptimized();
-                        Thread.sleep(batchProcessorSleepMs);
+                        Thread.sleep(getBatchProcessorSleepMs());
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         break;
@@ -269,9 +262,9 @@ public class BatchProcessor {
         // Collect batch with timeout
         long startTime = System.currentTimeMillis();
         boolean continueCollecting = true;
-        while (continueCollecting &&
-               batch.size() < batchSize &&
-               (System.currentTimeMillis() - startTime) < batchTimeoutMs) {
+     while (continueCollecting &&
+         batch.size() < getBatchSize() &&
+         (System.currentTimeMillis() - startTime) < getBatchTimeoutMs()) {
             request = pendingRequests.poll();
             if (request != null) {
                 batch.add(request);
@@ -291,6 +284,33 @@ public class BatchProcessor {
         }
         
         return batch;
+    }
+
+    // Dynamic batch configuration getters
+    private int getBatchSize() {
+        // Scale batch size based on TPS and recent tick delay
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        long tickDelay = com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs();
+        int base = PerformanceConstants.DEFAULT_BATCH_SIZE;
+        double tpsFactor = Math.max(0.5, Math.min(1.5, tps / 20.0));
+        double delayFactor = 1.0;
+        if (tickDelay > 50) delayFactor = Math.max(0.5, 50.0 / (double) tickDelay);
+        return Math.max(1, (int) (NativeBridgeUtils.calculateOptimalBatchSize(base, 25, 200) * tpsFactor * delayFactor));
+    }
+
+    private long getBatchTimeoutMs() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        // If TPS low, wait longer to aggregate more requests
+        if (tps < 15.0) return Math.max(20, PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS * 2);
+        if (tps < 18.0) return Math.max(10, PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS);
+        return PerformanceConstants.DEFAULT_BATCH_TIMEOUT_MS;
+    }
+
+    private int getBatchProcessorSleepMs() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        if (tps < 15.0) return Math.max(1, PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS / 2);
+        if (tps < 18.0) return PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS;
+        return Math.max(1, PerformanceConstants.BATCH_PROCESSOR_SLEEP_MS * 2);
     }
     
     /**

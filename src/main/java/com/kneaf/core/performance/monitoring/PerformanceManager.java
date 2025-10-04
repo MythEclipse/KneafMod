@@ -612,6 +612,13 @@ public class PerformanceManager {
         return lastTickDurationNanos / 1_000_000L;
     }
 
+    /**
+     * Public accessor for the rolling average TPS used by dynamic logging/decisions.
+     */
+    public static double getAverageTPS() {
+        return getRollingAvgTPS();
+    }
+
     private static double getRollingAvgTPS() {
         double sum = 0.0;
         int count = 0;

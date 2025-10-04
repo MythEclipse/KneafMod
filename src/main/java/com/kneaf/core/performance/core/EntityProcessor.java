@@ -112,14 +112,14 @@ public class EntityProcessor {
         jsonInput.put(PerformanceConstants.ENTITIES_KEY, input.entities);
         jsonInput.put(PerformanceConstants.PLAYERS_KEY, input.players);
         
-        // Add entity config
-        Map<String, Object> config = new HashMap<>();
-        config.put("closeRadius", 16.0f);
-        config.put("mediumRadius", 32.0f);
-        config.put("closeRate", 1.0f);
-        config.put("mediumRate", 0.5f);
-        config.put("farRate", 0.1f);
-        config.put("useSpatialPartitioning", true);
+    // Add entity config (values adapt to current TPS / tick delay)
+    Map<String, Object> config = new HashMap<>();
+    config.put("closeRadius", getCloseRadius());
+    config.put("mediumRadius", getMediumRadius());
+    config.put("closeRate", getCloseRate());
+    config.put("mediumRate", getMediumRate());
+    config.put("farRate", getFarRate());
+    config.put("useSpatialPartitioning", isSpatialPartitioningEnabled());
         
         // World bounds (example values)
         Map<String, Object> worldBounds = new HashMap<>();
@@ -131,11 +131,55 @@ public class EntityProcessor {
         worldBounds.put("maxZ", 1000.0);
         config.put("worldBounds", worldBounds);
         
-        config.put("quadtreeMaxEntities", 1000);
-        config.put("quadtreeMaxDepth", 10);
+    config.put("quadtreeMaxEntities", getQuadtreeMaxEntities());
+    config.put("quadtreeMaxDepth", getQuadtreeMaxDepth());
         jsonInput.put("entityConfig", config);
         
         return jsonInput;
+    }
+
+    // Dynamic entity processing configuration getters
+    private double getCloseRadius() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        return Math.max(8.0, 16.0 * (tps / 20.0));
+    }
+
+    private double getMediumRadius() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        return Math.max(16.0, 32.0 * (tps / 20.0));
+    }
+
+    private double getCloseRate() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        return Math.max(0.2, Math.min(1.0, tps / 20.0));
+    }
+
+    private double getMediumRate() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        return Math.max(0.1, Math.min(0.8, (tps / 20.0) * 0.5));
+    }
+
+    private double getFarRate() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        return Math.max(0.05, Math.min(0.5, (20.0 - tps) / 20.0 * 0.2 + 0.1));
+    }
+
+    private boolean isSpatialPartitioningEnabled() {
+        // Disable spatial partitioning when TPS is very low to reduce overhead
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        return tps >= 12.0;
+    }
+
+    private int getQuadtreeMaxEntities() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        int base = 1000;
+        double factor = Math.max(0.5, Math.min(1.5, tps / 20.0));
+        return Math.max(100, (int) (base * factor));
+    }
+
+    private int getQuadtreeMaxDepth() {
+        double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
+        return tps > 18.0 ? 10 : (tps > 14.0 ? 8 : 6);
     }
     
     /**

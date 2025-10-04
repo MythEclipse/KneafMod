@@ -1,6 +1,7 @@
 package com.kneaf.core.performance.core;
 
 import com.kneaf.core.KneafCore;
+import com.kneaf.core.performance.monitoring.PerformanceManager;
 import com.kneaf.core.performance.bridge.NativeIntegrationManager;
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.PlayerData;
@@ -23,13 +24,13 @@ public class PerformanceOptimizer {
     private final EntityProcessor entityProcessor;
     private final BatchProcessor batchProcessor;
     
-    // Optimization configuration
-    private final int maxEntitiesPerTick;
-    private final int maxItemsPerTick;
-    private final int maxMobsPerTick;
-    private final int maxBlocksPerTick;
-    private final double targetTickTimeMs;
-    private final int optimizationThreshold;
+    // Optimization configuration (base values). Actual values are computed dynamically
+    private static final int BASE_MAX_ENTITIES = 200;
+    private static final int BASE_MAX_ITEMS = 300;
+    private static final int BASE_MAX_MOBS = 150;
+    private static final int BASE_MAX_BLOCKS = 500;
+    private static final double BASE_TARGET_TICK_TIME_MS = 50.0;
+    private static final int BASE_OPTIMIZATION_THRESHOLD = 25;
     
     // Performance tracking
     private final AtomicLong totalOptimizationsApplied = new AtomicLong(0);
@@ -52,13 +53,52 @@ public class PerformanceOptimizer {
         this.entityProcessor = entityProcessor;
         this.batchProcessor = batchProcessor;
         
-        // Default optimization configuration
-        this.maxEntitiesPerTick = 200; // Default max entities per tick
-        this.maxItemsPerTick = 300; // Default max items per tick
-        this.maxMobsPerTick = 150; // Default max mobs per tick
-        this.maxBlocksPerTick = 500; // Default max blocks per tick
-        this.targetTickTimeMs = 50.0; // Target tick time in milliseconds
-        this.optimizationThreshold = 25; // Minimum count for optimization
+    // Default optimization configuration base values are constants; values used at runtime
+    // are computed from current TPS and tick delay via helper getters below.
+    }
+    
+    // Dynamic getters - compute actual runtime values based on TPS and tick delay
+    private int getMaxEntitiesPerTick() {
+        double tps = PerformanceManager.getAverageTPS();
+        long tickDelayMs = PerformanceManager.getLastTickDurationMs();
+        // Scale down entities when TPS is low or tick delay is high
+        double tpsFactor = Math.max(0.5, Math.min(1.5, tps / 20.0));
+        double delayFactor = 1.0;
+        if (tickDelayMs > BASE_TARGET_TICK_TIME_MS) {
+            delayFactor = Math.max(0.5, BASE_TARGET_TICK_TIME_MS / (double) tickDelayMs);
+        }
+        return (int) Math.max(10, BASE_MAX_ENTITIES * tpsFactor * delayFactor);
+    }
+
+    private int getMaxItemsPerTick() {
+        double tps = PerformanceManager.getAverageTPS();
+        double tpsFactor = Math.max(0.5, Math.min(1.5, tps / 20.0));
+        return (int) Math.max(10, BASE_MAX_ITEMS * tpsFactor);
+    }
+
+    private int getMaxMobsPerTick() {
+        double tps = PerformanceManager.getAverageTPS();
+        double tpsFactor = Math.max(0.4, Math.min(1.2, tps / 20.0));
+        return (int) Math.max(5, BASE_MAX_MOBS * tpsFactor);
+    }
+
+    private int getMaxBlocksPerTick() {
+        double tps = PerformanceManager.getAverageTPS();
+        double tpsFactor = Math.max(0.6, Math.min(1.3, tps / 20.0));
+        return (int) Math.max(10, BASE_MAX_BLOCKS * tpsFactor);
+    }
+
+    private double getTargetTickTimeMs() {
+        // We can slightly adjust target tick time based on rolling TPS
+        double tps = PerformanceManager.getAverageTPS();
+        return BASE_TARGET_TICK_TIME_MS * (20.0 / Math.max(0.1, tps));
+    }
+
+    private int getOptimizationThreshold() {
+        double tps = PerformanceManager.getAverageTPS();
+        // Lower threshold when TPS is low to engage optimizations earlier
+        double factor = tps >= 20.0 ? 1.0 : Math.max(0.4, tps / 20.0);
+        return (int) Math.max(1, BASE_OPTIMIZATION_THRESHOLD * factor);
     }
     
     /**
@@ -92,8 +132,11 @@ public class PerformanceOptimizer {
                                   result.size(),
                                   System.currentTimeMillis() - startTime);
             
-            // Monitor entity optimization
-            KneafCore.LOGGER.debug("Optimized {} entities, {} processed", entities.size(), entitiesToProcess.size());
+            // Monitor entity optimization (include dynamic tick delay and average TPS)
+            long tickDelayMs = PerformanceManager.getLastTickDurationMs();
+            double avgTps = PerformanceManager.getAverageTPS();
+            KneafCore.LOGGER.debug("Optimized {} entities (toProcess {}), resultSize {}, tickDelayMs={}ms, avgTps={}",
+                                  entities.size(), entitiesToProcess.size(), result.size(), tickDelayMs, String.format("%.2f", avgTps));
             
             return result;
             
@@ -116,7 +159,7 @@ public class PerformanceOptimizer {
             
             // Process villagers using native integration if available
             List<Long> result;
-            if (nativeManager.isNativeAvailable() && villagersToProcess.size() >= optimizationThreshold) {
+            if (nativeManager.isNativeAvailable() && villagersToProcess.size() >= getOptimizationThreshold()) {
                 result = processVillagersNative(villagersToProcess);
             } else {
                 result = processVillagersDirect(villagersToProcess);
@@ -207,8 +250,8 @@ public class PerformanceOptimizer {
      * Determine optimization level based on current load and performance metrics.
      */
     private OptimizationLevel determineOptimizationLevel(int entityCount, int playerCount) {
-        // Get current performance metrics (simplified)
-        double avgTickTime = 50.0; // Default tick time
+        // Get current performance metrics (dynamic)
+        double avgTickTime = getTargetTickTimeMs();
         double memoryUsage = getMemoryUsagePercent();
         
         // Calculate load factor
@@ -216,11 +259,11 @@ public class PerformanceOptimizer {
         
         // Determine optimization level
         OptimizationLevel newLevel;
-        if (avgTickTime > targetTickTimeMs * 1.5 || memoryUsage > 85.0 || loadFactor > 2.0) {
+        if (avgTickTime > getTargetTickTimeMs() * 1.5 || memoryUsage > 85.0 || loadFactor > 2.0) {
             newLevel = OptimizationLevel.AGGRESSIVE;
-        } else if (avgTickTime > targetTickTimeMs * 1.2 || memoryUsage > 70.0 || loadFactor > 1.5) {
+        } else if (avgTickTime > getTargetTickTimeMs() * 1.2 || memoryUsage > 70.0 || loadFactor > 1.5) {
             newLevel = OptimizationLevel.HIGH;
-        } else if (avgTickTime > targetTickTimeMs * 1.1 || memoryUsage > 60.0 || loadFactor > 1.0) {
+        } else if (avgTickTime > getTargetTickTimeMs() * 1.1 || memoryUsage > 60.0 || loadFactor > 1.0) {
             newLevel = OptimizationLevel.MEDIUM;
         } else {
             newLevel = OptimizationLevel.NORMAL;
@@ -246,15 +289,15 @@ public class PerformanceOptimizer {
      * Apply entity limit based on optimization level.
      */
     private List<EntityData> applyEntityLimit(List<EntityData> entities, OptimizationLevel level) {
-        if (entities.size() <= maxEntitiesPerTick) {
+        if (entities.size() <= getMaxEntitiesPerTick()) {
             return entities;
         }
         
         int limit = switch (level) {
-            case AGGRESSIVE -> Math.min(maxEntitiesPerTick / 2, 50);
-            case HIGH -> Math.min(maxEntitiesPerTick * 2/3, 100);
-            case MEDIUM -> Math.min(maxEntitiesPerTick * 3/4, 150);
-            case NORMAL -> maxEntitiesPerTick;
+            case AGGRESSIVE -> Math.min(getMaxEntitiesPerTick() / 2, 50);
+            case HIGH -> Math.min(getMaxEntitiesPerTick() * 2/3, 100);
+            case MEDIUM -> Math.min(getMaxEntitiesPerTick() * 3/4, 150);
+            case NORMAL -> getMaxEntitiesPerTick();
         };
         
         // Prioritize entities closer to players or with higher priority
@@ -269,7 +312,7 @@ public class PerformanceOptimizer {
      */
     private List<VillagerData> applyVillagerSpatialFilter(List<VillagerData> villagers, 
                                                          int centerX, int centerZ, int radius) {
-        if (villagers.size() <= optimizationThreshold) {
+        if (villagers.size() <= getOptimizationThreshold()) {
             return villagers;
         }
         
@@ -282,7 +325,7 @@ public class PerformanceOptimizer {
                 int dz = position[1] - centerZ;
                 return (dx * dx + dz * dz) <= radiusSquared;
             })
-            .limit(maxEntitiesPerTick)
+        .limit(getMaxEntitiesPerTick())
             .toList();
     }
     
@@ -290,7 +333,7 @@ public class PerformanceOptimizer {
      * Check if batch processing should be used.
      */
     private boolean shouldUseBatchProcessing(int entityCount) {
-        return entityCount >= optimizationThreshold && nativeManager.isNativeAvailable();
+        return entityCount >= getOptimizationThreshold() && nativeManager.isNativeAvailable();
     }
     
     /**
