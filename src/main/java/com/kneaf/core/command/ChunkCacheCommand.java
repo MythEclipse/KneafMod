@@ -157,13 +157,20 @@ public class ChunkCacheCommand {
   private static int clearCache(CommandContext<CommandSourceStack> context) {
     CommandSourceStack source = context.getSource();
 
-    int clearedCount = STORAGE_MANAGERS.size();
-    // Note: In a real implementation, we'd need to add a clearCache method to ChunkStorageManager
-    // and actually call it for each manager. For now, we just count the number of managers.
+    int clearedCount = 0;
+    for (Map.Entry<String, ChunkStorageManager> entry : STORAGE_MANAGERS.entrySet()) {
+      try {
+        entry.getValue().clearCache();
+        clearedCount++;
+      } catch (Exception e) {
+        LOGGER.warn("Failed to clear cache for world { }: { }", entry.getKey(), e.getMessage());
+      }
+    }
 
-    source.sendSuccess(
-        () -> Component.literal(String.format("§aCleared caches for §f%d §aworlds", clearedCount)),
-        false);
+  final int finalCleared = clearedCount;
+  source.sendSuccess(
+    () -> Component.literal(String.format("§aCleared caches for §f%d §aworlds", finalCleared)),
+    false);
 
     return 1;
   }
@@ -254,15 +261,22 @@ public class ChunkCacheCommand {
   private static int setCacheCapacity(CommandContext<CommandSourceStack> context, int capacity) {
     CommandSourceStack source = context.getSource();
 
-    // Note: In a real implementation, we'd need to add a setCacheCapacity method to
-    // ChunkStorageManager
-    // For now, we'll just acknowledge the command
+    int applied = 0;
+    for (Map.Entry<String, ChunkStorageManager> entry : STORAGE_MANAGERS.entrySet()) {
+      try {
+        entry.getValue().setCacheCapacity(capacity);
+        applied++;
+      } catch (Exception e) {
+        LOGGER.warn("Failed to set cache capacity for world { }: { }", entry.getKey(), e.getMessage());
+      }
+    }
 
-    source.sendSuccess(
-        () ->
-            Component.literal(
-                String.format("§aCache capacity set to §f%d §afor all worlds", capacity)),
-        false);
+  final int finalApplied = applied;
+  source.sendSuccess(
+    () ->
+      Component.literal(
+        String.format("§aCache capacity set to §f%d §afor %d worlds", capacity, finalApplied)),
+    false);
 
     return 1;
   }
@@ -285,15 +299,22 @@ public class ChunkCacheCommand {
       return 0;
     }
 
-    // Note: In a real implementation, we'd need to add a setEvictionPolicy method to
-    // ChunkStorageManager
-    // For now, we'll just acknowledge the command
+    int applied = 0;
+    for (Map.Entry<String, ChunkStorageManager> entry : STORAGE_MANAGERS.entrySet()) {
+      try {
+        entry.getValue().setEvictionPolicy(policy);
+        applied++;
+      } catch (Exception e) {
+        LOGGER.warn("Failed to set eviction policy for world { }: { }", entry.getKey(), e.getMessage());
+      }
+    }
 
-    source.sendSuccess(
-        () ->
-            Component.literal(
-                String.format("§aEviction policy set to §f%s §afor all worlds", policy)),
-        false);
+  final int finalApplied2 = applied;
+  source.sendSuccess(
+    () ->
+      Component.literal(
+        String.format("§aEviction policy set to §f%s §afor %d worlds", policy, finalApplied2)),
+    false);
 
     return 1;
   }

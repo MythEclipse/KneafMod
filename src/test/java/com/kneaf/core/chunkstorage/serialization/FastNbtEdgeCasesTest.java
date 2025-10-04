@@ -8,8 +8,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Test suite for FastNBT edge cases and error handling.
- * Tests various edge cases and error conditions that FastNBT must handle gracefully.
+ * Test suite for FastNBT edge cases and error handling. Tests various edge cases and error
+ * conditions that FastNBT must handle gracefully.
  */
 class FastNbtEdgeCasesTest {
 
@@ -29,14 +29,17 @@ class FastNbtEdgeCasesTest {
   @Test
   void testNullDataHandling() {
     // Test that null data is handled gracefully
-    assertThrows(IllegalArgumentException.class, () -> {
-      if (standardSerializer != null) {
-        standardSerializer.deserialize(null);
-      } else {
-        // Simulate the error for FastNBT
-        throw new IllegalArgumentException("Data cannot be null or empty");
-      }
-    }, "Should throw IllegalArgumentException for null data");
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> {
+          if (standardSerializer != null) {
+            standardSerializer.deserialize(null);
+          } else {
+            // Simulate the error for FastNBT
+            throw new IllegalArgumentException("Data cannot be null or empty");
+          }
+        },
+        "Should throw IllegalArgumentException for null data");
   }
 
   @Test
@@ -44,14 +47,17 @@ class FastNbtEdgeCasesTest {
     // Test that empty data is handled gracefully
     byte[] emptyData = new byte[0];
 
-    assertThrows(IllegalArgumentException.class, () -> {
-      if (standardSerializer != null) {
-        standardSerializer.deserialize(emptyData);
-      } else {
-        // Simulate the error for FastNBT
-        throw new IllegalArgumentException("Data cannot be null or empty");
-      }
-    }, "Should throw IllegalArgumentException for empty data");
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> {
+          if (standardSerializer != null) {
+            standardSerializer.deserialize(emptyData);
+          } else {
+            // Simulate the error for FastNBT
+            throw new IllegalArgumentException("Data cannot be null or empty");
+          }
+        },
+        "Should throw IllegalArgumentException for empty data");
   }
 
   @Test
@@ -64,9 +70,12 @@ class FastNbtEdgeCasesTest {
     // Test with obviously corrupted data
     byte[] corruptedData = "this is not valid NBT data".getBytes();
 
-    assertThrows(IOException.class, () -> {
-      standardSerializer.deserialize(corruptedData);
-    }, "Should throw IOException for corrupted data");
+    assertThrows(
+        IOException.class,
+        () -> {
+          standardSerializer.deserialize(corruptedData);
+        },
+        "Should throw IOException for corrupted data");
   }
 
   @Test
@@ -91,9 +100,10 @@ class FastNbtEdgeCasesTest {
       assertNotNull(result, "Large data deserialization should produce valid result");
     } catch (IOException e) {
       // IOException is acceptable for large/invalid data
-      assertTrue(e.getMessage().contains("Failed to deserialize") ||
-                 e.getMessage().contains("corrupted") ||
-                 e.getMessage().contains("invalid"),
+      assertTrue(
+          e.getMessage().contains("Failed to deserialize")
+              || e.getMessage().contains("corrupted")
+              || e.getMessage().contains("invalid"),
           "Exception message should indicate deserialization failure");
     }
   }
@@ -108,9 +118,12 @@ class FastNbtEdgeCasesTest {
     // Test serialization with invalid chunk object
     Object invalidChunk = "this is not a chunk object";
 
-    assertThrows(IOException.class, () -> {
-      standardSerializer.serialize(invalidChunk);
-    }, "Should throw IOException for invalid chunk object");
+    assertThrows(
+        IOException.class,
+        () -> {
+          standardSerializer.serialize(invalidChunk);
+        },
+        "Should throw IOException for invalid chunk object");
   }
 
   @Test
@@ -146,7 +159,8 @@ class FastNbtEdgeCasesTest {
     assertEquals(0.85, pressureConfig.getHighMemoryThreshold(), 0.001);
 
     // FastNBT should handle memory pressure gracefully, possibly falling back to standard mode
-    System.out.println("Memory pressure handling: FastNBT should fall back gracefully under pressure");
+    System.out.println(
+        "Memory pressure handling: FastNBT should fall back gracefully under pressure");
   }
 
   @Test
@@ -155,11 +169,12 @@ class FastNbtEdgeCasesTest {
     config.setEnableFastNbt(true);
 
     // Simulate concurrent modifications
-    Runnable configModifier = () -> {
-      for (int i = 0; i < 100; i++) {
-        config.setEnableFastNbt(!config.isEnableFastNbt());
-      }
-    };
+    Runnable configModifier =
+        () -> {
+          for (int i = 0; i < 100; i++) {
+            config.setEnableFastNbt(!config.isEnableFastNbt());
+          }
+        };
 
     // Run multiple threads modifying configuration
     Thread thread1 = new Thread(configModifier);
@@ -186,10 +201,13 @@ class FastNbtEdgeCasesTest {
     config.setEnableFastNbt(true);
 
     // This simulates what should happen when FastNBT features are not yet implemented
-    assertThrows(UnsupportedOperationException.class, () -> {
-      // This would be a call to a FastNBT-specific method that doesn't exist yet
-      throw new UnsupportedOperationException("FastNBT feature not yet implemented");
-    }, "Should throw UnsupportedOperationException for unimplemented features");
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> {
+          // This would be a call to a FastNBT-specific method that doesn't exist yet
+          throw new UnsupportedOperationException("FastNBT feature not yet implemented");
+        },
+        "Should throw UnsupportedOperationException for unimplemented features");
   }
 
   @Test
@@ -263,9 +281,7 @@ class FastNbtEdgeCasesTest {
     assertFalse(config.isEnableFastNbt(), "Should fall back to standard implementation");
   }
 
-  /**
-   * Calculate checksum using the same algorithm as NbtChunkSerializer.
-   */
+  /** Calculate checksum using the same algorithm as NbtChunkSerializer. */
   private long calculateChecksum(byte[] data) {
     if (data == null || data.length == 0) {
       return 0L;

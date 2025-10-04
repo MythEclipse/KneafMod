@@ -12,7 +12,7 @@ public class ChunkStorageConfig {
   private String backupPath = "backups/chunkstorage";
   private boolean enableChecksums = true;
   private boolean enableCompression = false;
-  private boolean enableFastNbt = false;
+  private boolean enableFastNbt = true;
   private int maxBackupFiles = 10;
   private long backupRetentionDays = 7;
   private String databaseType = "rust"; // "rust", "inmemory", "rocksdb", "sled", "lmdb"
@@ -314,7 +314,9 @@ public class ChunkStorageConfig {
 
   /** Create a default configuration. */
   public static ChunkStorageConfig createDefault() {
-    return new ChunkStorageConfig(true, 1000, "LRU");
+    ChunkStorageConfig config = new ChunkStorageConfig(true, 1000, "LRU");
+    config.setEnableFastNbt(true); // Enable FastNBT by default
+    return config;
   }
 
   /** Create a development configuration with smaller cache. */
@@ -322,6 +324,7 @@ public class ChunkStorageConfig {
     ChunkStorageConfig config = new ChunkStorageConfig(true, 100, "LRU");
     config.setAsyncThreadpoolSize(2);
     config.setMaintenanceIntervalMinutes(30);
+    config.setEnableFastNbt(true); // Enable FastNBT by default in development
     return config;
   }
 
@@ -334,6 +337,7 @@ public class ChunkStorageConfig {
     config.setEnableSwapManager(true);
     config.setMaxConcurrentSwaps(20);
     config.setSwapBatchSize(100);
+    config.setEnableFastNbt(true); // Enable FastNBT by default in production
     return config;
   }
 }

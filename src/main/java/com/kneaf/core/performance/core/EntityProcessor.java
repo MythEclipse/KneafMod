@@ -27,7 +27,7 @@ public class EntityProcessor {
   public EntityProcessor(NativeBridgeProvider bridgeProvider, PerformanceMonitor monitor) {
     this.bridgeProvider = bridgeProvider;
     this.monitor = monitor;
-  this.protocolProcessor = EnhancedProtocolProcessor.createDefault();
+    this.protocolProcessor = EnhancedProtocolProcessor.createDefault();
   }
 
   /** Process entities and return list of entity IDs that should be ticked. */
@@ -36,8 +36,8 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-    EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
-      protocolProcessor.processWithFallback(
+      EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
+          protocolProcessor.processWithFallback(
               new EntityInput(entities, players),
               "Entity processing",
               new EnhancedProtocolProcessor.BinarySerializer<EntityInput>() {
@@ -247,8 +247,8 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-    EnhancedProtocolProcessor.ProtocolResult<ItemProcessResult> result =
-      protocolProcessor.processWithFallback(
+      EnhancedProtocolProcessor.ProtocolResult<ItemProcessResult> result =
+          protocolProcessor.processWithFallback(
               items,
               "Item processing",
               new EnhancedProtocolProcessor.BinarySerializer<
@@ -353,11 +353,12 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-    EnhancedProtocolProcessor.ProtocolResult<MobProcessResult> result =
-      protocolProcessor.processWithFallback(
+      EnhancedProtocolProcessor.ProtocolResult<MobProcessResult> result =
+          protocolProcessor.processWithFallback(
               mobs,
               "Mob processing",
-              new EnhancedProtocolProcessor.BinarySerializer<List<com.kneaf.core.data.entity.MobData>>() {
+              new EnhancedProtocolProcessor.BinarySerializer<
+                  List<com.kneaf.core.data.entity.MobData>>() {
                 @Override
                 public ByteBuffer serialize(List<com.kneaf.core.data.entity.MobData> input)
                     throws Exception {
@@ -390,7 +391,8 @@ public class EntityProcessor {
                   return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
                 }
               },
-              new EnhancedProtocolProcessor.JsonInputPreparer<List<com.kneaf.core.data.entity.MobData>>() {
+              new EnhancedProtocolProcessor.JsonInputPreparer<
+                  List<com.kneaf.core.data.entity.MobData>>() {
                 @Override
                 public Map<String, Object> prepareInput(
                     List<com.kneaf.core.data.entity.MobData> jsonInput) {
@@ -438,8 +440,8 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-    EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
-      protocolProcessor.processWithFallback(
+      EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
+          protocolProcessor.processWithFallback(
               villagers,
               "Villager processing",
               new EnhancedProtocolProcessor.BinarySerializer<List<VillagerData>>() {
@@ -525,12 +527,12 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-    EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
-      protocolProcessor.processWithFallback(
+      EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
+          protocolProcessor.processWithFallback(
               blockEntities,
               "Block processing",
-        new EnhancedProtocolProcessor.BinarySerializer<
-          List<com.kneaf.core.data.block.BlockEntityData>>() {
+              new EnhancedProtocolProcessor.BinarySerializer<
+                  List<com.kneaf.core.data.block.BlockEntityData>>() {
                 @Override
                 public ByteBuffer serialize(List<com.kneaf.core.data.block.BlockEntityData> input)
                     throws Exception {
@@ -558,8 +560,8 @@ public class EntityProcessor {
                   return new ArrayList<>();
                 }
               },
-        new EnhancedProtocolProcessor.JsonInputPreparer<
-          List<com.kneaf.core.data.block.BlockEntityData>>() {
+              new EnhancedProtocolProcessor.JsonInputPreparer<
+                  List<com.kneaf.core.data.block.BlockEntityData>>() {
                 @Override
                 public Map<String, Object> prepareInput(
                     List<com.kneaf.core.data.block.BlockEntityData> jsonInput) {

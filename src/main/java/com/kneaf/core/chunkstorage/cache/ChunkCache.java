@@ -23,8 +23,8 @@ public class ChunkCache implements StorageStatisticsProvider {
   private static final Logger LOGGER = LoggerFactory.getLogger(ChunkCache.class);
 
   private final Map<String, CachedChunk> cache = new ConcurrentHashMap<>();
-  private final int maxCapacity;
-  private final EvictionPolicy evictionPolicy;
+  private final java.util.concurrent.atomic.AtomicInteger maxCapacity;
+  private volatile EvictionPolicy evictionPolicy;
   private final ReadWriteLock cacheLock = new ReentrantReadWriteLock();
 
   // Cache statistics
@@ -427,13 +427,13 @@ public class ChunkCache implements StorageStatisticsProvider {
       throw new IllegalArgumentException("Eviction policy cannot be null");
     }
 
-    this.maxCapacity = maxCapacity;
-    this.evictionPolicy = evictionPolicy;
+  this.maxCapacity = new java.util.concurrent.atomic.AtomicInteger(maxCapacity);
+  this.evictionPolicy = evictionPolicy;
 
     LOGGER.info(
         "Initialized ChunkCache with capacity { } and { } eviction policy",
-        maxCapacity,
-        evictionPolicy.getPolicyName());
+    this.maxCapacity.get(),
+    evictionPolicy.getPolicyName());
   }
 
   /**
@@ -490,7 +490,7 @@ public class ChunkCache implements StorageStatisticsProvider {
     cacheLock.writeLock().lock();
     try {
       // Check if we need to evict a chunk
-      if (cache.size() >= maxCapacity && !cache.containsKey(key)) {
+      if (cache.size() >= maxCapacity.get() && !cache.containsKey(key)) {
         String keyToEvict = evictionPolicy.selectChunkToEvict(cache);
         if (keyToEvict != null) {
           CachedChunk evicted = cache.remove(keyToEvict);
@@ -585,7 +585,7 @@ public class ChunkCache implements StorageStatisticsProvider {
    * @return The maximum number of chunks that can be cached
    */
   public int getMaxCapacity() {
-    return maxCapacity;
+    return maxCapacity.get();
   }
 
   /** Clear all chunks from the cache. */
@@ -637,7 +637,7 @@ public class ChunkCache implements StorageStatisticsProvider {
           currentMisses,
           currentEvictions,
           cacheSize,
-          maxCapacity,
+      maxCapacity.get(),
           hitRate,
           evictionPolicy.getPolicyName(),
           currentSwapOuts,
@@ -648,6 +648,91 @@ public class ChunkCache implements StorageStatisticsProvider {
           totalSwapInDuration);
     } finally {
       cacheLock.readLock().unlock();
+    }
+  }
+
+  /**
+   * Set the maximum cache capacity at runtime. If the new capacity is smaller than the
+   * current cache size, evict chunks according to the current eviction policy until the
+   * size is within limits.
+   *
+   * @param newCapacity new maximum capacity (must be positive)
+   * @return true if applied, false on invalid input
+   */
+  public boolean setMaxCapacity(int newCapacity) {
+    if (newCapacity <= 0) {
+      return false;
+    }
+
+    cacheLock.writeLock().lock();
+    try {
+      int old = this.maxCapacity.getAndSet(newCapacity);
+      LOGGER.info("Cache capacity changed from { } to { }", old, newCapacity);
+
+      // If we now exceed capacity, evict until size <= newCapacity
+      while (cache.size() > newCapacity) {
+        String keyToEvict = evictionPolicy.selectChunkToEvict(cache);
+        if (keyToEvict == null) {
+          break;
+        }
+        CachedChunk evicted = cache.remove(keyToEvict);
+        if (evicted != null) {
+          evictionCount.incrementAndGet();
+          if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug(
+                "Evicted chunk { } due to capacity change (policy: { })",
+                keyToEvict,
+                evictionPolicy.getPolicyName());
+          }
+        }
+      }
+
+      return true;
+    } finally {
+      cacheLock.writeLock().unlock();
+    }
+  }
+
+  /**
+   * Switch eviction policy at runtime. Policy name is case-insensitive and supports: LRU,
+   * Distance, Hybrid, SwapAware.
+   *
+   * @param policyName policy name
+   * @return true if applied, false if invalid
+   */
+  public boolean setEvictionPolicy(String policyName) {
+    if (policyName == null || policyName.isEmpty()) {
+      return false;
+    }
+
+    cacheLock.writeLock().lock();
+    try {
+      EvictionPolicy newPolicy;
+      switch (policyName.toLowerCase()) {
+        case "lru":
+          newPolicy = new LRUEvictionPolicy();
+          break;
+        case "distance":
+          // Default center at 0,0 when runtime player centers aren't available
+          newPolicy = new DistanceEvictionPolicy(0, 0);
+          break;
+        case "hybrid":
+          newPolicy = new HybridEvictionPolicy();
+          break;
+        case "swapaware":
+        case "swap_aware":
+        case "swap-aware":
+          newPolicy = new SwapAwareEvictionPolicy(memoryPressureLevel);
+          break;
+        default:
+          return false;
+      }
+
+      this.evictionPolicy = newPolicy;
+      LOGGER.info("Eviction policy switched to { }", newPolicy.getPolicyName());
+      return true;
+    } finally {
+      cacheLock.writeLock().unlock();
     }
   }
 

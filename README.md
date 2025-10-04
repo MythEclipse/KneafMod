@@ -14,25 +14,30 @@ This is a Rust-based optimization library for Minecraft mods, providing high-per
 ## New Features & Optimizations (Latest Update)
 
 ### Enhanced Performance Manager
+
 - **Multithreaded Optimization Processing**: Now uses asynchronous multithreading for better server performance
 - **Reduced Processing Frequency**: Optimized to process every 3 ticks instead of every tick, reducing CPU load
 - **Enhanced Logging**: Structured JSON logging with periodic spatial grid statistics and meaningful optimization summaries
 
 ### Network Optimizer Improvements
+
 - **Increased Batch Size**: Enhanced throughput with larger batch processing (increased from 10)
 - **Reduced Code Clutter**: Removed unused methods like `calculateRateLimitDelay` for cleaner codebase
 
 ### Rust Core Optimizations
+
 - **SIMD-Accelerated Entity Filtering**: Enhanced performance with vectorized entity filtering operations
 - **Proximity-Based Optimization**: Reduced processing overhead with intelligent proximity calculations
 - **Manhattan Distance Enhancement**: Improved spatial calculations for better performance
 - **Reduced Debug Noise**: Removed excessive debug logging to improve performance and reduce log clutter
 
 ### Memory Management
+
 - **Native Float Buffer Pool**: Enhanced memory pooling for native operations
 - **Optimized Memory Allocation**: Improved allocator performance for better memory efficiency
 
 ### Enhanced Native Bridge
+
 - **Improved Batch Operations**: Enhanced batch processing with result callbacks
 - **Better Error Handling**: Comprehensive error handling for native operations
 - **Heavy Job Processing**: Optimized processing for resource-intensive operations

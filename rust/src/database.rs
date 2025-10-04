@@ -12,6 +12,30 @@ use sled::Db;
 use fastnbt::Value;
 
 use log::{debug, info, error};
+use serde_json;
+use std::fs;
+
+/// Recursively copy a directory's contents to a destination directory.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    if !src.is_dir() {
+        return Err(format!("Source is not a directory: {:?}", src));
+    }
+
+    for entry in fs::read_dir(src).map_err(|e| format!("Failed to read dir {:?}: {}", src, e))? {
+        let entry = entry.map_err(|e| format!("Failed to read dir entry: {}", e))?;
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+
+        if path.is_dir() {
+            fs::create_dir_all(&dest).map_err(|e| format!("Failed to create dir {:?}: {}", dest, e))?;
+            copy_dir_recursive(&path, &dest)?;
+        } else {
+            fs::copy(&path, &dest)
+                .map_err(|e| format!("Failed to copy file {:?} to {:?}: {}", path, dest, e))?;
+        }
+    }
+    Ok(())
+}
 
 /// Swap metadata for tracking chunk access patterns
 #[derive(Debug, Clone)]
@@ -428,21 +452,86 @@ impl RustDatabaseAdapter {
     pub fn create_backup(&self, backup_path: &str) -> Result<(), String> {
         info!("Creating backup at: {}", backup_path);
         
-        // In a real implementation, this would create a proper backup
-        // For now, we'll export the current stats and log the operation
-        let stats = self.get_stats()?;
-        
-        // Create backup directory if it doesn't exist
-        let backup_dir = Path::new(backup_path);
-        if let Some(parent) = backup_dir.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create backup directory: {}", e))?;
-        }
-        
-        info!("Backup operation logged for {} chunks ({} bytes)", 
-              stats.total_chunks, stats.total_size_bytes);
-        
-        Ok(())
+            // Create a timestamped backup directory under the provided path
+            let stats = self.get_stats()?;
+
+            // Ensure base backup directory exists
+            let base = Path::new(backup_path);
+            std::fs::create_dir_all(&base)
+                .map_err(|e| format!("Failed to create base backup directory {}: {}", backup_path, e))?;
+
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| format!("SystemTime error: {}", e))?
+                .as_secs();
+
+            let backup_dir = base.join(format!("backup_{}", ts));
+            std::fs::create_dir_all(&backup_dir)
+                .map_err(|e| format!("Failed to create backup directory {:?}: {}", backup_dir, e))?;
+
+            // Copy sled db directory files into the backup directory. If db_path is a directory
+            // we copy recursively. Otherwise copy the single file.
+            let db_path = Path::new(&self.db_path);
+            if db_path.exists() {
+                let copy_result = if db_path.is_dir() {
+                    // Recursively copy directory contents
+                    copy_dir_recursive(db_path, &backup_dir)
+                } else {
+                    // Copy single file into backup_dir
+                    let file_name = db_path.file_name().ok_or("Invalid db path file name")?;
+                    let dest = backup_dir.join(file_name);
+                    std::fs::copy(db_path, &dest)
+                        .map(|_| ())
+                        .map_err(|e| format!("Failed to copy db file {:?} to {:?}: {}", db_path, dest, e))
+                };
+
+                copy_result.map_err(|e| format!("Failed to copy database for backup: {}", e))?;
+            } else {
+                return Err(format!("Database path does not exist: {}", self.db_path));
+            }
+
+            // Save metadata about the backup (stats + timestamp)
+            let metadata = serde_json::json!({
+                "timestamp": ts,
+                "total_chunks": stats.total_chunks,
+                "total_size_bytes": stats.total_size_bytes,
+                "database_type": self.database_type,
+            });
+
+            let meta_path = backup_dir.join("metadata.json");
+            std::fs::write(&meta_path, serde_json::to_vec_pretty(&metadata).map_err(|e| format!("Failed to serialize metadata: {}", e))?)
+                .map_err(|e| format!("Failed to write metadata file {:?}: {}", meta_path, e))?;
+
+            info!("Created backup at {:?} ({} chunks, {} bytes)", backup_dir, stats.total_chunks, stats.total_size_bytes);
+
+            // Prune old backups according to simple retention: keep latest N backups if present
+            // We'll keep up to 10 backups by default to avoid unbounded growth
+            if let Some(parent_dir) = base.to_str() {
+                if let Ok(entries) = std::fs::read_dir(base) {
+                    let mut backups: Vec<_> = entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .collect();
+
+                    // Sort by modified time ascending
+                    backups.sort_by_key(|d| d.metadata().and_then(|m| m.modified()).ok());
+
+                    // Maximum backups to keep
+                    let max_backups = 10usize;
+                    while backups.len() > max_backups {
+                        // remove the oldest (first) entry and delete its directory
+                        let oldest = backups.remove(0);
+                        let old_path = oldest.path();
+                        if let Err(e) = std::fs::remove_dir_all(&old_path) {
+                            error!("Failed to prune old backup {:?}: {}", old_path, e);
+                        } else {
+                            info!("Pruned old backup: {:?}", old_path);
+                        }
+                    }
+                }
+            }
+
+            Ok(())
     }
     
     /// Store data with checksum

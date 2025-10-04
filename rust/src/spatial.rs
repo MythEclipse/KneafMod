@@ -197,6 +197,258 @@ impl Aabb {
         }
     }
 }
+/// SIMD-accelerated ray-AABB intersection test
+pub fn ray_aabb_intersect_simd(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> Option<f32> {
+    #[cfg(target_feature = "avx2")]
+    {
+        use std::arch::x86_64::*;
+
+        let origin = _mm256_set_ps(
+            ray_origin.x as f32, ray_origin.y as f32, ray_origin.z as f32, 0.0,
+            ray_origin.x as f32, ray_origin.y as f32, ray_origin.z as f32, 0.0
+        );
+        let dir = _mm256_set_ps(
+            ray_dir.x as f32, ray_dir.y as f32, ray_dir.z as f32, 0.0,
+            ray_dir.x as f32, ray_dir.y as f32, ray_dir.z as f32, 0.0
+        );
+        let aabb_min = _mm256_set_ps(
+            aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0,
+            aabb.min_x as f32, aabb.min_y as f32, aabb.min_z as f32, 0.0
+        );
+        let aabb_max = _mm256_set_ps(
+            aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0,
+            aabb.max_x as f32, aabb.max_y as f32, aabb.max_z as f32, 0.0
+        );
+
+        // Calculate t_min and t_max for each axis
+        let inv_dir = _mm256_div_ps(_mm256_set1_ps(1.0), dir);
+        let t1 = _mm256_mul_ps(_mm256_sub_ps(aabb_min, origin), inv_dir);
+        let t2 = _mm256_mul_ps(_mm256_sub_ps(aabb_max, origin), inv_dir);
+
+        let t_min = _mm256_min_ps(t1, t2);
+        let t_max = _mm256_max_ps(t1, t2);
+
+        // Find the maximum t_min and minimum t_max
+        let t_min_max = _mm256_max_ps(
+            _mm256_max_ps(_mm256_shuffle_ps(t_min, t_min, 0b00000000), _mm256_shuffle_ps(t_min, t_min, 0b01010101)),
+            _mm256_shuffle_ps(t_min, t_min, 0b10101010)
+        );
+        let t_max_min = _mm256_min_ps(
+            _mm256_min_ps(_mm256_shuffle_ps(t_max, t_max, 0b00000000), _mm256_shuffle_ps(t_max, t_max, 0b01010101)),
+            _mm256_shuffle_ps(t_max, t_max, 0b10101010)
+        );
+
+        let mut t_min_arr = [0.0f32; 8];
+        let mut t_max_arr = [0.0f32; 8];
+        _mm256_storeu_ps(t_min_arr.as_mut_ptr(), t_min_max);
+        _mm256_storeu_ps(t_max_arr.as_mut_ptr(), t_max_min);
+
+        let t_min_final = t_min_arr[0];
+        let t_max_final = t_max_arr[0];
+
+        if t_min_final <= t_max_final && t_max_final >= 0.0 {
+            Some(t_min_final.max(0.0))
+        } else {
+            None
+        }
+    }
+    #[cfg(not(target_feature = "avx2"))]
+    {
+        ray_aabb_intersect_scalar(ray_origin, ray_dir, aabb)
+    }
+}
+
+/// Scalar fallback for ray-AABB intersection
+pub fn ray_aabb_intersect_scalar(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> Option<f32> {
+    let inv_dir_x = 1.0 / ray_dir.x as f64;
+    let inv_dir_y = 1.0 / ray_dir.y as f64;
+    let inv_dir_z = 1.0 / ray_dir.z as f64;
+
+    let t1_x = (aabb.min_x - ray_origin.x as f64) * inv_dir_x;
+    let t2_x = (aabb.max_x - ray_origin.x as f64) * inv_dir_x;
+    let t1_y = (aabb.min_y - ray_origin.y as f64) * inv_dir_y;
+    let t2_y = (aabb.max_y - ray_origin.y as f64) * inv_dir_y;
+    let t1_z = (aabb.min_z - ray_origin.z as f64) * inv_dir_z;
+    let t2_z = (aabb.max_z - ray_origin.z as f64) * inv_dir_z;
+
+    let t_min_x = t1_x.min(t2_x);
+    let t_max_x = t1_x.max(t2_x);
+    let t_min_y = t1_y.min(t2_y);
+    let t_max_y = t1_y.max(t2_y);
+    let t_min_z = t1_z.min(t2_z);
+    let t_max_z = t1_z.max(t2_z);
+
+    let t_min = t_min_x.max(t_min_y).max(t_min_z);
+    let t_max = t_max_x.min(t_max_y).min(t_max_z);
+
+    if t_min <= t_max && t_max >= 0.0 {
+        Some(t_min.max(0.0) as f32)
+    } else {
+        None
+    }
+}
+
+/// SIMD-accelerated batch ray-AABB intersection for multiple rays
+pub fn batch_ray_aabb_intersect_simd(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<Option<f32>> {
+    #[cfg(target_feature = "avx2")]
+    {
+        use std::arch::x86_64::*;
+
+        let aabb_min = _mm256_set1_ps(aabb.min_x as f32);
+        let aabb_max = _mm256_set1_ps(aabb.max_x as f32);
+        let aabb_min_y = _mm256_set1_ps(aabb.min_y as f32);
+        let aabb_max_y = _mm256_set1_ps(aabb.max_y as f32);
+        let aabb_min_z = _mm256_set1_ps(aabb.min_z as f32);
+        let aabb_max_z = _mm256_set1_ps(aabb.max_z as f32);
+
+        rays.par_chunks(8).flat_map(|chunk| {
+            let mut results = vec![None; chunk.len()];
+
+            for (i, (origin, dir)) in chunk.iter().enumerate() {
+                let origin_x = _mm256_set1_ps(origin.x as f32);
+                let origin_y = _mm256_set1_ps(origin.y as f32);
+                let origin_z = _mm256_set1_ps(origin.z as f32);
+                let dir_x = _mm256_set1_ps(dir.x as f32);
+                let dir_y = _mm256_set1_ps(dir.y as f32);
+                let dir_z = _mm256_set1_ps(dir.z as f32);
+
+                // Calculate intersection for X axis
+                let inv_dir_x = _mm256_div_ps(_mm256_set1_ps(1.0), dir_x);
+                let t1_x = _mm256_mul_ps(_mm256_sub_ps(aabb_min, origin_x), inv_dir_x);
+                let t2_x = _mm256_mul_ps(_mm256_sub_ps(aabb_max, origin_x), inv_dir_x);
+                let t_min_x = _mm256_min_ps(t1_x, t2_x);
+                let t_max_x = _mm256_max_ps(t1_x, t2_x);
+
+                // Y axis
+                let inv_dir_y = _mm256_div_ps(_mm256_set1_ps(1.0), dir_y);
+                let t1_y = _mm256_mul_ps(_mm256_sub_ps(aabb_min_y, origin_y), inv_dir_y);
+                let t2_y = _mm256_mul_ps(_mm256_sub_ps(aabb_max_y, origin_y), inv_dir_y);
+                let t_min_y = _mm256_min_ps(t1_y, t2_y);
+                let t_max_y = _mm256_max_ps(t1_y, t2_y);
+
+                // Z axis
+                let inv_dir_z = _mm256_div_ps(_mm256_set1_ps(1.0), dir_z);
+                let t1_z = _mm256_mul_ps(_mm256_sub_ps(aabb_min_z, origin_z), inv_dir_z);
+                let t2_z = _mm256_mul_ps(_mm256_sub_ps(aabb_max_z, origin_z), inv_dir_z);
+                let t_min_z = _mm256_min_ps(t1_z, t2_z);
+                let t_max_z = _mm256_max_ps(t1_z, t2_z);
+
+                // Combine results
+                let t_min = _mm256_max_ps(_mm256_max_ps(t_min_x, t_min_y), t_min_z);
+                let t_max = _mm256_min_ps(_mm256_min_ps(t_max_x, t_max_y), t_max_z);
+
+                let mut t_min_arr = [0.0f32; 8];
+                let mut t_max_arr = [0.0f32; 8];
+                _mm256_storeu_ps(t_min_arr.as_mut_ptr(), t_min);
+                _mm256_storeu_ps(t_max_arr.as_mut_ptr(), t_max);
+
+                if t_min_arr[0] <= t_max_arr[0] && t_max_arr[0] >= 0.0 {
+                    results[i] = Some(t_min_arr[0].max(0.0));
+                }
+            }
+
+            results
+        }).collect()
+    }
+    #[cfg(not(target_feature = "avx2"))]
+    {
+        rays.iter().map(|(origin, dir)| ray_aabb_intersect_scalar(*origin, *dir, aabb)).collect()
+    }
+}
+
+/// SIMD-accelerated swept AABB collision detection
+pub fn swept_aabb_collision_simd(aabb1: &Aabb, velocity1: Vec3, aabb2: &Aabb, delta_time: f32) -> Option<f32> {
+    #[cfg(target_feature = "avx2")]
+    {
+        use std::arch::x86_64::*;
+
+        // Expand AABB2 by AABB1's size in the direction of movement
+        let expanded_min_x = if velocity1.x > 0.0 {
+            aabb2.min_x - aabb1.half_size().x as f64 * delta_time as f64
+        } else {
+            aabb2.min_x
+        };
+        let expanded_max_x = if velocity1.x < 0.0 {
+            aabb2.max_x + aabb1.half_size().x as f64 * delta_time as f64
+        } else {
+            aabb2.max_x
+        };
+
+        let expanded_min_y = if velocity1.y > 0.0 {
+            aabb2.min_y - aabb1.half_size().y as f64 * delta_time as f64
+        } else {
+            aabb2.min_y
+        };
+        let expanded_max_y = if velocity1.y < 0.0 {
+            aabb2.max_y + aabb1.half_size().y as f64 * delta_time as f64
+        } else {
+            aabb2.max_y
+        };
+
+        let expanded_min_z = if velocity1.z > 0.0 {
+            aabb2.min_z - aabb1.half_size().z as f64 * delta_time as f64
+        } else {
+            aabb2.min_z
+        };
+        let expanded_max_z = if velocity1.z < 0.0 {
+            aabb2.max_z + aabb1.half_size().z as f64 * delta_time as f64
+        } else {
+            aabb2.max_z
+        };
+
+        let expanded_aabb = Aabb::new(expanded_min_x, expanded_min_y, expanded_min_z, expanded_max_x, expanded_max_y, expanded_max_z);
+
+        // Check ray intersection with expanded AABB
+        ray_aabb_intersect_simd(aabb1.center(), velocity1 * delta_time, &expanded_aabb)
+    }
+    #[cfg(not(target_feature = "avx2"))]
+    {
+        swept_aabb_collision_scalar(aabb1, velocity1, aabb2, delta_time)
+    }
+}
+
+/// Scalar fallback for swept AABB collision
+pub fn swept_aabb_collision_scalar(aabb1: &Aabb, velocity1: Vec3, aabb2: &Aabb, delta_time: f32) -> Option<f32> {
+    // Expand AABB2 by AABB1's size in the direction of movement
+    let expanded_min_x = if velocity1.x > 0.0 {
+        aabb2.min_x - aabb1.half_size().x as f64 * delta_time as f64
+    } else {
+        aabb2.min_x
+    };
+    let expanded_max_x = if velocity1.x < 0.0 {
+        aabb2.max_x + aabb1.half_size().x as f64 * delta_time as f64
+    } else {
+        aabb2.max_x
+    };
+
+    let expanded_min_y = if velocity1.y > 0.0 {
+        aabb2.min_y - aabb1.half_size().y as f64 * delta_time as f64
+    } else {
+        aabb2.min_y
+    };
+    let expanded_max_y = if velocity1.y < 0.0 {
+        aabb2.max_y + aabb1.half_size().y as f64 * delta_time as f64
+    } else {
+        aabb2.max_y
+    };
+
+    let expanded_min_z = if velocity1.z > 0.0 {
+        aabb2.min_z - aabb1.half_size().z as f64 * delta_time as f64
+    } else {
+        aabb2.min_z
+    };
+    let expanded_max_z = if velocity1.z < 0.0 {
+        aabb2.max_z + aabb1.half_size().z as f64 * delta_time as f64
+    } else {
+        aabb2.max_z
+    };
+
+    let expanded_aabb = Aabb::new(expanded_min_x, expanded_min_y, expanded_min_z, expanded_max_x, expanded_max_y, expanded_max_z);
+
+    // Check ray intersection with expanded AABB
+    ray_aabb_intersect_scalar(aabb1.center(), velocity1 * delta_time, &expanded_aabb)
+}
+
 
 #[derive(Debug, Clone)]
 pub struct QuadTree<T> {

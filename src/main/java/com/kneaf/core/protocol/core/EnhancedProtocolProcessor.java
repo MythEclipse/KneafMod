@@ -7,9 +7,9 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -33,7 +33,6 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
   // Batching state
   private final List<Object> packetBuffer;
   private final ScheduledExecutorService batchScheduler;
-  private volatile long lastFlushTime;
   private volatile java.util.concurrent.ScheduledFuture<?> batchFlushTask;
   private final Map<Object, CompletableFuture<Object>> pendingResults;
 
@@ -74,7 +73,6 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
     this.batchTimeThresholdMs = batchTimeThresholdMs;
     this.packetBuffer = new ArrayList<>();
     this.batchScheduler = batchingEnabled ? Executors.newSingleThreadScheduledExecutor() : null;
-    this.lastFlushTime = System.currentTimeMillis();
     this.pendingResults = new ConcurrentHashMap<>();
   }
 
@@ -412,52 +410,50 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
     return future;
   }
 
-  /**
-   * Schedule batch flush based on time threshold.
-   */
+  /** Schedule batch flush based on time threshold. */
   private void scheduleFlush() {
     if (batchFlushTask != null && !batchFlushTask.isDone()) {
       batchFlushTask.cancel(false);
     }
-    batchFlushTask = batchScheduler.schedule(this::flushBatch, batchTimeThresholdMs, TimeUnit.MILLISECONDS);
+    batchFlushTask =
+        batchScheduler.schedule(this::flushBatch, batchTimeThresholdMs, TimeUnit.MILLISECONDS);
   }
 
-  /**
-   * Flush the current batch by processing all buffered packets.
-   */
+  /** Flush the current batch by processing all buffered packets. */
   private synchronized void flushBatch() {
     if (packetBuffer.isEmpty()) return;
     List<Object> batch = new ArrayList<>(packetBuffer);
     packetBuffer.clear();
-    lastFlushTime = System.currentTimeMillis();
     if (batchFlushTask != null) {
       batchFlushTask.cancel(false);
       batchFlushTask = null;
     }
     // Process batch asynchronously
-    CompletableFuture.runAsync(() -> {
-      for (Object packet : batch) {
-        try {
-          Object result = processWithFallback(packet);
-          CompletableFuture<Object> future = pendingResults.remove(packet);
-          if (future != null) {
-            future.complete(result);
+    CompletableFuture.runAsync(
+        () -> {
+          for (Object packet : batch) {
+            try {
+              Object result = processWithFallback(packet);
+              CompletableFuture<Object> future = pendingResults.remove(packet);
+              if (future != null) {
+                future.complete(result);
+              }
+            } catch (Exception e) {
+              CompletableFuture<Object> future = pendingResults.remove(packet);
+              if (future != null) {
+                future.completeExceptionally(e);
+              }
+              logger.logError(
+                  "batch_processing",
+                  e,
+                  logger.generateTraceId(),
+                  Map.of("packet_type", packet.getClass().getSimpleName()));
+            }
           }
-        } catch (Exception e) {
-          CompletableFuture<Object> future = pendingResults.remove(packet);
-          if (future != null) {
-            future.completeExceptionally(e);
-          }
-          logger.logError("batch_processing", e, logger.generateTraceId(),
-              Map.of("packet_type", packet.getClass().getSimpleName()));
-        }
-      }
-    });
+        });
   }
 
-  /**
-   * Shutdown the batch scheduler.
-   */
+  /** Shutdown the batch scheduler. */
   public void shutdown() {
     if (batchScheduler != null) {
       batchScheduler.shutdown();

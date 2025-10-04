@@ -3,13 +3,12 @@ package com.kneaf.core.chunkstorage.serialization;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.kneaf.core.chunkstorage.common.ChunkStorageConfig;
-import java.io.IOException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Test suite for FastNBT functionality.
- * Tests the fast NBT serialization/deserialization when enabled.
+ * Test suite for FastNBT functionality. Tests the fast NBT serialization/deserialization when
+ * enabled.
  */
 class FastNbtTest {
 
@@ -21,9 +20,9 @@ class FastNbtTest {
   }
 
   @Test
-  void testFastNbtConfigDefaultDisabled() {
-    // FastNBT should be disabled by default
-    assertFalse(config.isEnableFastNbt(), "FastNBT should be disabled by default");
+  void testFastNbtConfigDefaultEnabled() {
+    // FastNBT should be enabled by default (new behavior)
+    assertTrue(config.isEnableFastNbt(), "FastNBT should be enabled by default");
   }
 
   @Test
@@ -43,21 +42,22 @@ class FastNbtTest {
   @Test
   void testFastNbtConfigToggle() {
     // Test toggling FastNBT
-    assertFalse(config.isEnableFastNbt());
-
-    config.setEnableFastNbt(true);
     assertTrue(config.isEnableFastNbt());
 
     config.setEnableFastNbt(false);
     assertFalse(config.isEnableFastNbt());
+
+    config.setEnableFastNbt(true);
+    assertTrue(config.isEnableFastNbt());
   }
 
   @Test
   void testFastNbtConfigToString() {
     // Test that toString includes FastNBT setting
     String configString = config.toString();
-    assertTrue(configString.contains("enableFastNbt=false"),
-        "Config toString should include FastNBT setting");
+    assertTrue(
+        configString.contains("enableFastNbt=true"),
+        "Config toString should include FastNBT setting (now enabled by default)");
   }
 
   @Test
@@ -65,7 +65,8 @@ class FastNbtTest {
     // Test that toString reflects enabled FastNBT
     config.setEnableFastNbt(true);
     String configString = config.toString();
-    assertTrue(configString.contains("enableFastNbt=true"),
+    assertTrue(
+        configString.contains("enableFastNbt=true"),
         "Config toString should reflect enabled FastNBT");
   }
 
@@ -83,39 +84,40 @@ class FastNbtTest {
 
   @Test
   void testFastNbtInDefaultConfig() {
-    // Test default configuration has FastNBT disabled
+    // Test default configuration has FastNBT enabled (new behavior)
     ChunkStorageConfig defaultConfig = ChunkStorageConfig.createDefault();
-    assertFalse(defaultConfig.isEnableFastNbt(),
-        "Default config should have FastNBT disabled");
+    assertTrue(defaultConfig.isEnableFastNbt(), "Default config should have FastNBT enabled");
   }
 
   @Test
   void testFastNbtInDevelopmentConfig() {
-    // Test development configuration has FastNBT disabled
+    // Test development configuration has FastNBT enabled (new behavior)
     ChunkStorageConfig devConfig = ChunkStorageConfig.createDevelopment();
-    assertFalse(devConfig.isEnableFastNbt(),
-        "Development config should have FastNBT disabled");
+    assertTrue(devConfig.isEnableFastNbt(), "Development config should have FastNBT enabled");
   }
 
   @Test
   void testFastNbtInProductionConfig() {
-    // Test production configuration has FastNBT disabled by default
+    // Test production configuration has FastNBT enabled by default (new behavior)
     ChunkStorageConfig prodConfig = ChunkStorageConfig.createProduction();
-    assertFalse(prodConfig.isEnableFastNbt(),
-        "Production config should have FastNBT disabled by default");
+    assertTrue(
+        prodConfig.isEnableFastNbt(), "Production config should have FastNBT enabled by default");
   }
 
-  // TODO: Add tests for actual FastNBT serialization/deserialization once implemented
+  // Add tests for actual FastNBT serialization/deserialization once implemented
   // These tests will need mock chunk data and FastNBT serializer implementation
 
   @Test
   void testFastNbtSerializerNotImplemented() {
     // Placeholder test - FastNBT serializer should not be available yet
     // This test will be updated once FastNBT implementation is added
-    assertThrows(UnsupportedOperationException.class, () -> {
-      // This would be the call to create FastNBT serializer
-      throw new UnsupportedOperationException("FastNBT serializer not yet implemented");
-    }, "FastNBT serializer should not be implemented yet");
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> {
+          // This would be the call to create FastNBT serializer
+          throw new UnsupportedOperationException("FastNBT serializer not yet implemented");
+        },
+        "FastNBT serializer should not be implemented yet");
   }
 
   @Test

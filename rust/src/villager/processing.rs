@@ -142,11 +142,21 @@ fn process_working_group(
     let group_distance = calculate_group_distance_to_players(group, &input.players);
 
     if group_distance > config.disable_ai_distance {
-        // Disable AI for far working villagers
-        disable_ai.extend(&group.villager_ids);
+        // Far working villagers - disable AI for most, keep a few active for critical tasks
+        let villagers_to_keep = std::cmp::max(1, group.villager_ids.len() / 8);
+        for (i, &villager_id) in group.villager_ids.iter().enumerate() {
+            if i >= villagers_to_keep {
+                disable_ai.push(villager_id);
+            }
+        }
     } else if group_distance > config.simplify_ai_distance {
-        // Simplify AI for medium-distance working villagers
-        simplify_ai.extend(&group.villager_ids);
+        // Medium distance - simplify AI but keep some complexity
+        let villagers_to_keep_complex = std::cmp::max(2, group.villager_ids.len() / 4);
+        for (i, &villager_id) in group.villager_ids.iter().enumerate() {
+            if i >= villagers_to_keep_complex {
+                simplify_ai.push(villager_id);
+            }
+        }
     }
 }
 
@@ -179,7 +189,7 @@ fn process_resting_group(
     group: &VillagerGroup,
     input: &VillagerInput,
     config: &VillagerConfig,
-    disable_ai: &mut Vec<u64>,
+    _disable_ai: &mut Vec<u64>,
     simplify_ai: &mut Vec<u64>,
 ) {
     // Resting villagers can have heavily reduced AI
@@ -202,9 +212,21 @@ fn process_wandering_group(
     let group_distance = calculate_group_distance_to_players(group, &input.players);
 
     if group_distance > config.disable_ai_distance {
-        disable_ai.extend(&group.villager_ids);
+        // Far wandering villagers - disable AI for most, keep a few active for exploration
+        let villagers_to_keep = std::cmp::max(1, group.villager_ids.len() / 8);
+        for (i, &villager_id) in group.villager_ids.iter().enumerate() {
+            if i >= villagers_to_keep {
+                disable_ai.push(villager_id);
+            }
+        }
     } else if group_distance > config.simplify_ai_distance {
-        simplify_ai.extend(&group.villager_ids);
+        // Medium distance - simplify AI but keep some exploration behavior
+        let villagers_to_keep_complex = std::cmp::max(2, group.villager_ids.len() / 4);
+        for (i, &villager_id) in group.villager_ids.iter().enumerate() {
+            if i >= villagers_to_keep_complex {
+                simplify_ai.push(villager_id);
+            }
+        }
     }
 }
 
@@ -219,9 +241,21 @@ fn process_generic_group(
     let group_distance = calculate_group_distance_to_players(group, &input.players);
 
     if group_distance > config.disable_ai_distance {
-        disable_ai.extend(&group.villager_ids);
+        // Far generic villagers - disable AI for most, keep a few active
+        let villagers_to_keep = std::cmp::max(1, group.villager_ids.len() / 8);
+        for (i, &villager_id) in group.villager_ids.iter().enumerate() {
+            if i >= villagers_to_keep {
+                disable_ai.push(villager_id);
+            }
+        }
     } else if group_distance > config.simplify_ai_distance {
-        simplify_ai.extend(&group.villager_ids);
+        // Medium distance - simplify AI but keep some basic behavior
+        let villagers_to_keep_complex = std::cmp::max(2, group.villager_ids.len() / 4);
+        for (i, &villager_id) in group.villager_ids.iter().enumerate() {
+            if i >= villagers_to_keep_complex {
+                simplify_ai.push(villager_id);
+            }
+        }
     }
 }
 
@@ -229,8 +263,8 @@ fn apply_distance_optimizations(
     group: &VillagerGroup,
     input: &VillagerInput,
     config: &VillagerConfig,
-    disable_ai: &mut Vec<u64>,
-    simplify_ai: &mut Vec<u64>,
+    _disable_ai: &mut Vec<u64>,
+    _simplify_ai: &mut Vec<u64>,
     reduce_pathfinding: &mut Vec<u64>,
 ) {
     // Additional distance-based optimizations

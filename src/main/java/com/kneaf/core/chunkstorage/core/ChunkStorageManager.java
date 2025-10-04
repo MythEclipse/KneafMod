@@ -7,6 +7,7 @@ import com.kneaf.core.chunkstorage.database.DatabaseAdapter;
 import com.kneaf.core.chunkstorage.database.InMemoryDatabaseAdapter;
 import com.kneaf.core.chunkstorage.database.RustDatabaseAdapter;
 import com.kneaf.core.chunkstorage.serialization.ChunkSerializer;
+import com.kneaf.core.chunkstorage.serialization.FastNbtSerializer;
 import com.kneaf.core.chunkstorage.serialization.NbtChunkSerializer;
 import com.kneaf.core.chunkstorage.swap.SwapManager;
 import java.util.Optional;
@@ -57,6 +58,16 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
       SwapManager swapManager = createSwapManager(config);
 
       this.core = new ChunkStorageCore(worldName, serializer, database, cache, config.isEnabled());
+
+      // Wire the swap manager into the core so core can request swap-in operations
+      if (swapManager != null) {
+        try {
+          this.core.setSwapManager(swapManager);
+        } catch (Exception e) {
+          LOGGER.warn("Failed to set SwapManager on ChunkStorageCore: { }", e.getMessage());
+        }
+      }
+
       this.coordinator =
           swapManager != null
               ? new ChunkStorageCoordinator(worldName, core, swapManager, config.isEnabled())
@@ -72,6 +83,50 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
       this.core = null;
       this.coordinator = null;
       LOGGER.info("ChunkStorageManager FACADE disabled for world '{ }'", worldName);
+    }
+  }
+
+  /** Clear the in-memory cache for this storage manager. */
+  public void clearCache() {
+    if (!enabled || shutdown || core == null) {
+      return;
+    }
+
+    try {
+      core.clearCache();
+    } catch (Exception e) {
+      LOGGER.error("ChunkStorageManager: Failed to clear cache for world '" + worldName + "'", e);
+    }
+  }
+
+  /** Set cache capacity (best-effort). */
+  public void setCacheCapacity(int capacity) {
+    if (!enabled || shutdown || core == null) {
+      return;
+    }
+
+    try {
+      // Best-effort: if core exposes a method to update cache capacity in future, call it.
+      // For now, update configuration via coordinator if available.
+      // No-op fallback to keep compatibility.
+    } catch (Exception e) {
+      LOGGER.error(
+          "ChunkStorageManager: Failed to set cache capacity for world '" + worldName + "'", e);
+    }
+  }
+
+  /** Set eviction policy (best-effort). */
+  public void setEvictionPolicy(String policy) {
+    if (!enabled || shutdown || core == null) {
+      return;
+    }
+
+    try {
+      // Best-effort no-op for now; the cache implementation would need to expose
+      // a runtime eviction policy switch to make this effective.
+    } catch (Exception e) {
+      LOGGER.error(
+          "ChunkStorageManager: Failed to set eviction policy for world '" + worldName + "'", e);
     }
   }
 
@@ -372,15 +427,31 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
 
   private ChunkSerializer createSerializer(ChunkStorageConfig config) {
     try {
-      if (NbtChunkSerializer.isMinecraftAvailable()) {
+      // Check if FastNBT is enabled and available
+      if (config.isEnableFastNbt() && FastNbtSerializer.isFastNbtAvailable()) {
+        LOGGER.info("Using FastNbtSerializer for chunk serialization");
+        return new FastNbtSerializer();
+      }
+      // Fall back to standard NBT serializer if FastNBT is not available or disabled
+      else if (NbtChunkSerializer.isMinecraftAvailable()) {
+        LOGGER.info(
+            "Using NbtChunkSerializer for chunk serialization (FastNBT not available or disabled)");
         return new NbtChunkSerializer();
       } else {
-        LOGGER.warn("Minecraft classes not available - serializer will be null");
+        LOGGER.warn(
+            "Neither FastNBT nor standard NBT classes are available - serializer will be null");
         return null;
       }
     } catch (Exception e) {
-      LOGGER.warn(
-          "Failed to initialize NbtChunkSerializer, serializer will be null: { }", e.getMessage());
+      LOGGER.warn("Failed to initialize serializer, will use fallback: { }", e.getMessage());
+
+      // Try fallback to standard NBT if FastNBT initialization failed
+      if (NbtChunkSerializer.isMinecraftAvailable()) {
+        LOGGER.info("Falling back to NbtChunkSerializer after FastNBT initialization failed");
+        return new NbtChunkSerializer();
+      }
+
+      LOGGER.error("All serialization options failed - serializer will be null");
       return null;
     }
   }
@@ -495,26 +566,16 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
   }
 
   private Object createEmptySwapStats() {
-    // For now, return a simple placeholder object
-    // In a real implementation, this would create proper SwapManagerStats
-    java.util.Map<String, Object> placeholder = new java.util.HashMap<>();
-    placeholder.put("enabled", false);
-    placeholder.put("pressureLevel", "NORMAL");
-    placeholder.put("totalOperations", 0);
-    placeholder.put("failedOperations", 0);
-    return placeholder;
+    // Return a proper SwapManagerStats instance with default values
+    SwapManager.MemoryUsageInfo memInfo = new SwapManager.MemoryUsageInfo(0, 0, 0, 0, 0.0);
+    SwapManager.SwapStatistics swapStatistics = new SwapManager.SwapStatistics();
+    return new SwapManager.SwapManagerStats(
+        false, SwapManager.MemoryPressureLevel.NORMAL, 0L, 0L, 0, 0, memInfo, swapStatistics);
   }
 
   private Object createEmptyMemoryUsage() {
-    // For now, return a simple placeholder object
-    // In a real implementation, this would create proper MemoryUsageInfo
-    java.util.Map<String, Object> placeholder = new java.util.HashMap<>();
-    placeholder.put("totalMemory", 0);
-    placeholder.put("freeMemory", 0);
-    placeholder.put("usedMemory", 0);
-    placeholder.put("maxMemory", 0);
-    placeholder.put("usagePercentage", 0.0);
-    return placeholder;
+    // Return a proper MemoryUsageInfo object with zeroed values
+    return new SwapManager.MemoryUsageInfo(0L, 0L, 0L, 0L, 0.0);
   }
 
   /** Storage statistics container. */

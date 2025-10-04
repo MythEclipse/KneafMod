@@ -8,8 +8,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Test suite for FastNBT data format compatibility.
- * Ensures that FastNBT produces data compatible with standard NBT format.
+ * Test suite for FastNBT data format compatibility. Ensures that FastNBT produces data compatible
+ * with standard NBT format.
  */
 class FastNbtCompatibilityTest {
 
@@ -83,7 +83,7 @@ class FastNbtCompatibilityTest {
     // For now, it verifies that the configuration is set correctly
     assertTrue(config.isEnableFastNbt(), "FastNBT should be enabled for this test");
 
-    // TODO: When FastNBT is implemented, this test should:
+    // When FastNBT is implemented, this test should:
     // 1. Serialize with FastNBT
     // 2. Deserialize with standard NBT
     // 3. Verify data integrity
@@ -101,16 +101,23 @@ class FastNbtCompatibilityTest {
     final int expectedVersion = 1;
 
     if (standardSerializer != null) {
-      assertEquals(expectedFormat, standardSerializer.getFormat(),
+      assertEquals(
+          expectedFormat,
+          standardSerializer.getFormat(),
           "Serializer should use correct format name");
-      assertEquals(expectedVersion, standardSerializer.getVersion(),
+      assertEquals(
+          expectedVersion,
+          standardSerializer.getVersion(),
           "Serializer should use correct format version");
     }
 
     // FastNBT should also maintain the same format name and version for compatibility
     // This is a design requirement for FastNBT implementation
-    System.out.println("Format compatibility requirement: FastNBT must use format='" +
-        expectedFormat + "', version=" + expectedVersion);
+    System.out.println(
+        "Format compatibility requirement: FastNBT must use format='"
+            + expectedFormat
+            + "', version="
+            + expectedVersion);
   }
 
   @Test
@@ -185,18 +192,14 @@ class FastNbtCompatibilityTest {
     System.out.println("Forward compatibility: FastNBT must follow same version rules");
   }
 
-  /**
-   * Create mock chunk data for testing.
-   */
+  /** Create mock chunk data for testing. */
   private Object createMockChunkData() {
     // Return a simple mock object
     // In real implementation, this would create actual Minecraft chunk data
     return new Object();
   }
 
-  /**
-   * Calculate checksum using the same algorithm as NbtChunkSerializer.
-   */
+  /** Calculate checksum using the same algorithm as NbtChunkSerializer. */
   private long calculateChecksum(byte[] data) {
     if (data == null || data.length == 0) {
       return 0L;

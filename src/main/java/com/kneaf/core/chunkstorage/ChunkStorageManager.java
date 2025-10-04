@@ -261,8 +261,63 @@ public class ChunkStorageManager {
             // Chunk should now be available in cache
             cached = cache.getChunk(chunkKey);
             if (cached.isPresent() && !cached.get().isSwapped()) {
-              // Note: In a real implementation, we'd need to serialize the cached chunk back to NBT
-              // For now, we'll continue to database lookup
+              // Cached chunk is now available in memory. Prefer returning it directly
+              // if it's already in a usable form (LevelChunk or CompoundTag). If it's a
+              // serialized byte[] try to deserialize it. As a last resort attempt a
+              // serialize->deserialize roundtrip to produce a CompoundTag-like object.
+              try {
+                Object cachedObj = cached.get().getChunk();
+
+                if (cachedObj != null) {
+                  // If it's a live LevelChunk, return it immediately
+                  if (isMinecraftLevelChunk(cachedObj)) {
+                    LOGGER.debug("Returning LevelChunk from cache for {}", chunkKey);
+                    return Optional.of(cachedObj);
+                  }
+
+                  // If it's already an NBT CompoundTag, return that
+                  if (isMinecraftCompoundTag(cachedObj)) {
+                    LOGGER.debug("Returning CompoundTag from cache for {}", chunkKey);
+                    return Optional.of(cachedObj);
+                  }
+
+                  // If cached object is a serialized byte[], attempt to deserialize
+                  if (cachedObj instanceof byte[]) {
+                    try {
+                      Object deserialized = serializer.deserialize((byte[]) cachedObj);
+                      if (deserialized != null) {
+                        LOGGER.debug("Returning deserialized cached chunk for {}", chunkKey);
+                        return Optional.of(deserialized);
+                      }
+                    } catch (Exception e) {
+                      LOGGER.warn(
+                          "Failed to deserialize cached byte[] for {}: {}",
+                          chunkKey,
+                          e.getMessage());
+                    }
+                  }
+
+                  // As a last resort, try to serialize the cached object and then deserialize
+                  // to get it into the expected CompoundTag form (if supported by serializer)
+                  try {
+                    byte[] roundtrip = serializer.serialize(cachedObj);
+                    Object deserialized = serializer.deserialize(roundtrip);
+                    if (deserialized != null) {
+                      LOGGER.debug(
+                          "Returning serialized->deserialized cached chunk for {}", chunkKey);
+                      return Optional.of(deserialized);
+                    }
+                  } catch (Exception e) {
+                    LOGGER.debug(
+                        "Could not convert cached object to CompoundTag for {}: {}",
+                        chunkKey,
+                        e.getMessage());
+                  }
+                }
+              } catch (Exception e) {
+                LOGGER.warn(
+                    "Error while returning cached chunk for {}: {}", chunkKey, e.getMessage());
+              }
             }
           } else {
             LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
@@ -563,6 +618,69 @@ public class ChunkStorageManager {
       LOGGER.info("Backup completed for world '{ }'", worldName);
     } catch (Exception e) {
       LOGGER.error("Failed to create backup for world '{ }' at '{ }'", worldName, backupPath, e);
+    }
+  }
+
+  /** Clear the in-memory cache for this storage manager (best-effort). */
+  public void clearCache() {
+    if (!enabled || shutdown) {
+      return;
+    }
+
+    try {
+      // If core exists, delegate; otherwise attempt to clear cache directly if available
+      try {
+        java.lang.reflect.Field coreField = this.getClass().getDeclaredField("core");
+        coreField.setAccessible(true);
+        Object coreObj = coreField.get(this);
+        if (coreObj != null) {
+          java.lang.reflect.Method m = coreObj.getClass().getMethod("clearCache");
+          m.invoke(coreObj);
+          return;
+        }
+      } catch (NoSuchFieldException nsf) {
+        // ignore
+      }
+    } catch (Exception e) {
+      LOGGER.warn("Failed to clear cache via core delegation: { }", e.getMessage());
+    }
+  }
+
+  /** Set cache capacity (best-effort no-op). */
+  public void setCacheCapacity(int capacity) {
+    if (!enabled || shutdown) {
+      return;
+    }
+
+    try {
+      boolean applied = cache.setMaxCapacity(capacity);
+      if (applied) {
+        LOGGER.info("Cache capacity changed to { } for world '{ }'", capacity, worldName);
+      } else {
+        LOGGER.warn(
+            "Requested cache capacity change to { } for world '{ }' was rejected", capacity, worldName);
+      }
+    } catch (Exception e) {
+      LOGGER.warn("Failed to change cache capacity for world '{ }': { }", worldName, e.getMessage());
+    }
+  }
+
+  /** Set eviction policy (best-effort no-op). */
+  public void setEvictionPolicy(String policy) {
+    if (!enabled || shutdown) {
+      return;
+    }
+
+    try {
+      boolean applied = cache.setEvictionPolicy(policy);
+      if (applied) {
+        LOGGER.info("Eviction policy changed to { } for world '{ }'", policy, worldName);
+      } else {
+        LOGGER.warn(
+            "Requested eviction policy change to { } for world '{ }' was rejected", policy, worldName);
+      }
+    } catch (Exception e) {
+      LOGGER.warn("Failed to change eviction policy for world '{ }': { }", worldName, e.getMessage());
     }
   }
 

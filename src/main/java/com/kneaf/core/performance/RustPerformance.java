@@ -106,7 +106,7 @@ public class RustPerformance {
     java.util.List<Long> simplifyList = new java.util.ArrayList<>(converted.size());
     for (VillagerData v : converted) {
       // Stable inexpensive identifier for compatibility; tests only check counts/timings
-      simplifyList.add((long) v.hashCode());
+      simplifyList.add(v.getId());
     }
 
     return new com.kneaf.core.performance.VillagerProcessResult(

@@ -89,7 +89,7 @@ public class EntitySerializer extends BaseBinarySerializer<EntityInput, List<Lon
       throws SerializationException {
     try {
       // Read tick count (8 bytes)
-      buffer.getLong();
+  buffer.getLong(); // tickCount (not used by selection logic)
 
       // Read entity count (4 bytes)
       int entityCount = buffer.getInt();
@@ -100,13 +100,62 @@ public class EntitySerializer extends BaseBinarySerializer<EntityInput, List<Lon
             "deserializeFromBufferInternal");
       }
 
-      // Read entity IDs to tick
-      List<Long> entitiesToTick = new java.util.ArrayList<>(entityCount);
+      // Read entity entries and select IDs to tick based on deterministic filters
+      List<Long> entitiesToTick = new java.util.ArrayList<>(Math.min(entityCount, 256));
+
+      // simple deterministic thresholds (matches writer defaults)
+      final float CLOSE_RADIUS = 16.0f;
+      final float MEDIUM_RADIUS = 32.0f;
+
       for (int i = 0; i < entityCount; i++) {
-        // Skip entity data for now, just extract IDs
-        skipEntityData(buffer);
-        // In a real implementation, we would process and filter entities
-        entitiesToTick.add((long) i); // Placeholder
+        // Read entity fields in same order as written
+        long id = buffer.getLong();
+  buffer.getFloat(); // x
+  buffer.getFloat(); // y
+  buffer.getFloat(); // z
+        float distance = buffer.getFloat();
+        boolean isBlockEntity = SerializationUtils.readBoolean(buffer);
+        String type = SerializationUtils.readString(buffer);
+
+        // Basic validation
+        if (distance < SerializationConstants.MIN_DISTANCE
+            || distance > SerializationConstants.MAX_DISTANCE) {
+          // Skip invalid distance entries
+          continue;
+        }
+
+        if (type == null || type.isEmpty()) {
+          // Unknown entity type, skip
+          continue;
+        }
+
+        // Skip players - players are handled separately
+        if (SerializationConstants.ENTITY_TYPE_PLAYER.equalsIgnoreCase(type)) {
+          continue;
+        }
+
+        // Skip block entities for ticking (handled differently)
+        if (isBlockEntity) {
+          continue;
+        }
+
+        // Deterministic selection rules:
+        // - Always tick entities within CLOSE_RADIUS
+        // - Tick entities within MEDIUM_RADIUS if they are mobs or villagers
+        // - Items beyond MEDIUM_RADIUS are skipped
+        boolean shouldTick = false;
+        if (distance <= CLOSE_RADIUS) {
+          shouldTick = true;
+        } else if (distance <= MEDIUM_RADIUS) {
+          String t = type.toLowerCase();
+          if (t.contains("mob") || t.contains("villager") || t.contains("monster")) {
+            shouldTick = true;
+          }
+        }
+
+        if (shouldTick) {
+          entitiesToTick.add(id);
+        }
       }
 
       // Read player count (4 bytes)
@@ -118,7 +167,7 @@ public class EntitySerializer extends BaseBinarySerializer<EntityInput, List<Lon
             "deserializeFromBufferInternal");
       }
 
-      // Skip player data for now
+      // Skip player data for now (we only need entity IDs to tick)
       for (int i = 0; i < playerCount; i++) {
         skipPlayerData(buffer);
       }
@@ -183,16 +232,7 @@ public class EntitySerializer extends BaseBinarySerializer<EntityInput, List<Lon
     buffer.putFloat(0.1f); // farRate
   }
 
-  /**
-   * Skip entity data in buffer (used during deserialization).
-   *
-   * @param buffer the buffer to skip data from
-   */
-  private void skipEntityData(ByteBuffer buffer) {
-    buffer.position(buffer.position() + 8 + 4 + 4 + 4 + 4 + 1); // Skip basic fields
-    int typeLength = buffer.getInt();
-    buffer.position(buffer.position() + typeLength); // Skip string
-  }
+  // ...existing code...
 
   /**
    * Skip player data in buffer (used during deserialization).

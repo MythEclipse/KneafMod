@@ -386,9 +386,60 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
 
   /** Free float buffer native. */
   public void freeFloatBuffer(ByteBuffer buffer) {
-    // Placeholder implementation - actual would use native code to free
-    if (buffer != null && buffer.isDirect()) {
-      // In a real implementation, this would call native code to free the direct buffer
+    if (buffer == null) return;
+
+    // Prefer native free if available
+    try {
+      NativeBridge.nativeFreeBuffer(buffer);
+      return;
+    } catch (Throwable ignored) {
+      // Fall back to Java-based cleanup below
+    }
+
+    // If the buffer is a direct ByteBuffer, try to explicitly release its memory via Cleaner.
+    // This uses reflection to avoid compile-time dependency on internal APIs and is safe
+    // because it only runs when native free is not available.
+    try {
+      if (buffer.isDirect()) {
+        // Java 9+ Cleaner approach: invoke 'cleaner' or use sun.misc.Cleaner via reflection
+        try {
+          // Try the jdk.internal.ref.Cleaner path first (OpenJDK/Oracle)
+          Object cleaner = null;
+          try {
+            java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+            cleanerMethod.setAccessible(true);
+            cleaner = cleanerMethod.invoke(buffer);
+          } catch (NoSuchMethodException nsme) {
+            // fall through to other strategies
+          }
+
+          if (cleaner != null) {
+            java.lang.reflect.Method clean = cleaner.getClass().getMethod("clean");
+            clean.invoke(cleaner);
+            return;
+          }
+
+          // Fallback: try invoking sun.misc.Cleaner (older JDKs)
+          try {
+            java.lang.reflect.Field cleanerField = buffer.getClass().getDeclaredField("cleaner");
+            cleanerField.setAccessible(true);
+            Object c = cleanerField.get(buffer);
+            if (c != null) {
+              java.lang.reflect.Method clean = c.getClass().getMethod("clean");
+              clean.invoke(c);
+            }
+          } catch (NoSuchFieldException | IllegalAccessException inner) {
+            // If all reflection attempts fail, rely on GC as last resort
+            KneafCore.LOGGER.debug("Could not explicitly free direct ByteBuffer; relying on GC: { }", inner.getMessage());
+          }
+        } catch (Throwable ex) {
+          // Last resort - let the GC take care of it
+          KneafCore.LOGGER.debug("Failed explicit direct buffer cleanup: { }", ex.getMessage());
+        }
+      }
+    } catch (Throwable t) {
+      // Safe fallback - do nothing, GC will reclaim when possible
+      KneafCore.LOGGER.debug("freeFloatBuffer fallback failed: { }", t.getMessage());
     }
   }
 

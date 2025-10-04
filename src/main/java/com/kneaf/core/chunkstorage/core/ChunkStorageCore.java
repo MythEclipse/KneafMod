@@ -22,7 +22,7 @@ public class ChunkStorageCore {
   private final ChunkSerializer serializer;
   private final DatabaseAdapter database;
   private final ChunkCache cache;
-  private final SwapManager swapManager;
+  private SwapManager swapManager;
   private final String worldName;
   private final boolean enabled;
 
@@ -36,8 +36,13 @@ public class ChunkStorageCore {
     this.serializer = serializer;
     this.database = database;
     this.cache = cache;
-    this.swapManager = null; // Will be set later if needed
+    this.swapManager = null; // Will be set later if needed via setter
     this.enabled = enabled;
+  }
+
+  /** Set the SwapManager after construction if swap coordination is needed. */
+  public void setSwapManager(SwapManager swapManager) {
+    this.swapManager = swapManager;
   }
 
   /**
@@ -113,8 +118,115 @@ public class ChunkStorageCore {
         // Check if chunk is swapped out and needs to be swapped in
         if (cached.get().isSwapped()) {
           LOGGER.debug("Chunk { } is swapped out, initiating swap-in", chunkKey);
-          // Note: In a real implementation, we'd need to swap the chunk back in
-          // For now, we'll continue to database lookup
+
+          boolean swappedIn = false;
+
+          try {
+            // Prefer using cache-level swap-in if provided (non-blocking)
+            try {
+              java.lang.reflect.Method initiateMethod =
+                  cache
+                      .getClass()
+                      .getMethod("initiateSwapIn", String.class, java.util.function.Consumer.class);
+              if (initiateMethod != null) {
+                CompletableFuture<Boolean> fut = cache.initiateSwapIn(chunkKey, null);
+                // Wait up to configured timeout if possible, otherwise use default
+                long timeoutMs = ChunkStorageConstants.DEFAULT_SWAP_TIMEOUT_MS;
+                try {
+                  swappedIn = fut.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                } catch (Exception e) {
+                  LOGGER.warn(
+                      "Cache-level swap-in timed out or failed for {}: {}",
+                      chunkKey,
+                      e.getMessage());
+                  swappedIn = false;
+                }
+              }
+            } catch (NoSuchMethodException ignored) {
+              // Cache does not provide initiateSwapIn via reflective signature, fall back
+            }
+
+            // If not swapped in yet, ask SwapManager if available
+            if (!swappedIn && swapManager != null) {
+              try {
+                // Respect SwapManager's timeout configuration if set
+                long timeoutMs = ChunkStorageConstants.DEFAULT_SWAP_TIMEOUT_MS;
+                CompletableFuture<Boolean> swapFuture = swapManager.swapInChunk(chunkKey);
+                try {
+                  swappedIn = swapFuture.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                } catch (Exception e) {
+                  LOGGER.warn(
+                      "SwapManager swap-in timed out or failed for {}: {}",
+                      chunkKey,
+                      e.getMessage());
+                  swappedIn = false;
+                }
+              } catch (Exception e) {
+                LOGGER.warn(
+                    "Failed to request swap-in from SwapManager for {}: {}",
+                    chunkKey,
+                    e.getMessage());
+                swappedIn = false;
+              }
+            }
+          } catch (Exception e) {
+            LOGGER.warn("Unexpected error during swap-in for {}: {}", chunkKey, e.getMessage());
+            swappedIn = false;
+          }
+
+          if (swappedIn) {
+            LOGGER.debug("Successfully swapped in chunk: { }", chunkKey);
+            // Attempt to retrieve the (now) in-memory cached chunk
+            cached = cache.getChunk(chunkKey);
+            if (cached.isPresent() && !cached.get().isSwapped()) {
+              // Return the in-cache object where possible (LevelChunk/CompoundTag) or
+              // attempt to deserialize if the cache stores a byte[] payload.
+              try {
+                Object cachedObj = cached.get().getChunk();
+
+                if (cachedObj != null) {
+                  if (ChunkStorageUtils.isMinecraftLevelChunk(cachedObj)) {
+                    return Optional.of(cachedObj);
+                  }
+
+                  if (ChunkStorageUtils.isMinecraftCompoundTag(cachedObj)) {
+                    return Optional.of(cachedObj);
+                  }
+
+                  if (cachedObj instanceof byte[]) {
+                    try {
+                      Object deserialized = serializer.deserialize((byte[]) cachedObj);
+                      if (deserialized != null) {
+                        return Optional.of(deserialized);
+                      }
+                    } catch (Exception ex) {
+                      LOGGER.warn(
+                          "Failed to deserialize cached byte[] for {}: {}",
+                          chunkKey,
+                          ex.getMessage());
+                    }
+                  }
+
+                  // Last resort: try serialize->deserialize roundtrip
+                  try {
+                    byte[] round = serializer.serialize(cachedObj);
+                    Object deserialized = serializer.deserialize(round);
+                    if (deserialized != null) {
+                      return Optional.of(deserialized);
+                    }
+                  } catch (Exception ex) {
+                    LOGGER.debug(
+                        "Roundtrip conversion failed for {}: {}", chunkKey, ex.getMessage());
+                  }
+                }
+              } catch (Exception e) {
+                LOGGER.warn(
+                    "Error while returning cached chunk for {}: {}", chunkKey, e.getMessage());
+              }
+            }
+          } else {
+            LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
+          }
         }
       }
 

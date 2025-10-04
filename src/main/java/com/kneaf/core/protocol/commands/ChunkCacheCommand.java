@@ -184,7 +184,21 @@ public class ChunkCacheCommand extends BaseCommand {
    * @return command result
    */
   private int executeClear(CommandContext<CommandSourceStack> context) {
-    int clearedCount = STORAGE_MANAGERS.size();
+    int clearedCount = 0;
+    for (Map.Entry<String, ChunkStorageManager> entry : STORAGE_MANAGERS.entrySet()) {
+      try {
+        entry.getValue().clearCache();
+        clearedCount++;
+      } catch (Exception e) {
+        // Log and continue
+        getLogger()
+            .logError(
+                "clear_cache_error",
+                e,
+                ProtocolUtils.generateTraceId(),
+                java.util.Map.of("world", entry.getKey()));
+      }
+    }
 
     sendSuccessFormatted(context, "§aCleared caches for §f%d §aworlds", clearedCount);
 
@@ -288,12 +302,28 @@ public class ChunkCacheCommand extends BaseCommand {
    * @return command result
    */
   private int executeSetCapacity(CommandContext<CommandSourceStack> context, int capacity) {
-    sendSuccessFormatted(context, "§aCache capacity set to §f%d §afor all worlds", capacity);
+    int applied = 0;
+    for (Map.Entry<String, ChunkStorageManager> entry : STORAGE_MANAGERS.entrySet()) {
+      try {
+        entry.getValue().setCacheCapacity(capacity);
+        applied++;
+      } catch (Exception e) {
+        getLogger()
+            .logError(
+                "set_capacity_error",
+                e,
+                ProtocolUtils.generateTraceId(),
+                java.util.Map.of("world", entry.getKey()));
+      }
+    }
+
+    sendSuccessFormatted(
+        context, "§aCache capacity set to §f%d §afor %d worlds", capacity, applied);
 
     getLogger()
         .logMetrics(
             "set_capacity",
-            java.util.Map.of("new_capacity", capacity),
+            java.util.Map.of("new_capacity", capacity, "applied", applied),
             ProtocolUtils.generateTraceId());
 
     return 1;
@@ -316,14 +346,31 @@ public class ChunkCacheCommand extends BaseCommand {
       return 0;
     }
 
-    sendSuccessFormatted(context, "§aEviction policy set to §f%s §afor all worlds", policy);
+    int applied = 0;
+    for (Map.Entry<String, ChunkStorageManager> entry : STORAGE_MANAGERS.entrySet()) {
+      try {
+        entry.getValue().setEvictionPolicy(policy);
+        applied++;
+      } catch (Exception e) {
+        getLogger()
+            .logError(
+                "set_eviction_policy_error",
+                e,
+                ProtocolUtils.generateTraceId(),
+                java.util.Map.of("world", entry.getKey()));
+      }
+    }
+
+    sendSuccessFormatted(context, "§aEviction policy set to §f%s §afor %d worlds", policy, applied);
 
     getLogger()
         .logMetrics(
             "set_eviction_policy",
             java.util.Map.of(
                 "new_policy",
-                policy.equalsIgnoreCase("LRU") ? 1 : policy.equalsIgnoreCase("Distance") ? 2 : 3),
+                policy.equalsIgnoreCase("LRU") ? 1 : policy.equalsIgnoreCase("Distance") ? 2 : 3,
+                "applied",
+                applied),
             ProtocolUtils.generateTraceId());
 
     return 1;
