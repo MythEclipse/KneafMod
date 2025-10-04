@@ -12,6 +12,7 @@ public class ChunkStorageConfig {
   private String backupPath = "backups/chunkstorage";
   private boolean enableChecksums = true;
   private boolean enableCompression = false;
+  private boolean enableFastNbt = false;
   private int maxBackupFiles = 10;
   private long backupRetentionDays = 7;
   private String databaseType = "rust"; // "rust", "inmemory", "rocksdb", "sled", "lmdb"
@@ -132,6 +133,14 @@ public class ChunkStorageConfig {
 
   public void setEnableCompression(boolean enableCompression) {
     this.enableCompression = enableCompression;
+  }
+
+  public boolean isEnableFastNbt() {
+    return enableFastNbt;
+  }
+
+  public void setEnableFastNbt(boolean enableFastNbt) {
+    this.enableFastNbt = enableFastNbt;
   }
 
   public int getMaxBackupFiles() {
@@ -269,7 +278,7 @@ public class ChunkStorageConfig {
     return String.format(
         "ChunkStorageConfig{enabled=%s, cacheCapacity=%d, evictionPolicy='%s', "
             + "asyncThreadpoolSize=%d, enableAsyncOperations=%s, maintenanceIntervalMinutes=%d, "
-            + "enableBackups=%s, backupPath='%s', enableChecksums=%s, enableCompression=%s, "
+            + "enableBackups=%s, backupPath='%s', enableChecksums=%s, enableCompression=%s, enableFastNbt=%s, "
             + "maxBackupFiles=%d, backupRetentionDays=%d, databaseType='%s', useRustDatabase=%s, "
             + "enableSwapManager=%s, swapMemoryCheckIntervalMs=%d, maxConcurrentSwaps=%d, "
             + "swapBatchSize=%d, swapTimeoutMs=%d, enableAutomaticSwapping=%s, "
@@ -285,6 +294,7 @@ public class ChunkStorageConfig {
         backupPath,
         enableChecksums,
         enableCompression,
+        enableFastNbt,
         maxBackupFiles,
         backupRetentionDays,
         databaseType,

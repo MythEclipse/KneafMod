@@ -9,6 +9,7 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteArray, JObject};
 use jni::sys::{jboolean, jlong, jint, jbyteArray};
 use sled::Db;
+use fastnbt::Value;
 
 use log::{debug, info, error};
 
@@ -117,6 +118,46 @@ impl DatabaseStats {
             memory_mapped_files_active: 0,
             total_swap_size_bytes: 0,
         }
+    }
+}
+/// Chunk coordinate structure for indexing
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ChunkCoordinates {
+    pub x: i32,
+    pub z: i32,
+    pub dimension: String,
+}
+
+impl ChunkCoordinates {
+    pub fn new(x: i32, z: i32, dimension: String) -> Self {
+        Self { x, z, dimension }
+    }
+
+    /// Generate a key string for database storage
+    pub fn to_key(&self) -> String {
+        format!("chunk:{},{},{}", self.x, self.z, self.dimension)
+    }
+
+    /// Parse coordinates from a key string
+    pub fn from_key(key: &str) -> Result<Self, String> {
+        if !key.starts_with("chunk:") {
+            return Err("Invalid chunk key format".to_string());
+        }
+
+        let coords_str = &key[6..]; // Remove "chunk:" prefix
+        let parts: Vec<&str> = coords_str.split(',').collect();
+
+        if parts.len() != 3 {
+            return Err("Invalid chunk coordinates format".to_string());
+        }
+
+        let x = parts[0].parse::<i32>()
+            .map_err(|_| "Invalid x coordinate".to_string())?;
+        let z = parts[1].parse::<i32>()
+            .map_err(|_| "Invalid z coordinate".to_string())?;
+        let dimension = parts[2].to_string();
+
+        Ok(Self { x, z, dimension })
     }
 }
 
@@ -736,6 +777,99 @@ impl RustDatabaseAdapter {
         
         Ok(())
     }
+    /// Store a chunk using raw NBT data with FastNBT parsing
+    pub fn store_chunk_raw_nbt(&self, x: i32, z: i32, dimension: &str, raw_nbt_data: &[u8]) -> Result<(), String> {
+        let start_time = std::time::Instant::now();
+
+        // Parse NBT data using FastNBT
+        let nbt_value: Value = fastnbt::from_bytes(raw_nbt_data)
+            .map_err(|e| format!("Failed to parse NBT data: {}", e))?;
+
+        // Extract chunk coordinates and validate
+        let coords = ChunkCoordinates::new(x, z, dimension.to_string());
+        let key = coords.to_key();
+
+        // Validate that the NBT data contains expected chunk structure
+        if let Value::Compound(root) = &nbt_value {
+            // Check for basic chunk structure (xPos, zPos, etc.)
+            if !root.contains_key("xPos") || !root.contains_key("zPos") {
+                return Err("Invalid chunk NBT: missing position data".to_string());
+            }
+        } else {
+            return Err("Invalid chunk NBT: root must be a compound tag".to_string());
+        }
+
+        // Serialize back to bytes for storage (this ensures consistent format)
+        let serialized_data = fastnbt::to_bytes(&nbt_value)
+            .map_err(|e| format!("Failed to serialize NBT data: {}", e))?;
+
+        // Store in database
+        self.put_chunk(&key, &serialized_data)?;
+
+        info!("Stored chunk at ({}, {}) in dimension {} using FastNBT ({} bytes) in {} ms",
+              x, z, dimension, serialized_data.len(), start_time.elapsed().as_millis());
+
+        Ok(())
+    }
+
+    /// Retrieve and parse chunk data using FastNBT
+    pub fn get_chunk_parsed_nbt(&self, x: i32, z: i32, dimension: &str) -> Result<Option<Value>, String> {
+        let coords = ChunkCoordinates::new(x, z, dimension.to_string());
+        let key = coords.to_key();
+
+        match self.get_chunk(&key)? {
+            Some(data) => {
+                let nbt_value: Value = fastnbt::from_bytes(&data)
+                    .map_err(|e| format!("Failed to parse stored NBT data: {}", e))?;
+                Ok(Some(nbt_value))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Query chunks by coordinate range with optimization
+    pub fn query_chunks_by_range(&self, min_x: i32, max_x: i32, min_z: i32, max_z: i32, dimension: &str) -> Result<Vec<ChunkCoordinates>, String> {
+        let mut results = Vec::new();
+
+        // Use sled's prefix iterator for efficient range queries
+        let prefix = format!("chunk:{},", dimension);
+        let prefix_bytes = prefix.as_bytes();
+
+        for item in self.db.scan_prefix(prefix_bytes) {
+            if let Ok((key_bytes, _)) = item {
+                if let Ok(key_str) = String::from_utf8(key_bytes.to_vec()) {
+                    if let Ok(coords) = ChunkCoordinates::from_key(&key_str) {
+                        // Check if coordinates are within the specified range
+                        if coords.x >= min_x && coords.x <= max_x &&
+                           coords.z >= min_z && coords.z <= max_z &&
+                           coords.dimension == dimension {
+                            results.push(coords);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Get chunk statistics by dimension
+    pub fn get_chunk_stats_by_dimension(&self, dimension: &str) -> Result<(u64, u64), String> {
+        let mut chunk_count = 0u64;
+        let mut total_size = 0u64;
+
+        let prefix = format!("chunk:{},", dimension);
+        let prefix_bytes = prefix.as_bytes();
+
+        for item in self.db.scan_prefix(prefix_bytes) {
+            if let Ok((_, value)) = item {
+                chunk_count += 1;
+                total_size += value.len() as u64;
+            }
+        }
+
+        Ok((chunk_count, total_size))
+    }
 }
 
 // JNI bindings for Java integration
@@ -1263,7 +1397,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
                 .expect("Failed to find ArrayList class");
             let list_obj = env.new_object(&list_class, "()V", &[])
                 .expect("Failed to create ArrayList");
-            
+
             // Add results to list
             for data in results {
                 let byte_array = env.byte_array_from_slice(&data)
@@ -1271,12 +1405,196 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
                 env.call_method(&list_obj, "add", "(Ljava/lang/Object;)Z", &[jni::objects::JValue::Object(&byte_array)])
                     .expect("Failed to add to list");
             }
-            
-            list_obj
+
+            return list_obj;
         }
         Err(e) => {
             error!("Failed to bulk swap in: {}", e);
+            return JObject::null();
+        }
+    }
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeStoreChunkRawNbt<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    adapter_ptr: jlong,
+    x: jint,
+    z: jint,
+    dimension: JString<'a>,
+    raw_nbt_data: JByteArray<'a>,
+) -> jboolean {
+    if adapter_ptr == 0 {
+        error!("Database adapter pointer is null");
+        return 0;
+    }
+
+    let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+
+    let dimension_str = env.get_string(&dimension)
+        .expect("Failed to get dimension string")
+        .to_str()
+        .expect("Failed to convert dimension to str")
+        .to_string();
+
+    let nbt_data_vec = env.convert_byte_array(&raw_nbt_data)
+        .expect("Failed to convert byte array");
+
+    match adapter.store_chunk_raw_nbt(x as i32, z as i32, &dimension_str, &nbt_data_vec) {
+        Ok(_) => 1,
+        Err(e) => {
+            error!("Failed to store chunk raw NBT: {}", e);
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeGetChunkParsedNbt<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    adapter_ptr: jlong,
+    x: jint,
+    z: jint,
+    dimension: JString<'a>,
+) -> jbyteArray {
+    if adapter_ptr == 0 {
+        error!("Database adapter pointer is null");
+        return std::ptr::null_mut();
+    }
+
+    let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+
+    let dimension_str = env.get_string(&dimension)
+        .expect("Failed to get dimension string")
+        .to_str()
+        .expect("Failed to convert dimension to str")
+        .to_string();
+
+    match adapter.get_chunk_parsed_nbt(x as i32, z as i32, &dimension_str) {
+        Ok(Some(nbt_value)) => {
+            // Serialize back to bytes for Java
+            match fastnbt::to_bytes(&nbt_value) {
+                Ok(data) => {
+                    env.byte_array_from_slice(&data)
+                        .expect("Failed to create byte array")
+                        .into_raw()
+                }
+                Err(e) => {
+                    error!("Failed to serialize NBT value: {}", e);
+                    std::ptr::null_mut()
+                }
+            }
+        }
+        Ok(None) => std::ptr::null_mut(),
+        Err(e) => {
+            error!("Failed to get chunk parsed NBT: {}", e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeQueryChunksByRange<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    adapter_ptr: jlong,
+    min_x: jint,
+    max_x: jint,
+    min_z: jint,
+    max_z: jint,
+    dimension: JString<'a>,
+) -> JObject<'a> {
+    if adapter_ptr == 0 {
+        error!("Database adapter pointer is null");
+        return JObject::null();
+    }
+
+    let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+
+    let dimension_str = env.get_string(&dimension)
+        .expect("Failed to get dimension string")
+        .to_str()
+        .expect("Failed to convert dimension to str")
+        .to_string();
+
+    match adapter.query_chunks_by_range(min_x as i32, max_x as i32, min_z as i32, max_z as i32, &dimension_str) {
+        Ok(chunks) => {
+            // Create Java ArrayList of chunk coordinates
+            let list_class = env.find_class("java/util/ArrayList")
+                .expect("Failed to find ArrayList class");
+            let list_obj = env.new_object(&list_class, "()V", &[])
+                .expect("Failed to create ArrayList");
+
+            // Create chunk coordinate class
+            let coord_class = env.find_class("com/kneaf/core/chunkstorage/ChunkCoordinates")
+                .expect("Failed to find ChunkCoordinates class");
+
+            // Add chunks to list
+            for chunk in chunks {
+                let coord_obj = env.new_object(
+                    &coord_class,
+                    "(IILjava/lang/String;)V",
+                    &[
+                        jni::objects::JValue::Int(chunk.x as jint),
+                        jni::objects::JValue::Int(chunk.z as jint),
+                        jni::objects::JValue::Object(&env.new_string(&chunk.dimension)
+                            .expect("Failed to create dimension string")),
+                    ],
+                ).expect("Failed to create ChunkCoordinates object");
+
+                env.call_method(&list_obj, "add", "(Ljava/lang/Object;)Z",
+                    &[jni::objects::JValue::Object(&coord_obj)])
+                    .expect("Failed to add to list");
+            }
+
+            list_obj
+        }
+        Err(e) => {
+            error!("Failed to query chunks by range: {}", e);
             JObject::null()
         }
     }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeGetChunkStatsByDimension<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    adapter_ptr: jlong,
+    dimension: JString<'a>,
+) -> JObject<'a> {
+    if adapter_ptr == 0 {
+        error!("Database adapter pointer is null");
+        return JObject::null();
+    }
+
+    let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+
+    let dimension_str = env.get_string(&dimension)
+        .expect("Failed to get dimension string")
+        .to_str()
+        .expect("Failed to convert dimension to str")
+        .to_string();
+
+    match adapter.get_chunk_stats_by_dimension(&dimension_str) {
+        Ok((chunk_count, total_size)) => {
+            // Create Java ChunkStats object
+            let stats_class = env.find_class("com/kneaf/core/chunkstorage/ChunkStats")
+                .expect("Failed to find ChunkStats class");
+
+            env.new_object(
+                &stats_class,
+                "(JJ)V",
+                &[
+                    jni::objects::JValue::Long(chunk_count as jlong),
+                    jni::objects::JValue::Long(total_size as jlong),
+                ],
+            ).expect("Failed to create ChunkStats object")
+        }
+        Err(e) => {
+            error!("Failed to get chunk stats by dimension: {}", e);
+            JObject::null()
+        }
+    }
+}
 }

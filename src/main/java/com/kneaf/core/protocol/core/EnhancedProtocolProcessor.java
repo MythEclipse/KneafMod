@@ -435,13 +435,13 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
 
       if (binaryResult != null && binaryResult.length > 0) {
         R result = binaryDeserializer.deserialize(binaryResult);
-        logger.logOperationComplete(
-            operationName,
-            ProtocolConstants.FORMAT_BINARY,
-            traceId,
-            0,
-            true,
-            Map.of("result_type", result.getClass().getSimpleName()));
+        // logger.logOperationComplete(
+        //     operationName,
+        //     ProtocolConstants.FORMAT_BINARY,
+        //     traceId,
+        //     0,
+        //     true,
+        //     Map.of("result_type", result.getClass().getSimpleName()));
         return new ProtocolResult<>(result, null, true);
       }
     } catch (Exception e) {
@@ -460,13 +460,13 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
 
       if (jsonResult != null && !jsonResult.isEmpty()) {
         R result = jsonResultParser.parseResult(jsonResult);
-        logger.logOperationComplete(
-            operationName,
-            ProtocolConstants.FORMAT_JSON,
-            traceId,
-            0,
-            true,
-            Map.of("result_type", result.getClass().getSimpleName()));
+        // logger.logOperationComplete(
+        //     operationName,
+        //     ProtocolConstants.FORMAT_JSON,
+        //     traceId,
+        //     0,
+        //     true,
+        //     Map.of("result_type", result.getClass().getSimpleName()));
         return new ProtocolResult<>(result, null, true);
       }
     } catch (Exception e) {
@@ -478,8 +478,8 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
     }
 
     // Return fallback result
-    logger.logOperationComplete(
-        operationName, "fallback", traceId, 0, true, Map.of("fallback_used", true));
+    // logger.logOperationComplete(
+    //     operationName, "fallback", traceId, 0, true, Map.of("fallback_used", true));
     return new ProtocolResult<>(fallbackResult, null, true);
   }
 }

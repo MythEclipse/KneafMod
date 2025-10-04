@@ -9,6 +9,7 @@ This is a Rust-based optimization library for Minecraft mods, providing high-per
 - **Spatial Partitioning**: Quadtree-based spatial partitioning for efficient entity queries
 - **JNI Integration**: Seamless integration with Java-based Minecraft mods
 - **Batch Processing**: Support for processing entities in batches for better performance
+- **FastNBT Mode**: Optional high-performance NBT serialization using Rust's fastnbt library for improved chunk storage performance
 
 ## New Features & Optimizations (Latest Update)
 
@@ -49,6 +50,7 @@ The library achieves performance gains through:
 7. **Async Chunk Loading**: Pre-load chunks asynchronously to reduce lag
 8. **Connection Pooling**: Framework ready for future database integrations
 9. **Memory Pooling**: Object reuse to minimize garbage collection pressure
+10. **FastNBT Serialization**: High-performance NBT processing for chunk data when enabled
 
 ## Usage
 
@@ -91,6 +93,9 @@ itemMergeRadius = 1.0
 itemDespawnTime = 6000
 verboseLogging = false
 tpsAlertThreshold = 15.0
+
+[kneafcore.chunkstorage]
+enableFastNbt = false
 ```
 
 ## Commands
