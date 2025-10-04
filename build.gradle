@@ -6,6 +6,8 @@ plugins {
     id 'net.neoforged.moddev' version '2.0.107'
     id 'idea'
     id 'jacoco'
+    id 'checkstyle'
+    id 'com.diffplug.spotless' version '6.25.0'
 }
 
 tasks.named('wrapper', Wrapper).configure {
@@ -233,6 +235,30 @@ jacocoTestCoverageVerification {
                 minimum = 0.80
             }
         }
+    }
+}
+
+// Checkstyle configuration
+checkstyle {
+    toolVersion = '10.12.4'
+    configFile = file('checkstyle.xml')
+}
+
+tasks.withType(Checkstyle).configureEach {
+    reports {
+        xml.required = true
+        html.required = true
+    }
+    
+    // Include only main source set for now
+    source = sourceSets.main.allJava
+    classpath = sourceSets.main.compileClasspath
+}
+
+// Spotless configuration for code formatting
+spotless {
+    java {
+        googleJavaFormat()
     }
 }
 

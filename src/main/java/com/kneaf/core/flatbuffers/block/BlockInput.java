@@ -1,18 +1,15 @@
 package com.kneaf.core.flatbuffers.block;
 
 import com.kneaf.core.data.block.BlockEntityData;
-
 import java.util.List;
 
-/**
- * Helper class for block input data.
- */
+/** Helper class for block input data. */
 public class BlockInput {
-    public final long tickCount;
-    public final List<BlockEntityData> blockEntities;
-    
-    public BlockInput(long tickCount, List<BlockEntityData> blockEntities) {
-        this.tickCount = tickCount;
-        this.blockEntities = blockEntities;
-    }
+  public final long tickCount;
+  public final List<BlockEntityData> blockEntities;
+
+  public BlockInput(long tickCount, List<BlockEntityData> blockEntities) {
+    this.tickCount = tickCount;
+    this.blockEntities = blockEntities;
+  }
 }

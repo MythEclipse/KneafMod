@@ -1,7 +1,8 @@
 package com.kneaf.core.chunkstorage;
 
-import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
+
+import org.junit.jupiter.api.Test;
 
 /**
  * Minimal placeholder tests for NBT serializer suite to avoid needing Minecraft classes in test
@@ -9,15 +10,14 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class NbtChunkSerializerTest {
 
-    @Test
-    void testPublicRemovedAndIsEmpty() {
-        String s = "";
-        assertTrue(s.isEmpty());
-    }
+  @Test
+  void testPublicRemovedAndIsEmpty() {
+    String s = "";
+    assertTrue(s.isEmpty());
+  }
 
-    @Test
-    void testTrivial() {
-        assertTrue(true);
-    }
-
+  @Test
+  void testTrivial() {
+    assertTrue(true);
+  }
 }

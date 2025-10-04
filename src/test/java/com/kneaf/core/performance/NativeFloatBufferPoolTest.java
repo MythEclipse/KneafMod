@@ -1,223 +1,231 @@
 package com.kneaf.core.performance;
 
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * Test for NativeFloatBuffer buffer pooling functionality
- */
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+/** Test for NativeFloatBuffer buffer pooling functionality */
 public class NativeFloatBufferPoolTest {
 
-    @BeforeEach
-    void setUp() {
-        // Check if native library is available with better error handling
-        try {
-            // First try to load the RustPerformance class to trigger static initialization
-            Class.forName("com.kneaf.core.performance.RustPerformance");
-            
-            // Try to allocate a small buffer to test native availability
-            NativeFloatBuffer testBuffer = NativeFloatBuffer.allocateFromNative(1, 1);
-            if (testBuffer == null) {
-                Assumptions.assumeTrue(false, "Native buffer allocation returned null, skipping tests");
-            } else {
-                testBuffer.close();
-            }
-        } catch (ClassNotFoundException e) {
-            Assumptions.assumeTrue(false, "RustPerformance class not found, skipping tests: " + e.getMessage());
-        } catch (UnsatisfiedLinkError e) {
-            Assumptions.assumeTrue(false, "Native library not available, skipping tests: " + e.getMessage());
-        } catch (ExceptionInInitializerError e) {
-            Assumptions.assumeTrue(false, "RustPerformance initialization failed, skipping tests: " + e.getMessage());
-        } catch (Exception e) {
-            Assumptions.assumeTrue(false, "Unexpected error during native library setup, skipping tests: " + e.getMessage());
-        } catch (Throwable t) {
-            Assumptions.assumeTrue(false, "Critical error during native library setup, skipping tests: " + t.getMessage());
-        }
-        
-        // Clear pools before each test to ensure clean state
-        try {
-            NativeFloatBuffer.clearPools();
-        } catch (Exception e) {
-            // Ignore errors during pool cleanup
-        } catch (Throwable t) {
-            // Ignore any errors during cleanup
-        }
+  @BeforeEach
+  void setUp() {
+    // Check if native library is available with better error handling
+    try {
+      // First try to load the RustPerformance class to trigger static initialization
+      Class.forName("com.kneaf.core.performance.RustPerformance");
+
+      // Try to allocate a small buffer to test native availability
+      NativeFloatBuffer testBuffer = NativeFloatBuffer.allocateFromNative(1, 1);
+      if (testBuffer == null) {
+        Assumptions.assumeTrue(false, "Native buffer allocation returned null, skipping tests");
+      } else {
+        testBuffer.close();
+      }
+    } catch (ClassNotFoundException e) {
+      Assumptions.assumeTrue(
+          false, "RustPerformance class not found, skipping tests: " + e.getMessage());
+    } catch (UnsatisfiedLinkError e) {
+      Assumptions.assumeTrue(
+          false, "Native library not available, skipping tests: " + e.getMessage());
+    } catch (ExceptionInInitializerError e) {
+      Assumptions.assumeTrue(
+          false, "RustPerformance initialization failed, skipping tests: " + e.getMessage());
+    } catch (Exception e) {
+      Assumptions.assumeTrue(
+          false, "Unexpected error during native library setup, skipping tests: " + e.getMessage());
+    } catch (Throwable t) {
+      Assumptions.assumeTrue(
+          false, "Critical error during native library setup, skipping tests: " + t.getMessage());
     }
 
-    @AfterEach
-    void tearDown() {
-        // Clean up after each test
-        NativeFloatBuffer.clearPools();
+    // Clear pools before each test to ensure clean state
+    try {
+      NativeFloatBuffer.clearPools();
+    } catch (Exception e) {
+      // Ignore errors during pool cleanup
+    } catch (Throwable t) {
+      // Ignore any errors during cleanup
+    }
+  }
+
+  @AfterEach
+  void tearDown() {
+    // Clean up after each test
+    NativeFloatBuffer.clearPools();
+  }
+
+  @Test
+  void testBufferPoolingEnabledByDefault() {
+    // Allocate a buffer with pooling enabled (default)
+    NativeFloatBuffer buffer1 = NativeFloatBuffer.allocateFromNative(100, 100);
+    assertNotNull(buffer1, "Buffer allocation should succeed");
+
+    // Get initial Stats
+    String StatsBefore = NativeFloatBuffer.getPoolStats();
+    long allocationsBefore = getTOTAL_ALLOCATIONS(StatsBefore);
+
+    // Close the buffer (should return to pool)
+    buffer1.close();
+
+    // Allocate another buffer of same size
+    NativeFloatBuffer buffer2 = NativeFloatBuffer.allocateFromNative(100, 100);
+    assertNotNull(buffer2, "Second buffer allocation should succeed");
+
+    // Get Stats after
+    String StatsAfter = NativeFloatBuffer.getPoolStats();
+    long allocationsAfter = getTOTAL_ALLOCATIONS(StatsAfter);
+
+    // Should have reused from pool (no new allocation)
+    assertEquals(
+        allocationsBefore,
+        allocationsAfter,
+        "Should reuse buffer from pool, no new allocation expected");
+
+    buffer2.close();
+  }
+
+  @Test
+  void testBufferPoolingDisabled() {
+    // Allocate with pooling disabled
+    NativeFloatBuffer buffer1 = NativeFloatBuffer.allocateFromNative(100, 100, false);
+    assertNotNull(buffer1, "Buffer allocation should succeed");
+
+    // Get initial Stats
+    String StatsBefore = NativeFloatBuffer.getPoolStats();
+    long allocationsBefore = getTOTAL_ALLOCATIONS(StatsBefore);
+
+    // Close the buffer (should free, not pool)
+    buffer1.close();
+
+    // Allocate another buffer with pooling disabled
+    NativeFloatBuffer buffer2 = NativeFloatBuffer.allocateFromNative(100, 100, false);
+    assertNotNull(buffer2, "Second buffer allocation should succeed");
+
+    // Get Stats after
+    String StatsAfter = NativeFloatBuffer.getPoolStats();
+    long allocationsAfter = getTOTAL_ALLOCATIONS(StatsAfter);
+
+    // Should have allocated new buffer (no pooling)
+    assertTrue(
+        allocationsAfter > allocationsBefore,
+        "Should allocate new buffer when pooling is disabled");
+
+    buffer2.close();
+  }
+
+  @Test
+  void testPoolStatistics() {
+    // Clear pools first
+    NativeFloatBuffer.clearPools();
+
+    String initialStats = NativeFloatBuffer.getPoolStats();
+    assertTrue(initialStats.contains("Buffer Pool Statistics:"));
+    // Allow for some allocations that might have happened during setup
+    assertTrue(initialStats.contains("Total Allocations:"));
+    assertTrue(initialStats.contains("Total Reuses:"));
+
+    // Allocate and close a buffer
+    NativeFloatBuffer buffer = NativeFloatBuffer.allocateFromNative(50, 50);
+    assertNotNull(buffer);
+    buffer.close();
+
+    String StatsAfterAllocation = NativeFloatBuffer.getPoolStats();
+    // Just check that allocations increased, exact number may vary
+    assertTrue(StatsAfterAllocation.contains("Total Allocations:"));
+
+    // Allocate again to trigger reuse
+    NativeFloatBuffer buffer2 = NativeFloatBuffer.allocateFromNative(50, 50);
+    assertNotNull(buffer2);
+
+    String StatsAfterReuse = NativeFloatBuffer.getPoolStats();
+    // Just check that reuses increased, exact number may vary
+    assertTrue(StatsAfterReuse.contains("Total Reuses:"));
+
+    buffer2.close();
+  }
+
+  @Test
+  void testForceCleanup() {
+    // Allocate and close multiple buffers
+    for (int i = 0; i < 5; i++) {
+      NativeFloatBuffer buffer = NativeFloatBuffer.allocateFromNative(100, 100);
+      assertNotNull(buffer);
+      buffer.close();
     }
 
-    @Test
-    void testBufferPoolingEnabledByDefault() {
-        // Allocate a buffer with pooling enabled (default)
-        NativeFloatBuffer buffer1 = NativeFloatBuffer.allocateFromNative(100, 100);
-        assertNotNull(buffer1, "Buffer allocation should succeed");
-        
-        // Get initial stats
-        String statsBefore = NativeFloatBuffer.getPoolStats();
-        long allocationsBefore = getTotalAllocations(statsBefore);
-        
-        // Close the buffer (should return to pool)
-        buffer1.close();
-        
-        // Allocate another buffer of same size
-        NativeFloatBuffer buffer2 = NativeFloatBuffer.allocateFromNative(100, 100);
-        assertNotNull(buffer2, "Second buffer allocation should succeed");
-        
-        // Get stats after
-        String statsAfter = NativeFloatBuffer.getPoolStats();
-        long allocationsAfter = getTotalAllocations(statsAfter);
-        
-        // Should have reused from pool (no new allocation)
-        assertEquals(allocationsBefore, allocationsAfter, 
-            "Should reuse buffer from pool, no new allocation expected");
-        
-        buffer2.close();
-    }
+    // Force cleanup
+    NativeFloatBuffer.forceCleanup();
 
-    @Test
-    void testBufferPoolingDisabled() {
-        // Allocate with pooling disabled
-        NativeFloatBuffer buffer1 = NativeFloatBuffer.allocateFromNative(100, 100, false);
-        assertNotNull(buffer1, "Buffer allocation should succeed");
-        
-        // Get initial stats
-        String statsBefore = NativeFloatBuffer.getPoolStats();
-        long allocationsBefore = getTotalAllocations(statsBefore);
-        
-        // Close the buffer (should free, not pool)
-        buffer1.close();
-        
-        // Allocate another buffer with pooling disabled
-        NativeFloatBuffer buffer2 = NativeFloatBuffer.allocateFromNative(100, 100, false);
-        assertNotNull(buffer2, "Second buffer allocation should succeed");
-        
-        // Get stats after
-        String statsAfter = NativeFloatBuffer.getPoolStats();
-        long allocationsAfter = getTotalAllocations(statsAfter);
-        
-        // Should have allocated new buffer (no pooling)
-        assertTrue(allocationsAfter > allocationsBefore, 
-            "Should allocate new buffer when pooling is disabled");
-        
-        buffer2.close();
-    }
+    // Verify cleanup worked (pools should be reduced)
+    String Stats = NativeFloatBuffer.getPoolStats();
+    // Should still have statistics but potentially fewer buffers in pools
+    assertTrue(Stats.contains("Buffer Pool Statistics:"));
+  }
 
-    @Test
-    void testPoolStatistics() {
-        // Clear pools first
-        NativeFloatBuffer.clearPools();
-        
-        String initialStats = NativeFloatBuffer.getPoolStats();
-        assertTrue(initialStats.contains("Buffer Pool Statistics:"));
-        // Allow for some allocations that might have happened during setup
-        assertTrue(initialStats.contains("Total Allocations:"));
-        assertTrue(initialStats.contains("Total Reuses:"));
-        
-        // Allocate and close a buffer
-        NativeFloatBuffer buffer = NativeFloatBuffer.allocateFromNative(50, 50);
-        assertNotNull(buffer);
-        buffer.close();
-        
-        String statsAfterAllocation = NativeFloatBuffer.getPoolStats();
-        // Just check that allocations increased, exact number may vary
-        assertTrue(statsAfterAllocation.contains("Total Allocations:"));
-        
-        // Allocate again to trigger reuse
-        NativeFloatBuffer buffer2 = NativeFloatBuffer.allocateFromNative(50, 50);
-        assertNotNull(buffer2);
-        
-        String statsAfterReuse = NativeFloatBuffer.getPoolStats();
-        // Just check that reuses increased, exact number may vary
-        assertTrue(statsAfterReuse.contains("Total Reuses:"));
-        
-        buffer2.close();
-    }
+  @Test
+  void testClearPools() {
+    // Allocate and close some buffers to populate pools
+    NativeFloatBuffer buffer1 = NativeFloatBuffer.allocateFromNative(100, 100);
+    NativeFloatBuffer buffer2 = NativeFloatBuffer.allocateFromNative(200, 200);
 
-    @Test
-    void testForceCleanup() {
-        // Allocate and close multiple buffers
-        for (int i = 0; i < 5; i++) {
-            NativeFloatBuffer buffer = NativeFloatBuffer.allocateFromNative(100, 100);
-            assertNotNull(buffer);
-            buffer.close();
-        }
-        
-        // Force cleanup
-        NativeFloatBuffer.forceCleanup();
-        
-        // Verify cleanup worked (pools should be reduced)
-        String stats = NativeFloatBuffer.getPoolStats();
-        // Should still have statistics but potentially fewer buffers in pools
-        assertTrue(stats.contains("Buffer Pool Statistics:"));
-    }
+    assertNotNull(buffer1);
+    assertNotNull(buffer2);
 
-    @Test
-    void testClearPools() {
-        // Allocate and close some buffers to populate pools
-        NativeFloatBuffer buffer1 = NativeFloatBuffer.allocateFromNative(100, 100);
-        NativeFloatBuffer buffer2 = NativeFloatBuffer.allocateFromNative(200, 200);
-        
-        assertNotNull(buffer1);
-        assertNotNull(buffer2);
-        
-        buffer1.close();
-        buffer2.close();
-        
-        // Clear all pools
-        NativeFloatBuffer.clearPools();
-        
-        String stats = NativeFloatBuffer.getPoolStats();
-        // Should show no buffers in pools after clear
-        assertFalse(stats.contains("Bucket 0 (4096 bytes): 1 buffers"));
-        assertFalse(stats.contains("Bucket 1 (8192 bytes): 1 buffers"));
-    }
+    buffer1.close();
+    buffer2.close();
 
-    @Test
-    void testMultipleBufferSizes() {
-        // Test different buffer sizes to ensure bucket system works
-        NativeFloatBuffer smallBuffer = NativeFloatBuffer.allocateFromNative(10, 10);   // 400 bytes
-        NativeFloatBuffer mediumBuffer = NativeFloatBuffer.allocateFromNative(100, 100); // 40,000 bytes
-        NativeFloatBuffer largeBuffer = NativeFloatBuffer.allocateFromNative(500, 500);  // 1,000,000 bytes
-        
-        assertNotNull(smallBuffer);
-        assertNotNull(mediumBuffer);
-        assertNotNull(largeBuffer);
-        
-        // Close them to return to pools
-        smallBuffer.close();
-        mediumBuffer.close();
-        largeBuffer.close();
-        
-        // Allocate same sizes again to test reuse
-        NativeFloatBuffer smallBuffer2 = NativeFloatBuffer.allocateFromNative(10, 10);
-        NativeFloatBuffer mediumBuffer2 = NativeFloatBuffer.allocateFromNative(100, 100);
-        NativeFloatBuffer largeBuffer2 = NativeFloatBuffer.allocateFromNative(500, 500);
-        
-        assertNotNull(smallBuffer2);
-        assertNotNull(mediumBuffer2);
-        assertNotNull(largeBuffer2);
-        
-        // Clean up
-        smallBuffer2.close();
-        mediumBuffer2.close();
-        largeBuffer2.close();
-    }
+    // Clear all pools
+    NativeFloatBuffer.clearPools();
 
-    // Helper method to extract total allocations from stats string
-    private long getTotalAllocations(String stats) {
-        String[] lines = stats.split("\n");
-        for (String line : lines) {
-            if (line.startsWith("Total Allocations: ")) {
-                return Long.parseLong(line.substring("Total Allocations: ".length()));
-            }
-        }
-        return 0;
+    String Stats = NativeFloatBuffer.getPoolStats();
+    // Should show no buffers in pools after clear
+    assertFalse(Stats.contains("Bucket 0 (4096 bytes): 1 buffers"));
+    assertFalse(Stats.contains("Bucket 1 (8192 bytes): 1 buffers"));
+  }
+
+  @Test
+  void testMultipleBufferSizes() {
+    // Test different buffer sizes to ensure bucket system works
+    NativeFloatBuffer smallBuffer = NativeFloatBuffer.allocateFromNative(10, 10); // 400 bytes
+    NativeFloatBuffer mediumBuffer = NativeFloatBuffer.allocateFromNative(100, 100); // 40,000 bytes
+    NativeFloatBuffer largeBuffer =
+        NativeFloatBuffer.allocateFromNative(500, 500); // 1,000,000 bytes
+
+    assertNotNull(smallBuffer);
+    assertNotNull(mediumBuffer);
+    assertNotNull(largeBuffer);
+
+    // Close them to return to pools
+    smallBuffer.close();
+    mediumBuffer.close();
+    largeBuffer.close();
+
+    // Allocate same sizes again to test reuse
+    NativeFloatBuffer smallBuffer2 = NativeFloatBuffer.allocateFromNative(10, 10);
+    NativeFloatBuffer mediumBuffer2 = NativeFloatBuffer.allocateFromNative(100, 100);
+    NativeFloatBuffer largeBuffer2 = NativeFloatBuffer.allocateFromNative(500, 500);
+
+    assertNotNull(smallBuffer2);
+    assertNotNull(mediumBuffer2);
+    assertNotNull(largeBuffer2);
+
+    // Clean up
+    smallBuffer2.close();
+    mediumBuffer2.close();
+    largeBuffer2.close();
+  }
+
+  // Helper method to extract total allocations from Stats string
+  private long getTOTAL_ALLOCATIONS(String Stats) {
+    String[] lines = Stats.split("\n");
+    for (String line : lines) {
+      if (line.startsWith("Total Allocations: ")) {
+        return Long.parseLong(line.substring("Total Allocations: ".length()));
+      }
     }
+    return 0;
+  }
 }
