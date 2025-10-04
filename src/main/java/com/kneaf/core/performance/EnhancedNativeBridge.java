@@ -121,9 +121,7 @@ public final class EnhancedNativeBridge {
     private static void processBatch(byte operationType, List<BatchOperation> batch) {
         if (batch.isEmpty()) return;
 
-        long startTime = System.nanoTime();
-        
-        try {
+    try {
             // Prepare batch data for JNI call
             int totalSize = 0;
             for (BatchOperation op : batch) {
@@ -191,8 +189,8 @@ public final class EnhancedNativeBridge {
             }
         }
 
-        // Update metrics
-        long processingTime = System.nanoTime() - startTime;
+    // Update metrics
+    // processingTime is intentionally not stored here; metrics record counts and averages instead
         totalBatchesProcessed.incrementAndGet();
         totalOperationsBatched.addAndGet(batch.size());
         

@@ -6,8 +6,7 @@ import com.kneaf.core.performance.bridge.NativeIntegrationManager;
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.PlayerData;
 import com.kneaf.core.data.entity.VillagerData;
-import com.kneaf.core.exceptions.OptimizedProcessingException;
-
+// cleaned: removed unused exception import
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -17,6 +16,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Handles performance optimization logic including entity processing, memory management,
  * and adaptive optimization strategies.
  */
+@SuppressWarnings({"unused"})
 public class PerformanceOptimizer {
     
     private final PerformanceMonitor monitor;

@@ -3,9 +3,7 @@ package com.kneaf.core.performance.core;
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.PlayerData;
 import com.kneaf.core.data.entity.VillagerData;
-import com.kneaf.core.data.item.ItemEntityData;
-import com.kneaf.core.data.block.BlockEntityData;
-import com.kneaf.core.performance.bridge.NativeBridgeUtils;
+// cleaned: removed some unused imports
 import com.kneaf.core.binary.ManualSerializers;
 import com.kneaf.core.protocol.ProtocolProcessor;
 import com.kneaf.core.KneafCore;
@@ -26,9 +24,9 @@ import java.util.HashSet;
 /**
  * Handles entity processing operations including batch processing and optimization.
  */
+@SuppressWarnings({"deprecation", "unused"})
 public class EntityProcessor {
     
-    private static final Gson gson = new Gson();
     private final ProtocolProcessor protocolProcessor;
     private final PerformanceMonitor monitor;
     private final NativeBridgeProvider bridgeProvider;

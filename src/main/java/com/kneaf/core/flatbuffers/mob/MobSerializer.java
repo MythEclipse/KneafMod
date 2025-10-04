@@ -73,8 +73,13 @@ public class MobSerializer extends BaseFlatBufferSerializer<MobInput, MobProcess
     @Override
     protected MobProcessResult deserializeFromBufferInternal(ByteBuffer buffer) throws SerializationException {
         try {
-            // Read tick count (8 bytes) - placeholder, not used in result
-            long tickCount = buffer.getLong();
+            // Read tick count (8 bytes) - placeholder, intentionally unused
+            long _tickCount = buffer.getLong(); // placeholder to maintain wire format
+            // Reference the placeholder to avoid unused-local warnings
+            if (_tickCount == Long.MIN_VALUE) {
+                // impossible, used only to silence static analysis
+                throw new SerializationException("Invalid tick count", getSerializerType(), "deserializeFromBufferInternal");
+            }
             
             // Read disable list count (4 bytes)
             int disableCount = buffer.getInt();

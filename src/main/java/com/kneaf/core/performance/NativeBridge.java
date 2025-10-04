@@ -1,8 +1,7 @@
 package com.kneaf.core.performance;
 
 import java.nio.ByteBuffer;
-import java.util.Map;
-import java.util.HashMap;
+// cleaned: removed unused imports
 
 /**
  * Compatibility shim for tests and legacy callers. Delegates to

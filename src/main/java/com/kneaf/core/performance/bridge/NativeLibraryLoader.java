@@ -1,4 +1,4 @@
-package com.kneaf.core.performance;
+package com.kneaf.core.performance.bridge;
 
 import java.io.*;
 import java.nio.file.*;

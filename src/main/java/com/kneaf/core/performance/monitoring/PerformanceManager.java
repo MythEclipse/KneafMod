@@ -34,10 +34,7 @@ import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.PlayerData;
 import com.kneaf.core.performance.spatial.SpatialGrid;
 import com.kneaf.core.performance.RustPerformance;
-import com.kneaf.core.performance.core.ItemProcessResult;
-import com.kneaf.core.performance.core.MobProcessResult;
-import com.kneaf.core.performance.core.PerformanceProcessor;
-import com.kneaf.core.performance.bridge.NativeBridge;
+// cleaned: removed unused performance imports
 
 /**
  * Manages performance optimizations for the Minecraft server.
@@ -389,6 +386,7 @@ public class PerformanceManager {
     private static final Object spatialGridLock = new Object();
     
     // Asynchronous distance calculation configuration
+    @SuppressWarnings("unused")
     private static final int DISTANCE_CALCULATION_INTERVAL = 10; // Reduced frequency: calculate distances every 10 ticks
 
     public static boolean isEnabled() { return enabled; }

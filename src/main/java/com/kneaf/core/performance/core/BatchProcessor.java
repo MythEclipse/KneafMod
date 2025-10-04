@@ -4,15 +4,13 @@ import com.kneaf.core.KneafCore;
 import com.kneaf.core.data.item.ItemEntityData;
 import com.kneaf.core.data.entity.MobData;
 import com.kneaf.core.data.block.BlockEntityData;
-import com.kneaf.core.data.entity.EntityData;
-import com.kneaf.core.data.entity.PlayerData;
 import com.kneaf.core.binary.ManualSerializers;
 import com.kneaf.core.performance.bridge.NativeBridgeUtils;
 import com.kneaf.core.exceptions.OptimizedProcessingException;
 import com.kneaf.core.exceptions.AsyncProcessingException;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+// cleaned: removed unused imports
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -24,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Handles batch processing of performance operations with optimized memory management.
  */
+@SuppressWarnings({"deprecation"})
 public class BatchProcessor {
     
     private final ConcurrentLinkedQueue<BatchRequest> pendingRequests = new ConcurrentLinkedQueue<>();
@@ -615,7 +614,7 @@ public class BatchProcessor {
         return null;
     }
     
-    private final com.google.gson.Gson gson = new com.google.gson.Gson();
+    // gson is intentionally omitted; JSON fallback uses local Gson instances to avoid shared state
     private long tickCount = 0;
     
     /**

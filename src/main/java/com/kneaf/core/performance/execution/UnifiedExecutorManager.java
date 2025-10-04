@@ -140,9 +140,12 @@ public final class UnifiedExecutorManager {
      * Task information for tracking
      */
     private static final class TaskInfo {
+        @SuppressWarnings("unused")
         private final long taskId;
+        @SuppressWarnings("unused")
         private final String taskType;
         private final long startTime;
+        @SuppressWarnings("unused")
         private final TaskPriority priority;
         
         TaskInfo(long taskId, String taskType, long startTime, TaskPriority priority) {
@@ -298,8 +301,10 @@ public final class UnifiedExecutorManager {
     /**
      * Submit parallel computation task
      */
+    private static final java.util.concurrent.atomic.AtomicLong TASK_ID_GENERATOR = new java.util.concurrent.atomic.AtomicLong(1);
+
     public <T> CompletableFuture<T> submitParallelTask(java.util.function.Supplier<T> task, String taskType) {
-        long taskId = Thread.currentThread().getId();
+        long taskId = TASK_ID_GENERATOR.getAndIncrement();
         TaskInfo taskInfo = new TaskInfo(taskId, taskType, System.currentTimeMillis(), TaskPriority.NORMAL);
         activeTasks.put(taskId, taskInfo);
         
@@ -340,7 +345,7 @@ public final class UnifiedExecutorManager {
      * Submit task to specific executor
      */
     private CompletableFuture<Void> submitToExecutor(Runnable task, ExecutorService executor, TaskPriority priority, String taskType) {
-        long taskId = Thread.currentThread().getId();
+        long taskId = TASK_ID_GENERATOR.getAndIncrement();
         TaskInfo taskInfo = new TaskInfo(taskId, taskType, System.currentTimeMillis(), priority);
         activeTasks.put(taskId, taskInfo);
         

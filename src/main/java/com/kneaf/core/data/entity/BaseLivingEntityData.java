@@ -1,6 +1,5 @@
 package com.kneaf.core.data.entity;
 
-import com.kneaf.core.data.core.DataUtils;
 import com.kneaf.core.data.core.DataValidationException;
 
 /**

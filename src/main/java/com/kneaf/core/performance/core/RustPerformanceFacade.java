@@ -8,8 +8,7 @@ import com.kneaf.core.data.entity.MobData;
 import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.PlayerData;
 import com.kneaf.core.data.entity.VillagerData;
-import com.kneaf.core.performance.core.ItemProcessResult;
-import com.kneaf.core.performance.core.MobProcessResult;
+// cleaned: removed unused imports
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;

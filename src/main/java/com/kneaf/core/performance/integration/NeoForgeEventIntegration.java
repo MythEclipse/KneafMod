@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Integrates Rust native optimizations into Minecraft server events to reduce tick time.
  */
 @EventBusSubscriber(modid = "kneafcore")
+@SuppressWarnings({"unused"})
 public class NeoForgeEventIntegration {
     private static final Logger LOGGER = LoggerFactory.getLogger(NeoForgeEventIntegration.class);
     

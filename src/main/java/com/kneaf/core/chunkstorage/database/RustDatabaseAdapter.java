@@ -1,7 +1,5 @@
 package com.kneaf.core.chunkstorage.database;
 
-import com.kneaf.core.chunkstorage.common.StorageStatisticsProvider;
-import com.kneaf.core.chunkstorage.common.ChunkStorageExceptionHandler;
 import com.kneaf.core.chunkstorage.common.ChunkStorageUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,14 +7,13 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.List;
-import java.util.ArrayList;
+// cleaned: removed unused list imports
 
 /**
  * High-performance Rust-based database adapter implementation.
  * Provides native performance with checksum validation and thread-safe operations.
  */
-public class RustDatabaseAdapter extends AbstractDatabaseAdapter implements StorageStatisticsProvider {
+public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
     private static final Logger LOGGER = LoggerFactory.getLogger(RustDatabaseAdapter.class);
     
     /**

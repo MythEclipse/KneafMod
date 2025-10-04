@@ -8,8 +8,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.ArrayList;
-import java.util.List;
+// cleaned: removed unused imports
 import java.util.concurrent.locks.StampedLock;
 
 /**
@@ -53,7 +52,8 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
         private final ConcurrentLinkedQueue<PooledBuffer> queue = new ConcurrentLinkedQueue<>();
         private final AtomicInteger size = new AtomicInteger(0);
         private final AtomicInteger highWaterMark = new AtomicInteger(0);
-        private final int bucketIndex;
+    @SuppressWarnings("unused")
+    private final int bucketIndex;
         
         LockFreePool(int bucketIndex) {
             this.bucketIndex = bucketIndex;
@@ -151,8 +151,10 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
     private static final class PooledBuffer {
         final ByteBuffer buffer;
         final int bucketIndex;
-        final long creationTime;
-        final int reuseCount;
+    @SuppressWarnings("unused")
+    final long creationTime;
+    @SuppressWarnings("unused")
+    final int reuseCount;
         
         PooledBuffer(ByteBuffer buffer, int bucketIndex, long creationTime, int reuseCount) {
             this.buffer = buffer;
@@ -232,8 +234,11 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
     private final int byteCapacity;
     private final Cleaner.Cleanable cleanable;
     private volatile boolean closed = false;
+    @SuppressWarnings("unused")
     private final boolean isPooled;
+    @SuppressWarnings("unused")
     private final int bucketIndex;
+    @SuppressWarnings("unused")
     private final long creationTime;
 
     private EnhancedNativeFloatBuffer(ByteBuffer buf, long rows, long cols, boolean isPooled, int bucketIndex) {
