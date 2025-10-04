@@ -430,7 +430,9 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
             }
           } catch (NoSuchFieldException | IllegalAccessException inner) {
             // If all reflection attempts fail, rely on GC as last resort
-            KneafCore.LOGGER.debug("Could not explicitly free direct ByteBuffer; relying on GC: { }", inner.getMessage());
+            KneafCore.LOGGER.debug(
+                "Could not explicitly free direct ByteBuffer; relying on GC: { }",
+                inner.getMessage());
           }
         } catch (Throwable ex) {
           // Last resort - let the GC take care of it

@@ -427,13 +427,13 @@ public class ChunkCache implements StorageStatisticsProvider {
       throw new IllegalArgumentException("Eviction policy cannot be null");
     }
 
-  this.maxCapacity = new java.util.concurrent.atomic.AtomicInteger(maxCapacity);
-  this.evictionPolicy = evictionPolicy;
+    this.maxCapacity = new java.util.concurrent.atomic.AtomicInteger(maxCapacity);
+    this.evictionPolicy = evictionPolicy;
 
     LOGGER.info(
         "Initialized ChunkCache with capacity { } and { } eviction policy",
-    this.maxCapacity.get(),
-    evictionPolicy.getPolicyName());
+        this.maxCapacity.get(),
+        evictionPolicy.getPolicyName());
   }
 
   /**
@@ -637,7 +637,7 @@ public class ChunkCache implements StorageStatisticsProvider {
           currentMisses,
           currentEvictions,
           cacheSize,
-      maxCapacity.get(),
+          maxCapacity.get(),
           hitRate,
           evictionPolicy.getPolicyName(),
           currentSwapOuts,
@@ -652,9 +652,9 @@ public class ChunkCache implements StorageStatisticsProvider {
   }
 
   /**
-   * Set the maximum cache capacity at runtime. If the new capacity is smaller than the
-   * current cache size, evict chunks according to the current eviction policy until the
-   * size is within limits.
+   * Set the maximum cache capacity at runtime. If the new capacity is smaller than the current
+   * cache size, evict chunks according to the current eviction policy until the size is within
+   * limits.
    *
    * @param newCapacity new maximum capacity (must be positive)
    * @return true if applied, false on invalid input
@@ -694,8 +694,8 @@ public class ChunkCache implements StorageStatisticsProvider {
   }
 
   /**
-   * Switch eviction policy at runtime. Policy name is case-insensitive and supports: LRU,
-   * Distance, Hybrid, SwapAware.
+   * Switch eviction policy at runtime. Policy name is case-insensitive and supports: LRU, Distance,
+   * Hybrid, SwapAware.
    *
    * @param policyName policy name
    * @return true if applied, false if invalid

@@ -89,7 +89,7 @@ public class EntitySerializer extends BaseBinarySerializer<EntityInput, List<Lon
       throws SerializationException {
     try {
       // Read tick count (8 bytes)
-  buffer.getLong(); // tickCount (not used by selection logic)
+      buffer.getLong(); // tickCount (not used by selection logic)
 
       // Read entity count (4 bytes)
       int entityCount = buffer.getInt();
@@ -110,9 +110,9 @@ public class EntitySerializer extends BaseBinarySerializer<EntityInput, List<Lon
       for (int i = 0; i < entityCount; i++) {
         // Read entity fields in same order as written
         long id = buffer.getLong();
-  buffer.getFloat(); // x
-  buffer.getFloat(); // y
-  buffer.getFloat(); // z
+        buffer.getFloat(); // x
+        buffer.getFloat(); // y
+        buffer.getFloat(); // z
         float distance = buffer.getFloat();
         boolean isBlockEntity = SerializationUtils.readBoolean(buffer);
         String type = SerializationUtils.readString(buffer);

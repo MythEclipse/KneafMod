@@ -100,9 +100,9 @@ public class SwapEndToEndTest {
   void testCompleteSwapCycle() throws Exception {
     System.out.println("Testing complete swap out and swap in cycle...");
 
-    // Skip test if native library is not available
-    if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
-      System.out.println("⚠️ Skipping test - Native library not available");
+    // Skip test if critical components are not available (swap manager or database)
+    if (swapManager == null || databaseAdapter == null) {
+      System.out.println("⚠️ Skipping test - Critical components not available");
       return;
     }
 
@@ -171,13 +171,7 @@ public class SwapEndToEndTest {
   void testBulkSwapOperations() throws Exception {
     System.out.println("Testing bulk swap operations...");
 
-    // Skip test if native library is not available
-    if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
-      System.out.println("⚠️ Skipping test - Native library not available");
-      return;
-    }
-
-    // Verify critical components are available
+    // Skip test if critical components are not available
     if (swapManager == null || databaseAdapter == null) {
       System.out.println("⚠️ Skipping test - Critical components not available");
       return;
@@ -225,13 +219,7 @@ public class SwapEndToEndTest {
   void testAutomaticSwapTriggering() throws Exception {
     System.out.println("Testing automatic swap triggering under memory pressure...");
 
-    // Skip test if native library is not available
-    if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
-      System.out.println("⚠️ Skipping test - Native library not available");
-      return;
-    }
-
-    // Verify critical components are available
+    // Skip test if critical components are not available
     if (swapManager == null || databaseAdapter == null) {
       System.out.println("⚠️ Skipping test - Critical components not available");
       return;
@@ -316,13 +304,7 @@ public class SwapEndToEndTest {
   void testSwapStatisticsAccuracy() throws Exception {
     System.out.println("Testing swap statistics accuracy...");
 
-    // Skip test if native library is not available
-    if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
-      System.out.println("⚠️ Skipping test - Native library not available");
-      return;
-    }
-
-    // Verify critical components are available
+    // Skip test if critical components are not available
     if (swapManager == null || databaseAdapter == null) {
       System.out.println("⚠️ Skipping test - Critical components not available");
       return;
@@ -374,13 +356,7 @@ public class SwapEndToEndTest {
   void testConcurrentSwapOperations() throws Exception {
     System.out.println("Testing concurrent swap operations...");
 
-    // Skip test if native library is not available
-    if (!RustDatabaseAdapter.isNativeLibraryAvailable()) {
-      System.out.println("⚠️ Skipping test - Native library not available");
-      return;
-    }
-
-    // Verify critical components are available
+    // Skip test if critical components are not available
     if (swapManager == null || databaseAdapter == null) {
       System.out.println("⚠️ Skipping test - Critical components not available");
       return;

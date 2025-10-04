@@ -658,10 +658,13 @@ public class ChunkStorageManager {
         LOGGER.info("Cache capacity changed to { } for world '{ }'", capacity, worldName);
       } else {
         LOGGER.warn(
-            "Requested cache capacity change to { } for world '{ }' was rejected", capacity, worldName);
+            "Requested cache capacity change to { } for world '{ }' was rejected",
+            capacity,
+            worldName);
       }
     } catch (Exception e) {
-      LOGGER.warn("Failed to change cache capacity for world '{ }': { }", worldName, e.getMessage());
+      LOGGER.warn(
+          "Failed to change cache capacity for world '{ }': { }", worldName, e.getMessage());
     }
   }
 
@@ -677,10 +680,13 @@ public class ChunkStorageManager {
         LOGGER.info("Eviction policy changed to { } for world '{ }'", policy, worldName);
       } else {
         LOGGER.warn(
-            "Requested eviction policy change to { } for world '{ }' was rejected", policy, worldName);
+            "Requested eviction policy change to { } for world '{ }' was rejected",
+            policy,
+            worldName);
       }
     } catch (Exception e) {
-      LOGGER.warn("Failed to change eviction policy for world '{ }': { }", worldName, e.getMessage());
+      LOGGER.warn(
+          "Failed to change eviction policy for world '{ }': { }", worldName, e.getMessage());
     }
   }
 

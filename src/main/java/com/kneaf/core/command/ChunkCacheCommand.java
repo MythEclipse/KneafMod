@@ -167,10 +167,10 @@ public class ChunkCacheCommand {
       }
     }
 
-  final int finalCleared = clearedCount;
-  source.sendSuccess(
-    () -> Component.literal(String.format("§aCleared caches for §f%d §aworlds", finalCleared)),
-    false);
+    final int finalCleared = clearedCount;
+    source.sendSuccess(
+        () -> Component.literal(String.format("§aCleared caches for §f%d §aworlds", finalCleared)),
+        false);
 
     return 1;
   }
@@ -267,16 +267,18 @@ public class ChunkCacheCommand {
         entry.getValue().setCacheCapacity(capacity);
         applied++;
       } catch (Exception e) {
-        LOGGER.warn("Failed to set cache capacity for world { }: { }", entry.getKey(), e.getMessage());
+        LOGGER.warn(
+            "Failed to set cache capacity for world { }: { }", entry.getKey(), e.getMessage());
       }
     }
 
-  final int finalApplied = applied;
-  source.sendSuccess(
-    () ->
-      Component.literal(
-        String.format("§aCache capacity set to §f%d §afor %d worlds", capacity, finalApplied)),
-    false);
+    final int finalApplied = applied;
+    source.sendSuccess(
+        () ->
+            Component.literal(
+                String.format(
+                    "§aCache capacity set to §f%d §afor %d worlds", capacity, finalApplied)),
+        false);
 
     return 1;
   }
@@ -305,16 +307,18 @@ public class ChunkCacheCommand {
         entry.getValue().setEvictionPolicy(policy);
         applied++;
       } catch (Exception e) {
-        LOGGER.warn("Failed to set eviction policy for world { }: { }", entry.getKey(), e.getMessage());
+        LOGGER.warn(
+            "Failed to set eviction policy for world { }: { }", entry.getKey(), e.getMessage());
       }
     }
 
-  final int finalApplied2 = applied;
-  source.sendSuccess(
-    () ->
-      Component.literal(
-        String.format("§aEviction policy set to §f%s §afor %d worlds", policy, finalApplied2)),
-    false);
+    final int finalApplied2 = applied;
+    source.sendSuccess(
+        () ->
+            Component.literal(
+                String.format(
+                    "§aEviction policy set to §f%s §afor %d worlds", policy, finalApplied2)),
+        false);
 
     return 1;
   }
