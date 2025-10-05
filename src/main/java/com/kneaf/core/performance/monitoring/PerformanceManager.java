@@ -140,6 +140,111 @@ public class PerformanceManager {
   private static final ThreadLocal<ProfileData> PROFILE_DATA =
       ThreadLocal.withInitial(ProfileData::new);
 
+  // Distance transition configuration
+  private static final int DEFAULT_TRANSITION_TICKS = 20; // default smoothing window
+  private static final int TRANSITION_TICKS = DEFAULT_TRANSITION_TICKS;
+
+  // Per-level distance state maps for restore and smoothing
+  private static final java.util.concurrent.ConcurrentMap<ServerLevel, Integer> ORIGINAL_VIEW_DISTANCE =
+    new java.util.concurrent.ConcurrentHashMap<>();
+  private static final java.util.concurrent.ConcurrentMap<ServerLevel, Integer> TARGET_DISTANCE =
+    new java.util.concurrent.ConcurrentHashMap<>();
+  private static final java.util.concurrent.ConcurrentMap<ServerLevel, Integer> TRANSITION_REMAINING =
+    new java.util.concurrent.ConcurrentHashMap<>();
+  // Simulation distance tracking
+  private static final java.util.concurrent.ConcurrentMap<ServerLevel, Integer> ORIGINAL_SIMULATION_DISTANCE =
+    new java.util.concurrent.ConcurrentHashMap<>();
+  private static final java.util.concurrent.ConcurrentMap<ServerLevel, Integer> TARGET_SIMULATION_DISTANCE =
+    new java.util.concurrent.ConcurrentHashMap<>();
+  private static final java.util.concurrent.ConcurrentMap<ServerLevel, Integer> TRANSITION_REMAINING_SIM =
+    new java.util.concurrent.ConcurrentHashMap<>();
+
+  // Reflection method cache to avoid repeated lookups and noisy logs
+  private static final java.util.concurrent.ConcurrentMap<Class<?>, java.lang.reflect.Method> VIEW_GET_CACHE =
+    new java.util.concurrent.ConcurrentHashMap<>();
+  private static final java.util.concurrent.ConcurrentMap<Class<?>, java.lang.reflect.Method> VIEW_SET_CACHE =
+    new java.util.concurrent.ConcurrentHashMap<>();
+  private static final java.util.concurrent.ConcurrentMap<Class<?>, java.lang.reflect.Method> SIM_GET_CACHE =
+    new java.util.concurrent.ConcurrentHashMap<>();
+  private static final java.util.concurrent.ConcurrentMap<Class<?>, java.lang.reflect.Method> SIM_SET_CACHE =
+    new java.util.concurrent.ConcurrentHashMap<>();
+  private static final java.util.concurrent.ConcurrentMap<Class<?>, Boolean> METHOD_RESOLVED =
+    new java.util.concurrent.ConcurrentHashMap<>();
+
+  // Resolve and cache view getter
+  private static java.lang.reflect.Method resolveViewGetter(Class<?> cls) {
+    var m = VIEW_GET_CACHE.get(cls);
+    if (m != null) return m;
+    if (METHOD_RESOLVED.containsKey(cls) && !VIEW_GET_CACHE.containsKey(cls)) return null;
+    try {
+      try {
+        m = cls.getMethod("getViewDistance");
+      } catch (NoSuchMethodException e) {
+        m = cls.getMethod("viewDistance");
+      }
+      VIEW_GET_CACHE.put(cls, m);
+      METHOD_RESOLVED.put(cls, true);
+      return m;
+    } catch (Throwable t) {
+      METHOD_RESOLVED.put(cls, false);
+      return null;
+    }
+  }
+
+  private static java.lang.reflect.Method resolveViewSetter(Class<?> cls) {
+    var m = VIEW_SET_CACHE.get(cls);
+    if (m != null) return m;
+    try {
+      m = cls.getMethod("setViewDistance", int.class);
+      VIEW_SET_CACHE.put(cls, m);
+      return m;
+    } catch (Throwable t) {
+      return null;
+    }
+  }
+
+  private static java.lang.reflect.Method resolveSimGetter(Class<?> cls) {
+    var m = SIM_GET_CACHE.get(cls);
+    if (m != null) return m;
+    try {
+      m = cls.getMethod("getSimulationDistance");
+      SIM_GET_CACHE.put(cls, m);
+      return m;
+    } catch (Throwable t) {
+      return null;
+    }
+  }
+
+  private static java.lang.reflect.Method resolveSimSetter(Class<?> cls) {
+    var m = SIM_SET_CACHE.get(cls);
+    if (m != null) return m;
+    try {
+      m = cls.getMethod("setSimulationDistance", int.class);
+      SIM_SET_CACHE.put(cls, m);
+      return m;
+    } catch (Throwable t) {
+      return null;
+    }
+  }
+
+  private static void disableReflectionForClass(Class<?> cls, String why, Throwable t) {
+    try {
+      VIEW_GET_CACHE.remove(cls);
+      VIEW_SET_CACHE.remove(cls);
+      SIM_GET_CACHE.remove(cls);
+      SIM_SET_CACHE.remove(cls);
+      METHOD_RESOLVED.put(cls, false);
+    } finally {
+      // Log once per-class at debug so we don't spam logs every tick
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Disabling reflection distance adjustments for {}: {}", cls.getName(), why);
+      }
+      if (LOGGER.isTraceEnabled()) {
+        LOGGER.trace("Reflection disable cause: ", t);
+      }
+    }
+  }
+
   private static ThreadPoolExecutor getExecutor() {
     synchronized (EXECUTOR_LOCK) {
       if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
@@ -502,6 +607,13 @@ public class PerformanceManager {
 
     // Collect and consolidate data
     EntityDataCollection data = collectAndConsolidate(server, shouldProfile, profile);
+
+    // Apply any pending distance transitions each tick
+    try {
+      applyDistanceTransitions(server);
+    } catch (Throwable t) {
+      LOGGER.debug("Error applying distance transitions: {}", t.getMessage());
+    }
 
     // Decide whether to offload heavy processing based on rolling TPS and dynamic threshold
     double avgTps = getRollingAvgTPS();
@@ -1009,7 +1121,196 @@ public class PerformanceManager {
   private static void applyOptimizations(MinecraftServer server, OptimizationResults results) {
     applyItemUpdates(server, results.itemResult());
     applyMobOptimizations(server, results.mobResult());
+    // Ensure server-level distance settings are constrained when optimization level requires it
+    try {
+      com.kneaf.core.performance.core.RustPerformanceFacade facade =
+          com.kneaf.core.performance.core.RustPerformanceFacade.getInstance();
+      com.kneaf.core.performance.core.PerformanceOptimizer.OptimizationLevel level =
+          facade.isNativeAvailable() ? facade.getCurrentOptimizationLevel() : null;
+      if (level != null) {
+        // Map optimization level to a target chunk distance (min..max both set to the target)
+        int target;
+        switch (level) {
+          case AGGRESSIVE -> target = 8; // most aggressive -> smallest distance
+          case HIGH -> target = 12;
+          case MEDIUM -> target = 16;
+          case NORMAL -> target = 32; // normal (low optimization) -> largest distance
+          default -> target = 16;
+        }
+          // Instead of forcing immediately, set target distances and let smoothing handle changes
+          setTargetDistance(server, target);
+      }
+    } catch (Throwable t) {
+      // Non-fatal - log at debug to avoid spamming logs
+      LOGGER.debug("Failed to enforce server distance bounds: {}", t.getMessage());
+    }
   }
+
+  private static void setTargetDistance(MinecraftServer server, int targetChunks) {
+    if (server == null) return;
+    for (ServerLevel level : server.getAllLevels()) {
+      try {
+        // Record original view distance if not already recorded
+        if (!ORIGINAL_VIEW_DISTANCE.containsKey(level)) {
+          try {
+            var m = resolveViewGetter(level.getClass());
+            if (m != null) {
+              int current = (int) m.invoke(level);
+              ORIGINAL_VIEW_DISTANCE.put(level, current);
+            }
+          } catch (Throwable t) {
+            // if getViewDistance isn't available, skip storing original
+          }
+        }
+        // Record original simulation distance if not already recorded
+        if (!ORIGINAL_SIMULATION_DISTANCE.containsKey(level)) {
+          try {
+            var sm = resolveSimGetter(level.getClass());
+            if (sm != null) {
+              int curSim = (int) sm.invoke(level);
+              ORIGINAL_SIMULATION_DISTANCE.put(level, curSim);
+            }
+          } catch (Throwable t) {
+            // ignore if not available
+          }
+        }
+
+        TARGET_DISTANCE.put(level, targetChunks);
+        TRANSITION_REMAINING.put(level, TRANSITION_TICKS);
+        // For simulation distance, use same target and ticks by default
+        TARGET_SIMULATION_DISTANCE.put(level, targetChunks);
+        TRANSITION_REMAINING_SIM.put(level, TRANSITION_TICKS);
+      } catch (Throwable t) {
+        LOGGER.debug("Failed to set target distance for level {}: {}", level, t.getMessage());
+      }
+    }
+  }
+
+  private static void applyDistanceTransitions(MinecraftServer server) {
+    if (server == null) return;
+    for (ServerLevel level : server.getAllLevels()) {
+      Integer remaining = TRANSITION_REMAINING.get(level);
+      Integer target = TARGET_DISTANCE.get(level);
+      if (remaining == null || target == null) continue;
+
+      try {
+        var lvlClass = level.getClass();
+        var vg = resolveViewGetter(lvlClass);
+        if (vg == null) {
+          // no supported view getter for this level
+          TRANSITION_REMAINING.remove(level);
+          TARGET_DISTANCE.remove(level);
+          continue;
+        }
+        int current = (int) vg.invoke(level);
+
+        if (remaining <= 1) {
+          // final step: set to target and cleanup
+          try {
+              var setView = resolveViewSetter(lvlClass);
+              if (setView != null) setView.invoke(level, target);
+          } catch (Throwable ignored) {
+            // ignore
+          }
+          TRANSITION_REMAINING.remove(level);
+          TARGET_DISTANCE.remove(level);
+          // If target equals original, remove original record
+          Integer orig = ORIGINAL_VIEW_DISTANCE.get(level);
+          if (orig != null && orig.equals(target)) ORIGINAL_VIEW_DISTANCE.remove(level);
+          continue;
+        }
+
+        // Compute one-step linear transition toward target
+        int step = (int) Math.ceil((double) (target - current) / remaining);
+        int next = current + step;
+
+        try {
+          var setView = resolveViewSetter(lvlClass);
+          if (setView != null) setView.invoke(level, next);
+        } catch (Throwable ignored) {
+          // ignore if not available
+        }
+
+  int rem = remaining.intValue();
+  TRANSITION_REMAINING.put(level, Integer.valueOf(rem - 1));
+      } catch (Throwable t) {
+        LOGGER.debug("Error transitioning distance for level {}: {}", level, t.getMessage());
+        // Clean up to avoid endless retries
+        TRANSITION_REMAINING.remove(level);
+        TARGET_DISTANCE.remove(level);
+      }
+    }
+    // Now handle simulation distance transitions in parallel
+    for (ServerLevel level : server.getAllLevels()) {
+      Integer remaining = TRANSITION_REMAINING_SIM.get(level);
+      Integer target = TARGET_SIMULATION_DISTANCE.get(level);
+      if (remaining == null || target == null) continue;
+
+      try {
+        var lvlClass = level.getClass();
+        var sg = resolveSimGetter(lvlClass);
+        if (sg == null) {
+          TRANSITION_REMAINING_SIM.remove(level);
+          TARGET_SIMULATION_DISTANCE.remove(level);
+          continue;
+        }
+        int current = (int) sg.invoke(level);
+
+        if (remaining <= 1) {
+          try {
+            var setSim = resolveSimSetter(lvlClass);
+            if (setSim != null) setSim.invoke(level, target);
+          } catch (Throwable ignored) {
+            // ignore
+          }
+          TRANSITION_REMAINING_SIM.remove(level);
+          TARGET_SIMULATION_DISTANCE.remove(level);
+          Integer orig = ORIGINAL_SIMULATION_DISTANCE.get(level);
+          if (orig != null && orig.equals(target)) ORIGINAL_SIMULATION_DISTANCE.remove(level);
+          continue;
+        }
+
+        int step = (int) Math.ceil((double) (target - current) / remaining);
+        int next = current + step;
+
+        try {
+          var setSim = resolveSimSetter(lvlClass);
+          if (setSim != null) setSim.invoke(level, next);
+        } catch (Throwable ignored) {
+          // ignore if not available
+        }
+
+  int remSim = remaining.intValue();
+  TRANSITION_REMAINING_SIM.put(level, Integer.valueOf(remSim - 1));
+      } catch (Throwable t) {
+        LOGGER.debug("Error transitioning simulation distance for level {}: {}", level, t.getMessage());
+        TRANSITION_REMAINING_SIM.remove(level);
+        TARGET_SIMULATION_DISTANCE.remove(level);
+      }
+    }
+    // If no transitions remain, consider restoring originals for levels where target==original
+    for (ServerLevel level : server.getAllLevels()) {
+      if (!TARGET_DISTANCE.containsKey(level) && ORIGINAL_VIEW_DISTANCE.containsKey(level)) {
+        try {
+          var lvlClass = level.getClass();
+          var vg = resolveViewGetter(lvlClass);
+          var vs = resolveViewSetter(lvlClass);
+          if (vg != null && vs != null) {
+            int current = ((Number) vg.invoke(level)).intValue();
+            int orig = ORIGINAL_VIEW_DISTANCE.get(level).intValue();
+            if (current != orig) {
+              vs.invoke(level, Integer.valueOf(orig));
+            }
+          }
+        } catch (Throwable t) {
+          // Disable reflection for this class to prevent repeated errors
+          disableReflectionForClass(level.getClass(), "restoreView", t);
+        } finally {
+          ORIGINAL_VIEW_DISTANCE.remove(level);
+        }
+      }
+    }
+    }
 
   private static void applyItemUpdates(
       MinecraftServer server, com.kneaf.core.performance.core.ItemProcessResult itemResult) {

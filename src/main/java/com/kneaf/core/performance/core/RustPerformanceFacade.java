@@ -439,6 +439,17 @@ public class RustPerformanceFacade {
     }
   }
 
+  /**
+   * Return the current optimization level from the internal PerformanceOptimizer.
+   * This is a small convenience method so other systems with a server reference can
+   * adapt server-side settings based on the active optimization level.
+   */
+  public com.kneaf.core.performance.core.PerformanceOptimizer.OptimizationLevel
+      getCurrentOptimizationLevel() {
+    ensureInitialized();
+    return optimizer.getOptimizationStatistics().getCurrentLevel();
+  }
+
   /** Performance statistics data class. */
   public static class PerformanceStatistics {
     private final long totalEntitiesProcessed;
