@@ -155,14 +155,15 @@ impl ChunkGenerator {
                 let manhattan_distance = (pos.x - center_x).abs() + (pos.z - center_z).abs();
                 let euclidean_distance = ((pos.x - center_x) as f64).hypot((pos.z - center_z) as f64);
                 
-                // Apply proximity-based generation logic with reduced frequency for distant chunks
+                // Apply proximity-based generation logic with reduced frequency for distant chunks (LOD)
                 if manhattan_distance <= radius as i32 && euclidean_distance <= radius as f64 {
-                    // Higher probability for closer chunks, lower for distant ones
+                    // Higher probability for closer chunks, lower for distant ones (Level of Detail)
                     let generation_probability = match manhattan_distance {
-                        0..=2 => 0.9,  // High probability for very close chunks
-                        3..=5 => 0.7,  // Medium probability for nearby chunks
-                        6..=8 => 0.4,  // Lower probability for distant chunks
-                        _ => 0.2,      // Low probability for far chunks
+                        0..=1 => 1.0,  // Very close chunks, always generate for immediate rendering
+                        2..=3 => 0.8,  // Close chunks, high priority
+                        4..=6 => 0.5,  // Medium distance, moderate priority
+                        7..=10 => 0.2, // Distant chunks, low priority for LOD
+                        _ => 0.05,     // Very far chunks, minimal generation for LOD
                     };
                     
                     // Use a simple hash-based deterministic check instead of expensive modulo

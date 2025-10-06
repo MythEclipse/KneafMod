@@ -46,6 +46,10 @@ public class ChunkGeneratorOptimizer {
   private static final AtomicInteger PREDICTIVE_CHUNKS_GENERATED = new AtomicInteger(0);
   private static final AtomicInteger TOTAL_PREDICTIVE_ATTEMPTS = new AtomicInteger(0);
 
+  // High speed movement threshold for simplified rendering
+  private static final double HIGH_SPEED_THRESHOLD = 10.0; // blocks per second
+  private static final int FAST_EXPLORATION_DELTA_THRESHOLD = 16; // chunks
+
   private ChunkGeneratorOptimizer() {}
 
   /** Player movement data for predictive loading */
@@ -54,6 +58,7 @@ public class ChunkGeneratorOptimizer {
         new ArrayDeque<>(getPlayerMovementHistorySize());
     private final Queue<Long> timestamps = new ArrayDeque<>(getPlayerMovementHistorySize());
     private long lastPredictionTime = 0;
+    private double currentVelocity = 0.0; // blocks per second
 
     public void addPosition(BlockPos pos) {
       long currentTime = System.currentTimeMillis();
@@ -62,6 +67,21 @@ public class ChunkGeneratorOptimizer {
       if (recentPositions.size() >= getPlayerMovementHistorySize()) {
         recentPositions.poll();
         timestamps.poll();
+      }
+
+      // Calculate velocity if we have previous position
+      if (!recentPositions.isEmpty() && !timestamps.isEmpty()) {
+        BlockPos prevPos = recentPositions.peek();
+        long prevTime = timestamps.peek();
+        double timeDelta = (currentTime - prevTime) / 1000.0; // seconds
+        if (timeDelta > 0) {
+          double distance = Math.sqrt(
+              Math.pow(pos.getX() - prevPos.getX(), 2) +
+              Math.pow(pos.getY() - prevPos.getY(), 2) +
+              Math.pow(pos.getZ() - prevPos.getZ(), 2)
+          );
+          currentVelocity = distance / timeDelta;
+        }
       }
 
       recentPositions.offer(pos);
@@ -106,6 +126,10 @@ public class ChunkGeneratorOptimizer {
     public void updatePrediction(BlockPos predictedPos) {
       this.lastPredictionTime = System.currentTimeMillis();
     }
+
+    public double getCurrentVelocity() {
+      return currentVelocity;
+    }
   }
 
   @SubscribeEvent
@@ -145,6 +169,21 @@ public class ChunkGeneratorOptimizer {
       // Add current position to history
       movementData.addPosition(currentPos);
 
+      // Check movement characteristics for optimization
+      double velocity = movementData.getCurrentVelocity();
+      boolean isHighSpeed = velocity > HIGH_SPEED_THRESHOLD;
+
+      // Check for fast exploration (large chunk jumps)
+      boolean isFastExploration = false;
+      if (movementData.recentPositions.size() >= 2) {
+        List<BlockPos> posList = new ArrayList<>(movementData.recentPositions);
+        ChunkPos currentChunk = new ChunkPos(posList.get(posList.size() - 1));
+        ChunkPos prevChunk = new ChunkPos(posList.get(posList.size() - 2));
+        int deltaX = Math.abs(currentChunk.x - prevChunk.x);
+        int deltaZ = Math.abs(currentChunk.z - prevChunk.z);
+        isFastExploration = deltaX > FAST_EXPLORATION_DELTA_THRESHOLD || deltaZ > FAST_EXPLORATION_DELTA_THRESHOLD;
+      }
+
       // Predict next position
       BlockPos predictedPos = movementData.predictNextPosition();
       if (predictedPos != null && !movementData.isPredictionValid()) {
@@ -158,11 +197,24 @@ public class ChunkGeneratorOptimizer {
             com.kneaf.core.performance.core.PerformanceConstants
                 .getAdaptiveMaxPredictiveChunksPerTick(
                     com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS());
-        for (int dx = -tpsAdaptiveRadius;
-            dx <= tpsAdaptiveRadius && chunksGeneratedThisTick < tpsAdaptiveMax;
+
+        // Adjust parameters based on movement characteristics
+        int adjustedRadius = tpsAdaptiveRadius;
+        int adjustedMax = tpsAdaptiveMax;
+        if (isHighSpeed) {
+          // Reduce prefetch for high speed to focus on immediate area
+          adjustedRadius = Math.max(1, tpsAdaptiveRadius / 2);
+          adjustedMax = Math.max(1, tpsAdaptiveMax / 2);
+        } else if (isFastExploration) {
+          // Increase prefetch for fast exploration
+          adjustedRadius = Math.min(tpsAdaptiveRadius * 2, 32);
+          adjustedMax = Math.min(tpsAdaptiveMax * 2, 100);
+        }
+        for (int dx = -adjustedRadius;
+            dx <= adjustedRadius && chunksGeneratedThisTick < adjustedMax;
             dx++) {
-          for (int dz = -tpsAdaptiveRadius;
-              dz <= tpsAdaptiveRadius && chunksGeneratedThisTick < tpsAdaptiveMax;
+          for (int dz = -adjustedRadius;
+              dz <= adjustedRadius && chunksGeneratedThisTick < adjustedMax;
               dz++) {
             int chunkX = predictedChunk.x + dx;
             int chunkZ = predictedChunk.z + dz;
