@@ -15,10 +15,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CompletionException;
 import com.kneaf.core.performance.RustPerformance;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 
 /** Handles batch processing of performance operations with optimized memory management. */
 @SuppressWarnings({"deprecation"})
@@ -34,6 +37,26 @@ public class BatchProcessor {
 
   private volatile boolean BATCH_PROCESSOR_RUNNING = false;
   private final Object batchLock = new Object();
+  
+  // Configuration
+ private static final PerformanceConfig CONFIG = PerformanceConfig.load();
+
+ // Entity collection optimizations
+ private final AtomicInteger entityCollectionCounter = new AtomicInteger(0);
+ private final Map<Long, EntityData> entityMemoryPool = new ConcurrentHashMap<>();
+ private final AtomicLong poolSize = new AtomicLong(0);
+ private final int MAX_POOL_SIZE;
+ private final double SAMPLING_RATE;
+ private final int CHUNK_SIZE;
+ private final boolean ENABLE_OPTIMIZATIONS;
+ private final boolean CHUNK_BASED_PARALLELISM;
+
+ // JNI batch processing configuration - increased minimum from 25 to 100+
+ private static final int DEFAULT_JNI_MIN_BATCH_SIZE = 100;
+ private static final int DEFAULT_JNI_MAX_BATCH_SIZE = 500;
+ private final int JNI_MIN_BATCH_SIZE;
+ private final int JNI_MAX_BATCH_SIZE;
+ private final boolean COMBINE_MULTIPLE_OPS;
 
   // Batch processing configuration (computed dynamically)
 
@@ -44,8 +67,20 @@ public class BatchProcessor {
     this.entityProcessor = entityProcessor;
     this.monitor = monitor;
     this.bridgeProvider = bridgeProvider;
-  // No circuit-breaker initialization (resilience4j not required at runtime)
-  }
+    
+    // Initialize entity collection optimizations
+    this.ENABLE_OPTIMIZATIONS = CONFIG.isEntityCollectionOptimizationsEnabled();
+    this.SAMPLING_RATE = CONFIG.getEntitySamplingRate();
+    this.CHUNK_SIZE = CONFIG.getEntityChunkSize();
+    this.MAX_POOL_SIZE = CONFIG.getEntityPoolSize();
+    this.CHUNK_BASED_PARALLELISM = CONFIG.isChunkBasedParallelProcessing();
+    
+    // Initialize JNI batch processing configuration
+    this.JNI_MIN_BATCH_SIZE = CONFIG.getJniMinimumBatchSize();
+    this.JNI_MAX_BATCH_SIZE = CONFIG.getJniMaximumBatchSize();
+    this.COMBINE_MULTIPLE_OPS = CONFIG.isCombineMultipleOperations();
+ // No circuit-breaker initialization (resilience4j not required at runtime)
+ }
 
   /**
    * Synchronous wrapper for existing call-sites that expect a blocking method.
@@ -127,7 +162,7 @@ public class BatchProcessor {
 
     // Use NativeBridge for optimized batch processing if available
     if (bridgeProvider.isNativeAvailable()
-        && batch.size() >= NativeBridgeUtils.calculateOptimalBatchSize(1, 25, 200)) {
+        && batch.size() >= JNI_MIN_BATCH_SIZE) {
       try {
         // existing call sites expect a synchronous call; delegate to the async implementation and wait
         processBatchWithNativeBridge(batch);
@@ -184,7 +219,7 @@ public class BatchProcessor {
               batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
           }
 
-          // Process each type batch using NativeBridge
+          // Process each type batch using NativeBridge with combined operations support
           for (Map.Entry<String, List<BatchRequest<?>>> entry : batchedByType.entrySet()) {
               String type = entry.getKey();
               List<BatchRequest<?>> typeBatch = entry.getValue();
@@ -192,16 +227,32 @@ public class BatchProcessor {
               try {
                   switch (type) {
                       case PerformanceConstants.ENTITIES_KEY:
-                          processEntitiesBatchOptimized(typeBatch);
+                          if (COMBINE_MULTIPLE_OPS && typeBatch.size() > 1) {
+                              processCombinedEntitiesBatch(typeBatch);
+                          } else {
+                              processEntitiesBatchOptimized(typeBatch);
+                          }
                           break;
                       case PerformanceConstants.ITEMS_KEY:
-                          processItemBatchOptimized(typeBatch);
+                          if (COMBINE_MULTIPLE_OPS && typeBatch.size() > 1) {
+                              processCombinedItemsBatch(typeBatch);
+                          } else {
+                              processItemBatchOptimized(typeBatch);
+                          }
                           break;
                       case PerformanceConstants.MOBS_KEY:
-                          processMobBatchOptimized(typeBatch);
+                          if (COMBINE_MULTIPLE_OPS && typeBatch.size() > 1) {
+                              processCombinedMobsBatch(typeBatch);
+                          } else {
+                              processMobBatchOptimized(typeBatch);
+                          }
                           break;
                       case PerformanceConstants.BLOCKS_KEY:
-                          processBlockBatchOptimized(typeBatch);
+                          if (COMBINE_MULTIPLE_OPS && typeBatch.size() > 1) {
+                              processCombinedBlocksBatch(typeBatch);
+                          } else {
+                              processBlockBatchOptimized(typeBatch);
+                          }
                           break;
                       default:
                           // Fallback to individual processing
@@ -215,7 +266,7 @@ public class BatchProcessor {
                   completeBatchFuturesWithExceptionAsync(typeBatch, e);
               }
           }
-    });
+      });
   }
 
   private void processEntitiesBatchOptimized(List<BatchRequest<?>> batch) throws OptimizedProcessingException {
@@ -228,8 +279,26 @@ public class BatchProcessor {
         allEntities.addAll(entities);
       }
 
-      List<Long> result = RustPerformance.getEntitiesToTick(allEntities, new ArrayList<>());
+      List<Long> result;
       
+      // Apply chunk-based parallel processing if enabled
+      if (CHUNK_BASED_PARALLELISM && allEntities.size() > CHUNK_SIZE) {
+        result = processEntitiesInChunks(allEntities);
+      } else {
+        // Original processing logic with entity pooling
+        List<EntityData> optimizedEntities = new ArrayList<>();
+        for (EntityData entity : allEntities) {
+          EntityData pooledEntity = getFromEntityPool(entity.getId());
+          optimizedEntities.add(pooledEntity != null ? pooledEntity : entity);
+        }
+        result = RustPerformance.getEntitiesToTick(optimizedEntities, new ArrayList<>());
+      }
+      
+      // Store processed entities back in pool for reuse
+      for (EntityData entity : allEntities) {
+        putToEntityPool(entity.getId(), entity);
+      }
+
       for (BatchRequest<?> req : batch) {
         completeFutureAsync(req.future, result);
       }
@@ -237,6 +306,53 @@ public class BatchProcessor {
       throw OptimizedProcessingException.batchProcessingError(
           "processEntitiesBatchOptimized", "Failed to process entity batch of size " + batch.size(), e);
     }
+  }
+  
+  /**
+   * Process entities in chunks for parallel processing.
+   */
+  private List<Long> processEntitiesInChunks(List<EntityData> allEntities) {
+    List<CompletableFuture<List<Long>>> futures = new ArrayList<>();
+    List<Long> finalResult = new ArrayList<>();
+    
+    // Split entities into chunks
+    int numChunks = (allEntities.size() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    
+    for (int i = 0; i < numChunks; i++) {
+      final int chunkIndex = i;
+      int start = chunkIndex * CHUNK_SIZE;
+      int end = Math.min(start + CHUNK_SIZE, allEntities.size());
+      final List<EntityData> chunk = allEntities.subList(start, end);
+      
+      futures.add(CompletableFuture.supplyAsync(() -> {
+        try {
+          // Reuse entity data structures from pool when possible
+          List<EntityData> optimizedChunk = new ArrayList<>();
+          for (EntityData entity : chunk) {
+            EntityData pooledEntity = getFromEntityPool(entity.getId());
+            optimizedChunk.add(pooledEntity != null ? pooledEntity : entity);
+          }
+          
+          return RustPerformance.getEntitiesToTick(optimizedChunk, new ArrayList<>());
+        } catch (Exception e) {
+          KneafCore.LOGGER.warn("Error processing chunk " + chunkIndex, e);
+          return new ArrayList<>();
+        }
+      }));
+    }
+    
+    // Wait for all chunks to complete and combine results
+    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    
+    for (CompletableFuture<List<Long>> future : futures) {
+      try {
+        finalResult.addAll(future.get());
+      } catch (Exception e) {
+        KneafCore.LOGGER.warn("Error combining chunk results", e);
+      }
+    }
+    
+    return finalResult;
   }
 
   /** Process item batch using optimized NativeBridge. */
@@ -309,6 +425,117 @@ public class BatchProcessor {
           "processBlockBatchOptimized", "Failed to process block batch of size " + batch.size(), e);
     }
   }
+  /** Process combined entities batch in a single JNI call. */
+  private void processCombinedEntitiesBatch(List<BatchRequest<?>> batch) throws OptimizedProcessingException {
+    if (batch.isEmpty()) return;
+
+    try {
+      List<EntityData> allEntities = new ArrayList<>();
+      for (BatchRequest<?> req : batch) {
+        List<EntityData> entities = (List<EntityData>) req.data;
+        allEntities.addAll(entities);
+      }
+
+      // Apply chunk-based parallel processing if enabled
+      List<Long> result;
+      if (CHUNK_BASED_PARALLELISM && allEntities.size() > CHUNK_SIZE) {
+        result = processEntitiesInChunks(allEntities);
+      } else {
+        // Combined processing: optimize entities and process in single JNI call
+        List<EntityData> optimizedEntities = new ArrayList<>();
+        for (EntityData entity : allEntities) {
+          EntityData pooledEntity = getFromEntityPool(entity.getId());
+          optimizedEntities.add(pooledEntity != null ? pooledEntity : entity);
+        }
+        result = RustPerformance.getEntitiesToTick(optimizedEntities, new ArrayList<>());
+      }
+
+      // Store processed entities back in pool for reuse
+      for (EntityData entity : allEntities) {
+        putToEntityPool(entity.getId(), entity);
+      }
+
+      // Distribute results to all batch requests
+      for (BatchRequest<?> req : batch) {
+        completeFutureAsync(req.future, result);
+      }
+    } catch (Exception e) {
+      throw OptimizedProcessingException.batchProcessingError(
+          "processCombinedEntitiesBatch", "Failed to process combined entity batch of size " + batch.size(), e);
+    }
+  }
+
+  /** Process combined items batch in a single JNI call. */
+  private void processCombinedItemsBatch(List<BatchRequest<?>> batch) throws OptimizedProcessingException {
+    if (batch.isEmpty()) return;
+
+    try {
+      List<ItemEntityData> allItems = new ArrayList<>();
+      for (BatchRequest<?> req : batch) {
+        List<ItemEntityData> items = (List<ItemEntityData>) req.data;
+        allItems.addAll(items);
+      }
+
+      // Process all items in a single JNI call
+      ItemProcessResult result = processItemEntitiesDirect(allItems);
+
+      // Distribute results to all batch requests
+      for (BatchRequest<?> req : batch) {
+        completeFutureAsync(req.future, result);
+      }
+    } catch (Exception e) {
+      throw OptimizedProcessingException.batchProcessingError(
+          "processCombinedItemsBatch", "Failed to process combined item batch of size " + batch.size(), e);
+    }
+  }
+
+  /** Process combined mobs batch in a single JNI call. */
+  private void processCombinedMobsBatch(List<BatchRequest<?>> batch) throws OptimizedProcessingException {
+    if (batch.isEmpty()) return;
+
+    try {
+      List<MobData> allMobs = new ArrayList<>();
+      for (BatchRequest<?> req : batch) {
+        List<MobData> mobs = (List<MobData>) req.data;
+        allMobs.addAll(mobs);
+      }
+
+      // Process all mobs in a single JNI call
+      MobProcessResult result = processMobAIDirect(allMobs);
+
+      // Distribute results to all batch requests
+      for (BatchRequest<?> req : batch) {
+        completeFutureAsync(req.future, result);
+      }
+    } catch (Exception e) {
+      throw OptimizedProcessingException.batchProcessingError(
+          "processCombinedMobsBatch", "Failed to process combined mob batch of size " + batch.size(), e);
+    }
+  }
+
+  /** Process combined blocks batch in a single JNI call. */
+  private void processCombinedBlocksBatch(List<BatchRequest<?>> batch) throws OptimizedProcessingException {
+    if (batch.isEmpty()) return;
+
+    try {
+      List<BlockEntityData> allBlocks = new ArrayList<>();
+      for (BatchRequest<?> req : batch) {
+        List<BlockEntityData> blocks = (List<BlockEntityData>) req.data;
+        allBlocks.addAll(blocks);
+      }
+
+      // Process all blocks in a single JNI call
+      List<Long> results = getBlockEntitiesToTickDirect(allBlocks);
+
+      // Distribute results to all batch requests
+      for (BatchRequest<?> req : batch) {
+        completeFutureAsync(req.future, results);
+      }
+    } catch (Exception e) {
+      throw OptimizedProcessingException.batchProcessingError(
+          "processCombinedBlocksBatch", "Failed to process combined block batch of size " + batch.size(), e);
+    }
+  }
 
   /** Collect all pending requests without timeout waiting. */
   private List<BatchRequest<?>> collectBatch() {
@@ -317,25 +544,61 @@ public class BatchProcessor {
 
     // Collect all available requests up to batch size limit
     int targetSize = getBatchSize();
-    while (batch.size() < targetSize && (request = pendingRequests.poll()) != null) {
-      batch.add(request);
+    
+    // Apply entity collection optimizations if enabled
+    if (ENABLE_OPTIMIZATIONS) {
+      batch = collectBatchWithOptimizations(targetSize);
+    } else {
+      // Original collection logic
+      while (batch.size() < targetSize && (request = pendingRequests.poll()) != null) {
+        batch.add(request);
+      }
+
+      // If we collected some requests, return immediately
+      if (!batch.isEmpty()) {
+        return batch;
+      }
+
+      // If no requests available, wait briefly but don't block indefinitely
+      try {
+        Thread.sleep(1);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+
+      // Try one more time to collect any requests that arrived during the sleep
+      while (batch.size() < targetSize && (request = pendingRequests.poll()) != null) {
+        batch.add(request);
+      }
     }
 
-    // If we collected some requests, return immediately
-    if (!batch.isEmpty()) {
-      return batch;
-    }
-
-    // If no requests available, wait briefly but don't block indefinitely
-    try {
-      Thread.sleep(1);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-    }
-
-    // Try one more time to collect any requests that arrived during the sleep
-    while (batch.size() < targetSize && (request = pendingRequests.poll()) != null) {
-      batch.add(request);
+    return batch;
+  }
+  
+  /**
+   * Collect batch with entity collection optimizations enabled.
+   * Implements sampling and chunk-based parallel processing.
+   */
+  private List<BatchRequest<?>> collectBatchWithOptimizations(int targetSize) {
+    List<BatchRequest<?>> batch = new ArrayList<>();
+    BatchRequest<?> request;
+    
+    // Apply sampling if rate is less than 1.0
+    if (SAMPLING_RATE < 1.0) {
+      int sampleSize = (int) Math.max(1, targetSize * SAMPLING_RATE);
+      int sampleInterval = (int) Math.max(1, 1.0 / SAMPLING_RATE);
+      
+      while (batch.size() < sampleSize && (request = pendingRequests.poll()) != null) {
+        // Use counter to implement proper sampling
+        if (entityCollectionCounter.incrementAndGet() % sampleInterval == 0) {
+          batch.add(request);
+        }
+      }
+    } else {
+      // Full collection if sampling rate is 1.0 (no sampling)
+      while (batch.size() < targetSize && (request = pendingRequests.poll()) != null) {
+        batch.add(request);
+      }
     }
 
     return batch;
@@ -354,7 +617,7 @@ public class BatchProcessor {
     return Math.max(
         1,
         (int)
-            (NativeBridgeUtils.calculateOptimalBatchSize(base, 25, 200) * tpsFactor * delayFactor));
+            (NativeBridgeUtils.calculateOptimalBatchSize(base, JNI_MIN_BATCH_SIZE, JNI_MAX_BATCH_SIZE) * tpsFactor * delayFactor));
   }
 
   private int getBatchProcessorSleepMs() {
@@ -470,6 +733,45 @@ public class BatchProcessor {
         KneafCore.LOGGER.warn("Attempted to complete already done future, skipping");
       }
     });
+  }
+  
+  /**
+   * Get entity data from memory pool (object pooling).
+   */
+  private EntityData getFromEntityPool(long entityId) {
+    return entityMemoryPool.get(entityId);
+  }
+  
+  /**
+   * Put entity data into memory pool with size control.
+   */
+  private void putToEntityPool(long entityId, EntityData entityData) {
+    if (poolSize.get() >= MAX_POOL_SIZE) {
+      // Evict least recently used entity (simple implementation)
+      evictFromEntityPool();
+    }
+    entityMemoryPool.put(entityId, entityData);
+    poolSize.incrementAndGet();
+  }
+  
+  /**
+   * Evict entity from memory pool (simple implementation).
+   */
+  private void evictFromEntityPool() {
+    if (entityMemoryPool.isEmpty()) return;
+    
+    // Simple eviction: remove first entry (could be enhanced with LRU strategy)
+    Map.Entry<Long, EntityData> entry = entityMemoryPool.entrySet().iterator().next();
+    entityMemoryPool.remove(entry.getKey());
+    poolSize.decrementAndGet();
+  }
+  
+  /**
+   * Clear entity memory pool.
+   */
+  public void clearEntityPool() {
+    entityMemoryPool.clear();
+    poolSize.set(0);
   }
   
   /** Complete all batch futures with exception asynchronously. */

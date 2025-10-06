@@ -61,6 +61,18 @@ public final class PerformanceConfig {
   private final int itemProcessingIntervalMultiplier;
   private final int spatialGridUpdateInterval;
   private final boolean incrementalSpatialUpdates;
+  
+  // Entity collection optimization configuration
+  private final boolean entityCollectionOptimizationsEnabled;
+  private final double entitySamplingRate;
+  private final int entityChunkSize;
+  private final int entityPoolSize;
+  private final boolean chunkBasedParallelProcessing;
+
+  // JNI batch processing configuration - increased minimum from 25 to 100+
+  private final int jniMinimumBatchSize;
+  private final int jniMaximumBatchSize;
+  private final boolean combineMultipleOperations;
 
   // Use a Builder to avoid long constructor parameter lists (satisfies java:S107)
   private PerformanceConfig(Builder b) {
@@ -102,6 +114,18 @@ public final class PerformanceConfig {
     this.itemProcessingIntervalMultiplier = b.itemProcessingIntervalMultiplier;
     this.spatialGridUpdateInterval = b.spatialGridUpdateInterval;
     this.incrementalSpatialUpdates = b.incrementalSpatialUpdates;
+    
+    // Entity collection optimization configuration
+    this.entityCollectionOptimizationsEnabled = b.entityCollectionOptimizationsEnabled;
+    this.entitySamplingRate = b.entitySamplingRate;
+    this.entityChunkSize = b.entityChunkSize;
+    this.entityPoolSize = b.entityPoolSize;
+    this.chunkBasedParallelProcessing = b.chunkBasedParallelProcessing;
+
+    // JNI batch processing configuration - increased minimum from 25 to 100+
+    this.jniMinimumBatchSize = b.jniMinimumBatchSize;
+    this.jniMaximumBatchSize = b.jniMaximumBatchSize;
+    this.combineMultipleOperations = b.combineMultipleOperations;
 
     // Validate configuration consistency
     validateConfiguration();
@@ -173,6 +197,18 @@ public final class PerformanceConfig {
     private int itemProcessingIntervalMultiplier;
     private int spatialGridUpdateInterval;
     private boolean incrementalSpatialUpdates;
+    
+    // Entity collection optimization configuration
+    private boolean entityCollectionOptimizationsEnabled;
+    private double entitySamplingRate;
+    private int entityChunkSize;
+    private int entityPoolSize;
+    private boolean chunkBasedParallelProcessing;
+
+    // JNI batch processing configuration - increased minimum from 25 to 100+
+    private int jniMinimumBatchSize;
+    private int jniMaximumBatchSize;
+    private boolean combineMultipleOperations;
 
     public Builder enabled(boolean v) {
       this.enabled = v;
@@ -340,6 +376,48 @@ public final class PerformanceConfig {
       this.incrementalSpatialUpdates = v;
       return this;
     }
+    
+    // Entity collection optimization configuration setters
+    public Builder entityCollectionOptimizationsEnabled(boolean v) {
+      this.entityCollectionOptimizationsEnabled = v;
+      return this;
+    }
+    
+    public Builder entitySamplingRate(double v) {
+      this.entitySamplingRate = v;
+      return this;
+    }
+    
+    public Builder entityChunkSize(int v) {
+      this.entityChunkSize = v;
+      return this;
+    }
+    
+    public Builder entityPoolSize(int v) {
+      this.entityPoolSize = v;
+      return this;
+    }
+    
+    public Builder chunkBasedParallelProcessing(boolean v) {
+      this.chunkBasedParallelProcessing = v;
+      return this;
+    }
+    
+    // JNI batch processing configuration setters
+    public Builder jniMinimumBatchSize(int v) {
+      this.jniMinimumBatchSize = v;
+      return this;
+    }
+    
+    public Builder jniMaximumBatchSize(int v) {
+      this.jniMaximumBatchSize = v;
+      return this;
+    }
+    
+    public Builder combineMultipleOperations(boolean v) {
+      this.combineMultipleOperations = v;
+      return this;
+    }
 
     public PerformanceConfig build() {
       // Apply same defensive constraints as before and build a config using this Builder
@@ -367,6 +445,18 @@ public final class PerformanceConfig {
       int vItemProcessingIntervalMultiplier = Math.max(1, this.itemProcessingIntervalMultiplier);
       int vSpatialGridUpdateInterval = Math.max(1, this.spatialGridUpdateInterval);
       boolean vIncrementalSpatialUpdates = this.incrementalSpatialUpdates;
+      
+      // Entity collection optimization configuration
+      boolean vEntityCollectionOptimizationsEnabled = this.entityCollectionOptimizationsEnabled;
+      double vEntitySamplingRate = Math.max(0.1, Math.min(1.0, this.entitySamplingRate));
+      int vEntityChunkSize = Math.max(100, this.entityChunkSize);
+      int vEntityPoolSize = Math.max(1000, this.entityPoolSize);
+      boolean vChunkBasedParallelProcessing = this.chunkBasedParallelProcessing;
+      
+      // JNI batch processing configuration - increased minimum from 25 to 100+
+      int vJniMinimumBatchSize = Math.max(100, this.jniMinimumBatchSize);
+      int vJniMaximumBatchSize = Math.max(vJniMinimumBatchSize, this.jniMaximumBatchSize);
+      boolean vCombineMultipleOperations = this.combineMultipleOperations;
 
       Builder validated = new Builder();
       validated
@@ -393,8 +483,22 @@ public final class PerformanceConfig {
           .itemProcessingIntervalMultiplier(vItemProcessingIntervalMultiplier)
           .spatialGridUpdateInterval(vSpatialGridUpdateInterval)
           .incrementalSpatialUpdates(vIncrementalSpatialUpdates);
-
-      // Advanced parallelism configuration validation
+      
+      // Apply entity collection optimization configuration
+      validated
+          .entityCollectionOptimizationsEnabled(vEntityCollectionOptimizationsEnabled)
+          .entitySamplingRate(vEntitySamplingRate)
+          .entityChunkSize(vEntityChunkSize)
+          .entityPoolSize(vEntityPoolSize)
+          .chunkBasedParallelProcessing(vChunkBasedParallelProcessing);
+          
+          // JNI batch processing configuration
+          validated
+              .jniMinimumBatchSize(vJniMinimumBatchSize)
+              .jniMaximumBatchSize(vJniMaximumBatchSize)
+              .combineMultipleOperations(vCombineMultipleOperations);
+   
+          // Advanced parallelism configuration validation
       int vMinThreadpoolSize = Math.max(1, this.minThreadpoolSize);
       boolean vDynamicThreadScaling = this.dynamicThreadScaling;
       double vThreadScaleUpThreshold = Math.clamp(0.1, this.threadScaleUpThreshold, 1.0);
@@ -467,6 +571,18 @@ public final class PerformanceConfig {
       // Spatial grid optimization defaults
       this.spatialGridUpdateInterval = 1;
       this.incrementalSpatialUpdates = true;
+      
+      // Entity collection optimization defaults
+      this.entityCollectionOptimizationsEnabled = false;
+      this.entitySamplingRate = 1.0; // Default: no sampling (process all entities)
+      this.entityChunkSize = 1000; // Default chunk size
+      this.entityPoolSize = 10000; // Default pool size
+      this.chunkBasedParallelProcessing = false; // Default: disabled
+
+      // JNI batch processing defaults - increased minimum from 25 to 100+
+      this.jniMinimumBatchSize = 100;
+      this.jniMaximumBatchSize = 500;
+      this.combineMultipleOperations = true;
     }
   }
 
@@ -602,9 +718,44 @@ public final class PerformanceConfig {
     return spatialGridUpdateInterval;
   }
 
-  public boolean isIncrementalSpatialUpdates() {
-    return incrementalSpatialUpdates;
-  }
+public boolean isIncrementalSpatialUpdates() {
+  return incrementalSpatialUpdates;
+}
+
+// Entity collection optimization configuration getters
+public boolean isEntityCollectionOptimizationsEnabled() {
+  return entityCollectionOptimizationsEnabled;
+}
+
+public double getEntitySamplingRate() {
+  return entitySamplingRate;
+}
+
+public int getEntityChunkSize() {
+  return entityChunkSize;
+}
+
+public int getEntityPoolSize() {
+  return entityPoolSize;
+}
+public boolean isChunkBasedParallelProcessing() {
+  return chunkBasedParallelProcessing;
+}
+
+// JNI batch processing configuration getters
+public int getJniMinimumBatchSize() {
+  return jniMinimumBatchSize;
+}
+
+public int getJniMaximumBatchSize() {
+  return jniMaximumBatchSize;
+}
+
+public boolean isCombineMultipleOperations() {
+  return combineMultipleOperations;
+}
+
+
 
   public static PerformanceConfig load() {
     Properties props = new Properties();
@@ -672,6 +823,35 @@ public final class PerformanceConfig {
     // Apply broadcastToClient property
     b.broadcastToClient(broadcastToClient);
 
+    // Load entity collection optimization configuration
+    boolean entityCollectionOptimizationsEnabled =
+        Boolean.parseBoolean(props.getProperty("entityCollectionOptimizationsEnabled", "false"));
+    double entitySamplingRate =
+        parseDoubleOrDefault(props.getProperty("entitySamplingRate"), 1.0);
+    int entityChunkSize =
+        parseIntOrDefault(props.getProperty("entityChunkSize"), 1000);
+    int entityPoolSize =
+        parseIntOrDefault(props.getProperty("entityPoolSize"), 10000);
+    boolean chunkBasedParallelProcessing =
+        Boolean.parseBoolean(props.getProperty("chunkBasedParallelProcessing", "false"));
+
+    // Load JNI batch processing configuration - increased minimum from 25 to 100+
+    int jniMinimumBatchSize =
+        parseIntOrDefault(props.getProperty("jniMinimumBatchSize"), 100);
+    int jniMaximumBatchSize =
+        parseIntOrDefault(props.getProperty("jniMaximumBatchSize"), 500);
+    boolean combineMultipleOperations =
+        Boolean.parseBoolean(props.getProperty("combineMultipleOperations", "true"));
+
+    b.entityCollectionOptimizationsEnabled(entityCollectionOptimizationsEnabled)
+     .entitySamplingRate(entitySamplingRate)
+     .entityChunkSize(entityChunkSize)
+     .entityPoolSize(entityPoolSize)
+     .chunkBasedParallelProcessing(chunkBasedParallelProcessing)
+     .jniMinimumBatchSize(jniMinimumBatchSize)
+     .jniMaximumBatchSize(jniMaximumBatchSize)
+     .combineMultipleOperations(combineMultipleOperations);
+
     return b.build();
   }
 
@@ -733,6 +913,22 @@ public final class PerformanceConfig {
         + slowTickThresholdMs
         + ", profilingSampleRate="
         + profilingSampleRate
+        + ", entityCollectionOptimizationsEnabled="
+        + entityCollectionOptimizationsEnabled
+        + ", entitySamplingRate="
+        + entitySamplingRate
+        + ", entityChunkSize="
+        + entityChunkSize
+        + ", entityPoolSize="
+        + entityPoolSize
+        + ", chunkBasedParallelProcessing="
+        + chunkBasedParallelProcessing
+        + ", jniMinimumBatchSize="
+        + jniMinimumBatchSize
+        + ", jniMaximumBatchSize="
+        + jniMaximumBatchSize
+        + ", combineMultipleOperations="
+        + combineMultipleOperations
         + '}';
   }
 }
