@@ -53,7 +53,6 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
     private final AtomicInteger size = new AtomicInteger(0);
     private final AtomicInteger highWaterMark = new AtomicInteger(0);
 
-    @SuppressWarnings("unused")
     private final int bucketIndex;
 
     LockFreePool(int bucketIndex) {
@@ -147,10 +146,8 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
     final ByteBuffer buffer;
     final int bucketIndex;
 
-    @SuppressWarnings("unused")
     final long creationTime;
 
-    @SuppressWarnings("unused")
     final int reuseCount;
 
     PooledBuffer(ByteBuffer buffer, int bucketIndex, long creationTime, int reuseCount) {
@@ -234,10 +231,8 @@ public final class EnhancedNativeFloatBuffer implements AutoCloseable {
   private final Cleaner.Cleanable cleanable;
   private volatile boolean closed = false;
 
-  @SuppressWarnings("unused")
   private final boolean isPooled;
 
-  @SuppressWarnings("unused")
   private final int bucketIndex;
 
   private final long creationTime;

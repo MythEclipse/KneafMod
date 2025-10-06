@@ -132,15 +132,12 @@ public final class UnifiedExecutorManager {
 
   /** Task information for tracking */
   private static final class TaskInfo {
-    @SuppressWarnings("unused")
     private final long taskId;
 
-    @SuppressWarnings("unused")
     private final String taskType;
 
     private final long startTime;
 
-    @SuppressWarnings("unused")
     private final TaskPriority priority;
 
     TaskInfo(long taskId, String taskType, long startTime, TaskPriority priority) {

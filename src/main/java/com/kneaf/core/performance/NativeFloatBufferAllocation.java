@@ -233,9 +233,7 @@ public final class NativeFloatBufferAllocation {
    */
   private static class PooledBuffer {
     private final ByteBuffer buffer;
-    @SuppressWarnings("unused")
     private final long creationTime;
-    @SuppressWarnings("unused")
     private volatile long lastUsedTime;
 
     PooledBuffer(ByteBuffer buffer, long creationTime) {

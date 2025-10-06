@@ -16,7 +16,13 @@ import java.util.logging.Logger;
  */
 public final class PerformanceConfig {
   private static final String DEFAULT_CONFIG_PATH = "config/kneaf-performance.properties";
-  private static final Logger LOGGER = Logger.getLogger(PerformanceConfig.class.getName());
+  private static class LazyLoggerHolder {
+    static final Logger LOGGER = Logger.getLogger(PerformanceConfig.class.getName());
+  }
+
+  public static Logger getLogger() {
+    return LazyLoggerHolder.LOGGER;
+  }
 
   private final boolean enabled;
   private final int threadpoolSize;
@@ -607,10 +613,10 @@ public final class PerformanceConfig {
       try (InputStream in = Files.newInputStream(path)) {
         props.load(in);
       } catch (IOException e) {
-        if (LOGGER.isLoggable(Level.WARNING)) {
-          LOGGER.log(
+        if (getLogger().isLoggable(Level.WARNING)) {
+          getLogger().log(
               Level.WARNING, "Failed to read performance config at {0}, using defaults", path);
-          LOGGER.log(Level.FINE, "Exception reading performance config", e);
+          getLogger().log(Level.FINE, "Exception reading performance config", e);
         }
       }
     }

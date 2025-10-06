@@ -1,3 +1,4 @@
+use rand::Rng;
 use std::alloc::{alloc, Layout, dealloc};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, RwLock};
@@ -136,29 +137,83 @@ impl BumpArena {
 
     /// Allocate memory from the arena with bounds checking and pressure awareness
     pub fn alloc(&self, size: usize, align: usize) -> *mut u8 {
-        // Mark as critical operation to prevent cleanup during allocation
-        self.is_critical_operation.store(true, Ordering::Relaxed);
+        if size == 0 {
+            return std::ptr::null_mut();
+        }
+
+        // Fast path: try allocation without locking first
+        let result = self.try_fast_allocate(size, align);
         
-        let result = {
-            let mut chunk = self.current.lock().expect("Arena mutex poisoned");
-            
-            if let Some(ptr) = chunk.allocate(size, align) {
-                self.total_used.fetch_add(size, Ordering::Relaxed);
-                self.record_allocation(size);
-                Some(ptr)
-            } else {
-                // Need a new chunk
-                None
-            }
+        // If fast path failed, use slow path with locking
+        if let Some(ptr) = result {
+            ptr
+        } else {
+            self.slow_allocate(size, align)
+        }
+    }
+
+    /// Fast allocation path without locking (tries current chunk first)
+    fn try_fast_allocate(&self, size: usize, align: usize) -> Option<*mut u8> {
+        // Skip locking for small allocations if we're under pressure
+        if self.should_check_pressure_lightweight() {
+            return None;
+        }
+
+        let mut chunk = match self.current.try_lock() {
+            Ok(mut chunk) => chunk,
+            Err(_) => return None, // Another thread is allocating, fall back to slow path
         };
+
+        if let Some(ptr) = chunk.allocate(size, align) {
+            self.total_used.fetch_add(size, Ordering::Relaxed);
+            self.record_allocation(size);
+            Some(ptr)
+        } else {
+            None
+        }
+    }
+
+    /// Slow allocation path with full locking and chunk creation
+    fn slow_allocate(&self, size: usize, align: usize) -> *mut u8 {
+        let mut chunk = self.current.lock().expect("Arena mutex poisoned");
         
-        // Clear critical operation flag
-        self.is_critical_operation.store(false, Ordering::Relaxed);
+        // Try allocation again now that we have the lock
+        if let Some(ptr) = chunk.allocate(size, align) {
+            self.total_used.fetch_add(size, Ordering::Relaxed);
+            self.record_allocation(size);
+            return ptr;
+        }
+
+        // Need a new chunk
+        let chunk_size = size.max(self.chunk_size);
+        let mut new_chunk = Self::allocate_safe_chunk(chunk_size, align);
         
-        // Check memory pressure and perform cleanup if needed (outside lock)
-        self.check_memory_pressure();
+        // Allocate from new chunk
+        let result = new_chunk.allocate(size, align)
+            .expect("New chunk should have enough space");
+
+        // Replace the current chunk
+        let old_chunk = std::mem::replace(&mut *chunk, new_chunk);
         
-        result.unwrap_or_else(|| self.allocate_new_chunk(size, align))
+        // Deallocate the old chunk to free memory
+        old_chunk.deallocate();
+
+        self.total_allocated.fetch_add(chunk_size, Ordering::Relaxed);
+        self.total_used.fetch_add(size, Ordering::Relaxed);
+        self.record_allocation(size);
+
+        result
+    }
+
+    /// Simple memory pressure check hook with reduced frequency
+    fn should_check_pressure_lightweight(&self) -> bool {
+        // Only perform pressure checks 1/10 of the time to reduce overhead (from 1/5)
+        if rand::thread_rng().gen::<f64>() < 0.1 {
+            self.check_memory_pressure();
+            true
+        } else {
+            false
+        }
     }
     
         fn allocate_new_chunk(&self, min_size: usize, align: usize) -> *mut u8 {
@@ -274,18 +329,19 @@ impl BumpArena {
         }
     }
 
-    /// Simple memory pressure check hook. Incomplete: real implementation should
-    /// consult the pressure_monitor and take action. Present to satisfy callers.
+    /// Simple memory pressure check hook with reduced frequency
     fn check_memory_pressure(&self) {
-        if let Ok(mut monitor) = self.pressure_monitor.write() {
-            // record a lightweight pressure check (placeholder)
-            let stats = self.stats();
-            let usage_ratio = if stats.total_allocated > 0 {
-                stats.total_used as f64 / stats.total_allocated as f64
-            } else { 0.0 };
+        // Only perform pressure checks 1/5 of the time to reduce overhead
+        if rand::thread_rng().gen::<f64>() < 0.2 {
+            if let Ok(mut monitor) = self.pressure_monitor.write() {
+                let stats = self.stats();
+                let usage_ratio = if stats.total_allocated > 0 {
+                    stats.total_used as f64 / stats.total_allocated as f64
+                } else { 0.0 };
 
-            let level = MemoryPressureLevel::from_usage_ratio(usage_ratio);
-            monitor.record_pressure_check(level);
+                let level = MemoryPressureLevel::from_usage_ratio(usage_ratio);
+                monitor.record_pressure_check(level);
+            }
         }
     }
 }

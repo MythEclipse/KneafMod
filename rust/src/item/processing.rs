@@ -1,5 +1,6 @@
 use super::types::*;
 use super::config::*;
+use crate::{log_error, logging::{generate_trace_id}};
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
@@ -95,7 +96,8 @@ impl OperationTimer {
                 );
                 
                 if let Err(e) = LOG_SENDER.send(log_msg) {
-                    eprintln!("Failed to send profiling log to background thread: {}", e);
+                    let trace_id = generate_trace_id();
+                    log_error!("profiling_log", "send", &trace_id, "Failed to send profiling log to background thread", e);
                 }
             }
         }

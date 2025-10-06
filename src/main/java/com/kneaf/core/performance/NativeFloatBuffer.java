@@ -87,10 +87,8 @@ public final class NativeFloatBuffer implements AutoCloseable {
   private final Cleaner.Cleanable cleanable;
   private volatile boolean closed = false;
 
-  @SuppressWarnings("unused")
   private final boolean isPooled;
 
-  @SuppressWarnings("unused")
   private final int bucketIndex;
 
   private static final class State implements Runnable {

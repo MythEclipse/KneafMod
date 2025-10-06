@@ -2,7 +2,7 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, Ordering};
 use std::sync::Arc;
 use jni::{JNIEnv, objects::{JString, JClass}, sys::jlong};
-use crate::logging::{PerformanceLogger, generate_trace_id};
+use crate::{log_error, logging::{PerformanceLogger, generate_trace_id}};
 use once_cell::sync::Lazy;
 use std::time::SystemTime;
 use std::collections::HashMap;
@@ -366,8 +366,10 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordJniCallN
             0 // Success
         }
         Err(e) => {
+            let trace_id = generate_trace_id();
+                        PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to get JNI call type: {}", e), "JNI_ERROR");
             if let Err(throw_err) = env.throw_new("java/lang/IllegalStateException", &format!("Failed to get JNI call type: {}", e)) {
-                eprintln!("Failed to throw exception: {}", throw_err);
+                PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to throw exception: {}", throw_err), "JNI_ERROR");
             }
             -1 // Error
         }
@@ -389,8 +391,10 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordLockWait
             0 // Success
         }
         Err(e) => {
+            let trace_id = generate_trace_id();
+            PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to get lock name: {}", e), "JNI_ERROR");
             if let Err(throw_err) = env.throw_new("java/lang/IllegalStateException", &format!("Failed to get lock name: {}", e)) {
-                eprintln!("Failed to throw exception: {}", throw_err);
+                PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to throw exception: {}", throw_err), "JNI_ERROR");
             }
             -1 // Error
         }
@@ -455,7 +459,8 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getPerformance
                 Ok(_global_ref) => 0, // Success (pointer return temporarily disabled)
                 Err(e) => {
                     if let Err(throw_err) = env.throw_new("java/lang/IllegalStateException", &format!("Failed to create global ref: {}", e)) {
-                        eprintln!("Failed to throw exception: {}", throw_err);
+                        let trace_id = generate_trace_id();
+                        PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to throw exception: {}", throw_err), "JNI_ERROR");
                     }
                     -1
                 }
@@ -463,7 +468,8 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getPerformance
         },
         Err(e) => {
             if let Err(throw_err) = env.throw_new("java/lang/IllegalStateException", &format!("Failed to create JSON string: {}", e)) {
-                eprintln!("Failed to throw exception: {}", throw_err);
+                let trace_id = generate_trace_id();
+                PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to throw exception: {}", throw_err), "JNI_ERROR");
             }
             -1 // Error
         }

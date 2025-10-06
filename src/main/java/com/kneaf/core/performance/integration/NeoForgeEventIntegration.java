@@ -29,7 +29,7 @@ import org.slf4j.LoggerFactory;
  * optimizations into Minecraft server events to reduce tick time.
  */
 @EventBusSubscriber(modid = "kneafcore")
-@SuppressWarnings({"unused"})
+@SuppressWarnings({})
 public class NeoForgeEventIntegration {
   private static final Logger LOGGER = LoggerFactory.getLogger(NeoForgeEventIntegration.class);
 

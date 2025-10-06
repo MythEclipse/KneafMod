@@ -5,9 +5,14 @@ use serde_json;
 use crate::memory_pool::get_thread_local_pool;
 use crate::parallelism::WorkStealingScheduler;
 use std::time::Instant;
+use crate::{log_error, logging::{PerformanceLogger, generate_trace_id}};
+use once_cell::sync::Lazy;
+
+static ENTITY_PROCESSOR_LOGGER: Lazy<PerformanceLogger> = Lazy::new(|| PerformanceLogger::new("entity_processor"));
 
 pub fn process_entities(input: Input) -> ProcessResult {
-    eprintln!("[PROCESS] process_entities called with {} entities", input.entities.len());
+    let trace_id = generate_trace_id();
+    ENTITY_PROCESSOR_LOGGER.log_info("process_start", &trace_id, &format!("process_entities called with {} entities", input.entities.len()));
     let start_time = Instant::now();
 
     // Better estimate: use entity diversity analysis for more accurate memory allocation
@@ -19,7 +24,7 @@ pub fn process_entities(input: Input) -> ProcessResult {
     } else {
         (entity_count / 8).max(3).min(25) // More generous estimate for small datasets
     };
-    eprintln!("[PROCESS] Estimated entity types: {}", estimated_types);
+    ENTITY_PROCESSOR_LOGGER.log_debug("entity_types_estimate", &trace_id, &format!("Estimated entity types: {}", estimated_types));
     
     let mut entities_by_type: HashMap<String, Vec<&EntityData>> = HashMap::with_capacity(estimated_types);
 
@@ -30,16 +35,16 @@ pub fn process_entities(input: Input) -> ProcessResult {
             .push(entity);
     }
     
-    eprintln!("[PROCESS] Grouped entities by type: {} groups", entities_by_type.len());
+    ENTITY_PROCESSOR_LOGGER.log_debug("entity_grouping", &trace_id, &format!("Grouped entities by type: {} groups", entities_by_type.len()));
 
     // Process each group in parallel using optimized batching
     let pool_manager = match get_thread_local_pool() {
         Some(pool) => {
-            eprintln!("[PROCESS] Successfully got thread local memory pool");
+            ENTITY_PROCESSOR_LOGGER.log_debug("memory_pool", &trace_id, "Successfully got thread local memory pool");
             pool
         },
         None => {
-            eprintln!("[PROCESS] ERROR: Memory pool not initialized");
+            ENTITY_PROCESSOR_LOGGER.log_error("memory_pool_error", &trace_id, "ERROR: Memory pool not initialized", "ENTITY_PROCESSING");
             panic!("Memory pool not initialized");
         }
     };
@@ -50,29 +55,29 @@ pub fn process_entities(input: Input) -> ProcessResult {
     } else {
         entity_count // Assume all need processing in small datasets
     };
-    eprintln!("[PROCESS] Estimated active entities: {}", estimated_active_entities);
+    ENTITY_PROCESSOR_LOGGER.log_debug("active_entities_estimate", &trace_id, &format!("Estimated active entities: {}", estimated_active_entities));
     
     let mut entities_to_tick = pool_manager.get_vec_u64(estimated_active_entities);
 
     // Collect into a temporary Vec using rayon then move into pooled vec
-    eprintln!("[PROCESS] Starting parallel processing");
+    ENTITY_PROCESSOR_LOGGER.log_info("parallel_processing_start", &trace_id, "Starting parallel processing");
     let temp: Vec<u64> = entities_by_type.into_par_iter()
         .flat_map(|(_entity_type, entities)| {
             entities.into_par_iter().map(|entity| entity.id)
         })
         .collect();
 
-    eprintln!("[PROCESS] Parallel processing completed, collected {} entities", temp.len());
+    ENTITY_PROCESSOR_LOGGER.log_debug("parallel_processing_complete", &trace_id, &format!("Parallel processing completed, collected {} entities", temp.len()));
 
     // Move collected ids into pooled vector
     entities_to_tick.as_mut().extend_from_slice(&temp);
 
     // Record performance metrics (simplified)
     let elapsed = start_time.elapsed();
-    eprintln!("[PROCESS] Processing completed in {:?}", elapsed);
+    ENTITY_PROCESSOR_LOGGER.log_info("processing_complete", &trace_id, &format!("Processing completed in {:?}", elapsed));
 
     let result = ProcessResult { entities_to_tick: entities_to_tick.take() };
-    eprintln!("[PROCESS] Returning result with {} entities_to_tick", result.entities_to_tick.len());
+    ENTITY_PROCESSOR_LOGGER.log_info("result_return", &trace_id, &format!("Returning result with {} entities_to_tick", result.entities_to_tick.len()));
     result
 }
 
@@ -84,30 +89,31 @@ pub fn process_entities_batch(inputs: Vec<Input>) -> Vec<ProcessResult> {
 
 /// Process entities from JSON input and return JSON result
 pub fn process_entities_json(json_input: &str) -> Result<String, String> {
-    eprintln!("[JSON] process_entities_json called with input length: {}", json_input.len());
+    let trace_id = generate_trace_id();
+    ENTITY_PROCESSOR_LOGGER.log_info("json_process_start", &trace_id, &format!("process_entities_json called with input length: {}", json_input.len()));
     
     // Log input preview for debugging
     let preview_len = json_input.len().min(100);
-    eprintln!("[JSON] Input preview: {}", &json_input[..preview_len]);
+    ENTITY_PROCESSOR_LOGGER.log_debug("json_input_preview", &trace_id, &format!("Input preview: {}", &json_input[..preview_len]));
     
     let input: Input = serde_json::from_str(json_input)
         .map_err(|e| {
-            eprintln!("[JSON] ERROR: Failed to parse JSON input: {}", e);
+            ENTITY_PROCESSOR_LOGGER.log_error("json_parse_error", &trace_id, &format!("ERROR: Failed to parse JSON input: {}", e), "ENTITY_PROCESSING");
             format!("Failed to parse JSON input: {}", e)
         })?;
     
-    eprintln!("[JSON] Successfully parsed JSON input, entities count: {}", input.entities.len());
+    ENTITY_PROCESSOR_LOGGER.log_info("json_parse_success", &trace_id, &format!("Successfully parsed JSON input, entities count: {}", input.entities.len()));
     
     let result = process_entities(input);
     
-    eprintln!("[JSON] process_entities completed, entities_to_tick count: {}", result.entities_to_tick.len());
+    ENTITY_PROCESSOR_LOGGER.log_info("json_process_complete", &trace_id, &format!("process_entities completed, entities_to_tick count: {}", result.entities_to_tick.len()));
     
     let json_result = serde_json::to_string(&result)
         .map_err(|e| {
-            eprintln!("[JSON] ERROR: Failed to serialize result to JSON: {}", e);
+            ENTITY_PROCESSOR_LOGGER.log_error("json_serialize_error", &trace_id, &format!("ERROR: Failed to serialize result to JSON: {}", e), "ENTITY_PROCESSING");
             format!("Failed to serialize result to JSON: {}", e)
         })?;
     
-    eprintln!("[JSON] Successfully serialized result, output length: {}", json_result.len());
+    ENTITY_PROCESSOR_LOGGER.log_info("json_serialize_success", &trace_id, &format!("Successfully serialized result, output length: {}", json_result.len()));
     Ok(json_result)
 }

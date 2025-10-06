@@ -6,11 +6,8 @@ import com.kneaf.core.data.entity.MobData;
 import com.kneaf.core.data.entity.PlayerData;
 import com.kneaf.core.data.item.ItemEntityData;
 import com.kneaf.core.performance.RustPerformance;
-// cleaned: removed unused performance imports
 import com.kneaf.core.performance.spatial.SpatialGrid;
 import com.mojang.logging.LogUtils;
-import java.lang.management.ManagementFactory;
-import java.lang.management.OperatingSystemMXBean;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -19,10 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentHashMap;
@@ -93,12 +87,7 @@ public class PerformanceManager {
 
   // Profiling configuration
   private static final boolean PROFILING_ENABLED = CONFIG.isProfilingEnabled();
-  private static final long SLOW_TICK_THRESHOLD_MS = CONFIG.getSlowTickThresholdMs();
   private static final int PROFILING_SAMPLE_RATE = CONFIG.getProfilingSampleRate();
-
-  // Advanced ThreadPoolExecutor with dynamic sizing and monitoring
-  private static ThreadPoolExecutor serverTaskExecutor = null;
-  private static final Object EXECUTOR_LOCK = new Object();
 
   // Executor monitoring and metrics
   public static final class ExecutorMetrics {
@@ -131,21 +120,13 @@ public class PerformanceManager {
     }
   }
 
-  private static final ExecutorMetrics EXECUTOR_METRICS = new ExecutorMetrics();
-
   // Rolling TPS average to make decisions about whether to offload work
-  private static final int TPS_WINDOW_SIZE = 20;
+  private static final int TPS_WINDOW_SIZE = 8; // Further reduced from 10 to lower overhead
   private static final double[] TPS_WINDOW = new double[TPS_WINDOW_SIZE];
   private static int tpsWindowIndex = 0;
 
   // Dynamic async thresholding based on executor queue size
   private static double currentTpsThreshold;
-  private static final double MIN_TPS_THRESHOLD = 15.0;
-  private static final double MAX_TPS_THRESHOLD = 19.5;
-  private static final int QUEUE_SIZE_HIGH_THRESHOLD = 10;
-  private static final int QUEUE_SIZE_LOW_THRESHOLD = 3;
-  private static final double THRESHOLD_ADJUSTMENT_RATE = 0.1;
-
   // Profiling data structures
   private static final class ProfileData {
     long entityCollectionTime = 0;
@@ -157,10 +138,6 @@ public class PerformanceManager {
     int entitiesProcessed = 0;
     int itemsProcessed = 0;
     int executorQueueSize = 0;
-
-    boolean isSlowTick() {
-      return TOTAL_TICK_TIME > SLOW_TICK_THRESHOLD_MS * 1_000_000; // Convert ms to ns
-    }
 
     String toJson() {
       return String.format(
@@ -285,263 +262,35 @@ public class PerformanceManager {
     }
   }
 
-  private static ThreadPoolExecutor getExecutor() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
-        createAdvancedThreadPool();
-      }
-      return serverTaskExecutor;
-    }
-  }
-
-  private static void createAdvancedThreadPool() {
-    // give threads unique names to make debugging easier
-    AtomicInteger threadIndex = new AtomicInteger(0);
-    ThreadFactory factory =
-        r -> {
-          Thread t = new Thread(r, "kneaf-perf-worker-" + threadIndex.getAndIncrement());
-          t.setDaemon(true);
-          return t;
-        };
-
-    int coreThreads = CONFIG.getMinThreadpoolSize();
-    int maxThreads = CONFIG.getMaxThreadpoolSize();
-
-    // CPU-aware sizing if enabled
-    if (CONFIG.isCpuAwareThreadSizing()) {
-      int availableProcessors = Runtime.getRuntime().availableProcessors();
-      double cpuLoad = getSystemCpuLoad();
-
-      if (cpuLoad < CONFIG.getCpuLoadThreshold()) {
-        // CPU is not heavily loaded, can use more threads
-        maxThreads = Math.min(maxThreads, availableProcessors);
-      } else {
-        // CPU is heavily loaded, be conservative
-        maxThreads = Math.clamp(availableProcessors / 2, 1, maxThreads);
-      }
-
-      coreThreads = Math.min(coreThreads, maxThreads);
-    }
-
-    // Adaptive sizing based on available processors if enabled
-    if (CONFIG.isAdaptiveThreadPool()) {
-      int availableProcessors = Runtime.getRuntime().availableProcessors();
-      maxThreads = clamp(availableProcessors - 1, 1, maxThreads);
-      coreThreads = Math.min(coreThreads, maxThreads);
-    }
-
-    // Create work-stealing queue if enabled
-    LinkedBlockingQueue<Runnable> workQueue;
-    if (CONFIG.isWorkStealingEnabled()) {
-      workQueue = new LinkedBlockingQueue<>(CONFIG.getWorkStealingQueueSize());
-    } else {
-      workQueue = new LinkedBlockingQueue<>();
-    }
-
-    serverTaskExecutor =
-        new ThreadPoolExecutor(
-            coreThreads,
-            maxThreads,
-            CONFIG.getThreadPoolKeepAliveSeconds(),
-            TimeUnit.SECONDS,
-            workQueue,
-            factory);
-
-    // Allow core threads to timeout if not needed
-    serverTaskExecutor.allowCoreThreadTimeOut(true);
-
-    // Initialize metrics
-    EXECUTOR_METRICS.currentThreadCount = coreThreads;
-    EXECUTOR_METRICS.peakThreadCount = coreThreads;
-
-    LOGGER.info(
-        "Created advanced ThreadPoolExecutor: core={ }, max={ }, workStealing={ }, cpuAware={ }",
-        coreThreads,
-        maxThreads,
-        CONFIG.isWorkStealingEnabled(),
-        CONFIG.isCpuAwareThreadSizing());
-
-    // Initialize dynamic threshold with config value
-    currentTpsThreshold = CONFIG.getTpsThresholdForAsync();
-  }
-
-  private static double getSystemCpuLoad() {
-    try {
-      OperatingSystemMXBean osBean = ManagementFactory.getOperatingSystemMXBean();
-      // Use system CPU load instead of process CPU load for broader availability
-      double systemLoad = osBean.getSystemLoadAverage();
-      if (systemLoad < 0) {
-        // Fallback: estimate based on available processors
-        int availableProcessors = osBean.getAvailableProcessors();
-        return Math.min(1.0, systemLoad / availableProcessors);
-      }
-      // Normalize system load to 0-1 range based on available processors
-      int availableProcessors = osBean.getAvailableProcessors();
-      return Math.min(1.0, systemLoad / availableProcessors);
-    } catch (Exception e) {
-      LOGGER.debug("Could not get CPU load, using default", e);
-      return 0.0;
-    }
-  }
-
-  private static int clamp(int v, int min, int max) {
-    if (v < min) return min;
-    if (v > max) return max;
-    return v;
-  }
-
-  private static double clamp(double v, double min, double max) {
-    if (v < min) return min;
-    if (v > max) return max;
-    return v;
-  }
-
-  public static void shutdown() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor != null) {
-        try {
-          if (LOGGER.isInfoEnabled()) {
-            LOGGER.info(
-                "Shutting down ThreadPoolExecutor. Metrics: { }", EXECUTOR_METRICS.toJson());
-          }
-          serverTaskExecutor.shutdown();
-          if (!serverTaskExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-            LOGGER.warn("ThreadPoolExecutor did not terminate gracefully, forcing shutdown");
-            serverTaskExecutor.shutdownNow();
-          }
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          serverTaskExecutor.shutdownNow();
-        } finally {
-          serverTaskExecutor = null;
-        }
-      }
-    }
-
-    // Clean up spatial grids
-    synchronized (SPATIAL_GRID_LOCK) {
-      LEVEL_SPATIAL_GRIDS.clear();
-    }
-  }
-
-  /** Get current executor metrics for monitoring and debugging */
-  public static String getExecutorMetrics() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null) {
-        return "{\"status\":\"not_initialized\"}";
-      }
-      return EXECUTOR_METRICS.toJson();
-    }
-  }
-
-  /** Get current executor status including pool configuration */
-  public static String getExecutorStatus() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null) {
-        return "Executor not initialized";
-      }
-
-      return String.format(
-          "ThreadPoolExecutor[core=%d, max=%d, current=%d, active=%d, queue=%d, completed=%d]",
-          serverTaskExecutor.getCorePoolSize(),
-          serverTaskExecutor.getMaximumPoolSize(),
-          serverTaskExecutor.getPoolSize(),
-          serverTaskExecutor.getActiveCount(),
-          serverTaskExecutor.getQueue().size(),
-          serverTaskExecutor.getCompletedTaskCount());
-    }
-  }
-
-  /** Validate executor health and configuration */
-  public static boolean isExecutorHealthy() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null
-          || serverTaskExecutor.isShutdown()
-          || serverTaskExecutor.isTerminated()) {
-        return false;
-      }
-
-      // Check if queue is not excessively backed up
-      int queueSize = serverTaskExecutor.getQueue().size();
-      int maxQueueSize = CONFIG.isWorkStealingEnabled() ? CONFIG.getWorkStealingQueueSize() : 1000;
-
-      if (queueSize > maxQueueSize * 0.9) {
-        LOGGER.warn("Executor queue is nearly full: { }/{ }", queueSize, maxQueueSize);
-        return false;
-      }
-
-      // Check if we're at maximum threads and still highly utilized
-      double utilization = getExecutorUtilization();
-      if (serverTaskExecutor.getPoolSize() >= serverTaskExecutor.getMaximumPoolSize()
-          && utilization > 0.95) {
-        if (LOGGER.isWarnEnabled()) {
-          LOGGER.warn(
-              "Executor at max capacity with high utilization: { } threads, { } utilization",
-              serverTaskExecutor.getPoolSize(),
-              String.format("%.2f", utilization));
-        }
-        return false;
-      }
-
-      return true;
-    }
-  }
-
-  /**
-   * Get the current executor queue size for dynamic threshold adjustment. Returns 0 if executor is
-   * not available.
-   */
-  private static int getExecutorQueueSize() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null) return 0;
-      return serverTaskExecutor.getQueue().size();
-    }
-  }
-
-  /** Get executor utilization for dynamic scaling decisions */
-  private static double getExecutorUtilization() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null) return 0.0;
-      int activeThreads = serverTaskExecutor.getActiveCount();
-      int poolSize = Math.max(1, serverTaskExecutor.getPoolSize());
-      return (double) activeThreads / poolSize;
-    }
-  }
-
-  /**
-   * Adjust TPS threshold dynamically based on executor queue size. Lower threshold when queue grows
-   * to maintain responsiveness.
-   */
-  private static void adjustDynamicThreshold() {
-    int queueSize = getExecutorQueueSize();
-    int currentTick = TICK_COUNTER % TPS_WINDOW_SIZE;
-
-    // Adjust threshold based on queue pressure
-    if (queueSize > QUEUE_SIZE_HIGH_THRESHOLD) {
-      // High queue pressure - lower threshold to reduce async load
-      currentTpsThreshold =
-          Math.max(MIN_TPS_THRESHOLD, currentTpsThreshold - THRESHOLD_ADJUSTMENT_RATE);
-    } else if (queueSize < QUEUE_SIZE_LOW_THRESHOLD && currentTick % 5 == 0) {
-      // Low queue pressure - gradually raise threshold (every 5 ticks to avoid oscillation)
-      currentTpsThreshold =
-          Math.min(MAX_TPS_THRESHOLD, currentTpsThreshold + (THRESHOLD_ADJUSTMENT_RATE * 0.5));
-    }
-
-    // Ensure threshold stays within config bounds
-    currentTpsThreshold = clamp(currentTpsThreshold, MIN_TPS_THRESHOLD, MAX_TPS_THRESHOLD);
-  }
 
   private PerformanceManager() {}
 
   // Runtime toggle (initialized from config)
   private static volatile boolean enabled = CONFIG.isEnabled();
+  
+  // Modular components (singleton instances)
+  private static final ThreadPoolManager THREAD_POOL_MANAGER = new ThreadPoolManager();
+  private static final EntityProcessor ENTITY_PROCESSOR = new EntityProcessor();
+  // Delegate executor queue size check to ThreadPoolManager
+  private static int getExecutorQueueSize() {
+    return THREAD_POOL_MANAGER.getExecutorQueueSize();
+  }
+
+  // Delegate executor retrieval to ThreadPoolManager
+  private static ThreadPoolExecutor getExecutor() {
+    return THREAD_POOL_MANAGER.getExecutor();
+  }
+
+  // Delegate shutdown to ThreadPoolManager
+  public static void shutdown() {
+    THREAD_POOL_MANAGER.shutdown();
+  }
 
   // Spatial grid for efficient player position queries per level
   private static final Map<ServerLevel, SpatialGrid> LEVEL_SPATIAL_GRIDS = new HashMap<>();
   private static final Object SPATIAL_GRID_LOCK = new Object();
 
   // Asynchronous distance calculation configuration
-  @SuppressWarnings("unused")
   private static final int DISTANCE_CALCULATION_INTERVAL =
       10; // Reduced frequency: calculate distances every 10 ticks
 
@@ -771,60 +520,8 @@ public class PerformanceManager {
   }
   
   public static void onServerTick(MinecraftServer server) {
-    // Respect runtime toggle first (can be flipped without restarting)
-    if (!enabled) return;
-
-    long tickStartTime = PROFILING_ENABLED ? System.nanoTime() : 0;
-    ProfileData profile = PROFILING_ENABLED ? PROFILE_DATA.get() : null;
-
-    updateTPS();
-    TICK_COUNTER++;
-
-    // Adjust dynamic threshold based on executor metrics
-    if (TICK_COUNTER % 2 == 0) { // Adjust every 2 ticks for responsiveness
-      adjustDynamicThreshold();
-    }
-
-    // Respect configured scan interval to reduce overhead on busy servers
-    // Increased interval for better performance: process every 3 ticks instead of every tick
-    if (!shouldPerformScan()) {
-      if (PROFILING_ENABLED) PROFILE_DATA.remove();
-      return;
-    }
-
-    // Sample profiling based on configured rate with lazy initialization
-    boolean shouldProfile = PROFILING_ENABLED && (TICK_COUNTER % (PROFILING_SAMPLE_RATE * 2) == 0);
-    prepareProfiling(profile, shouldProfile, tickStartTime);
-
-    // Collect and consolidate data
-    EntityDataCollection data = collectAndConsolidate(server, shouldProfile, profile);
-
-    // Apply any pending distance transitions each tick
-    try {
-      applyDistanceTransitions(server);
-    } catch (Throwable t) {
-      LOGGER.debug("Error applying distance transitions: {}", t.getMessage());
-    }
-
-    // Decide whether to offload heavy processing based on rolling TPS and dynamic threshold
-    double avgTps = getRollingAvgTPS();
-    if (avgTps >= currentTpsThreshold) {
-      submitAsyncOptimizations(server, data, shouldProfile);
-    } else {
-      runSynchronousOptimizations(server, data, shouldProfile);
-    }
-
-    // Log slow ticks with detailed profiling
-    if (shouldProfile && profile != null && profile.isSlowTick()) {
-      logSlowTick(server, profile);
-    }
-
-    if (PROFILING_ENABLED) PROFILE_DATA.remove();
-  }
-
-  // Helper to determine whether we should run the full scan this tick
-  private static boolean shouldPerformScan() {
-    return TICK_COUNTER % (CONFIG.getScanIntervalTicks() * 3) == 0;
+    // Delegate to EntityProcessor for modular implementation
+    ENTITY_PROCESSOR.onServerTick(server);
   }
 
   // Helper to initialize profiling values if needed
@@ -897,7 +594,9 @@ public class PerformanceManager {
           profile.optimizationApplicationTime = System.nanoTime() - applicationStart;
         }
       }
-      if (TICK_COUNTER % CONFIG.getLogIntervalTicks() == 0) logOptimizations(server, results);
+      if (TICK_COUNTER % CONFIG.getLogIntervalTicks() == 0) {
+        logOptimizations(server, results);
+      }
       removeItems(server, results.itemResult());
     } catch (Exception e) {
       LOGGER.warn("Error applying optimizations on server thread", e);
@@ -925,11 +624,63 @@ public class PerformanceManager {
         }
       }
 
-      if (TICK_COUNTER % CONFIG.getLogIntervalTicks() == 0) logOptimizations(server, results);
+      if (TICK_COUNTER % CONFIG.getLogIntervalTicks() == 0) {
+        logOptimizations(server, results);
+      }
       removeItems(server, results.itemResult());
     } catch (Exception ex) {
       LOGGER.warn("Error processing optimizations synchronously", ex);
     }
+  }
+
+  /**
+   * Adapter method to handle EntityProcessor results in PerformanceManager methods
+   */
+  private static void runSynchronousOptimizations(
+      MinecraftServer server, EntityProcessor.EntityDataCollection data, boolean shouldProfile) {
+    try {
+      long processingStart = shouldProfile ? System.nanoTime() : 0;
+      EntityProcessor.OptimizationResults processorResults = ENTITY_PROCESSOR.processOptimizations(data);
+      
+      // Convert to PerformanceManager results format for compatibility
+      OptimizationResults results = adaptOptimizationResults(processorResults);
+      
+      if (shouldProfile) {
+        ProfileData profile = PROFILE_DATA.get();
+        if (profile != null) {
+          profile.optimizationProcessingTime = System.nanoTime() - processingStart;
+        }
+      }
+
+      long applicationStart = shouldProfile ? System.nanoTime() : 0;
+      ENTITY_PROCESSOR.applyOptimizations(server, processorResults);
+      if (shouldProfile) {
+        ProfileData profile = PROFILE_DATA.get();
+        if (profile != null) {
+          profile.optimizationApplicationTime = System.nanoTime() - applicationStart;
+        }
+      }
+
+      if (TICK_COUNTER % CONFIG.getLogIntervalTicks() == 0) {
+        // Already using PerformanceManager results format in this method
+        logOptimizations(server, results);
+      }
+      ENTITY_PROCESSOR.removeItems(server, processorResults.itemResult());
+    } catch (Exception ex) {
+      LOGGER.warn("Error processing optimizations synchronously", ex);
+    }
+  }
+
+  /**
+   * Adapter: Convert EntityProcessor results to PerformanceManager results format
+   */
+  private static OptimizationResults adaptOptimizationResults(EntityProcessor.OptimizationResults source) {
+    return new OptimizationResults(
+      source.toTick(),
+      source.blockResult(),
+      source.itemResult(),
+      source.mobResult()
+    );
   }
 
   private static void updateTPS() {
@@ -1571,7 +1322,7 @@ public class PerformanceManager {
 
     // Log spatial grid statistics periodically for performance monitoring
     if (TICK_COUNTER % 1000 == 0) {
-      logSpatialGridStats(server);
+      ENTITY_PROCESSOR.logSpatialGridStats(server);
     }
 
     // Compact metrics line periodically

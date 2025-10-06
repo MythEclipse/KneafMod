@@ -41,6 +41,9 @@ pub use crate::performance_monitoring::{
     get_swap_performance_summary, SwapHealthStatus
 };
 
+// Re-export logging macros and functions
+pub use crate::logging::generate_trace_id;
+
 // Initialize the allocator - should be called once at startup
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_initRustAllocator() {
@@ -69,7 +72,8 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_generateF
     match unsafe { env.new_direct_byte_buffer(buffer_ptr, total_bytes as usize) } {
         Ok(buffer) => buffer.into_raw(),
         Err(e) => {
-            eprintln!("Failed to allocate direct ByteBuffer: {:?}", e);
+            let trace_id = generate_trace_id();
+            log_error!("buffer_allocation", "direct_buffer", &trace_id, "Failed to allocate direct ByteBuffer", e);
             // Free the memory if we failed to create the ByteBuffer
             unsafe { 
                 std::alloc::dealloc(buffer_ptr, std::alloc::Layout::from_size_align_unchecked(total_bytes as usize, 1));
@@ -107,13 +111,15 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_freeFloat
                         }
                     }
                     _ => {
-                        eprintln!("Failed to get buffer capacity or invalid capacity");
+                        let trace_id = generate_trace_id();
+                        log_error!("buffer_allocation", "get_capacity", &trace_id, "Failed to get buffer capacity or invalid capacity");
                     }
                 }
             }
         }
         Err(e) => {
-            eprintln!("Failed to get direct buffer address: {:?}", e);
+            let trace_id = generate_trace_id();
+            log_error!("buffer_allocation", "get_address", &trace_id, "Failed to get direct buffer address", e);
         }
     }
 }
@@ -341,7 +347,8 @@ pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativePushTask(
         let byte_array = unsafe { jni::objects::JByteArray::from_raw(payload) };
         if let Ok(bytes) = env.convert_byte_array(byte_array) {
             if let Err(e) = worker.push_task(&bytes) {
-                eprintln!("Failed to push task: {}", e);
+                let trace_id = generate_trace_id();
+                log_error!("worker_task", "push", &trace_id, "Failed to push task", e);
             }
         } else {
             eprintln!("Failed to convert byte array");

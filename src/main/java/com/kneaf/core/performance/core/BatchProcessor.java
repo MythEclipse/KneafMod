@@ -416,7 +416,6 @@ public class BatchProcessor {
   }
   
   /** Complete future asynchronously. */
-  @SuppressWarnings("unchecked")
   private void completeFutureAsync(CompletableFuture<?> future, Object result) {
     CompletableFuture<Object> f = (CompletableFuture<Object>) future;
     CompletableFuture.runAsync(() -> {

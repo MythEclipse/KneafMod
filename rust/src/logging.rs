@@ -402,8 +402,64 @@ macro_rules! log_error {
     ($component:expr, $operation:expr, $trace_id:expr, $error:expr) => {
         $crate::logging::LogEntry::new("ERROR", $component, $operation, &$error.to_string())
             .with_trace_id($trace_id.to_string())
-            .with_error_code("GENERIC_ERROR")
+            .with_error_code("GENERIC_ERROR".to_string())
             .log();
+    };
+    ($component:expr, $operation:expr, $trace_id:expr, $message:expr, $error:expr) => {
+        $crate::logging::LogEntry::new("ERROR", $component, $operation, &format!("{}: {}", $message, $error.to_string()))
+            .with_trace_id($trace_id.to_string())
+            .with_error_code("GENERIC_ERROR".to_string())
+            .log();
+    };
+}
+
+/// Error handling macro with automatic logging
+#[macro_export]
+macro_rules! handle_error {
+    ($component:expr, $operation:expr, $result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(e) => {
+                let trace_id = $crate::logging::generate_trace_id();
+                $crate::logging::log_error!($component, $operation, &trace_id, &e);
+                return Err(e);
+            }
+        }
+    };
+}
+
+/// Error handling macro with custom error code
+#[macro_export]
+macro_rules! handle_error_with_code {
+    ($component:expr, $operation:expr, $error_code:expr, $result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(e) => {
+                let trace_id = $crate::logging::generate_trace_id();
+                let mut entry = $crate::logging::LogEntry::new("ERROR", $component, $operation, &e.to_string())
+                    .with_trace_id(trace_id.to_string());
+                if !$error_code.is_empty() {
+                    entry = entry.with_error_code($error_code);
+                }
+                entry.log();
+                return Err(e);
+            }
+        }
+    };
+}
+
+/// Result handling macro that returns a default value on error
+#[macro_export]
+macro_rules! handle_result_or_default {
+    ($component:expr, $operation:expr, $result:expr, $default:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(e) => {
+                let trace_id = $crate::logging::generate_trace_id();
+                $crate::logging::log_error!($component, $operation, &trace_id, &e);
+                $default
+            }
+        }
     };
 }
 
