@@ -1,15 +1,18 @@
 //! Optimized spatial grid with O(log M) queries using hierarchical partitioning
 //! Implements SIMD-accelerated spatial queries with hierarchical spatial hashing
 
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::simd::prelude::*;
 use rayon::prelude::*;
 use crate::simd_enhanced::{EnhancedSimdProcessor, SimdCapability};
+use std::time::{Instant, Duration};
+use std::cell::UnsafeCell;
+use crossbeam_epoch::Atomic;
 
-/// Hierarchical spatial grid with O(log M) query performance
+/// Hierarchical spatial grid with O(log M) query performance for villager grouping
 pub struct OptimizedSpatialGrid {
-    // Hierarchical grid levels
+    // Hierarchical grid levels (coarser to finer)
     levels: Vec<SpatialGridLevel>,
     
     // Global entity index for fast lookup
@@ -23,6 +26,15 @@ pub struct OptimizedSpatialGrid {
     
     // Performance metrics
     metrics: GridMetrics,
+    
+    // Lazy update tracking
+    lazy_update_queue: RwLock<HashSet<u64>>,
+    
+    // Last update time for each entity
+    entity_last_update: RwLock<HashMap<u64, (Instant, f32, f32, f32)>>,
+    
+    // Movement threshold for triggering updates (meters)
+    movement_threshold: f32,
 }
 
 /// Grid configuration parameters
@@ -33,16 +45,18 @@ pub struct GridConfig {
     pub max_levels: usize,
     pub entities_per_cell_threshold: usize,
     pub simd_chunk_size: usize,
+    pub villager_movement_threshold: f32, // Minimum movement distance to trigger update
 }
 
 impl Default for GridConfig {
     fn default() -> Self {
         Self {
-            world_size: (1000.0, 256.0, 1000.0),
-            base_cell_size: 16.0,
-            max_levels: 4,
-            entities_per_cell_threshold: 8,
+            world_size: (10000.0, 256.0, 10000.0), // Larger world size for villages
+            base_cell_size: 32.0, // Larger base cell for better villager grouping
+            max_levels: 5, // More levels for finer granularity
+            entities_per_cell_threshold: 12, // Adjusted for villager density
             simd_chunk_size: 64,
+            villager_movement_threshold: 0.5, // 0.5 meters for significant movement
         }
     }
 }
@@ -143,6 +157,8 @@ impl OptimizedSpatialGrid {
                 level,
                 cell_size: current_cell_size,
                 cells: RwLock::new(HashMap::new()),
+                entity_count: Atomic::new(0),
+                last_access: Instant::now(),
             });
             current_cell_size *= 2.0;
         }
@@ -153,47 +169,261 @@ impl OptimizedSpatialGrid {
             simd_processor: EnhancedSimdProcessor::new(),
             config,
             metrics: GridMetrics::default(),
+            lazy_update_queue: RwLock::new(HashSet::new()),
+            entity_last_update: RwLock::new(HashMap::new()),
+            movement_threshold: config.villager_movement_threshold,
         }
+    }
+
+    /// Create new optimized spatial grid specifically for villagers
+    pub fn new_for_villagers(config: GridConfig) -> Self {
+        let mut grid = Self::new(config);
+        
+        // Optimize for villager grouping use case
+        grid.config.entities_per_cell_threshold = 15; // More entities per cell for villager density
+        grid.config.simd_chunk_size = 32; // Smaller chunks for better villager query performance
+        
+        grid
     }
     
     /// Insert entity into spatial grid with hierarchical indexing
-    pub fn insert_entity(&self, entity_id: u64, position: (f32, f32, f32), bounds: (f32, f32, f32, f32, f32, f32)) {
-        let entity_data = EntityData {
-            id: entity_id,
-            position,
-            bounds,
-        };
-        
-        // Insert at appropriate level based on entity size
-        let best_level = self.select_optimal_level(&bounds);
-        let cell_key = CellKey::from_position(position, self.levels[best_level].cell_size);
-        
-        // Insert into grid level
-        {
-            let mut cells = self.levels[best_level].cells.write().unwrap();
-            let cell_data = cells.entry(cell_key).or_insert_with(|| CellData {
-                entities: Vec::new(),
-                bounds: self.calculate_cell_bounds(cell_key, self.levels[best_level].cell_size),
-                last_updated: std::time::Instant::now(),
-            });
+        pub fn insert_entity(&self, entity_id: u64, position: (f32, f32, f32), bounds: (f32, f32, f32, f32, f32, f32)) {
+            let entity_data = EntityData {
+                id: entity_id,
+                position,
+                bounds,
+            };
             
-            cell_data.entities.push(entity_data);
-            cell_data.last_updated = std::time::Instant::now();
+            // Insert at appropriate level based on entity size
+            let best_level = self.select_optimal_level(&bounds);
+            let cell_key = CellKey::from_position(position, self.levels[best_level].cell_size);
+            
+            // Insert into grid level
+            {
+                let mut cells = self.levels[best_level].cells.write().unwrap();
+                let cell_data = cells.entry(cell_key).or_insert_with(|| CellData {
+                    entities: Vec::new(),
+                    bounds: self.calculate_cell_bounds(cell_key, self.levels[best_level].cell_size),
+                    last_updated: Instant::now(),
+                    entity_count: 1,
+                });
+                
+                cell_data.entities.push(entity_data);
+                cell_data.last_updated = Instant::now();
+                cell_data.entity_count += 1;
+            }
+            
+            // Update entity index
+            {
+                let mut index = self.entity_index.write().unwrap();
+                index.insert(entity_id, EntityLocation {
+                    entity_id,
+                    level: best_level,
+                    cell_key,
+                });
+            }
+            
+            // Track initial position for movement detection
+            {
+                let mut last_update = self.entity_last_update.write().unwrap();
+                last_update.insert(entity_id, (Instant::now(), position.0, position.1, position.2));
+            }
+            
+            // Update parent cells for hierarchical queries
+            self.update_parent_cells(best_level, cell_key);
         }
-        
-        // Update entity index
-        {
-            let mut index = self.entity_index.write().unwrap();
-            index.insert(entity_id, EntityLocation {
-                entity_id,
-                level: best_level,
-                cell_key,
-            });
+    
+        /// Update entity position with lazy evaluation
+        pub fn update_entity_position(&self, entity_id: u64, new_position: (f32, f32, f32)) -> bool {
+            // Check if entity exists
+            let location = {
+                let index = self.entity_index.read().unwrap();
+                match index.get(&entity_id) {
+                    Some(loc) => loc.clone(),
+                    None => return false,
+                }
+            };
+    
+            // Get last known position
+            let (last_time, last_x, last_y, last_z) = {
+                let last_update = self.entity_last_update.read().unwrap();
+                match last_update.get(&entity_id) {
+                    Some(data) => *data,
+                    None => return false,
+                }
+            };
+    
+            // Calculate distance moved
+            let dx = new_position.0 - last_x;
+            let dy = new_position.1 - last_y;
+            let dz = new_position.2 - last_z;
+            let distance_moved = (dx * dx + dy * dy + dz * dz).sqrt();
+    
+            // Only update if movement exceeds threshold
+            if distance_moved < self.movement_threshold {
+                // Queue for lazy update if not already queued
+                let mut queue = self.lazy_update_queue.write().unwrap();
+                queue.insert(entity_id);
+                return true;
+            }
+    
+            // Perform immediate update for significant movement
+            self.perform_immediate_update(entity_id, new_position, location.level, location.cell_key);
+            true
         }
-        
-        // Update parent cells for hierarchical queries
-        self.update_parent_cells(best_level, cell_key);
-    }
+    
+        /// Perform immediate entity position update
+        fn perform_immediate_update(&self, entity_id: u64, new_position: (f32, f32, f32), old_level: usize, old_cell_key: CellKey) {
+            // Remove from old cell
+            {
+                let mut cells = self.levels[old_level].cells.write().unwrap();
+                if let Some(cell_data) = cells.get_mut(&old_cell_key) {
+                    cell_data.entities.retain(|e| e.id != entity_id);
+                    cell_data.entity_count = cell_data.entities.len() as u64;
+                    
+                    if cell_data.entities.is_empty() {
+                        cells.remove(&old_cell_key);
+                    } else {
+                        cell_data.last_updated = Instant::now();
+                    }
+                }
+            }
+    
+            // Find new cell and level
+            let new_level = self.select_optimal_level_for_position(new_position);
+            let new_cell_key = CellKey::from_position(new_position, self.levels[new_level].cell_size);
+    
+            // Insert into new cell
+            {
+                let mut cells = self.levels[new_level].cells.write().unwrap();
+                let cell_data = cells.entry(new_cell_key).or_insert_with(|| CellData {
+                    entities: Vec::new(),
+                    bounds: self.calculate_cell_bounds(new_cell_key, self.levels[new_level].cell_size),
+                    last_updated: Instant::now(),
+                    entity_count: 0,
+                });
+                
+                cell_data.entities.push(EntityData {
+                    id: entity_id,
+                    position: new_position,
+                    bounds: self.get_entity_bounds(entity_id).unwrap_or_else(|| self.calculate_default_bounds(new_position)),
+                });
+                cell_data.entity_count += 1;
+                cell_data.last_updated = Instant::now();
+            }
+    
+            // Update entity index
+            {
+                let mut index = self.entity_index.write().unwrap();
+                if let Some(entry) = index.get_mut(&entity_id) {
+                    entry.level = new_level;
+                    entry.cell_key = new_cell_key;
+                }
+            }
+    
+            // Update parent cells
+            self.update_parent_cells(new_level, new_cell_key);
+    
+            // Update last update tracking
+            {
+                let mut last_update = self.entity_last_update.write().unwrap();
+                last_update.insert(entity_id, (Instant::now(), new_position.0, new_position.1, new_position.2));
+            }
+    
+            // Remove from lazy update queue if present
+            {
+                let mut queue = self.lazy_update_queue.write().unwrap();
+                queue.remove(&entity_id);
+            }
+        }
+    
+        /// Process lazy update queue (called periodically or when needed)
+        pub fn process_lazy_updates(&self) -> usize {
+            let mut queue = self.lazy_update_queue.write().unwrap();
+            let update_count = queue.len();
+            
+            if update_count == 0 {
+                return 0;
+            }
+    
+            let now = Instant::now();
+            let mut updated_entities = 0;
+    
+            // Process updates in batches for better performance
+            let batch_size = std::cmp::min(update_count, 32);
+            let entities_to_update: Vec<u64> = queue.iter().take(batch_size).cloned().collect();
+    
+            for entity_id in entities_to_update {
+                if let Some(location) = self.entity_index.read().unwrap().get(&entity_id) {
+                    if let Some((last_time, last_x, last_y, last_z)) = self.entity_last_update.read().unwrap().get(&entity_id) {
+                        let age = now.duration_since(*last_time);
+                        
+                        // Only update if entity hasn't moved significantly recently
+                        // or if the update is too old (stale data)
+                        if age > Duration::from_secs(1) {
+                            self.perform_immediate_update(entity_id, (*last_x, *last_y, *last_z), location.level, location.cell_key);
+                            updated_entities += 1;
+                        }
+                    }
+                }
+            }
+    
+            // Remove processed entities from queue
+            for entity_id in entities_to_update {
+                queue.remove(&entity_id);
+            }
+    
+            updated_entities
+        }
+    
+        /// Select optimal level based on entity position (for movement)
+        fn select_optimal_level_for_position(&self, position: (f32, f32, f32)) -> usize {
+            // For movement, use the same level selection as insertion
+            // but optimized for villager size
+            let villager_size = 0.6; // Typical villager bounding box size
+            let max_size = villager_size * 2.0;
+    
+            for (level, level_config) in self.levels.iter().enumerate() {
+                if max_size <= level_config.cell_size * 2.0 {
+                    return level;
+                }
+            }
+    
+            self.config.max_levels - 1
+        }
+    
+        /// Get entity bounds (simplified for villager use case)
+        fn get_entity_bounds(&self, entity_id: u64) -> Option<(f32, f32, f32, f32, f32, f32)> {
+            // In a real implementation, this would retrieve the actual bounds from entity data
+            // For villager optimization, we use a standard villager bounding box
+            let location = self.entity_index.read().unwrap().get(&entity_id)?;
+            let cells = self.levels[location.level].cells.read().unwrap();
+            let cell_data = cells.get(&location.cell_key)?;
+            
+            for entity in &cell_data.entities {
+                if entity.id == entity_id {
+                    return Some(entity.bounds);
+                }
+            }
+            
+            None
+        }
+    
+        /// Calculate default bounds for an entity
+        fn calculate_default_bounds(&self, position: (f32, f32, f32)) -> (f32, f32, f32, f32, f32, f32) {
+            // Standard villager bounding box: ~0.6x0.6x1.8 meters
+            let half_size = 0.3;
+            let height = 0.9;
+            
+            (
+                position.0 - half_size,
+                position.0 + half_size,
+                position.1,
+                position.1 + height,
+                position.2 - half_size,
+                position.2 + half_size,
+            )
+        }
     
     /// Remove entity from spatial grid
     pub fn remove_entity(&self, entity_id: u64) -> bool {

@@ -24,6 +24,9 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -42,9 +45,46 @@ import org.slf4j.Logger;
 public class PerformanceManager {
   private static final Logger LOGGER = LogUtils.getLogger();
 
+  // Performance monitoring counters
+  private static final AtomicLong totalJniCalls = new AtomicLong(0);
+  private static final AtomicLong totalJniCallDurationMs = new AtomicLong(0);
+  private static final AtomicLong maxJniCallDurationMs = new AtomicLong(0);
+  private static final ConcurrentHashMap<String, AtomicLong> jniCallTypes = new ConcurrentHashMap<>();
+
+  // Lock wait monitoring
+  private static final AtomicLong totalLockWaits = new AtomicLong(0);
+  private static final AtomicLong totalLockWaitTimeMs = new AtomicLong(0);
+  private static final AtomicLong maxLockWaitTimeMs = new AtomicLong(0);
+  private static final AtomicInteger currentLockContention = new AtomicInteger(0);
+
+  // Memory monitoring
+  private static final AtomicLong totalHeapBytes = new AtomicLong(0);
+  private static final AtomicLong usedHeapBytes = new AtomicLong(0);
+  private static final AtomicLong freeHeapBytes = new AtomicLong(0);
+  private static final AtomicLong gcCount = new AtomicLong(0);
+  private static final AtomicLong gcTimeMs = new AtomicLong(0);
+  private static final AtomicLong peakHeapUsageBytes = new AtomicLong(0);
+
+  // Threshold configuration
+
+  // Threshold alerts (unique, thread-safe)
+ private static final List<String> thresholdAlerts = new CopyOnWriteArrayList<>();
+
+  // Default thresholds if not found in config
+  private static final long DEFAULT_JNI_CALL_THRESHOLD_MS = 100;
+  private static final long DEFAULT_LOCK_WAIT_THRESHOLD_MS = 50;
+  private static final double DEFAULT_MEMORY_USAGE_THRESHOLD_PCT = 90.0;
+  private static final long DEFAULT_GC_DURATION_THRESHOLD_MS = 100;
+
+  // Threshold configuration (using defaults until config is loaded)
+  private static long JNI_CALL_THRESHOLD_MS = DEFAULT_JNI_CALL_THRESHOLD_MS;
+  private static long LOCK_WAIT_THRESHOLD_MS = DEFAULT_LOCK_WAIT_THRESHOLD_MS;
+  private static double MEMORY_USAGE_THRESHOLD_PCT = DEFAULT_MEMORY_USAGE_THRESHOLD_PCT;
+  private static long GC_DURATION_THRESHOLD_MS = DEFAULT_GC_DURATION_THRESHOLD_MS;
+
+  // TPS and tick monitoring
   private static int TICK_COUNTER = 0;
   private static long lastTickTime = 0;
-  // Last tick duration in nanoseconds (volatile because read from other threads)
   private static volatile long lastTickDurationNanos = 0;
 
   // Configuration (loaded from config/kneaf-performance.properties)
@@ -579,6 +619,157 @@ public class PerformanceManager {
    * Called on every server tick to perform performance optimizations. Now uses multithreading for
    * processing optimizations asynchronously.
    */
+  /** Record JNI call with duration tracking and threshold checking */
+  public static void recordJniCall(String callType, long durationMs) {
+    if (!isEnabled()) return;
+    
+    // Update atomic counters
+    totalJniCalls.incrementAndGet();
+    totalJniCallDurationMs.addAndGet(durationMs);
+    
+    // Update max call duration
+    long currentMax = maxJniCallDurationMs.get();
+    if (durationMs > currentMax) {
+      maxJniCallDurationMs.compareAndSet(currentMax, durationMs);
+    }
+    
+    // Update call type statistics
+    jniCallTypes.computeIfAbsent(callType, k -> new AtomicLong(0)).incrementAndGet();
+    
+    // Check threshold and trigger alert if needed
+    if (durationMs > JNI_CALL_THRESHOLD_MS) {
+      String alert = String.format("JNI call exceeded threshold: %dms > %dms (type: %s)",
+          durationMs, JNI_CALL_THRESHOLD_MS, callType);
+      addThresholdAlert(alert);
+    }
+  }
+  
+  /** Record simple JNI call without specific type */
+  public static void recordJniCall() {
+    recordJniCall("unspecified", 0);
+  }
+  
+  /** Record lock wait event with duration tracking and threshold checking */
+  public static void recordLockWait(String lockName, long durationMs) {
+    if (!isEnabled()) return;
+    
+    // Update atomic counters
+    totalLockWaits.incrementAndGet();
+    totalLockWaitTimeMs.addAndGet(durationMs);
+    
+    // Update max lock wait time
+    long currentMax = maxLockWaitTimeMs.get();
+    if (durationMs > currentMax) {
+      maxLockWaitTimeMs.compareAndSet(currentMax, durationMs);
+    }
+    
+    // Update current lock contention (approximate - decremented elsewhere)
+    currentLockContention.incrementAndGet();
+    
+    // Check threshold and trigger alert if needed
+    if (durationMs > LOCK_WAIT_THRESHOLD_MS) {
+      String alert = String.format("Lock wait exceeded threshold: %dms > %dms (lock: %s)",
+          durationMs, LOCK_WAIT_THRESHOLD_MS, lockName);
+      addThresholdAlert(alert);
+    }
+  }
+  
+  /** Record lock contention resolution (decrement counter) */
+  public static void recordLockResolved() {
+    if (!isEnabled()) return;
+    currentLockContention.updateAndGet(count -> Math.max(0, count - 1));
+  }
+  
+  /** Record memory usage statistics with threshold checking */
+  public static void recordMemoryUsage(long totalBytes, long usedBytes, long freeBytes) {
+    if (!isEnabled()) return;
+    
+    // Update atomic counters
+    totalHeapBytes.set(totalBytes);
+    usedHeapBytes.set(usedBytes);
+    freeHeapBytes.set(freeBytes);
+    
+    double usedPct = totalBytes > 0 ? (usedBytes * 100.0 / totalBytes) : 0.0;
+    
+    // Update peak heap usage
+    long currentPeak = peakHeapUsageBytes.get();
+    if (usedBytes > currentPeak) {
+      peakHeapUsageBytes.compareAndSet(currentPeak, usedBytes);
+    }
+    
+    // Check threshold and trigger alert if needed
+    if (usedPct > MEMORY_USAGE_THRESHOLD_PCT) {
+      String alert = String.format("Memory usage exceeded threshold: %.1f%% > %.1f%%",
+          usedPct, MEMORY_USAGE_THRESHOLD_PCT);
+      addThresholdAlert(alert);
+    }
+  }
+  
+  /** Record GC event with duration tracking and threshold checking */
+  public static void recordGcEvent(long durationMs) {
+    if (!isEnabled()) return;
+    
+    // Update atomic counters
+    gcCount.incrementAndGet();
+    gcTimeMs.addAndGet(durationMs);
+    
+    // Check threshold and trigger alert if needed
+    if (durationMs > GC_DURATION_THRESHOLD_MS) {
+      String alert = String.format("GC duration exceeded threshold: %dms > %dms",
+          durationMs, GC_DURATION_THRESHOLD_MS);
+      addThresholdAlert(alert);
+    }
+  }
+  
+  /** Add threshold alert to be processed during next periodic log (unique entries only) */
+ public static void addThresholdAlert(String alert) {
+   if (!isEnabled() || alert == null || alert.isBlank()) return;
+   thresholdAlerts.add(alert);
+ }
+  
+  /** Clear all threshold alerts */
+  public static void clearThresholdAlerts() {
+    if (!isEnabled()) return;
+    thresholdAlerts.clear();
+  }
+  
+  /** Get current JNI call metrics */
+  public static Map<String, Object> getJniCallMetrics() {
+    Map<String, Object> metrics = new HashMap<>();
+    metrics.put("totalCalls", totalJniCalls.get());
+    metrics.put("totalDurationMs", totalJniCallDurationMs.get());
+    metrics.put("maxDurationMs", maxJniCallDurationMs.get());
+    metrics.put("callTypes", new HashMap<>(jniCallTypes));
+    return metrics;
+  }
+  
+  /** Get current lock wait metrics */
+ public static Map<String, Object> getLockWaitMetrics() {
+   Map<String, Object> metrics = new HashMap<>();
+   metrics.put("totalWaits", totalLockWaits.get());
+   metrics.put("totalWaitTimeMs", totalLockWaitTimeMs.get());
+   metrics.put("maxWaitTimeMs", maxLockWaitTimeMs.get());
+   metrics.put("currentContention", currentLockContention.get());
+   return metrics;
+ }
+  
+  /** Get current memory metrics */
+  public static Map<String, Object> getMemoryMetrics() {
+    Map<String, Object> metrics = new HashMap<>();
+    metrics.put("totalHeapBytes", totalHeapBytes.get());
+    metrics.put("usedHeapBytes", usedHeapBytes.get());
+    metrics.put("freeHeapBytes", freeHeapBytes.get());
+    metrics.put("peakHeapBytes", peakHeapUsageBytes.get());
+    metrics.put("gcCount", gcCount.get());
+    metrics.put("gcTimeMs", gcTimeMs.get());
+    return metrics;
+  }
+  
+  /** Get current threshold alerts */
+  public static List<String> getThresholdAlerts() {
+    return new ArrayList<>(thresholdAlerts);
+  }
+  
   public static void onServerTick(MinecraftServer server) {
     // Respect runtime toggle first (can be flipped without restarting)
     if (!enabled) return;

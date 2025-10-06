@@ -80,7 +80,6 @@ public class RustPerformance {
       }
       if (allVillagers) {
         // Unsafe cast but acceptable for the fast-path when tests pass a typed list
-        @SuppressWarnings("unchecked")
         java.util.List<VillagerData> castList = (java.util.List<VillagerData>) list;
         converted = castList;
       } else {
@@ -369,12 +368,24 @@ public class RustPerformance {
   }
 
   /** Free float buffer native. */
-  public static void freeFloatBufferNative(ByteBuffer buffer) {
-    ensureInitialized();
-    NATIVE_MANAGER.freeFloatBuffer(buffer);
-  }
+ public static void freeFloatBufferNative(ByteBuffer buffer) {
+   ensureInitialized();
+   NATIVE_MANAGER.freeFloatBuffer(buffer);
+ }
 
-  /** Performance statistics data class. */
+ /** Record JNI call performance metrics (native integration). */
+ public static native void recordJniCallNative(String callType, long durationMs);
+ 
+ /** Record lock wait performance metrics (native integration). */
+ public static native void recordLockWaitNative(String lockName, long durationMs);
+ 
+ /** Record memory usage performance metrics (native integration). */
+ public static native void recordMemoryUsageNative(long totalBytes, long usedBytes, long freeBytes);
+ 
+ /** Record GC event performance metrics (native integration). */
+ public static native void recordGcEventNative(long durationMs);
+
+ /** Performance statistics data class. */
   public static class PerformanceStatistics {
     private final long totalEntitiesProcessed;
     private final long totalItemsProcessed;

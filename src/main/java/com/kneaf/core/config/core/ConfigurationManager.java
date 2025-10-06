@@ -41,7 +41,6 @@ public class ConfigurationManager {
   }
 
   /** Get configuration for the specified type. */
-  @SuppressWarnings("unchecked")
   public <T> T getConfiguration(Class<T> configType) {
     return (T) configurations.computeIfAbsent(configType, this::createConfiguration);
   }

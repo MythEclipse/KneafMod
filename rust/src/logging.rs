@@ -131,6 +131,12 @@ impl PerformanceLogger {
             .with_trace_id(trace_id.to_string())
             .log();
     }
+
+    pub fn log_debug(&self, operation: &str, trace_id: &str, message: &str) {
+        LogEntry::new("DEBUG", &self.component, operation, message)
+            .with_trace_id(trace_id.to_string())
+            .log();
+    }
 }
 
 /// Error types with context

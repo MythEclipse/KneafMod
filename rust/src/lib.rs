@@ -1,6 +1,13 @@
 #![allow(
     unused_doc_comments,
-    mismatched_lifetime_syntaxes
+    mismatched_lifetime_syntaxes,
+    unused_imports,
+    unused_variables,
+    unused_mut,
+    dead_code,
+    unused_assignments,
+    unused_macros,
+    unused_qualifications
 )]
 
 // Module declarations

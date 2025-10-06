@@ -1,4 +1,5 @@
-use jni::{JNIEnv, objects::JClass, sys::{jlong, jint, jstring}};
+use jni::{JNIEnv, objects::JClass, sys::{jlong, jint, jstring, jbyte, jbyteArray}};
+use jni::objects::ReleaseMode;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -7,6 +8,50 @@ use log::{error, info, debug};
 use std::sync::atomic::{AtomicUsize, AtomicU64, AtomicBool, Ordering};
 use std::thread;
 use std::cmp;
+
+/// Buffer pool for batch data to reduce allocations and GC pressure
+#[derive(Debug)]
+struct BatchBufferPool {
+    buffers: Mutex<Vec<Vec<u8>>>,
+    max_buffers: usize,
+    buffer_capacity: usize,
+}
+
+impl BatchBufferPool {
+    fn new(max_buffers: usize, buffer_capacity: usize) -> Self {
+        let mut buffers = Vec::with_capacity(max_buffers);
+        for _ in 0..max_buffers {
+            buffers.push(Vec::with_capacity(buffer_capacity));
+        }
+
+        Self {
+            buffers: Mutex::new(buffers),
+            max_buffers,
+            buffer_capacity,
+        }
+    }
+
+    fn acquire_buffer(&self) -> Option<Vec<u8>> {
+        let mut buffers = self.buffers.lock().unwrap();
+        buffers.pop()
+    }
+
+    fn release_buffer(&self, mut buffer: Vec<u8>) {
+        buffer.clear();
+        buffer.reserve(self.buffer_capacity.saturating_sub(buffer.capacity()));
+
+        let mut buffers = self.buffers.lock().unwrap();
+        if buffers.len() < self.max_buffers {
+            buffers.push(buffer);
+        }
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref BATCH_BUFFER_POOL: BatchBufferPool = BatchBufferPool::new(32, 64 * 1024); // 32 buffers, 64KB each
+}
+
+/// Configuration for enhanced JNI batch processing
 
 /// Configuration for enhanced JNI batch processing
 #[derive(Debug, Clone)]
@@ -528,4 +573,113 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_initEnhan
         Ok(_) => 0, // Success
         Err(_) => 1, // Error
     }
+}
+/// JNI function to submit batched operations from Java
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitBatchedOperations(
+    env: JNIEnv,
+    _class: JClass,
+    operation_type: jbyte,
+    operations_data: jbyteArray,
+    priorities: jbyteArray,
+) -> jstring {
+    if let Some(processor) = get_enhanced_batch_processor() {
+        // Convert raw jbyteArray to JByteArray wrapper expected by the JNI helpers
+        let operations_obj = unsafe { jni::objects::JObject::from_raw(operations_data as *mut _ ) };
+        let priorities_obj = unsafe { jni::objects::JObject::from_raw(priorities as *mut _ ) };
+        let operations_jarray = jni::objects::JByteArray::from(operations_obj);
+        let priorities_jarray = jni::objects::JByteArray::from(priorities_obj);
+
+        match env.convert_byte_array(operations_jarray) {
+            Ok(operations_vec) => {
+                match env.convert_byte_array(priorities_jarray) {
+                    Ok(priorities_vec) => {
+                        let operations_slice = operations_vec.as_slice();
+                        let priorities_slice = priorities_vec.as_slice();
+
+                        // Parse batched operations data
+                        match parse_batched_operations(operations_slice, priorities_slice) {
+                            Ok(operations) => {
+                                let mut success_count = 0;
+                                for operation in operations {
+                                    if processor.submit_operation(operation).is_ok() {
+                                        success_count += 1;
+                                    }
+                                }
+
+                                let result = format!("Submitted {} operations successfully", success_count);
+                                env.new_string(&result)
+                                    .map(|s| s.into_raw())
+                                    .unwrap_or(std::ptr::null_mut())
+                            }
+                            Err(e) => {
+                                let error_msg = format!("Failed to parse operations: {}", e);
+                                env.new_string(&error_msg)
+                                    .map(|s| s.into_raw())
+                                    .unwrap_or(std::ptr::null_mut())
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        let error_msg = "Failed to access priorities array";
+                        env.new_string(error_msg)
+                            .map(|s| s.into_raw())
+                            .unwrap_or(std::ptr::null_mut())
+                    }
+                }
+            }
+            Err(_) => {
+                let error_msg = "Failed to access operations array";
+                env.new_string(error_msg)
+                    .map(|s| s.into_raw())
+                    .unwrap_or(std::ptr::null_mut())
+            }
+        }
+    } else {
+        let error_msg = "Enhanced batch processor not initialized";
+        env.new_string(error_msg)
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    }
+}
+
+/// Parse batched operations data from Java arrays
+fn parse_batched_operations(operations_data: &[u8], priorities: &[u8]) -> Result<Vec<EnhancedBatchOperation>, String> {
+    if operations_data.len() < 4 {
+        return Err("Operations data too small".to_string());
+    }
+
+    let operation_count = u32::from_le_bytes([operations_data[0], operations_data[1], operations_data[2], operations_data[3]]) as usize;
+    if operation_count != priorities.len() {
+        return Err("Operation count mismatch with priorities".to_string());
+    }
+
+    let mut operations = Vec::with_capacity(operation_count);
+    let mut offset = 4;
+
+    for i in 0..operation_count {
+        if offset + 4 > operations_data.len() {
+            return Err("Invalid operations data format".to_string());
+        }
+
+        let data_len = u32::from_le_bytes([
+            operations_data[offset],
+            operations_data[offset + 1],
+            operations_data[offset + 2],
+            operations_data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        if offset + data_len > operations_data.len() {
+            return Err("Operation data exceeds buffer".to_string());
+        }
+
+        let operation_data = operations_data[offset..offset + data_len].to_vec();
+        let priority = priorities[i];
+
+        operations.push(EnhancedBatchOperation::new(0, operation_data, priority));
+        offset += data_len;
+    }
+
+    Ok(operations)
 }

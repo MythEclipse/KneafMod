@@ -3,71 +3,165 @@ use super::config::*;
 use super::spatial::*;
 use super::pathfinding::*;
 use rayon::prelude::*;
-use std::sync::Mutex;
+use std::sync::{RwLock, Mutex};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use dashmap::DashMap;
+use crossbeam_queue::SegQueue;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, AtomicU64, AtomicBool, Ordering};
+use crate::memory_pool::{EnhancedMemoryPoolManager, get_global_enhanced_pool};
+use crate::arena::{BumpArena, get_global_arena_pool};
 
-// Global pathfinding optimizer instance
-static PATHFINDING_OPTIMIZER: Lazy<Mutex<PathfindingOptimizer>> = 
-    Lazy::new(|| Mutex::new(PathfindingOptimizer::new()));
+// Global pathfinding optimizer instances with read-write locks for read-heavy operations
+static PATHFINDING_OPTIMIZER: Lazy<RwLock<PathfindingOptimizer>> =
+    Lazy::new(|| RwLock::new(PathfindingOptimizer::new()));
 
-static ADVANCED_PATHFINDING_OPTIMIZER: Lazy<Mutex<AdvancedPathfindingOptimizer>> = 
-    Lazy::new(|| Mutex::new(AdvancedPathfindingOptimizer::new()));
+static ADVANCED_PATHFINDING_OPTIMIZER: Lazy<RwLock<AdvancedPathfindingOptimizer>> =
+    Lazy::new(|| RwLock::new(AdvancedPathfindingOptimizer::new()));
+
+// Lock-free villager group cache for O(1) access
+static VILLAGER_GROUP_CACHE: Lazy<DashMap<u32, VillagerGroup>> = Lazy::new(DashMap::new);
+
+// Global memory pool access for villager processing
+static MEMORY_POOL: Lazy<Arc<EnhancedMemoryPoolManager>> =
+    Lazy::new(|| Arc::clone(&get_global_enhanced_pool()));
+
+static ARENA_POOL: Lazy<Arc<crate::arena::ArenaPool>> =
+    Lazy::new(|| get_global_arena_pool());
+
+// Atomic counters for performance monitoring
+static TOTAL_VILLAGERS_PROCESSED: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_VILLAGER_GROUPS: AtomicUsize = AtomicUsize::new(0);
+static VILLAGER_AI_CRITICAL_OPS: AtomicUsize = AtomicUsize::new(0);
+static VILLAGER_AI_MEMORY_ABORTS: AtomicUsize = AtomicUsize::new(0);
+static IS_VILLAGER_AI_CRITICAL: AtomicBool = AtomicBool::new(false);
 
 pub fn process_villager_ai(input: VillagerInput) -> VillagerProcessResult {
+    // Mark as critical operation to prevent memory cleanup during villager AI processing
+    IS_VILLAGER_AI_CRITICAL.store(true, Ordering::Relaxed);
+    VILLAGER_AI_CRITICAL_OPS.fetch_add(1, Ordering::Relaxed);
+    
     let config = get_villager_config();
     
-    // Update pathfinding optimizer tick
+    // Check memory pressure before starting processing
+    let memory_pressure = MEMORY_POOL.get_memory_pressure();
+    
+    // If memory pressure is critical, abort some non-critical processing to prevent lag
+    if memory_pressure == crate::memory_pool::MemoryPressureLevel::Critical {
+        VILLAGER_AI_MEMORY_ABORTS.fetch_add(1, Ordering::Relaxed);
+        
+        // Return early with minimal processing during critical memory pressure
+    let result = process_villager_ai_during_critical_pressure(input, &config);
+        IS_VILLAGER_AI_CRITICAL.store(false, Ordering::Relaxed);
+        return result;
+    }
+    
+    // Update pathfinding optimizer tick (write operation)
     {
-        let mut optimizer = PATHFINDING_OPTIMIZER.lock().unwrap();
+        let mut optimizer = PATHFINDING_OPTIMIZER.write().unwrap();
         optimizer.update_tick(input.tick_count);
     }
 
-    // Step 1: Spatial grouping - group villagers by proximity
+    // Step 1: Spatial grouping - use lock-free grouping
     let spatial_groups = group_villagers_by_proximity(&input.villagers, &input.players);
     
-    // Step 2: Optimize villager groups based on characteristics and player distance
+    // Step 2: Optimize villager groups with lock-free operations
     let villager_groups = optimize_villager_groups(spatial_groups, &config);
     
-    // Step 3: Process AI optimizations in parallel by group
-    let group_results: Vec<_> = villager_groups.par_iter()
-        .map(|group| process_villager_group(group, &input, &config))
-        .collect();
+    // Update atomic counters for performance monitoring
+    let total_villagers = input.villagers.len() as u64;
+    TOTAL_VILLAGERS_PROCESSED.fetch_add(total_villagers, Ordering::Relaxed);
+    ACTIVE_VILLAGER_GROUPS.store(villager_groups.len(), Ordering::Relaxed);
 
-    // Step 4: Optimize pathfinding for all villagers
+    // Step 3: Process AI optimizations in parallel by group using lock-free results collection
+    let group_results: Arc<SegQueue<VillagerGroupResult>> = Arc::new(SegQueue::new());
+
+    villager_groups.par_iter().for_each(|group| {
+        let result = process_villager_group(&group, &input, &config);
+        group_results.push(result);
+
+        // Cache the group for O(1) access in future calls
+    VILLAGER_GROUP_CACHE.insert(group.group_id, group.clone());
+    });
+
+    // Step 4: Optimize pathfinding for all villagers with read-write locks
     let pathfinding_optimization = {
-        let mut optimizer = PATHFINDING_OPTIMIZER.lock().unwrap();
+        // Acquire write locks because optimizers may mutate caches during optimization
+        let mut optimizer = PATHFINDING_OPTIMIZER.write().unwrap();
         let mut villagers_copy = input.villagers.clone();
         let result = optimizer.optimize_villager_pathfinding(&mut villagers_copy, &config);
-        
+
         // Also apply advanced group-based pathfinding optimization
-        let mut advanced_optimizer = ADVANCED_PATHFINDING_OPTIMIZER.lock().unwrap();
-        let advanced_result = advanced_optimizer.optimize_large_villager_groups(&mut villager_groups.clone(), &config);
-        
-        // Combine results
-        let mut combined_result = result;
-            combined_result.extend(advanced_result);
+        let mut advanced_optimizer = ADVANCED_PATHFINDING_OPTIMIZER.write().unwrap();
+        let mut advanced_result = advanced_optimizer.optimize_large_villager_groups(&mut villager_groups.clone(), &config);
+
+        // Combine results into a Vec
+        let mut combined_result: Vec<u64> = Vec::new();
+        combined_result.extend(result);
+        combined_result.extend(advanced_result);
         combined_result
     };
 
-    // Step 5: Combine all results
-    let mut villagers_to_disable_ai = Vec::new();
-    let mut villagers_to_simplify_ai = Vec::new();
-    let mut villagers_to_reduce_pathfinding = pathfinding_optimization;
+    // Step 5: Combine all results using lock-free operations
+    let mut villagers_to_disable_ai: Vec<u64> = Vec::new();
+    let mut villagers_to_simplify_ai: Vec<u64> = Vec::new();
+    let mut villagers_to_reduce_pathfinding: Vec<u64> = Vec::new();
 
-    for group_result in group_results {
+    while let Some(group_result) = group_results.pop() {
         villagers_to_disable_ai.extend(group_result.villagers_to_disable_ai);
         villagers_to_simplify_ai.extend(group_result.villagers_to_simplify_ai);
         villagers_to_reduce_pathfinding.extend(group_result.villagers_to_reduce_pathfinding);
     }
 
-    // Clean up old cache entries
+    // Clean up old cache entries with read-write lock
     {
-        let mut optimizer = PATHFINDING_OPTIMIZER.lock().unwrap();
+        let mut optimizer = PATHFINDING_OPTIMIZER.write().unwrap();
         let active_ids: Vec<u64> = input.villagers.iter().map(|v| v.id).collect();
         optimizer.cleanup_old_cache(&active_ids);
     }
 
+    // Clear critical operation flag
+    IS_VILLAGER_AI_CRITICAL.store(false, Ordering::Relaxed);
+
+    VillagerProcessResult {
+        villagers_to_disable_ai,
+        villagers_to_simplify_ai,
+        villagers_to_reduce_pathfinding,
+        villager_groups,
+    }
+}
+
+/// Process villager AI with minimal processing during critical memory pressure
+fn process_villager_ai_during_critical_pressure(input: VillagerInput, config: &VillagerConfig) -> VillagerProcessResult {
+    // During critical memory pressure, we only do essential processing:
+    // 1. Calculate group distances
+    // 2. Apply maximum simplification to all villagers
+    // 3. Skip complex pathfinding
+    
+    let spatial_groups = group_villagers_by_proximity(&input.villagers, &input.players);
+    let villager_groups = optimize_villager_groups(spatial_groups, &config);
+    
+    let mut villagers_to_disable_ai = Vec::new();
+    let mut villagers_to_simplify_ai = Vec::new();
+    let mut villagers_to_reduce_pathfinding = Vec::new();
+    
+    // During critical pressure, disable AI for all but essential villagers
+    villager_groups.iter().for_each(|group| {
+        // Keep only 1 villager per group active during critical pressure
+        let keep_count = std::cmp::max(1, group.villager_ids.len() / group.villager_ids.len());
+        for (i, &villager_id) in group.villager_ids.iter().enumerate() {
+            if i >= keep_count {
+                villagers_to_disable_ai.push(villager_id);
+            } else {
+                villagers_to_simplify_ai.push(villager_id); // Simplify even the kept ones
+            }
+        }
+        
+        // Reduce pathfinding for all during critical pressure
+        villagers_to_reduce_pathfinding.extend(&group.villager_ids);
+    });
+    
     VillagerProcessResult {
         villagers_to_disable_ai,
         villagers_to_simplify_ai,
@@ -338,14 +432,14 @@ pub fn process_villager_ai_binary_batch(data: &[u8]) -> Result<Vec<u8>, String> 
 /// Get performance statistics for villager processing
 pub fn get_villager_processing_stats() -> Result<VillagerProcessingStats, String> {
     let pathfinding_stats = {
-        let optimizer = PATHFINDING_OPTIMIZER.lock().map_err(|e| format!("Failed to acquire pathfinding optimizer lock: {}", e))?;
+        let optimizer = PATHFINDING_OPTIMIZER.read().map_err(|e| format!("Failed to acquire pathfinding optimizer lock: {}", e))?;
         optimizer.get_cache_stats()
     };
 
     Ok(VillagerProcessingStats {
         pathfinding_cache_stats: pathfinding_stats,
-        active_groups: 0, // This would be calculated from current processing
-        total_villagers_processed: 0, // This would be tracked over time
+        active_groups: ACTIVE_VILLAGER_GROUPS.load(Ordering::Relaxed),
+        total_villagers_processed: TOTAL_VILLAGERS_PROCESSED.load(Ordering::Relaxed) as usize,
     })
 }
 

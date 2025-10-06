@@ -37,6 +37,12 @@ num_cpus = "1.16"
 fastrand = "2.0"
 byteorder = "1.4"
 fastnbt = "2.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+libc = "0.2"
+flate2 = "1.0"
+parking_lot = "0.12"
+crossbeam-epoch = "0.9"
+crossbeam-queue = "0.3"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 mimalloc = "0.1"

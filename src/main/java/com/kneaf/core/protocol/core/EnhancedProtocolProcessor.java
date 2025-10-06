@@ -247,7 +247,6 @@ public class EnhancedProtocolProcessor implements ProtocolHandler<Object, Object
     try {
       // Validate input
       if (context.getValidator() != null) {
-        @SuppressWarnings("unchecked")
         ProtocolValidator<Object> typedValidator =
             (ProtocolValidator<Object>) context.getValidator();
         ProtocolValidator.ValidationResult validationResult = typedValidator.validate(input);

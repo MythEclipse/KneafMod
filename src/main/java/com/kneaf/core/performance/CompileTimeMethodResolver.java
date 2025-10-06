@@ -310,7 +310,6 @@ public final class CompileTimeMethodResolver {
   }
 
   /** Invoke method without reflection using pre-compiled method handles */
-  @SuppressWarnings("unchecked")
   public <T, R> R invokeMethod(T target, String className, MethodSignature signature)
       throws Throwable {
     String cacheKey = className + "." + signature.getMethodName();
@@ -353,7 +352,6 @@ public final class CompileTimeMethodResolver {
   }
 
   /** Fallback reflection method (slower but always works) */
-  @SuppressWarnings("unchecked")
   private <T, R> R invokeWithReflection(T target, String className, MethodSignature signature)
       throws Throwable {
     reflectionFallbacks.incrementAndGet();
@@ -376,7 +374,6 @@ public final class CompileTimeMethodResolver {
   }
 
   /** Fallback reflection method with parameters */
-  @SuppressWarnings("unchecked")
   private <T, R> R invokeWithReflectionAndParams(
       T target, String className, MethodSignature signature, Object[] params) throws Throwable {
     reflectionFallbacks.incrementAndGet();
@@ -412,7 +409,6 @@ public final class CompileTimeMethodResolver {
       // Use optimized lambda
       for (T target : targets) {
         try {
-          @SuppressWarnings("unchecked")
           R result = (R) lambda.apply(target);
           results.put(target, result);
         } catch (Exception e) {

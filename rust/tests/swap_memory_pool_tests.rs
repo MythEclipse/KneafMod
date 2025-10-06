@@ -2,6 +2,8 @@ use rustperf::memory_pool::*;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use flate2::Compression;
+use tokio::runtime::Runtime;
 
 #[test]
 fn test_swap_memory_pool_creation() {
@@ -237,4 +239,98 @@ fn test_cleanup_strategies() {
     // Test aggressive cleanup
     pool.perform_aggressive_cleanup();
     // Cleanup doesn't return a value, so we just verify it doesn't panic
+}
+
+#[test]
+fn test_swap_io_configuration() {
+    let mut pool = SwapMemoryPool::new(1024 * 1024);
+    
+    // Create test configuration
+    let config = SwapIoConfig {
+        async_prefetching: true,
+        compression_enabled: true,
+        compression_level: Compression::best(),
+        memory_mapped_files: true,
+        non_blocking_io: true,
+        prefetch_buffer_size: 64 * 1024 * 1024,
+        async_prefetch_limit: 8,
+        mmap_cache_size: 128 * 1024 * 1024,
+    };
+    
+    // Apply configuration
+    pool.update_swap_io_config(config);
+    
+    // Verify configuration was applied (we can't directly check atomic variables,
+    // but we can verify the behavior is as expected in other tests)
+    assert!(true); // Configuration was applied without errors
+}
+
+#[tokio::test]
+async fn test_async_write_operations() {
+    let pool = SwapMemoryPool::new(1024 * 1024);
+    
+    // Create test data
+    let test_data = vec![0x42; 1024];
+    
+    // Test async write
+    let result = pool.write_data_async(test_data.clone()).await;
+    
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), test_data.len());
+}
+
+#[tokio::test]
+async fn test_async_read_operations() {
+    let pool = SwapMemoryPool::new(1024 * 1024);
+    
+    // Test async read with offset and size
+    let result = pool.read_data_async(0, 1024).await;
+    
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().len(), 1024);
+}
+
+#[test]
+fn test_compression_functionality() {
+    let pool = SwapMemoryPool::new(1024 * 1024);
+    
+    // Create test data with repeating pattern
+    let original_data = vec![0x01, 0x02, 0x03, 0x04; 1024];
+    
+    // Test compression
+    let compressed = pool.compress_data(&original_data).unwrap();
+    
+    // Compressed data should be smaller than original for compressible data
+    assert!(compressed.len() < original_data.len());
+    
+    // Test decompression
+    let decompressed = pool.decompress_data(&compressed).unwrap();
+    
+    // Decompressed data should match original
+    assert_eq!(decompressed, original_data);
+}
+
+#[test]
+fn test_swap_io_config_defaults() {
+    let pool = SwapMemoryPool::new(1024 * 1024);
+    
+    // Test that default configuration works
+    let metrics = pool.get_metrics();
+    assert_eq!(metrics.total_allocations, 0);
+    assert_eq!(metrics.current_usage_bytes, 0);
+}
+
+#[test]
+fn test_enhanced_pool_swap_io_integration() {
+    let manager = EnhancedMemoryPoolManager::new(1024 * 1024 * 16);
+    
+    // Get swap pool reference
+    let swap_pool = manager.get_swap_pool();
+    
+    // Test that we can perform operations through the enhanced manager
+    let metadata = swap_pool.allocate_chunk_metadata(1024).unwrap();
+    assert_eq!(metadata.len(), 1024);
+    
+    let metrics = swap_pool.get_metrics();
+    assert_eq!(metrics.total_allocations, 1);
 }

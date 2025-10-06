@@ -37,7 +37,6 @@ public final class ProtocolUtils {
    * @return parsed map
    * @throws JsonSyntaxException if JSON is invalid
    */
-  @SuppressWarnings("unchecked")
   public static Map<String, Object> parseJson(String json) throws JsonSyntaxException {
     return GSON.fromJson(json, Map.class);
   }

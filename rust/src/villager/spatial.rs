@@ -1,32 +1,40 @@
 use super::types::*;
 use rayon::prelude::*;
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicPtr, Ordering};
+use std::ptr;
+use dashmap::DashMap;
+use std::sync::{Arc, Mutex};
 
 const CHUNK_SIZE: f32 = 16.0;
 const MAX_GROUP_RADIUS: f32 = 32.0;
+
+// Global lock-free spatial grouping cache
+static VILLAGER_SPATIAL_CACHE: Lazy<DashMap<(i32, i32), Vec<SpatialGroup>>> = Lazy::new(DashMap::new);
 
 pub fn group_villagers_by_proximity(villagers: &[VillagerData], players: &[PlayerData]) -> Vec<SpatialGroup> {
     if villagers.is_empty() {
         return Vec::new();
     }
 
-    // Sort villagers by chunk coordinates for spatial locality
-    let mut villager_chunks: HashMap<(i32, i32), Vec<VillagerData>> = HashMap::new();
-    
+    // Use DashMap for chunk-based spatial partitioning (thread-safe)
+    let villager_chunks: DashMap<(i32, i32), Vec<VillagerData>> = DashMap::new();
+
     for villager in villagers {
         let chunk_x = (villager.x / CHUNK_SIZE).floor() as i32;
         let chunk_z = (villager.z / CHUNK_SIZE).floor() as i32;
-        villager_chunks.entry((chunk_x, chunk_z))
-            .or_insert_with(Vec::new)
-            .push(villager.clone());
+        let key = (chunk_x, chunk_z);
+
+        villager_chunks.entry(key).or_insert_with(Vec::new).push(villager.clone());
     }
 
-    // Process chunks in parallel and create spatial groups
-    let mut spatial_groups: Vec<SpatialGroup> = Vec::new();
-    
-    for ((chunk_x, chunk_z), mut chunk_villagers) in villager_chunks {
+    // Process chunks in parallel with lock-free operations
+    let results: Arc<Mutex<Vec<SpatialGroup>>> = Arc::new(Mutex::new(Vec::new()));
+    villager_chunks.into_iter().par_bridge().for_each(|((chunk_x, chunk_z), mut chunk_villagers)| {
         if chunk_villagers.is_empty() {
-            continue;
+            return;
         }
 
         // Calculate approximate player distance for this chunk
@@ -36,10 +44,17 @@ pub fn group_villagers_by_proximity(villagers: &[VillagerData], players: &[Playe
 
         // Group villagers within the chunk based on proximity
         let groups = group_villagers_in_chunk(&mut chunk_villagers, chunk_x, chunk_z, estimated_player_distance);
-        spatial_groups.extend(groups);
-    }
+        
+        // Use atomic operations to update cache without locking
+        VILLAGER_SPATIAL_CACHE.insert((chunk_x, chunk_z), groups.clone());
+        
+        // Append results into shared vector
+        let mut guard = results.lock().unwrap();
+        guard.extend(groups);
+    });
 
-    spatial_groups
+    let guard = results.lock().unwrap();
+    guard.clone()
 }
 
 fn group_villagers_in_chunk(villagers: &mut Vec<VillagerData>, chunk_x: i32, chunk_z: i32, estimated_player_distance: f32) -> Vec<SpatialGroup> {

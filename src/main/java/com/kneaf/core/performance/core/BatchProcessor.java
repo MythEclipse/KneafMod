@@ -59,7 +59,6 @@ public class BatchProcessor {
       // Calculate adaptive timeout per-request
       long timeoutMs = getBatchTimeoutMs();
       long timeoutSeconds = Math.max(1, TimeUnit.MILLISECONDS.toSeconds(timeoutMs));
-      @SuppressWarnings("unchecked")
       T result = (T) future.get(timeoutSeconds, TimeUnit.SECONDS);
       return result;
     } catch (InterruptedException e) {
@@ -68,7 +67,6 @@ public class BatchProcessor {
     } catch (Exception e) {
       KneafCore.LOGGER.error("Batch request timeout or error for type: { }", type, e);
       // Fallback to direct processing
-      @SuppressWarnings("unchecked")
       T result = (T) processIndividualRequest(type, data);
       return result;
     }
@@ -179,7 +177,6 @@ public class BatchProcessor {
     try {
       List<ItemEntityData> allItems = new ArrayList<>();
       for (BatchRequest req : batch) {
-        @SuppressWarnings("unchecked")
         List<ItemEntityData> items = (List<ItemEntityData>) req.data;
         allItems.addAll(items);
       }
@@ -204,7 +201,6 @@ public class BatchProcessor {
     try {
       List<MobData> allMobs = new ArrayList<>();
       for (BatchRequest req : batch) {
-        @SuppressWarnings("unchecked")
         List<MobData> mobs = (List<MobData>) req.data;
         allMobs.addAll(mobs);
       }
@@ -229,7 +225,6 @@ public class BatchProcessor {
     try {
       List<BlockEntityData> allBlocks = new ArrayList<>();
       for (BatchRequest req : batch) {
-        @SuppressWarnings("unchecked")
         List<BlockEntityData> blocks = (List<BlockEntityData>) req.data;
         allBlocks.addAll(blocks);
       }
@@ -357,7 +352,6 @@ public class BatchProcessor {
 
     List<ItemEntityData> allItems = new ArrayList<>();
     for (BatchRequest req : batch) {
-      @SuppressWarnings("unchecked")
       List<ItemEntityData> items = (List<ItemEntityData>) req.data;
       allItems.addAll(items);
     }
@@ -376,7 +370,6 @@ public class BatchProcessor {
 
     List<MobData> allMobs = new ArrayList<>();
     for (BatchRequest req : batch) {
-      @SuppressWarnings("unchecked")
       List<MobData> mobs = (List<MobData>) req.data;
       allMobs.addAll(mobs);
     }
@@ -395,7 +388,6 @@ public class BatchProcessor {
 
     List<BlockEntityData> allBlocks = new ArrayList<>();
     for (BatchRequest req : batch) {
-      @SuppressWarnings("unchecked")
       List<BlockEntityData> blocks = (List<BlockEntityData>) req.data;
       allBlocks.addAll(blocks);
     }

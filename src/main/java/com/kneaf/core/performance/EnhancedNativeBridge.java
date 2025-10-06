@@ -44,6 +44,7 @@ public class EnhancedNativeBridge {
         return t;
       });
 
+
   static {
     // Initialize shared buffers with native byte order
     for (int i = 0; i < MAX_BUFFERS; i++) {
@@ -194,17 +195,14 @@ public class EnhancedNativeBridge {
         Object firstElement = dataList.get(0);
 
         if (firstElement instanceof ItemEntityData) {
-          @SuppressWarnings("unchecked")
           List<ItemEntityData> items = (List<ItemEntityData>) dataList;
           return serializeItemBatch(items, buffer);
 
         } else if (firstElement instanceof MobData) {
-          @SuppressWarnings("unchecked")
           List<MobData> mobs = (List<MobData>) dataList;
           return serializeMobBatch(mobs, buffer);
 
         } else if (firstElement instanceof BlockEntityData) {
-          @SuppressWarnings("unchecked")
           List<BlockEntityData> blocks = (List<BlockEntityData>) dataList;
           return serializeBlockBatch(blocks, buffer);
         }
