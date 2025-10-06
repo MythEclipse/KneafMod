@@ -48,7 +48,7 @@ public final class NativeBridge {
   private static final ConcurrentLinkedQueue<byte[]> ENTITY_BATCH_BUFFER =
       new ConcurrentLinkedQueue<>();
   private static final AtomicInteger ENTITY_BATCH_SIZE = new AtomicInteger(0);
-  private static final Object ENTITY_BATCH_LOCK = new Object();
+  private static final AtomicInteger FLUSH_IN_PROGRESS = new AtomicInteger(0);
 
   // Memory pool configuration
   private static int bufferPoolSize() {
@@ -563,42 +563,52 @@ public final class NativeBridge {
 
   /** Flush buffered entity operations in a single large batch */
   public static void flushEntityBatch() {
-    synchronized (ENTITY_BATCH_LOCK) {
+    // Use compare-and-swap to ensure only one flush operation runs at a time
+    if (FLUSH_IN_PROGRESS.getAndSet(1) != 0) {
+      return; // Another flush is already in progress
+    }
+
+    try {
       int batchSize = ENTITY_BATCH_SIZE.get();
       if (batchSize == 0) {
         return; // Nothing to flush
       }
 
-      // Collect all buffered operations
-      byte[][] batchPayloads = new byte[batchSize][];
-      int collected = 0;
+      // Collect all buffered operations - ConcurrentLinkedQueue.poll() is lock-free
+      int actualCollected = 0;
       byte[] payload;
-      while ((payload = ENTITY_BATCH_BUFFER.poll()) != null && collected < batchSize) {
-        batchPayloads[collected++] = payload;
+      byte[][] batchPayloads = new byte[batchSize][];
+      
+      while ((payload = ENTITY_BATCH_BUFFER.poll()) != null && actualCollected < batchSize) {
+        batchPayloads[actualCollected++] = payload;
       }
 
-      // Reset batch size counter
-      ENTITY_BATCH_SIZE.addAndGet(-collected);
+      // Reset batch size counter with lock-free operation
+      if (actualCollected > 0) {
+        ENTITY_BATCH_SIZE.addAndGet(-actualCollected);
 
-      // Process batch if we collected operations
-      if (collected > 0) {
-        // Use default worker handle (0) for batched operations
-        // In production, this should be configurable
-        long workerHandle = 0;
+        // Process batch if we collected operations
+        if (actualCollected > 0) {
+          // Use default worker handle (0) for batched operations
+          // In production, this should be configurable
+          long workerHandle = 0;
 
-        // Find an active worker or create one
-        if (WORKERS.isEmpty()) {
-          workerHandle = createOptimizedWorker(4);
-        } else {
-          workerHandle = WORKERS.keySet().iterator().next();
-        }
+          // Find an active worker or create one
+          if (WORKERS.isEmpty()) {
+            workerHandle = createOptimizedWorker(4);
+          } else {
+            workerHandle = WORKERS.keySet().iterator().next();
+          }
 
-        if (workerHandle != 0) {
-          pushBatchOptimized(workerHandle, batchPayloads);
-          TOTAL_BATCHES_PROCESSED.incrementAndGet();
-          TOTAL_TASKS_PROCESSED.addAndGet(collected);
+          if (workerHandle != 0) {
+            pushBatchOptimized(workerHandle, batchPayloads);
+            TOTAL_BATCHES_PROCESSED.incrementAndGet();
+            TOTAL_TASKS_PROCESSED.addAndGet(actualCollected);
+          }
         }
       }
+    } finally {
+      FLUSH_IN_PROGRESS.set(0); // Reset flag even if there's an exception
     }
   }
 

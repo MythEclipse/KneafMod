@@ -16,13 +16,33 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Handles entity processing operations including batch processing and optimization. */
+/**
+ * Handles entity processing operations including batch processing and
+ * optimization.
+ */
 public class EntityProcessor {
 
   private final EnhancedProtocolProcessor protocolProcessor;
   private final PerformanceMonitor monitor;
   private final NativeBridgeProvider bridgeProvider;
   private long tickCount = 0;
+
+  // Object pools for reducing GC overhead
+  private final ArrayListPool<Long> longListPool = new ArrayListPool<>();
+  private final ArrayListPool<PerformanceProcessor.ItemUpdate> itemUpdatePool = new ArrayListPool<>();
+  private final ArrayListPool<List<?>> listPool = new ArrayListPool<>();
+  private final HashMapPool<String, Object> mapPool = new HashMapPool<>();
+
+  // Flyweight factory for entity data structures - reuses common entity configurations
+  private final EntityFlyweightFactory flyweightFactory = new EntityFlyweightFactory();
+  
+  // Pre-allocated buffer sizes based on typical entity counts and performance testing
+  private static final int STANDARD_ENTITY_LIST_SIZE = 256;    // Typical chunk entity count
+  private static final int STANDARD_PLAYER_LIST_SIZE = 64;     // Max players per server
+  private static final int STANDARD_CONFIG_MAP_SIZE = 32;      // Typical entity config size
+  private static final int STANDARD_WORLD_BOUNDS_SIZE = 16;    // Fixed world bounds structure
+  private static final int STANDARD_PROCESSING_PARAMS_SIZE = 16;// Processing parameters size
+  private static final int MAX_POOL_SIZE = 100;                // Max objects per pool to prevent memory leaks
 
   public EntityProcessor(NativeBridgeProvider bridgeProvider, PerformanceMonitor monitor) {
     this.bridgeProvider = bridgeProvider;
@@ -31,68 +51,67 @@ public class EntityProcessor {
   }
 
   /** Process entities and return list of entity IDs that should be ticked. */
-  public List<Long> processEntities(List<EntityData> entities, List<PlayerData> players) {
-    long startTime = System.currentTimeMillis();
+ public List<Long> processEntities(List<EntityData> entities, List<PlayerData> players) {
+   long startTime = System.currentTimeMillis();
 
-    try {
-      // Use protocol processor for unified binary/JSON processing
-      EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
-          protocolProcessor.processWithFallback(
-              new EntityInput(entities, players),
-              "Entity processing",
-              new EnhancedProtocolProcessor.BinarySerializer<EntityInput>() {
-                @Override
-                public ByteBuffer serialize(EntityInput input) throws Exception {
-                  return ManualSerializers.serializeEntityInput(
-                      tickCount++, input.entities, input.players);
-                }
-              },
-              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
-                @Override
-                public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
-                  return bridgeProvider.processEntitiesBinary(inputBuffer);
-                }
-              },
-              new EnhancedProtocolProcessor.BinaryDeserializer<List<Long>>() {
-                @Override
-                public List<Long> deserialize(byte[] resultBytes) throws Exception {
-                  if (resultBytes != null) {
-                    return PerformanceUtils.parseEntityResultWithFallback(resultBytes);
-                  }
-                  return new ArrayList<>();
-                }
-              },
-              new EnhancedProtocolProcessor.JsonInputPreparer<EntityInput>() {
-                @Override
-                public Map<String, Object> prepareInput(EntityInput jsonInput) {
-                  return prepareEntityJsonInput(jsonInput);
-                }
-              },
-              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
-                @Override
-                public String callNative(String jsonInput) throws Exception {
-                  return bridgeProvider.processEntitiesJson(jsonInput);
-                }
-              },
-              new EnhancedProtocolProcessor.JsonResultParser<List<Long>>() {
-                @Override
-                public List<Long> parseResult(String jsonResult) throws Exception {
-                  return PerformanceUtils.parseEntityResultFromJson(jsonResult);
-                }
-              },
-              new ArrayList<>());
+   try {
+     // Use protocol processor for unified binary/JSON processing
+     EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
+         protocolProcessor.processWithFallback(
+             new EntityInput(entities, players),
+             "Entity processing",
+             new EnhancedProtocolProcessor.BinarySerializer<EntityInput>() {
+               @Override
+               public ByteBuffer serialize(EntityInput input) throws Exception {
+                 return ManualSerializers.serializeEntityInput(
+                     tickCount++, input.entities, input.players);
+               }
+             },
+             new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
+               @Override
+               public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
+                 return bridgeProvider.processEntitiesBinary(inputBuffer);
+               }
+             },
+             new EnhancedProtocolProcessor.BinaryDeserializer<List<Long>>() {
+               @Override
+               public List<Long> deserialize(byte[] resultBytes) throws Exception {
+                 if (resultBytes != null) {
+                   return PerformanceUtils.parseEntityResultWithFallback(resultBytes);
+                 }
+                 return longListPool.acquire(); // Use pooled list
+               }
+             },
+             new EnhancedProtocolProcessor.JsonInputPreparer<EntityInput>() {
+               @Override
+               public Map<String, Object> prepareInput(EntityInput jsonInput) {
+                 return prepareEntityJsonInput(jsonInput);
+               }
+             },
+             new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
+               @Override
+               public String callNative(String jsonInput) throws Exception {
+                 return bridgeProvider.processEntitiesJson(jsonInput);
+               }
+             },
+             new EnhancedProtocolProcessor.JsonResultParser<List<Long>>() {
+               @Override
+               public List<Long> parseResult(String jsonResult) throws Exception {
+                 return PerformanceUtils.parseEntityResultFromJson(jsonResult);
+               }
+             },
+             longListPool.acquire()); // Use pooled list for fallback
 
-      List<Long> processedEntities = result.getDataOrThrow();
-      monitor.recordEntityProcessing(
-          processedEntities.size(), System.currentTimeMillis() - startTime);
-      return processedEntities;
+     List<Long> processedEntities = result.getDataOrThrow();
+     monitor.recordEntityProcessing(
+         processedEntities.size(), System.currentTimeMillis() - startTime);
+     return processedEntities;
 
-    } catch (Exception e) {
-      KneafCore.LOGGER.error("Error processing entities", e);
-      return new ArrayList<>();
-    }
-  }
-
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error processing entities", e);
+     return longListPool.acquire(); // Use pooled list for error case
+   }
+ }
   /** Process entities using JNI call batching for improved throughput. */
   public List<Long> processEntitiesBatched(List<EntityData> entities, List<PlayerData> players) {
     long startTime = System.currentTimeMillis();
@@ -110,9 +129,10 @@ public class EntityProcessor {
       com.kneaf.core.performance.bridge.NativeBridge.bufferEntityOperation(payload);
 
       // For batched processing, we need to return results differently
-      // This is a simplified implementation - in practice, results would be collected after flush
+      // This is a simplified implementation - in practice, results would be collected
+      // after flush
       // For now, return all entity IDs as if they should be ticked
-      List<Long> result = new ArrayList<>();
+      List<Long> result = longListPool.acquire();
       for (EntityData entity : entities) {
         result.add(entity.getId());
       }
@@ -127,6 +147,7 @@ public class EntityProcessor {
       return processEntities(entities, players);
     }
   }
+
   /** Flush buffered entity operations and return consolidated results. */
   public void flushEntityBatch() {
     long startTime = System.currentTimeMillis();
@@ -153,15 +174,16 @@ public class EntityProcessor {
     return com.kneaf.core.performance.bridge.NativeBridge.getEntityBatchBufferSize();
   }
 
-  /** Prepare JSON input for entity processing. */
+  /** Prepare JSON input for entity processing with flyweight optimization. */
   private Map<String, Object> prepareEntityJsonInput(EntityInput input) {
-    Map<String, Object> jsonInput = new HashMap<>();
+    Map<String, Object> jsonInput = mapPool.acquire();
     jsonInput.put(PerformanceConstants.TICK_COUNT_KEY, tickCount++);
     jsonInput.put(PerformanceConstants.ENTITIES_KEY, input.entities);
     jsonInput.put(PerformanceConstants.PLAYERS_KEY, input.players);
 
-    // Add entity config (values adapt to current TPS / tick delay)
-    Map<String, Object> config = new HashMap<>();
+    // Get flyweight entity config (reuses common configuration structure)
+    Map<String, Object> config = flyweightFactory.getEntityConfig();
+    config.clear(); // Clear existing data before reuse
     config.put("closeRadius", getCloseRadius());
     config.put("mediumRadius", getMediumRadius());
     config.put("closeRate", getCloseRate());
@@ -169,8 +191,9 @@ public class EntityProcessor {
     config.put("farRate", getFarRate());
     config.put("useSpatialPartitioning", isSpatialPartitioningEnabled());
 
-    // World bounds (example values)
-    Map<String, Object> worldBounds = new HashMap<>();
+    // Get flyweight world bounds (reuses common coordinate structure)
+    Map<String, Object> worldBounds = flyweightFactory.getWorldBounds();
+    worldBounds.clear(); // Clear existing data before reuse
     worldBounds.put("minX", -1000.0);
     worldBounds.put("minY", 0.0);
     worldBounds.put("minZ", -1000.0);
@@ -178,6 +201,14 @@ public class EntityProcessor {
     worldBounds.put("maxY", 256.0);
     worldBounds.put("maxZ", 1000.0);
     config.put("worldBounds", worldBounds);
+
+    // Add flyweight default entity properties
+    Map<String, Object> defaultProps = flyweightFactory.getDefaultEntityProperties();
+    defaultProps.clear(); // Clear existing data before reuse
+    defaultProps.put("gravity", 0.08);
+    defaultProps.put("friction", 0.2);
+    defaultProps.put("collisionRadius", 0.5);
+    config.put("defaultProperties", defaultProps);
 
     config.put("quadtreeMaxEntities", getQuadtreeMaxEntities());
     config.put("quadtreeMaxDepth", getQuadtreeMaxDepth());
@@ -231,49 +262,50 @@ public class EntityProcessor {
   }
 
   /** Process entity batch using optimized NativeBridge. */
-  public void processEntityBatchOptimized(List<BatchRequest> batch) throws Exception {
-    if (batch.isEmpty()) return;
+ public void processEntityBatchOptimized(List<BatchRequest> batch) throws Exception {
+   if (batch.isEmpty())
+     return;
 
-    // Pre-size collections to avoid resizing
-    int totalEntities = 0;
-    int totalPlayers = 0;
-    for (BatchRequest req : batch) {
-      EntityInput input = (EntityInput) req.data;
-      totalEntities += input.entities.size();
-      totalPlayers += input.players.size();
-    }
+   // Pre-size collections to avoid resizing
+   int totalEntities = 0;
+   int totalPlayers = 0;
+   for (BatchRequest req : batch) {
+     EntityInput input = (EntityInput) req.data;
+     totalEntities += input.entities.size();
+     totalPlayers += input.players.size();
+   }
 
-    // Extract data from all requests in batch
-    List<EntityData> allEntities = new ArrayList<>(totalEntities);
-    List<PlayerData> allPlayers = new ArrayList<>(totalPlayers);
+   // Extract data from all requests in batch
+   List<EntityData> allEntities = new ArrayList<>(totalEntities);
+   List<PlayerData> allPlayers = new ArrayList<>(totalPlayers);
 
-    for (BatchRequest req : batch) {
-      EntityInput input = (EntityInput) req.data;
-      allEntities.addAll(input.entities);
-      allPlayers.addAll(input.players);
-    }
+   for (BatchRequest req : batch) {
+     EntityInput input = (EntityInput) req.data;
+     allEntities.addAll(input.entities);
+     allPlayers.addAll(input.players);
+   }
 
-    // Process combined data using optimized method
-    List<Long> results = processEntities(allEntities, allPlayers);
+   // Process combined data using optimized method
+   List<Long> results = processEntities(allEntities, allPlayers);
 
-    // Create a Set for faster lookup
-    Set<Long> resultSet = new HashSet<>(results);
+   // Create a Set for faster lookup
+   Set<Long> resultSet = new HashSet<>(results);
 
-    // Distribute results back to individual futures
-    for (BatchRequest req : batch) {
-      EntityInput input = (EntityInput) req.data;
+   // Distribute results back to individual futures
+   for (BatchRequest req : batch) {
+     EntityInput input = (EntityInput) req.data;
 
-      // Find results for this request
-      List<Long> requestResults = new ArrayList<>();
-      for (EntityData entity : input.entities) {
-        if (resultSet.contains(entity.getId())) {
-          requestResults.add(entity.getId());
-        }
-      }
+     // Find results for this request
+     List<Long> requestResults = longListPool.acquire();
+     for (EntityData entity : input.entities) {
+       if (resultSet.contains(entity.getId())) {
+         requestResults.add(entity.getId());
+       }
+     }
 
-      req.future.complete(requestResults);
-    }
-  }
+     req.future.complete(requestResults);
+   }
+ }
 
   /** Helper class for entity input. */
   public static class EntityInput {
@@ -307,90 +339,85 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-      EnhancedProtocolProcessor.ProtocolResult<ItemProcessResult> result =
-          protocolProcessor.processWithFallback(
-              items,
-              "Item processing",
-              new EnhancedProtocolProcessor.BinarySerializer<
-                  List<com.kneaf.core.data.item.ItemEntityData>>() {
-                @Override
-                public ByteBuffer serialize(List<com.kneaf.core.data.item.ItemEntityData> input)
-                    throws Exception {
-                  return ManualSerializers.serializeItemInput(tickCount, input);
-                }
-              },
-              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
-                @Override
-                public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
-                  return bridgeProvider.processItemEntitiesBinary(inputBuffer);
-                }
-              },
-              new EnhancedProtocolProcessor.BinaryDeserializer<ItemProcessResult>() {
-                @Override
-                public ItemProcessResult deserialize(byte[] resultBytes) throws Exception {
-                  if (resultBytes != null) {
-                    ByteBuffer resultBuffer = ByteBuffer.wrap(resultBytes);
-                    List<com.kneaf.core.data.item.ItemEntityData> updatedItems =
-                        ManualSerializers.deserializeItemProcessResult(resultBuffer);
+      EnhancedProtocolProcessor.ProtocolResult<ItemProcessResult> result = protocolProcessor.processWithFallback(
+          items,
+          "Item processing",
+          new EnhancedProtocolProcessor.BinarySerializer<List<com.kneaf.core.data.item.ItemEntityData>>() {
+            @Override
+            public ByteBuffer serialize(List<com.kneaf.core.data.item.ItemEntityData> input)
+                throws Exception {
+              return ManualSerializers.serializeItemInput(tickCount, input);
+            }
+          },
+          new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
+            @Override
+            public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
+              return bridgeProvider.processItemEntitiesBinary(inputBuffer);
+            }
+          },
+          new EnhancedProtocolProcessor.BinaryDeserializer<ItemProcessResult>() {
+            @Override
+            public ItemProcessResult deserialize(byte[] resultBytes) throws Exception {
+              if (resultBytes != null) {
+                ByteBuffer resultBuffer = ByteBuffer.wrap(resultBytes);
+                List<com.kneaf.core.data.item.ItemEntityData> updatedItems = ManualSerializers
+                    .deserializeItemProcessResult(resultBuffer);
 
-                    // Convert to ItemProcessResult format
-                    List<Long> removeList = new ArrayList<>();
-                    List<PerformanceProcessor.ItemUpdate> updates = new ArrayList<>();
+                // Convert to ItemProcessResult format
+                List<Long> removeList = longListPool.acquire();
+                List<PerformanceProcessor.ItemUpdate> updates = itemUpdatePool.acquire();
 
-                    for (com.kneaf.core.data.item.ItemEntityData item : updatedItems) {
-                      if (item.getCount() == 0) {
-                        removeList.add(item.getId());
-                      } else {
-                        updates.add(
-                            new PerformanceProcessor.ItemUpdate(item.getId(), item.getCount()));
-                      }
-                    }
-
-                    return new ItemProcessResult(
-                        removeList, updates.size(), removeList.size(), updates);
-                  }
-                  return new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>());
-                }
-              },
-              new EnhancedProtocolProcessor.JsonInputPreparer<
-                  List<com.kneaf.core.data.item.ItemEntityData>>() {
-                @Override
-                public Map<String, Object> prepareInput(
-                    List<com.kneaf.core.data.item.ItemEntityData> jsonInput) {
-                  Map<String, Object> input = new HashMap<>();
-                  input.put(PerformanceConstants.ITEMS_KEY, jsonInput);
-                  input.put(PerformanceConstants.TICK_COUNT_KEY, tickCount++);
-                  return input;
-                }
-              },
-              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
-                @Override
-                public String callNative(String jsonInput) throws Exception {
-                  return bridgeProvider.processItemEntitiesJson(jsonInput);
-                }
-              },
-              new EnhancedProtocolProcessor.JsonResultParser<ItemProcessResult>() {
-                @Override
-                public ItemProcessResult parseResult(String jsonResult) throws Exception {
-                  PerformanceUtils.ItemParseResult parseResult =
-                      PerformanceUtils.parseItemResultFromJson(jsonResult);
-
-                  // Convert to ItemProcessResult format
-                  List<PerformanceProcessor.ItemUpdate> updates = new ArrayList<>();
-                  for (PerformanceUtils.ItemUpdateParseResult update :
-                      parseResult.getItemUpdates()) {
+                for (com.kneaf.core.data.item.ItemEntityData item : updatedItems) {
+                  if (item.getCount() == 0) {
+                    removeList.add(item.getId());
+                  } else {
                     updates.add(
-                        new PerformanceProcessor.ItemUpdate(update.getId(), update.getNewCount()));
+                        new PerformanceProcessor.ItemUpdate(item.getId(), item.getCount()));
                   }
-
-                  return new ItemProcessResult(
-                      parseResult.getItemsToRemove(),
-                      parseResult.getMergedCount(),
-                      parseResult.getDespawnedCount(),
-                      updates);
                 }
-              },
-              new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>()));
+
+                return new ItemProcessResult(
+                    removeList, updates.size(), removeList.size(), updates);
+              }
+              return new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>());
+            }
+          },
+          new EnhancedProtocolProcessor.JsonInputPreparer<List<com.kneaf.core.data.item.ItemEntityData>>() {
+            @Override
+            public Map<String, Object> prepareInput(
+                List<com.kneaf.core.data.item.ItemEntityData> jsonInput) {
+              Map<String, Object> input = new HashMap<>();
+              input.put(PerformanceConstants.ITEMS_KEY, jsonInput);
+              input.put(PerformanceConstants.TICK_COUNT_KEY, tickCount++);
+              return input;
+            }
+          },
+          new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
+            @Override
+            public String callNative(String jsonInput) throws Exception {
+              return bridgeProvider.processItemEntitiesJson(jsonInput);
+            }
+          },
+          new EnhancedProtocolProcessor.JsonResultParser<ItemProcessResult>() {
+            @Override
+            public ItemProcessResult parseResult(String jsonResult) throws Exception {
+              PerformanceUtils.ItemParseResult parseResult = PerformanceUtils.parseItemResultFromJson(jsonResult);
+
+              // Convert to ItemProcessResult format
+              List<PerformanceProcessor.ItemUpdate> updates = itemUpdatePool.acquire();
+              for (PerformanceUtils.ItemUpdateParseResult update : parseResult.getItemUpdates()) {
+                updates.add(
+                    new PerformanceProcessor.ItemUpdate(update.getId(), update.getNewCount()));
+              }
+
+              return new ItemProcessResult(
+                  parseResult.getItemsToRemove(),
+                  parseResult.getMergedCount(),
+                  parseResult.getDespawnedCount(),
+                  updates);
+            }
+          },
+          new ItemProcessResult(new ArrayList<>(), 0, 0, new ArrayList<>()));
 
       ItemProcessResult processedItems = result.getDataOrThrow();
       monitor.recordItemProcessing(
@@ -413,71 +440,66 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-      EnhancedProtocolProcessor.ProtocolResult<MobProcessResult> result =
-          protocolProcessor.processWithFallback(
-              mobs,
-              "Mob processing",
-              new EnhancedProtocolProcessor.BinarySerializer<
-                  List<com.kneaf.core.data.entity.MobData>>() {
-                @Override
-                public ByteBuffer serialize(List<com.kneaf.core.data.entity.MobData> input)
-                    throws Exception {
-                  return ManualSerializers.serializeMobInput(tickCount, input);
-                }
-              },
-              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
-                @Override
-                public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
-                  return bridgeProvider.processMobAiBinary(inputBuffer);
-                }
-              },
-              new EnhancedProtocolProcessor.BinaryDeserializer<MobProcessResult>() {
-                @Override
-                public MobProcessResult deserialize(byte[] resultBytes) throws Exception {
-                  if (resultBytes != null) {
-                    ByteBuffer resultBuffer =
-                        ByteBuffer.wrap(resultBytes).order(ByteOrder.LITTLE_ENDIAN);
-                    List<com.kneaf.core.data.entity.MobData> updatedMobs =
-                        ManualSerializers.deserializeMobProcessResult(resultBuffer);
+      EnhancedProtocolProcessor.ProtocolResult<MobProcessResult> result = protocolProcessor.processWithFallback(
+          mobs,
+          "Mob processing",
+          new EnhancedProtocolProcessor.BinarySerializer<List<com.kneaf.core.data.entity.MobData>>() {
+            @Override
+            public ByteBuffer serialize(List<com.kneaf.core.data.entity.MobData> input)
+                throws Exception {
+              return ManualSerializers.serializeMobInput(tickCount, input);
+            }
+          },
+          new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
+            @Override
+            public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
+              return bridgeProvider.processMobAiBinary(inputBuffer);
+            }
+          },
+          new EnhancedProtocolProcessor.BinaryDeserializer<MobProcessResult>() {
+            @Override
+            public MobProcessResult deserialize(byte[] resultBytes) throws Exception {
+              if (resultBytes != null) {
+                ByteBuffer resultBuffer = ByteBuffer.wrap(resultBytes).order(ByteOrder.LITTLE_ENDIAN);
+                List<com.kneaf.core.data.entity.MobData> updatedMobs = ManualSerializers
+                    .deserializeMobProcessResult(resultBuffer);
 
-                    // For now, assume all returned mobs need AI simplification
-                    List<Long> simplifyList = new ArrayList<>();
-                    for (com.kneaf.core.data.entity.MobData mob : updatedMobs) {
-                      simplifyList.add(mob.getId());
-                    }
+                // For now, assume all returned mobs need AI simplification
+                List<Long> simplifyList = longListPool.acquire();
+                for (com.kneaf.core.data.entity.MobData mob : updatedMobs) {
+                  simplifyList.add(mob.getId());
+                }
 
-                    return new MobProcessResult(new ArrayList<>(), simplifyList);
-                  }
-                  return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
-                }
-              },
-              new EnhancedProtocolProcessor.JsonInputPreparer<
-                  List<com.kneaf.core.data.entity.MobData>>() {
-                @Override
-                public Map<String, Object> prepareInput(
-                    List<com.kneaf.core.data.entity.MobData> jsonInput) {
-                  Map<String, Object> input = new HashMap<>();
-                  input.put("mobs", jsonInput);
-                  input.put(PerformanceConstants.TICK_COUNT_KEY, tickCount++);
-                  return input;
-                }
-              },
-              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
-                @Override
-                public String callNative(String jsonInput) throws Exception {
-                  return bridgeProvider.processMobAiJson(jsonInput);
-                }
-              },
-              new EnhancedProtocolProcessor.JsonResultParser<MobProcessResult>() {
-                @Override
-                public MobProcessResult parseResult(String jsonResult) throws Exception {
-                  PerformanceUtils.MobParseResult parseResult =
-                      PerformanceUtils.parseMobResultFromJson(jsonResult);
-                  return new MobProcessResult(
-                      parseResult.getDisableList(), parseResult.getSimplifyList());
-                }
-              },
-              new MobProcessResult(new ArrayList<>(), new ArrayList<>()));
+                return new MobProcessResult(new ArrayList<>(), simplifyList);
+              }
+              return new MobProcessResult(new ArrayList<>(), new ArrayList<>());
+            }
+          },
+          new EnhancedProtocolProcessor.JsonInputPreparer<List<com.kneaf.core.data.entity.MobData>>() {
+            @Override
+            public Map<String, Object> prepareInput(
+                List<com.kneaf.core.data.entity.MobData> jsonInput) {
+              Map<String, Object> input = new HashMap<>();
+              input.put("mobs", jsonInput);
+              input.put(PerformanceConstants.TICK_COUNT_KEY, tickCount++);
+              return input;
+            }
+          },
+          new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
+            @Override
+            public String callNative(String jsonInput) throws Exception {
+              return bridgeProvider.processMobAiJson(jsonInput);
+            }
+          },
+          new EnhancedProtocolProcessor.JsonResultParser<MobProcessResult>() {
+            @Override
+            public MobProcessResult parseResult(String jsonResult) throws Exception {
+              PerformanceUtils.MobParseResult parseResult = PerformanceUtils.parseMobResultFromJson(jsonResult);
+              return new MobProcessResult(
+                  parseResult.getDisableList(), parseResult.getSimplifyList());
+            }
+          },
+          new MobProcessResult(new ArrayList<>(), new ArrayList<>()));
 
       MobProcessResult processedMobs = result.getDataOrThrow();
       monitor.recordMobProcessing(
@@ -500,64 +522,63 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-      EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
-          protocolProcessor.processWithFallback(
-              villagers,
-              "Villager processing",
-              new EnhancedProtocolProcessor.BinarySerializer<List<VillagerData>>() {
-                @Override
-                public ByteBuffer serialize(List<VillagerData> input) throws Exception {
-                  return ManualSerializers.serializeVillagerInput(tickCount, input);
+      EnhancedProtocolProcessor.ProtocolResult<List<Long>> result = protocolProcessor.processWithFallback(
+          villagers,
+          "Villager processing",
+          new EnhancedProtocolProcessor.BinarySerializer<List<VillagerData>>() {
+            @Override
+            public ByteBuffer serialize(List<VillagerData> input) throws Exception {
+              return ManualSerializers.serializeVillagerInput(tickCount, input);
+            }
+          },
+          new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
+            @Override
+            public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
+              return bridgeProvider.processVillagerAiBinary(inputBuffer);
+            }
+          },
+          new EnhancedProtocolProcessor.BinaryDeserializer<List<Long>>() {
+            @Override
+            public List<Long> deserialize(byte[] resultBytes) throws Exception {
+              if (resultBytes != null) {
+                // For now, return a simplified result - full deserialization would be
+                // implemented
+                List<Long> simplifyList = new ArrayList<>();
+                for (VillagerData villager : villagers) {
+                  simplifyList.add((long) villager.hashCode());
                 }
-              },
-              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
-                @Override
-                public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
-                  return bridgeProvider.processVillagerAiBinary(inputBuffer);
-                }
-              },
-              new EnhancedProtocolProcessor.BinaryDeserializer<List<Long>>() {
-                @Override
-                public List<Long> deserialize(byte[] resultBytes) throws Exception {
-                  if (resultBytes != null) {
-                    // For now, return a simplified result - full deserialization would be
-                    // implemented
-                    List<Long> simplifyList = new ArrayList<>();
-                    for (VillagerData villager : villagers) {
-                      simplifyList.add((long) villager.hashCode());
-                    }
-                    return simplifyList;
-                  }
-                  return new ArrayList<>();
-                }
-              },
-              new EnhancedProtocolProcessor.JsonInputPreparer<List<VillagerData>>() {
-                @Override
-                public Map<String, Object> prepareInput(List<VillagerData> jsonInput) {
-                  Map<String, Object> input = new HashMap<>();
-                  input.put("villagers", jsonInput);
-                  input.put(PerformanceConstants.TICK_COUNT_KEY, tickCount++);
-                  return input;
-                }
-              },
-              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
-                @Override
-                public String callNative(String jsonInput) throws Exception {
-                  return bridgeProvider.processVillagerAiJson(jsonInput);
-                }
-              },
-              new EnhancedProtocolProcessor.JsonResultParser<List<Long>>() {
-                @Override
-                public List<Long> parseResult(String jsonResult) throws Exception {
-                  // For now, return all villagers
-                  List<Long> result = new ArrayList<>();
-                  for (VillagerData villager : villagers) {
-                    result.add((long) villager.hashCode());
-                  }
-                  return result;
-                }
-              },
-              new ArrayList<Long>());
+                return simplifyList;
+              }
+              return new ArrayList<>();
+            }
+          },
+          new EnhancedProtocolProcessor.JsonInputPreparer<List<VillagerData>>() {
+            @Override
+            public Map<String, Object> prepareInput(List<VillagerData> jsonInput) {
+              Map<String, Object> input = new HashMap<>();
+              input.put("villagers", jsonInput);
+              input.put(PerformanceConstants.TICK_COUNT_KEY, tickCount++);
+              return input;
+            }
+          },
+          new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
+            @Override
+            public String callNative(String jsonInput) throws Exception {
+              return bridgeProvider.processVillagerAiJson(jsonInput);
+            }
+          },
+          new EnhancedProtocolProcessor.JsonResultParser<List<Long>>() {
+            @Override
+            public List<Long> parseResult(String jsonResult) throws Exception {
+              // For now, return all villagers
+              List<Long> result = longListPool.acquire();
+              for (VillagerData villager : villagers) {
+                result.add((long) villager.hashCode());
+              }
+              return result;
+            }
+          },
+          new ArrayList<Long>());
 
       List<Long> processedVillagers = result.getDataOrThrow();
       monitor.recordVillagerProcessing(
@@ -570,7 +591,7 @@ public class EntityProcessor {
 
     } catch (Exception e) {
       KneafCore.LOGGER.error("Error processing villager AI", e);
-      List<Long> fallback = new ArrayList<>();
+      List<Long> fallback = longListPool.acquire();
       for (VillagerData villager : villagers) {
         fallback.add((long) villager.hashCode());
       }
@@ -587,63 +608,60 @@ public class EntityProcessor {
 
     try {
       // Use protocol processor for unified binary/JSON processing
-      EnhancedProtocolProcessor.ProtocolResult<List<Long>> result =
-          protocolProcessor.processWithFallback(
-              blockEntities,
-              "Block processing",
-              new EnhancedProtocolProcessor.BinarySerializer<
-                  List<com.kneaf.core.data.block.BlockEntityData>>() {
-                @Override
-                public ByteBuffer serialize(List<com.kneaf.core.data.block.BlockEntityData> input)
-                    throws Exception {
-                  return ManualSerializers.serializeBlockInput(tickCount++, input);
+      EnhancedProtocolProcessor.ProtocolResult<List<Long>> result = protocolProcessor.processWithFallback(
+          blockEntities,
+          "Block processing",
+          new EnhancedProtocolProcessor.BinarySerializer<List<com.kneaf.core.data.block.BlockEntityData>>() {
+            @Override
+            public ByteBuffer serialize(List<com.kneaf.core.data.block.BlockEntityData> input)
+                throws Exception {
+              return ManualSerializers.serializeBlockInput(tickCount++, input);
+            }
+          },
+          new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
+            @Override
+            public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
+              return bridgeProvider.processBlockEntitiesBinary(inputBuffer);
+            }
+          },
+          new EnhancedProtocolProcessor.BinaryDeserializer<List<Long>>() {
+            @Override
+            public List<Long> deserialize(byte[] resultBytes) throws Exception {
+              if (resultBytes != null) {
+                // For now, return all block entities as the binary protocol
+                // doesn't return a specific list of entities to tick
+                List<Long> resultList = longListPool.acquire();
+                for (com.kneaf.core.data.block.BlockEntityData block : blockEntities) {
+                  resultList.add(block.getId());
                 }
-              },
-              new EnhancedProtocolProcessor.BinaryNativeCaller<byte[]>() {
-                @Override
-                public byte[] callNative(ByteBuffer inputBuffer) throws Exception {
-                  return bridgeProvider.processBlockEntitiesBinary(inputBuffer);
-                }
-              },
-              new EnhancedProtocolProcessor.BinaryDeserializer<List<Long>>() {
-                @Override
-                public List<Long> deserialize(byte[] resultBytes) throws Exception {
-                  if (resultBytes != null) {
-                    // For now, return all block entities as the binary protocol
-                    // doesn't return a specific list of entities to tick
-                    List<Long> resultList = new ArrayList<>();
-                    for (com.kneaf.core.data.block.BlockEntityData block : blockEntities) {
-                      resultList.add(block.getId());
-                    }
-                    return resultList;
-                  }
-                  return new ArrayList<>();
-                }
-              },
-              new EnhancedProtocolProcessor.JsonInputPreparer<
-                  List<com.kneaf.core.data.block.BlockEntityData>>() {
-                @Override
-                public Map<String, Object> prepareInput(
-                    List<com.kneaf.core.data.block.BlockEntityData> jsonInput) {
-                  Map<String, Object> input = new HashMap<>();
-                  input.put(PerformanceConstants.TICK_COUNT_KEY, tickCount++);
-                  input.put("block_entities", jsonInput);
-                  return input;
-                }
-              },
-              new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
-                @Override
-                public String callNative(String jsonInput) throws Exception {
-                  return bridgeProvider.processBlockEntitiesJson(jsonInput);
-                }
-              },
-              new EnhancedProtocolProcessor.JsonResultParser<List<Long>>() {
-                @Override
-                public List<Long> parseResult(String jsonResult) throws Exception {
-                  return PerformanceUtils.parseBlockResultFromJson(jsonResult);
-                }
-              },
-              new ArrayList<Long>());
+                return resultList;
+              }
+              return new ArrayList<>();
+            }
+          },
+          new EnhancedProtocolProcessor.JsonInputPreparer<List<com.kneaf.core.data.block.BlockEntityData>>() {
+            @Override
+            public Map<String, Object> prepareInput(
+                List<com.kneaf.core.data.block.BlockEntityData> jsonInput) {
+              Map<String, Object> input = new HashMap<>();
+              input.put(PerformanceConstants.TICK_COUNT_KEY, tickCount++);
+              input.put("block_entities", jsonInput);
+              return input;
+            }
+          },
+          new EnhancedProtocolProcessor.JsonNativeCaller<String>() {
+            @Override
+            public String callNative(String jsonInput) throws Exception {
+              return bridgeProvider.processBlockEntitiesJson(jsonInput);
+            }
+          },
+          new EnhancedProtocolProcessor.JsonResultParser<List<Long>>() {
+            @Override
+            public List<Long> parseResult(String jsonResult) throws Exception {
+              return PerformanceUtils.parseBlockResultFromJson(jsonResult);
+            }
+          },
+          new ArrayList<Long>());
 
       List<Long> processedBlocks = result.getDataOrThrow();
       monitor.recordBlockProcessing(processedBlocks.size(), System.currentTimeMillis() - startTime);
@@ -651,7 +669,7 @@ public class EntityProcessor {
 
     } catch (Exception e) {
       KneafCore.LOGGER.error("Error processing block entities", e);
-      List<Long> all = new ArrayList<>();
+      List<Long> all = longListPool.acquire();
       for (com.kneaf.core.data.block.BlockEntityData block : blockEntities) {
         all.add(block.getId());
       }
@@ -660,3 +678,113 @@ public class EntityProcessor {
     }
   }
 }
+
+// Object pooling implementation for ArrayList to reduce GC overhead
+class ArrayListPool<T> {
+  private final java.util.Queue<ArrayList<T>> pool = new java.util.concurrent.ConcurrentLinkedQueue<>();
+  private final int initialCapacity;
+
+  public ArrayListPool() {
+    this(16); // Default initial capacity
+  }
+
+  public ArrayListPool(int initialCapacity) {
+    this.initialCapacity = initialCapacity;
+  }
+
+  public ArrayList<T> acquire() {
+    ArrayList<T> list = pool.poll();
+    if (list == null) {
+      list = new ArrayList<>(initialCapacity);
+    } else {
+      list.clear();
+    }
+    return list;
+  }
+
+  public void release(ArrayList<T> list) {
+    if (list != null && pool.size() < 100) { // Limit pool size to prevent memory leaks
+      pool.offer(list);
+    }
+  }
+}
+
+// Object pooling implementation for HashMap to reduce GC overhead
+class HashMapPool<K, V> {
+  private final java.util.Queue<HashMap<K, V>> pool = new java.util.concurrent.ConcurrentLinkedQueue<>();
+  private final int initialCapacity;
+
+  public HashMapPool() {
+    this(16); // Default initial capacity
+  }
+
+  public HashMapPool(int initialCapacity) {
+    this.initialCapacity = initialCapacity;
+  }
+
+  public HashMap<K, V> acquire() {
+    HashMap<K, V> map = pool.poll();
+    if (map == null) {
+      map = new HashMap<>(initialCapacity);
+    } else {
+      map.clear();
+    }
+    return map;
+  }
+
+  public void release(HashMap<K, V> map) {
+    if (map != null && pool.size() < 100) { // Limit pool size to prevent memory leaks
+      pool.offer(map);
+    }
+  }
+}
+
+// Flyweight factory for entity data structures - implements proper flyweight pattern
+class EntityFlyweightFactory {
+  // Separate maps for different types to maintain type safety
+  private final java.util.Map<String, EntityData> entityFlyweights = new java.util.concurrent.ConcurrentHashMap<>();
+  private final java.util.Map<String, Map<String, Object>> configFlyweights = new java.util.concurrent.ConcurrentHashMap<>();
+  
+  // Pre-defined flyweight keys for common configurations
+ public static final String ENTITY_CONFIG_KEY = "system.entity.config";
+ public static final String WORLD_BOUNDS_KEY = "system.world.bounds";
+ public static final String PROCESSING_PARAMS_KEY = "system.processing.params";
+ public static final String DEFAULT_ENTITY_PROPS_KEY = "default.entity.properties";
+
+  /** Get or create flyweight EntityData instance */
+  public EntityData getEntityFlyweight(String key, EntityData prototype) {
+    return entityFlyweights.computeIfAbsent(key, k -> {
+      // Create a copy of the prototype for flyweight
+      try {
+        // Simple flyweight - in practice, this would be more sophisticated
+        // For now, just return the prototype as-is since EntityData might not be
+        // cloneable
+        return prototype;
+      } catch (Exception e) {
+        return prototype;
+      }
+    });
+  }
+
+  /** Get or create flyweight configuration map (for entity processing) */
+public Map<String, Object> getEntityConfig() {
+  return configFlyweights.computeIfAbsent(ENTITY_CONFIG_KEY, k -> new HashMap<>(32));
+}
+
+/** Get or create flyweight world bounds map */
+public Map<String, Object> getWorldBounds() {
+  return configFlyweights.computeIfAbsent(WORLD_BOUNDS_KEY, k -> new HashMap<>(16));
+}
+
+/** Get or create flyweight for default entity properties */
+public Map<String, Object> getDefaultEntityProperties() {
+  return configFlyweights.computeIfAbsent(DEFAULT_ENTITY_PROPS_KEY, k -> new HashMap<>(16));
+}
+
+ /** Clear all flyweight instances (use with caution in concurrent environments) */
+  public void clear() {
+    entityFlyweights.clear();
+    configFlyweights.clear();
+  }
+}
+

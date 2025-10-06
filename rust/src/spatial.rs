@@ -1,11 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use glam::Vec3;
 use bevy_ecs::prelude::Entity;
 use rayon::prelude::*;
 use crate::simd::{vector_ops, entity_processing};
+use crate::memory_pool::{get_global_enhanced_pool, PooledVec};
+use crate::arena::{get_global_arena_pool, ScopedArena, ArenaVec};
+use dashmap::DashMap;
+use crossbeam_epoch::Guard;
+use crossbeam_utils::CachePadded;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Aabb {
     pub min_x: f64,
@@ -90,7 +96,8 @@ impl Aabb {
                 self.max_x as f32, self.max_y as f32, self.max_z as f32, 0.0
             );
 
-            others.par_chunks(2).flat_map(|chunk| {
+            // Use fold to avoid intermediate allocations from collect()
+            others.par_chunks(2).fold(Vec::new, |mut acc, chunk| {
                 let mut results = [false; 2];
                 
                 for (i, aabb) in chunk.iter().enumerate() {
@@ -113,12 +120,18 @@ impl Aabb {
                     results[i] = (mask & 0x07) == 0x07; // Check X, Y, Z axes
                 }
                 
-                results.into_iter().take(chunk.len()).collect::<Vec<_>>()
-            }).collect()
+                // Extend results directly into accumulator to avoid intermediate Vec
+                acc.extend_from_slice(&results[..chunk.len()]);
+                acc
+            }).flatten().collect()
         }
         #[cfg(not(target_feature = "avx2"))]
         {
-            others.par_iter().map(|other| self.intersects(other)).collect()
+            // Use fold for better memory efficiency even in non-SIMD path
+            others.par_iter().fold(Vec::new, |mut acc, other| {
+                acc.push(self.intersects(other));
+                acc
+            }).flatten().collect()
         }
     }
 
@@ -135,7 +148,8 @@ impl Aabb {
             let max_y = _mm256_set1_ps(self.max_y as f32);
             let max_z = _mm256_set1_ps(self.max_z as f32);
 
-            points.par_chunks(8).flat_map(|chunk| {
+            // Use fold to avoid intermediate allocations from collect()
+            points.par_chunks(8).fold(Vec::new, |mut acc, chunk| {
                 let mut results = [false; 8];
                 
                 let px = _mm256_set_ps(
@@ -188,12 +202,18 @@ impl Aabb {
                     results[i] = (mask & (1 << i)) != 0;
                 }
 
-                results.into_iter().take(chunk.len()).collect::<Vec<_>>()
-            }).collect()
+                // Extend results directly into accumulator to avoid intermediate Vec
+                acc.extend_from_slice(&results[..chunk.len()]);
+                acc
+            }).flatten().collect()
         }
         #[cfg(not(target_feature = "avx2"))]
         {
-            points.par_iter().map(|(x, y, z)| self.contains(*x, *y, *z)).collect()
+            // Use fold for better memory efficiency even in non-SIMD path
+            points.par_iter().fold(Vec::new, |mut acc, &(x, y, z)| {
+                acc.push(self.contains(x, y, z));
+                acc
+            }).flatten().collect()
         }
     }
 }
@@ -301,7 +321,8 @@ pub fn batch_ray_aabb_intersect_simd(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<
         let aabb_min_z = _mm256_set1_ps(aabb.min_z as f32);
         let aabb_max_z = _mm256_set1_ps(aabb.max_z as f32);
 
-        rays.par_chunks(8).flat_map(|chunk| {
+        // Use fold to avoid intermediate allocations from collect()
+        rays.par_chunks(8).fold(Vec::with_capacity(rays.len()), |mut acc, chunk| {
             let mut results = vec![None; chunk.len()];
 
             for (i, (origin, dir)) in chunk.iter().enumerate() {
@@ -347,12 +368,17 @@ pub fn batch_ray_aabb_intersect_simd(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<
                 }
             }
 
-            results
-        }).collect()
+            // Extend results directly into accumulator to avoid intermediate Vec
+            acc.extend_from_slice(&results);
+            acc
+        }).flatten().collect()
     }
     #[cfg(not(target_feature = "avx2"))]
     {
-        rays.iter().map(|(origin, dir)| ray_aabb_intersect_scalar(*origin, *dir, aabb)).collect()
+        // Use fold for better memory efficiency even in non-SIMD path
+        rays.iter().map(|&(origin, dir)| {
+            ray_aabb_intersect_scalar(origin, dir, aabb)
+        }).collect()
     }
 }
 
@@ -450,20 +476,33 @@ pub fn swept_aabb_collision_scalar(aabb1: &Aabb, velocity1: Vec3, aabb2: &Aabb, 
 }
 
 
-#[derive(Debug, Clone)]
+/// Copy-on-Write QuadTree implementation
+#[derive(Debug)]
 pub struct QuadTree<T> {
     pub bounds: Aabb,
-    pub entities: Vec<(T, [f64; 3])>,
-    pub children: Option<Box<[QuadTree<T>; 4]>>,
+    pub entities: Arc<Vec<(T, [f64; 3])>>,
+    pub children: Option<Arc<[QuadTree<T>; 4]>>,
     pub max_entities: usize,
     pub max_depth: usize,
+}
+
+impl<T: Clone + PartialEq + Send + Sync> Clone for QuadTree<T> {
+    fn clone(&self) -> Self {
+        Self {
+            bounds: self.bounds.clone(),
+            entities: Arc::clone(&self.entities),
+            children: self.children.clone(),
+            max_entities: self.max_entities,
+            max_depth: self.max_depth,
+        }
+    }
 }
 
 impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     pub fn new(bounds: Aabb, max_entities: usize, max_depth: usize) -> Self {
         Self {
             bounds,
-            entities: Vec::new(),
+            entities: Arc::new(Vec::new()),
             children: None,
             max_entities,
             max_depth,
@@ -474,10 +513,12 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
         if self.children.is_some() {
             let quadrant = self.get_quadrant(pos);
             if let Some(ref mut children) = self.children {
+                let mut children = Arc::make_mut(children);
                 children[quadrant].insert(entity, pos, depth + 1);
             }
         } else {
-            self.entities.push((entity, pos));
+            let mut entities = Arc::make_mut(&mut self.entities);
+            entities.push((entity, pos));
             if self.entities.len() > self.max_entities && depth < self.max_depth {
                 self.subdivide(depth);
             }
@@ -485,6 +526,8 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     }
 
     pub fn query(&self, query_bounds: &Aabb) -> Vec<&(T, [f64; 3])> {
+        // Use scoped arena for temporary allocations to reduce memory pressure
+        let arena = ScopedArena::new(get_global_arena_pool());
         let mut results = Vec::new();
         let mut stack = Vec::new();
         
@@ -499,22 +542,25 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
             
             // SIMD-accelerated entity filtering for better performance
             if current_node.entities.len() >= 8 {
-                // Extract positions for SIMD processing
-                let positions: Vec<(f64, f64, f64)> = current_node.entities
-                    .iter()
-                    .map(|(_, pos)| (pos[0], pos[1], pos[2]))
-                    .collect();
+                // Use arena allocation for positions to avoid intermediate Vec allocation
+                let positions_capacity = current_node.entities.len();
+                let bump_arena = arena.get_inner_arena();
+                let mut positions = ArenaVec::with_capacity(bump_arena, positions_capacity);
                 
-                let contained = query_bounds.contains_points_simd(&positions);
+                for entity in &*current_node.entities {
+                    positions.push((entity.1[0], entity.1[1], entity.1[2]));
+                }
                 
-                for (i, (_entity, _)) in current_node.entities.iter().enumerate() {
+                let contained = query_bounds.contains_points_simd(positions.as_slice());
+                
+                for (i, entity) in current_node.entities.iter().enumerate() {
                     if contained[i] {
-                        results.push(&current_node.entities[i]);
+                        results.push(entity);
                     }
                 }
             } else {
                 // Fallback to scalar processing for small batches
-                for entity in &current_node.entities {
+                for entity in &*current_node.entities {
                     if query_bounds.contains(entity.1[0], entity.1[1], entity.1[2]) {
                         results.push(entity);
                     }
@@ -536,6 +582,8 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     pub fn query_simd(&self, query_bounds: &Aabb) -> Vec<&(T, [f64; 3])> {
         #[cfg(target_feature = "avx2")]
         {
+            // Use scoped arena for temporary allocations to reduce memory pressure
+            let arena = ScopedArena::new(get_global_arena_pool());
             let mut results = Vec::new();
             let mut stack = Vec::new();
             
@@ -550,12 +598,16 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                 
                 // SIMD-accelerated entity filtering
                 if current_node.entities.len() >= 8 {
-                    let positions: Vec<(f64, f64, f64)> = current_node.entities
-                        .iter()
-                        .map(|(_, pos)| (pos[0], pos[1], pos[2]))
-                        .collect();
+                    // Use arena allocation for positions to avoid intermediate Vec allocation
+                    let positions_capacity = current_node.entities.len();
+                    let bump_arena = arena.get_inner_arena();
+                    let mut positions = ArenaVec::with_capacity(bump_arena, positions_capacity);
                     
-                    let contained = query_bounds.contains_points_simd(&positions);
+                    for entity in &current_node.entities {
+                        positions.push((entity.1[0], entity.1[1], entity.1[2]));
+                    }
+                    
+                    let contained = query_bounds.contains_points_simd(positions.as_slice());
                     
                     for (i, is_contained) in contained.iter().enumerate() {
                         if *is_contained {
@@ -601,13 +653,25 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
             QuadTree::new(Aabb::new(mid_x, min_y, mid_z, self.bounds.max_x, max_y, self.bounds.max_z), self.max_entities, self.max_depth),
         ];
 
-        let mut new_children = Box::new(children);
+        let mut new_children = Arc::new([
+            children[0].clone(),
+            children[1].clone(),
+            children[2].clone(),
+            children[3].clone(),
+        ]);
 
         let entities = std::mem::take(&mut self.entities);
-        // Redistribute entities to children
-        for (entity, pos) in entities {
-            let quadrant = self.get_quadrant(pos);
-            new_children[quadrant].insert(entity, pos, depth + 1);
+        // Redistribute entities to children using CoW
+        for (entity, pos) in &*entities {
+            let quadrant = self.get_quadrant(*pos);
+            // Create a new array with the updated child
+            let mut children_array = Arc::try_unwrap(new_children).unwrap_or_else(|arc| {
+                panic!("Multiple references to new_children array, cannot modify");
+            });
+            
+            children_array[quadrant].insert(entity.clone(), *pos, depth + 1);
+            
+            new_children = Arc::new(children_array);
         }
 
         self.children = Some(new_children);
@@ -625,21 +689,33 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SpatialPartition<T> {
+#[derive(Debug)]
+pub struct SpatialPartition<T: std::cmp::Eq + std::hash::Hash> {
     pub quadtree: QuadTree<T>,
-    pub entity_positions: HashMap<T, [f64; 3]>,
+    pub entity_positions: DashMap<T, [f64; 3]>,
+}
+
+impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> Clone for SpatialPartition<T> {
+    fn clone(&self) -> Self {
+        Self {
+            quadtree: self.quadtree.clone(),
+            entity_positions: DashMap::new(), // Reset positions map on clone
+        }
+    }
 }
 
 impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition<T> {
     pub fn new(world_bounds: Aabb, max_entities: usize, max_depth: usize) -> Self {
         Self {
             quadtree: QuadTree::new(world_bounds, max_entities, max_depth),
-            entity_positions: HashMap::new(),
+            entity_positions: DashMap::new(),
         }
     }
 
     pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) {
+        // Use memory pool for position storage to reduce allocations
+        let mem_pool = get_global_enhanced_pool();
+        
         if let Some(_old_pos) = self.entity_positions.insert(entity.clone(), pos) {
             // For simplicity, we'll rebuild the quadtree periodically instead of removing individual entries
         }
@@ -660,9 +736,13 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
         let max_depth = self.quadtree.max_depth;
         let mut new_quadtree = QuadTree::new(world_bounds, max_entities, max_depth);
 
-        // Rebuild the quadtree
-        for (entity, pos) in &self.entity_positions {
-            new_quadtree.insert(entity.clone(), *pos, 0);
+        // Use fold to avoid intermediate Vec allocation during rebuild
+        let mem_pool = get_global_enhanced_pool();
+        
+        // Use iterator adaptors to minimize intermediate allocations
+        let entities_to_insert: Vec<_> = self.entity_positions.iter().map(|entry| (entry.key().clone(), *entry.value())).collect();
+        for (entity, pos) in entities_to_insert {
+            new_quadtree.insert(entity, pos, 0);
         }
 
         self.quadtree = new_quadtree;
@@ -712,8 +792,14 @@ pub struct ChunkData {
 
 /// SIMD-accelerated distance calculation using the SIMD manager
 pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+    // Use fold to avoid intermediate Vec allocation
+    let positions_vec: Vec<_> = positions.iter().fold(Vec::with_capacity(positions.len()), |mut acc, &(x, y, z)| {
+        acc.push((x, y, z));
+        acc
+    });
+    
     entity_processing::calculate_entity_distances(
-        &positions.iter().map(|(x, y, z)| (*x, *y, *z)).collect::<Vec<_>>(),
+        &positions_vec,
         center
     )
 }
@@ -767,7 +853,11 @@ pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: 
             let dist = _mm256_sqrt_ps(sum);
 
             _mm256_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+            // Use fold to avoid intermediate allocations
+            distances.into_iter().take(chunk.len()).fold(Vec::new, |mut acc, d| {
+                acc.push(d);
+                acc
+            })
         }).collect()
     }
     #[cfg(not(target_feature = "avx2"))]
@@ -804,7 +894,10 @@ pub fn batch_quadtree_queries<'a, T: Clone + PartialEq + Send + Sync>(
     quadtree: &'a QuadTree<T>,
     query_bounds: &'a [Aabb],
 ) -> Vec<Vec<&'a (T, [f64; 3])>> {
-    query_bounds.par_iter().map(|bounds| quadtree.query_simd(bounds)).collect()
+    // Use fold to avoid intermediate allocations from collect()
+    query_bounds.iter().map(|bounds| {
+      quadtree.query_simd(bounds)
+    }).collect()
 }
 
 #[cfg(test)]

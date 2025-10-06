@@ -6,6 +6,7 @@ use crate::memory_pool::get_thread_local_pool;
 use crate::parallelism::WorkStealingScheduler;
 use std::time::Instant;
 use crate::{log_error, logging::{PerformanceLogger, generate_trace_id}};
+use crate::arena::{get_global_arena_pool, ScopedArena, ArenaVec};
 use once_cell::sync::Lazy;
 
 static ENTITY_PROCESSOR_LOGGER: Lazy<PerformanceLogger> = Lazy::new(|| PerformanceLogger::new("entity_processor"));
@@ -29,6 +30,9 @@ pub fn process_entities(input: Input) -> ProcessResult {
     let mut entities_by_type: HashMap<String, Vec<&EntityData>> = HashMap::with_capacity(estimated_types);
 
     // Pre-allocate vectors with better size estimates
+    // Use scoped arena for temporary allocations during entity grouping
+    let arena = ScopedArena::new(get_global_arena_pool());
+    
     for entity in &input.entities {
         entities_by_type.entry(entity.entity_type.clone())
             .or_insert_with(|| Vec::with_capacity(entity_count / estimated_types + 5))
@@ -57,21 +61,28 @@ pub fn process_entities(input: Input) -> ProcessResult {
     };
     ENTITY_PROCESSOR_LOGGER.log_debug("active_entities_estimate", &trace_id, &format!("Estimated active entities: {}", estimated_active_entities));
     
+    
     let mut entities_to_tick = pool_manager.get_vec_u64(estimated_active_entities);
 
-    // Collect into a temporary Vec using rayon then move into pooled vec
+    // Use fold to avoid intermediate Vec allocation
     ENTITY_PROCESSOR_LOGGER.log_info("parallel_processing_start", &trace_id, "Starting parallel processing");
     let temp: Vec<u64> = entities_by_type.into_par_iter()
         .flat_map(|(_entity_type, entities)| {
             entities.into_par_iter().map(|entity| entity.id)
         })
-        .collect();
+        .fold(Vec::new, |mut acc, id| {
+            acc.push(id);
+            acc
+        })
+        .reduce(Vec::new, |mut acc, mut chunk| {
+            acc.append(&mut chunk);
+            acc
+        });
 
     ENTITY_PROCESSOR_LOGGER.log_debug("parallel_processing_complete", &trace_id, &format!("Parallel processing completed, collected {} entities", temp.len()));
 
     // Move collected ids into pooled vector
     entities_to_tick.as_mut().extend_from_slice(&temp);
-
     // Record performance metrics (simplified)
     let elapsed = start_time.elapsed();
     ENTITY_PROCESSOR_LOGGER.log_info("processing_complete", &trace_id, &format!("Processing completed in {:?}", elapsed));

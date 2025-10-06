@@ -997,6 +997,11 @@ impl ScopedArena {
     pub fn stats(&self) -> ArenaStats {
         self.arena.stats()
     }
+
+    /// Get the inner bump arena (for advanced use cases)
+    pub fn get_inner_arena(&self) -> Arc<BumpArena> {
+        Arc::clone(&self.arena)
+    }
 }
 
 impl Drop for ScopedArena {

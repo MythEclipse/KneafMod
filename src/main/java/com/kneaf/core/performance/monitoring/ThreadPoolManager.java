@@ -20,12 +20,12 @@ public class ThreadPoolManager {
   private static final PerformanceConfig CONFIG = PerformanceConfig.load();
 
   // Advanced ThreadPoolExecutor with dynamic sizing and monitoring
-  private static ThreadPoolExecutor serverTaskExecutor = null;
-  private static final Object EXECUTOR_LOCK = new Object();
+  private static volatile ThreadPoolExecutor serverTaskExecutor = null;
+  private static final AtomicInteger EXECUTOR_INIT_LOCK = new AtomicInteger(0);
 
   // Adaptive scaling scheduler
-  private static ScheduledExecutorService adaptiveScheduler = null;
-  private static final Object SCHEDULER_LOCK = new Object();
+  private static volatile ScheduledExecutorService adaptiveScheduler = null;
+  private static final AtomicInteger SCHEDULER_INIT_LOCK = new AtomicInteger(0);
 
   // Executor monitoring and metrics
   public static final class ExecutorMetrics {
@@ -71,13 +71,28 @@ public class ThreadPoolManager {
    * Get or create the thread pool executor with advanced configuration.
    */
   public ThreadPoolExecutor getExecutor() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
-        createAdvancedThreadPool();
-        startAdaptiveScaling();
+    // Double-checked locking with volatile and CAS for lock-free initialization
+    if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
+      if (EXECUTOR_INIT_LOCK.compareAndSet(0, 1)) {
+        try {
+          if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
+            createAdvancedThreadPool();
+            startAdaptiveScaling();
+          }
+        } finally {
+          EXECUTOR_INIT_LOCK.set(0);
+        }
+      } else {
+        // Wait briefly and retry if initialization is in progress
+        try {
+          Thread.sleep(1);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+        return getExecutor(); // Recursive call after short wait
       }
-      return serverTaskExecutor;
     }
+    return serverTaskExecutor;
   }
 
   /**
@@ -172,45 +187,51 @@ public class ThreadPoolManager {
    * Perform adaptive thread pool scaling based on CPU load.
    */
   private static void performAdaptiveScaling() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
-        return;
+    // Use CAS-based locking for thread-safe operations
+    if (EXECUTOR_INIT_LOCK.get() == 1) {
+      return; // Skip if executor is being initialized
+    }
+
+    if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
+      return;
+    }
+
+    double cpuLoad = getSystemCpuLoad();
+    int currentCore = serverTaskExecutor.getCorePoolSize();
+    int currentMax = serverTaskExecutor.getMaximumPoolSize();
+    int minThreads = CONFIG.getMinThreadpoolSize();
+    int maxThreads = CONFIG.getMaxThreadpoolSize();
+
+    // Atomic operations for metrics updates
+    long now = System.currentTimeMillis();
+
+    // Scale up when CPU load is low (more capacity available)
+    if (cpuLoad < CONFIG.getCpuLoadThreshold() * 0.7) { // Scale up threshold: 70% of config threshold
+      int newCore = Math.min(currentCore + 1, maxThreads);
+      int newMax = Math.min(currentMax + 2, maxThreads);
+
+      if (newCore > currentCore || newMax > currentMax) {
+        serverTaskExecutor.setCorePoolSize(newCore);
+        serverTaskExecutor.setMaximumPoolSize(newMax);
+        EXECUTOR_METRICS.lastScaleUpTime = now;
+        EXECUTOR_METRICS.scaleUpCount++;
+        EXECUTOR_METRICS.currentThreadCount = newCore;
+        EXECUTOR_METRICS.peakThreadCount = Math.max(EXECUTOR_METRICS.peakThreadCount, newCore);
+        LOGGER.debug("Scaled up thread pool: core={}, max={}", newCore, newMax);
       }
+    }
+    // Scale down when CPU load is high (reduce resource usage)
+    else if (cpuLoad > CONFIG.getCpuLoadThreshold() * 1.3) { // Scale down threshold: 130% of config threshold
+      int newCore = Math.max(currentCore - 1, minThreads);
+      int newMax = Math.max(currentMax - 1, minThreads);
 
-      double cpuLoad = getSystemCpuLoad();
-      int currentCore = serverTaskExecutor.getCorePoolSize();
-      int currentMax = serverTaskExecutor.getMaximumPoolSize();
-      int minThreads = CONFIG.getMinThreadpoolSize();
-      int maxThreads = CONFIG.getMaxThreadpoolSize();
-
-      // Scale up when CPU load is low (more capacity available)
-      if (cpuLoad < CONFIG.getCpuLoadThreshold() * 0.7) { // Scale up threshold: 70% of config threshold
-        int newCore = Math.min(currentCore + 1, maxThreads);
-        int newMax = Math.min(currentMax + 2, maxThreads);
-
-        if (newCore > currentCore || newMax > currentMax) {
-          serverTaskExecutor.setCorePoolSize(newCore);
-          serverTaskExecutor.setMaximumPoolSize(newMax);
-          EXECUTOR_METRICS.lastScaleUpTime = System.currentTimeMillis();
-          EXECUTOR_METRICS.scaleUpCount++;
-          EXECUTOR_METRICS.currentThreadCount = newCore;
-          EXECUTOR_METRICS.peakThreadCount = Math.max(EXECUTOR_METRICS.peakThreadCount, newCore);
-          LOGGER.debug("Scaled up thread pool: core={}, max={}", newCore, newMax);
-        }
-      }
-      // Scale down when CPU load is high (reduce resource usage)
-      else if (cpuLoad > CONFIG.getCpuLoadThreshold() * 1.3) { // Scale down threshold: 130% of config threshold
-        int newCore = Math.max(currentCore - 1, minThreads);
-        int newMax = Math.max(currentMax - 1, minThreads);
-
-        if (newCore < currentCore || newMax < currentMax) {
-          serverTaskExecutor.setCorePoolSize(newCore);
-          serverTaskExecutor.setMaximumPoolSize(newMax);
-          EXECUTOR_METRICS.lastScaleDownTime = System.currentTimeMillis();
-          EXECUTOR_METRICS.scaleDownCount++;
-          EXECUTOR_METRICS.currentThreadCount = newCore;
-          LOGGER.debug("Scaled down thread pool: core={}, max={}", newCore, newMax);
-        }
+      if (newCore < currentCore || newMax < currentMax) {
+        serverTaskExecutor.setCorePoolSize(newCore);
+        serverTaskExecutor.setMaximumPoolSize(newMax);
+        EXECUTOR_METRICS.lastScaleDownTime = now;
+        EXECUTOR_METRICS.scaleDownCount++;
+        EXECUTOR_METRICS.currentThreadCount = newCore;
+        LOGGER.debug("Scaled down thread pool: core={}, max={}", newCore, newMax);
       }
     }
   }
@@ -219,23 +240,37 @@ public class ThreadPoolManager {
    * Start adaptive scaling scheduler.
    */
   private static void startAdaptiveScaling() {
-    synchronized (SCHEDULER_LOCK) {
-      if (adaptiveScheduler == null || adaptiveScheduler.isShutdown()) {
-        adaptiveScheduler = Executors.newScheduledThreadPool(1, r -> {
-          Thread t = new Thread(r, "kneaf-adaptive-scaler");
-          t.setDaemon(true);
-          return t;
-        });
+    if (adaptiveScheduler == null || adaptiveScheduler.isShutdown()) {
+      if (SCHEDULER_INIT_LOCK.compareAndSet(0, 1)) {
+        try {
+          if (adaptiveScheduler == null || adaptiveScheduler.isShutdown()) {
+            adaptiveScheduler = Executors.newScheduledThreadPool(1, r -> {
+              Thread t = new Thread(r, "kneaf-adaptive-scaler");
+              t.setDaemon(true);
+              return t;
+            });
 
-        // Schedule adaptive scaling every 10 seconds
-        adaptiveScheduler.scheduleAtFixedRate(
-            ThreadPoolManager::performAdaptiveScaling,
-            10, // Initial delay
-            10, // Period
-            TimeUnit.SECONDS
-        );
+            // Schedule adaptive scaling every 10 seconds
+            adaptiveScheduler.scheduleAtFixedRate(
+                ThreadPoolManager::performAdaptiveScaling,
+                10, // Initial delay
+                10, // Period
+                TimeUnit.SECONDS
+            );
 
-        LOGGER.debug("Started adaptive thread scaling scheduler");
+            LOGGER.debug("Started adaptive thread scaling scheduler");
+          }
+        } finally {
+          SCHEDULER_INIT_LOCK.set(0);
+        }
+      } else {
+        // Wait briefly and retry if initialization is in progress
+        try {
+          Thread.sleep(1);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+        startAdaptiveScaling(); // Recursive call after short wait
       }
     }
   }
@@ -262,36 +297,37 @@ public class ThreadPoolManager {
    * Shutdown the thread pool gracefully.
    */
   public void shutdown() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor != null) {
-        try {
-          serverTaskExecutor.shutdown();
-          if (!serverTaskExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-            serverTaskExecutor.shutdownNow();
-          }
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+    // Use CAS-based approach for shutdown to minimize lock contention
+    if (serverTaskExecutor != null) {
+      EXECUTOR_INIT_LOCK.set(1); // Prevent concurrent modifications
+      try {
+        serverTaskExecutor.shutdown();
+        if (!serverTaskExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
           serverTaskExecutor.shutdownNow();
-        } finally {
-          serverTaskExecutor = null;
         }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        serverTaskExecutor.shutdownNow();
+      } finally {
+        serverTaskExecutor = null;
+        EXECUTOR_INIT_LOCK.set(0);
       }
     }
 
     // Shutdown adaptive scheduler
-    synchronized (SCHEDULER_LOCK) {
-      if (adaptiveScheduler != null) {
-        try {
-          adaptiveScheduler.shutdown();
-          if (!adaptiveScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-            adaptiveScheduler.shutdownNow();
-          }
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+    if (adaptiveScheduler != null) {
+      SCHEDULER_INIT_LOCK.set(1); // Prevent concurrent modifications
+      try {
+        adaptiveScheduler.shutdown();
+        if (!adaptiveScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
           adaptiveScheduler.shutdownNow();
-        } finally {
-          adaptiveScheduler = null;
         }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        adaptiveScheduler.shutdownNow();
+      } finally {
+        adaptiveScheduler = null;
+        SCHEDULER_INIT_LOCK.set(0);
       }
     }
   }
@@ -300,82 +336,84 @@ public class ThreadPoolManager {
    * Get current executor metrics for monitoring and debugging.
    */
   public String getExecutorMetrics() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null) {
-        return "{\"status\":\"not_initialized\"}";
-      }
-      return EXECUTOR_METRICS.toJson();
+    // Use volatile read for lock-free access to metrics
+    if (serverTaskExecutor == null) {
+      return "{\"status\":\"not_initialized\"}";
     }
+    
+    // Update metrics with current values in a lock-free manner
+    EXECUTOR_METRICS.totalTasksSubmitted = serverTaskExecutor.getTaskCount();
+    EXECUTOR_METRICS.totalTasksCompleted = serverTaskExecutor.getCompletedTaskCount();
+    EXECUTOR_METRICS.currentQueueSize = serverTaskExecutor.getQueue().size();
+    EXECUTOR_METRICS.currentThreadCount = serverTaskExecutor.getPoolSize();
+    EXECUTOR_METRICS.currentUtilization = getExecutorUtilization();
+    
+    return EXECUTOR_METRICS.toJson();
   }
 
   /**
    * Get current executor status including pool configuration.
    */
   public String getExecutorStatus() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null) {
-        return "Executor not initialized";
-      }
-
-      return String.format(
-          "ThreadPoolExecutor[core=%d, max=%d, current=%d, active=%d, queue=%d, completed=%d]",
-          serverTaskExecutor.getCorePoolSize(),
-          serverTaskExecutor.getMaximumPoolSize(),
-          serverTaskExecutor.getPoolSize(),
-          serverTaskExecutor.getActiveCount(),
-          serverTaskExecutor.getQueue().size(),
-          serverTaskExecutor.getCompletedTaskCount());
+    if (serverTaskExecutor == null) {
+      return "Executor not initialized";
     }
+
+    // Lock-free status check using ThreadPoolExecutor's atomic operations
+    return String.format(
+        "ThreadPoolExecutor[core=%d, max=%d, current=%d, active=%d, queue=%d, completed=%d]",
+        serverTaskExecutor.getCorePoolSize(),
+        serverTaskExecutor.getMaximumPoolSize(),
+        serverTaskExecutor.getPoolSize(),
+        serverTaskExecutor.getActiveCount(),
+        serverTaskExecutor.getQueue().size(),
+        serverTaskExecutor.getCompletedTaskCount());
   }
 
   /**
    * Validate executor health and configuration.
    */
   public boolean isExecutorHealthy() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null
-          || serverTaskExecutor.isShutdown()
-          || serverTaskExecutor.isTerminated()) {
-        return false;
-      }
-
-      int queueSize = serverTaskExecutor.getQueue().size();
-      int maxQueueSize = CONFIG.isWorkStealingEnabled() ? CONFIG.getWorkStealingQueueSize() : 1000;
-
-      if (queueSize > maxQueueSize * 0.9) {
-        return false;
-      }
-
-      double utilization = getExecutorUtilization();
-      if (serverTaskExecutor.getPoolSize() >= serverTaskExecutor.getMaximumPoolSize()
-          && utilization > 0.95) {
-        return false;
-      }
-
-      return true;
+    // Lock-free health check
+    if (serverTaskExecutor == null
+        || serverTaskExecutor.isShutdown()
+        || serverTaskExecutor.isTerminated()) {
+      return false;
     }
+
+    int queueSize = serverTaskExecutor.getQueue().size();
+    int maxQueueSize = CONFIG.isWorkStealingEnabled() ? CONFIG.getWorkStealingQueueSize() : 1000;
+
+    if (queueSize > maxQueueSize * 0.9) {
+      return false;
+    }
+
+    double utilization = getExecutorUtilization();
+    if (serverTaskExecutor.getPoolSize() >= serverTaskExecutor.getMaximumPoolSize()
+        && utilization > 0.95) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
    * Get the current executor queue size for dynamic threshold adjustment.
    */
   public int getExecutorQueueSize() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null) return 0;
-      return serverTaskExecutor.getQueue().size();
-    }
+    if (serverTaskExecutor == null) return 0;
+    // Queue.size() is lock-free in LinkedBlockingQueue
+    return serverTaskExecutor.getQueue().size();
   }
 
   /**
    * Get executor utilization for dynamic scaling decisions.
    */
   public double getExecutorUtilization() {
-    synchronized (EXECUTOR_LOCK) {
-      if (serverTaskExecutor == null) return 0.0;
-      int activeThreads = serverTaskExecutor.getActiveCount();
-      int poolSize = Math.max(1, serverTaskExecutor.getPoolSize());
-      return (double) activeThreads / poolSize;
-    }
+    if (serverTaskExecutor == null) return 0.0;
+    int activeThreads = serverTaskExecutor.getActiveCount();
+    int poolSize = Math.max(1, serverTaskExecutor.getPoolSize());
+    return (double) activeThreads / poolSize;
   }
 
   /**

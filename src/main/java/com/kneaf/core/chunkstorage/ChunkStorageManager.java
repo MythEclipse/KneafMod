@@ -15,6 +15,8 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Flow;
+import java.util.concurrent.SubmissionPublisher;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -105,6 +107,8 @@ public class ChunkStorageManager {
   private final String worldName;
   private final boolean enabled;
   private final SwapManager swapManager;
+  private final SubmissionPublisher<ChunkOperation> savePipeline;
+  private final SubmissionPublisher<ChunkOperation> loadPipeline;
 
   private volatile boolean shutdown = false;
 
@@ -211,6 +215,14 @@ public class ChunkStorageManager {
       this.asyncExecutor =
           Executors.newFixedThreadPool(config.getAsyncThreadpoolSize(), threadFactory);
 
+      // Initialize reactive pipelines
+      this.savePipeline = new SubmissionPublisher<>(asyncExecutor, Flow.defaultBufferSize());
+      this.loadPipeline = new SubmissionPublisher<>(asyncExecutor, Flow.defaultBufferSize());
+
+      // Subscribe processors to pipelines
+      savePipeline.subscribe(new SaveChunkProcessor());
+      loadPipeline.subscribe(new LoadChunkProcessor());
+
       // Initialize swap manager if enabled
       SwapManager tempSwapManager = null;
       if (config.isEnableSwapManager()
@@ -246,12 +258,14 @@ public class ChunkStorageManager {
       this.cache = null;
       this.asyncExecutor = null;
       this.swapManager = null;
+      this.savePipeline = null;
+      this.loadPipeline = null;
       LOGGER.info("ChunkStorageManager disabled for world '{ }'", worldName);
     }
   }
 
   /**
-   * Save a chunk to storage (cache + database).
+   * Save a chunk to storage (cache + database) using reactive pipeline.
    *
    * @param chunk The chunk to save
    * @return CompletableFuture that completes when the save is done
@@ -263,49 +277,18 @@ public class ChunkStorageManager {
 
     String chunkKey = createChunkKey(chunk);
 
-    try {
-      // Serialize the chunk
-      byte[] serializedData = serializer.serialize(chunk);
+    // Create operation for reactive pipeline
+    ChunkOperation operation = new ChunkOperation("save", chunkKey, chunk);
 
-      // Cache the chunk - handle both LevelChunk and Object types
-      ChunkCache.CachedChunk evicted = null;
-      try {
-        // Try to cast to LevelChunk if Minecraft classes are available
-        if (isMinecraftLevelChunk(chunk)) {
-          // Cast to LevelChunk after checking
-          Object levelChunk =
-              Class.forName("net.minecraft.world.level.chunk.LevelChunk").cast(chunk);
-          evicted =
-              cache.putChunk(chunkKey, (net.minecraft.world.level.chunk.LevelChunk) levelChunk);
-        } else {
-          LOGGER.debug("Chunk object is not a LevelChunk, skipping cache for { }", chunkKey);
-        }
-      } catch (Exception e) {
-        LOGGER.debug("Failed to cache chunk { }: { }", chunkKey, e.getMessage());
-      }
+    // Submit to reactive pipeline
+    savePipeline.submit(operation);
 
-      // Handle evicted chunk if needed (save to database if dirty)
-      CompletableFuture<Void> evictedSave = CompletableFuture.completedFuture(null);
-      if (evicted != null && evicted.isDirty()) {
-        Object evictedChunk = evicted.getChunk();
-        String evictedKey = createChunkKey(evictedChunk);
-        evictedSave = saveChunkToDatabase(evictedKey, evictedChunk);
-      }
-
-      // Save current chunk to database asynchronously
-      CompletableFuture<Void> currentSave = saveChunkToDatabase(chunkKey, serializedData);
-
-      // Combine both operations
-      return CompletableFuture.allOf(evictedSave, currentSave);
-
-    } catch (Exception e) {
-      LOGGER.error("Failed to save chunk { }", chunkKey, e);
-      return CompletableFuture.failedFuture(e);
-    }
+    // Return the result future
+    return operation.getResult().thenApply(result -> null);
   }
 
   /**
-   * Load a chunk from storage (cache first, then database, with swap support).
+   * Load a chunk from storage (cache first, then database, with swap support) using reactive pipeline.
    *
    * @param level The server level
    * @param chunkX The chunk X coordinate
@@ -319,114 +302,17 @@ public class ChunkStorageManager {
 
     String chunkKey = createChunkKey(level, chunkX, chunkZ);
 
+    // Create operation for reactive pipeline
+    ChunkOperation operation = new ChunkOperation("load", chunkKey, null);
+
+    // Submit to reactive pipeline
+    loadPipeline.submit(operation);
+
     try {
-      // Try cache first
-      Optional<ChunkCache.CachedChunk> cached = cache.getChunk(chunkKey);
-      if (cached.isPresent()) {
-        LOGGER.trace("Chunk { } found in cache", chunkKey);
-
-        // Check if chunk is swapped out and needs to be swapped in
-        if (cached.get().isSwapped() && swapManager != null) {
-          LOGGER.debug("Chunk { } is swapped out, initiating swap-in", chunkKey);
-          boolean swapSuccess = swapManager.swapInChunk(chunkKey).join();
-          if (swapSuccess) {
-            LOGGER.debug("Successfully swapped in chunk: { }", chunkKey);
-            // Chunk should now be available in cache
-            cached = cache.getChunk(chunkKey);
-            if (cached.isPresent() && !cached.get().isSwapped()) {
-              // Cached chunk is now available in memory. Prefer returning it directly
-              // if it's already in a usable form (LevelChunk or CompoundTag). If it's a
-              // serialized byte[] try to deserialize it. As a last resort attempt a
-              // serialize->deserialize roundtrip to produce a CompoundTag-like object.
-              try {
-                Object cachedObj = cached.get().getChunk();
-
-                if (cachedObj != null) {
-                  // If it's a live LevelChunk, return it immediately
-                  if (isMinecraftLevelChunk(cachedObj)) {
-                    LOGGER.debug("Returning LevelChunk from cache for {}", chunkKey);
-                    return Optional.of(cachedObj);
-                  }
-
-                  // If it's already an NBT CompoundTag, return that
-                  if (isMinecraftCompoundTag(cachedObj)) {
-                    LOGGER.debug("Returning CompoundTag from cache for {}", chunkKey);
-                    return Optional.of(cachedObj);
-                  }
-
-                  // If cached object is a serialized byte[], attempt to deserialize
-                  if (cachedObj instanceof byte[]) {
-                    try {
-                      Object deserialized = serializer.deserialize((byte[]) cachedObj);
-                      if (deserialized != null) {
-                        LOGGER.debug("Returning deserialized cached chunk for {}", chunkKey);
-                        return Optional.of(deserialized);
-                      }
-                    } catch (Exception e) {
-                      LOGGER.warn(
-                          "Failed to deserialize cached byte[] for {}: {}",
-                          chunkKey,
-                          e.getMessage());
-                    }
-                  }
-
-                  // As a last resort, try to serialize the cached object and then deserialize
-                  // to get it into the expected CompoundTag form (if supported by serializer)
-                  try {
-                    byte[] roundtrip = serializer.serialize(cachedObj);
-                    Object deserialized = serializer.deserialize(roundtrip);
-                    if (deserialized != null) {
-                      LOGGER.debug(
-                          "Returning serialized->deserialized cached chunk for {}", chunkKey);
-                      return Optional.of(deserialized);
-                    }
-                  } catch (Exception e) {
-                    LOGGER.debug(
-                        "Could not convert cached object to CompoundTag for {}: {}",
-                        chunkKey,
-                        e.getMessage());
-                  }
-                }
-              } catch (Exception e) {
-                LOGGER.warn(
-                    "Error while returning cached chunk for {}: {}", chunkKey, e.getMessage());
-              }
-            }
-          } else {
-            LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
-          }
-        }
-      }
-
-      // Try database
-      Optional<byte[]> dbData = database.getChunk(chunkKey);
-      if (dbData.isPresent()) {
-        LOGGER.trace("Chunk { } found in database", chunkKey);
-        try {
-          Object chunkData = serializer.deserialize(dbData.get());
-
-          // Try to cast to CompoundTag if Minecraft classes are available
-          if (chunkData != null && isMinecraftCompoundTag(chunkData)) {
-            // Cache the loaded chunk for future access
-            // Note: We'd need to reconstruct the LevelChunk from the NBT data
-            // For now, we just return the NBT data
-            return Optional.of(chunkData);
-          } else {
-            LOGGER.warn("Deserialized data is not a valid CompoundTag for chunk { }", chunkKey);
-            return Optional.empty();
-          }
-        } catch (Exception e) {
-          LOGGER.error(
-              "Failed to deserialize chunk data for { }: { }", chunkKey, e.getMessage(), e);
-          return Optional.empty();
-        }
-      }
-
-      LOGGER.trace("Chunk { } not found in storage", chunkKey);
-      return Optional.empty();
-
+      // Wait for the result with timeout
+      return operation.getResult().get(30, java.util.concurrent.TimeUnit.SECONDS);
     } catch (Exception e) {
-      LOGGER.error("Failed to load chunk { }", chunkKey, e);
+      LOGGER.error("Failed to load chunk { } via reactive pipeline", chunkKey, e);
       return Optional.empty();
     }
   }
@@ -949,6 +835,259 @@ public class ChunkStorageManager {
     swapConfig.setEnableSwapStatistics(config.isEnableSwapStatistics());
     swapConfig.setEnablePerformanceMonitoring(true); // Always enable for integration
     return swapConfig;
+  }
+
+  /** Perform async save operation for reactive pipeline. */
+  private CompletableFuture<Void> performAsyncSave(String chunkKey, Object chunk) {
+    return CompletableFuture.supplyAsync(() -> {
+      try {
+        // Serialize the chunk asynchronously
+        byte[] serializedData = serializer.serialize(chunk);
+
+        // Cache the chunk - handle both LevelChunk and Object types
+        ChunkCache.CachedChunk evicted = null;
+        try {
+          // Try to cast to LevelChunk if Minecraft classes are available
+          if (isMinecraftLevelChunk(chunk)) {
+            // Cast to LevelChunk after checking
+            Object levelChunk =
+                Class.forName("net.minecraft.world.level.chunk.LevelChunk").cast(chunk);
+            evicted =
+                cache.putChunk(chunkKey, (net.minecraft.world.level.chunk.LevelChunk) levelChunk);
+          } else {
+            LOGGER.debug("Chunk object is not a LevelChunk, skipping cache for { }", chunkKey);
+          }
+        } catch (Exception e) {
+          LOGGER.debug("Failed to cache chunk { }: { }", chunkKey, e.getMessage());
+        }
+
+        // Handle evicted chunk if needed (save to database if dirty)
+        if (evicted != null && evicted.isDirty()) {
+          Object evictedChunk = evicted.getChunk();
+          String evictedKey = createChunkKey(evictedChunk);
+          saveChunkToDatabase(evictedKey, evictedChunk);
+        }
+
+        // Save current chunk to database
+        return saveChunkToDatabase(chunkKey, serializedData);
+
+      } catch (Exception e) {
+        LOGGER.error("Failed to save chunk { }", chunkKey, e);
+        throw new RuntimeException(e);
+      }
+    }, asyncExecutor).thenCompose(future -> future);
+  }
+
+  /** Perform async load operation for reactive pipeline. */
+  private CompletableFuture<Optional<Object>> performAsyncLoad(String chunkKey) {
+    return CompletableFuture.supplyAsync(() -> {
+      try {
+        // Try cache first
+        Optional<ChunkCache.CachedChunk> cached = cache.getChunk(chunkKey);
+        if (cached.isPresent()) {
+          LOGGER.trace("Chunk { } found in cache", chunkKey);
+
+          // Check if chunk is swapped out and needs to be swapped in
+          if (cached.get().isSwapped() && swapManager != null) {
+            LOGGER.debug("Chunk { } is swapped out, initiating swap-in", chunkKey);
+            boolean swapSuccess = swapManager.swapInChunk(chunkKey).join();
+            if (swapSuccess) {
+              LOGGER.debug("Successfully swapped in chunk: { }", chunkKey);
+              // Chunk should now be available in cache
+              cached = cache.getChunk(chunkKey);
+              if (cached.isPresent() && !cached.get().isSwapped()) {
+                // Cached chunk is now available in memory
+                try {
+                  Object cachedObj = cached.get().getChunk();
+
+                  if (cachedObj != null) {
+                    // If it's a live LevelChunk, return it immediately
+                    if (isMinecraftLevelChunk(cachedObj)) {
+                      LOGGER.debug("Returning LevelChunk from cache for {}", chunkKey);
+                      return Optional.of(cachedObj);
+                    }
+
+                    // If it's already an NBT CompoundTag, return that
+                    if (isMinecraftCompoundTag(cachedObj)) {
+                      LOGGER.debug("Returning CompoundTag from cache for {}", chunkKey);
+                      return Optional.of(cachedObj);
+                    }
+
+                    // If cached object is a serialized byte[], attempt to deserialize
+                    if (cachedObj instanceof byte[]) {
+                      try {
+                        Object deserialized = serializer.deserialize((byte[]) cachedObj);
+                        if (deserialized != null) {
+                          LOGGER.debug("Returning deserialized cached chunk for {}", chunkKey);
+                          return Optional.of(deserialized);
+                        }
+                      } catch (Exception e) {
+                        LOGGER.warn(
+                            "Failed to deserialize cached byte[] for {}: {}",
+                            chunkKey,
+                            e.getMessage());
+                      }
+                    }
+
+                    // As a last resort, try to serialize the cached object and then deserialize
+                    try {
+                      byte[] roundtrip = serializer.serialize(cachedObj);
+                      Object deserialized = serializer.deserialize(roundtrip);
+                      if (deserialized != null) {
+                        LOGGER.debug(
+                            "Returning serialized->deserialized cached chunk for {}", chunkKey);
+                        return Optional.of(deserialized);
+                      }
+                    } catch (Exception e) {
+                      LOGGER.debug(
+                          "Could not convert cached object to CompoundTag for {}: {}",
+                          chunkKey,
+                          e.getMessage());
+                    }
+                  }
+                } catch (Exception e) {
+                  LOGGER.warn(
+                      "Error while returning cached chunk for {}: {}", chunkKey, e.getMessage());
+                }
+              }
+            } else {
+              LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
+            }
+          }
+        }
+
+        // Try database
+        Optional<byte[]> dbData = database.getChunk(chunkKey);
+        if (dbData.isPresent()) {
+          LOGGER.trace("Chunk { } found in database", chunkKey);
+          try {
+            Object chunkData = serializer.deserialize(dbData.get());
+
+            // Try to cast to CompoundTag if Minecraft classes are available
+            if (chunkData != null && isMinecraftCompoundTag(chunkData)) {
+              // Cache the loaded chunk for future access
+              return Optional.of(chunkData);
+            } else {
+              LOGGER.warn("Deserialized data is not a valid CompoundTag for chunk { }", chunkKey);
+              return Optional.empty();
+            }
+          } catch (Exception e) {
+            LOGGER.error(
+                "Failed to deserialize chunk data for { }: { }", chunkKey, e.getMessage(), e);
+            return Optional.empty();
+          }
+        }
+
+        LOGGER.trace("Chunk { } not found in storage", chunkKey);
+        return Optional.empty();
+
+      } catch (Exception e) {
+        LOGGER.error("Failed to load chunk { }", chunkKey, e);
+        throw new RuntimeException(e);
+      }
+    }, asyncExecutor);
+  }
+
+  /** Chunk operation for reactive streams pipeline. */
+  private static class ChunkOperation {
+    private final String operationType; // "save" or "load"
+    private final String chunkKey;
+    private final Object chunk;
+    private final CompletableFuture<Optional<Object>> result;
+
+    public ChunkOperation(String operationType, String chunkKey, Object chunk) {
+      this.operationType = operationType;
+      this.chunkKey = chunkKey;
+      this.chunk = chunk;
+      this.result = new CompletableFuture<>();
+    }
+
+    public String getOperationType() { return operationType; }
+    public String getChunkKey() { return chunkKey; }
+    public Object getChunk() { return chunk; }
+    public CompletableFuture<Optional<Object>> getResult() { return result; }
+  }
+
+  /** Processor for save operations in reactive pipeline. */
+  private class SaveChunkProcessor implements Flow.Subscriber<ChunkOperation> {
+    private Flow.Subscription subscription;
+
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      this.subscription = subscription;
+      subscription.request(1);
+    }
+
+    @Override
+    public void onNext(ChunkOperation operation) {
+      try {
+        if ("save".equals(operation.getOperationType())) {
+          // Perform async save operation
+          CompletableFuture<Void> saveFuture = performAsyncSave(operation.getChunkKey(), operation.getChunk());
+          saveFuture.whenComplete((result, throwable) -> {
+            if (throwable != null) {
+              operation.getResult().completeExceptionally(throwable);
+            } else {
+              operation.getResult().complete(Optional.of(result));
+            }
+          });
+        }
+      } catch (Exception e) {
+        operation.getResult().completeExceptionally(e);
+      }
+      subscription.request(1);
+    }
+
+    @Override
+    public void onError(Throwable throwable) {
+      LOGGER.error("Error in save pipeline", throwable);
+    }
+
+    @Override
+    public void onComplete() {
+      // Pipeline completed
+    }
+  }
+
+  /** Processor for load operations in reactive pipeline. */
+  private class LoadChunkProcessor implements Flow.Subscriber<ChunkOperation> {
+    private Flow.Subscription subscription;
+
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      this.subscription = subscription;
+      subscription.request(1);
+    }
+
+    @Override
+    public void onNext(ChunkOperation operation) {
+      try {
+        if ("load".equals(operation.getOperationType())) {
+          // Perform async load operation
+          performAsyncLoad(operation.getChunkKey())
+              .whenComplete((result, throwable) -> {
+                if (throwable != null) {
+                  operation.getResult().completeExceptionally(throwable);
+                } else {
+                  operation.getResult().complete(result);
+                }
+              });
+        }
+      } catch (Exception e) {
+        operation.getResult().completeExceptionally(e);
+      }
+      subscription.request(1);
+    }
+
+    @Override
+    public void onError(Throwable throwable) {
+      LOGGER.error("Error in load pipeline", throwable);
+    }
+
+    @Override
+    public void onComplete() {
+      // Pipeline completed
+    }
   }
 
   /** Storage statistics container. */
