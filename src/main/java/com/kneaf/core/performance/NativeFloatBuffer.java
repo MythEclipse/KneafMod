@@ -90,6 +90,8 @@ public final class NativeFloatBuffer implements AutoCloseable {
   private final boolean isPooled;
 
   private final int bucketIndex;
+  
+  private final long operationId;
 
   private static final class State implements Runnable {
     private final ByteBuffer buf;
@@ -162,8 +164,11 @@ public final class NativeFloatBuffer implements AutoCloseable {
     }
   }
 
+  /**
+   * Main constructor with operation ID for zero-copy tracking
+   */
   private NativeFloatBuffer(
-      ByteBuffer buf, long rows, long cols, boolean isPooled, int bucketIndex) {
+      ByteBuffer buf, long rows, long cols, boolean isPooled, int bucketIndex, long operationId) {
     if (buf == null) throw new IllegalArgumentException("buf must not be null");
     if (rows < 0 || cols < 0) throw new IllegalArgumentException("rows/cols must be non-negative");
     this.buf = buf.order(ByteOrder.LITTLE_ENDIAN);
@@ -176,6 +181,15 @@ public final class NativeFloatBuffer implements AutoCloseable {
     this.cleanable = CLEANER.register(this, new State(this.buf, isPooled, bucketIndex));
     this.isPooled = isPooled;
     this.bucketIndex = bucketIndex;
+    this.operationId = operationId;
+  }
+
+  /**
+   * Backward-compatible constructor for non-zero-copy buffers
+   */
+  private NativeFloatBuffer(
+      ByteBuffer buf, long rows, long cols, boolean isPooled, int bucketIndex) {
+    this(buf, rows, cols, isPooled, bucketIndex, -1); // -1 indicates non-zero-copy
   }
 
   /** Calculate bucket index for given byte capacity */
@@ -333,6 +347,109 @@ public final class NativeFloatBuffer implements AutoCloseable {
           // Ignore pre-allocation failures
         }
       }
+    }
+  }
+
+  /**
+   * Create NativeFloatBuffer from an existing direct buffer (zero-copy)
+   * @param buffer Direct ByteBuffer with float data
+   * @param rows Number of rows in the buffer
+   * @param cols Number of columns in the buffer
+   * @return NativeFloatBuffer wrapping the existing buffer
+   * @throws IllegalArgumentException If buffer is not direct
+   */
+  public static NativeFloatBuffer fromDirectBuffer(ByteBuffer buffer, long rows, long cols) {
+    if (buffer == null || !buffer.isDirect()) {
+      throw new IllegalArgumentException("Zero-copy requires direct ByteBuffer");
+    }
+    if (rows <= 0 || cols <= 0) {
+      throw new IllegalArgumentException("Rows and cols must be positive");
+    }
+    if (buffer.remaining() != rows * cols * 4) {
+      throw new IllegalArgumentException("Buffer size must match rows * cols * 4 (float size)");
+    }
+
+    // Create buffer with LITTLE_ENDIAN order (required for native compatibility)
+    buffer.order(ByteOrder.LITTLE_ENDIAN);
+    
+    // Create instance without native allocation - use CLEANER for lifecycle management
+    NativeFloatBuffer instance = new NativeFloatBuffer(buffer, rows, cols, false, -1);
+    instance.closed = false; // Ensure buffer is not marked as closed
+    
+    return instance;
+  }
+
+  /**
+   * Get memory address of the underlying direct buffer (JNI-compatible)
+   * @return Memory address as long, or 0 if buffer is not direct
+   */
+  public long getBufferAddress() {
+    if (buf == null || !buf.isDirect()) {
+      return 0L;
+    }
+    return getBufferAddressImpl(buf);
+  }
+
+  /**
+   * Get memory address of direct buffer (JNI implementation)
+   * @param buffer Direct ByteBuffer
+   * @return Memory address as long
+   */
+  private static native long getBufferAddressImpl(ByteBuffer buffer);
+
+  /**
+   * Create zero-copy NativeFloatBuffer from direct buffer with proper lifecycle management
+   * @param buffer Direct ByteBuffer containing float data
+   * @param rows Number of rows in the buffer
+   * @param cols Number of columns in the buffer
+   * @param operationId Unique ID for tracking this zero-copy operation
+   * @return NativeFloatBuffer wrapping the existing buffer
+   * @throws IllegalArgumentException If buffer is not direct or invalid dimensions
+   */
+  public static NativeFloatBuffer createZeroCopyBuffer(ByteBuffer buffer, long rows, long cols, long operationId) {
+    if (buffer == null || !buffer.isDirect()) {
+      throw new IllegalArgumentException("Zero-copy requires direct ByteBuffer");
+    }
+    if (rows <= 0 || cols <= 0) {
+      throw new IllegalArgumentException("Rows and cols must be positive");
+    }
+    if (buffer.remaining() != rows * cols * 4) {
+      throw new IllegalArgumentException("Buffer size must match rows * cols * 4 (float size)");
+    }
+
+    // Create buffer with LITTLE_ENDIAN order (required for native compatibility)
+    buffer.order(ByteOrder.LITTLE_ENDIAN);
+    
+    // Create instance with zero-copy marker and operation ID through constructor
+    NativeFloatBuffer instance = new NativeFloatBuffer(buffer, rows, cols, false, -1, operationId);
+    instance.closed = false;
+    
+    return instance;
+  }
+
+  /**
+   * Get the zero-copy operation ID for this buffer (if zero-copy)
+   * @return Operation ID or -1 if not a zero-copy buffer
+   */
+  public long getOperationId() {
+    return operationId;
+  }
+
+  /**
+   * Check if this buffer was created via zero-copy operation
+   * @return true if zero-copy, false otherwise
+   */
+  public boolean isZeroCopy() {
+    return operationId != -1;
+  }
+
+  /**
+   * Cleanup resources for zero-copy buffer
+   */
+  public void cleanupZeroCopy() {
+    if (isZeroCopy() && !closed) {
+      RustPerformance.cleanupZeroCopyOperation(operationId);
+      closed = true;
     }
   }
 

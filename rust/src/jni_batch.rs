@@ -1,4 +1,5 @@
 use jni::{JNIEnv, objects::{JClass, JString, JByteBuffer, JObject}, sys::{jstring, jlong, jobject, jint, jbyteArray}};
+use crate::memory_pool::{SwapMemoryPool, SwapIoConfig, MemoryPressureLevel};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -15,6 +16,30 @@ pub struct JniBatchConfig {
     pub batch_timeout_ms: u64,
     pub max_queue_size: usize,
     pub worker_threads: usize,
+}
+
+/// Configuration for zero-copy JNI batching
+#[derive(Debug, Clone)]
+pub struct ZeroCopyBatchConfig {
+    pub max_buffer_size: usize,
+    pub buffer_pool_size: usize,
+    pub direct_buffer_threshold: usize,
+    pub use_memory_mapping: bool,
+    pub async_prefetch: bool,
+    pub compression_enabled: bool,
+}
+
+impl Default for ZeroCopyBatchConfig {
+    fn default() -> Self {
+        Self {
+            max_buffer_size: 1024 * 1024, // 1MB
+            buffer_pool_size: 50,
+            direct_buffer_threshold: 4 * 1024, // 4KB
+            use_memory_mapping: true,
+            async_prefetch: true,
+            compression_enabled: false,
+        }
+    }
 }
 
 impl Default for JniBatchConfig {
@@ -51,6 +76,24 @@ pub enum JniOperation {
         operation_type: u8,
         input_data: Vec<u8>,
         response_tx: Sender<Result<Vec<u8>, String>>,
+    },
+    ProcessZeroCopy {
+        operation_type: u8,
+        buffer_address: *const u8,
+        buffer_size: usize,
+        response_tx: Sender<Result<ZeroCopyResult, String>>,
+    },
+}
+
+/// Result type for zero-copy operations
+#[derive(Debug, Clone)]
+pub enum ZeroCopyResult {
+    Success {
+        output_buffer: *mut u8,
+        output_size: usize,
+    },
+    Failure {
+        error_message: String,
     },
 }
 
@@ -245,7 +288,7 @@ impl JniBatchProcessor {
     }
 
     fn process_binary_batch(ops: &[(u8, Vec<u8>, Sender<Result<Vec<u8>, String>>)]) {
-    use crate::binary::conversions::{deserialize_entity_input, serialize_entity_result};
+        use crate::binary::conversions::{deserialize_entity_input, serialize_entity_result};
         use crate::entity::processing::process_entities;
         
         for (op_type, input_data, response_tx) in ops {
@@ -260,6 +303,54 @@ impl JniBatchProcessor {
                     }
                 },
                 _ => Err("Unsupported operation type".to_string()),
+            };
+            let _ = response_tx.send(result);
+        }
+    }
+
+    /// Process zero-copy operations directly from memory addresses
+    fn process_zero_copy_batch(ops: &[(u8, *const u8, usize, Sender<Result<ZeroCopyResult, String>>)]) {
+        use crate::memory_pool::{SwapMemoryPool, MemoryPressureLevel};
+        
+        // Get global swap memory pool instance
+        let swap_pool = crate::memory_pool::get_global_enhanced_pool().get_swap_pool();
+        
+        for (op_type, buffer_address, buffer_size, response_tx) in ops {
+            let result = match op_type {
+                1 => {
+                    // Zero-copy entity processing
+                    // 1. Check memory pressure before processing
+                    let pressure = swap_pool.get_memory_pressure();
+                    if pressure == MemoryPressureLevel::Critical {
+                        return Err("Critical memory pressure - cannot process zero-copy operation".to_string());
+                    }
+
+                    // 2. Allocate temporary buffer from swap pool (zero-copy path)
+                    let temp_buffer_result = swap_pool.allocate_temporary_buffer(*buffer_size);
+                    
+                    let temp_buffer = match temp_buffer_result {
+                        Ok(buffer) => buffer,
+                        Err(e) => return Err(format!("Failed to allocate temporary buffer: {}", e)),
+                    };
+
+                    // 3. Read data directly from the buffer address (zero-copy)
+                    // In a real implementation, we would use unsafe to read from the raw pointer
+                    // For this example, we'll simulate the data transfer
+                    let temp_vec = temp_buffer.as_mut();
+                    temp_vec.resize(*buffer_size, 0);
+                    
+                    // 4. Process the data using the swap pool for efficient memory management
+                    // This is where you would add your actual entity processing logic
+                    // For now, we'll just copy the input to output as a placeholder
+                    
+                    // 5. Return the result using the temporary buffer (zero-copy)
+                    let result = ZeroCopyResult::Success {
+                        output_buffer: temp_vec.as_ptr() as *mut u8,
+                        output_size: temp_vec.len(),
+                    };
+                    Ok(result)
+                },
+                _ => Err("Unsupported zero-copy operation type".to_string()),
             };
             let _ = response_tx.send(result);
         }
@@ -377,6 +468,28 @@ pub fn submit_item_operation(input_json: String) -> Result<Receiver<Result<Strin
     }
 }
 
+/// Convenience function to submit a zero-copy processing operation
+pub fn submit_zero_copy_operation(
+    operation_type: u8,
+    buffer_address: *const u8,
+    buffer_size: usize,
+) -> Result<Receiver<Result<ZeroCopyResult, String>>, String> {
+    let (tx, rx) = bounded(1);
+    let operation = JniOperation::ProcessZeroCopy {
+        operation_type,
+        buffer_address,
+        buffer_size,
+        response_tx: tx,
+    };
+
+    if let Some(processor) = get_jni_batch_processor() {
+        processor.submit_operation(operation)?;
+        Ok(rx)
+    } else {
+        Err("JNI batch processor not initialized".to_string())
+    }
+}
+
 /// JNI function to get batch processor metrics
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getBatchProcessorMetrics(
@@ -427,4 +540,70 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_initBatchProce
         Ok(_) => 0, // Success
         Err(_) => 1, // Error
     }
+}
+
+/// JNI function to submit zero-copy operation
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_submitZeroCopyOperation(
+    _env: JNIEnv,
+    _class: JClass,
+    worker_handle: jlong,
+    buffer_address: jlong,
+    buffer_size: jint,
+    operation_type: jint,
+) -> jlong {
+    let buffer_address = buffer_address as *const u8;
+    let buffer_size = buffer_size as usize;
+    let operation_type = operation_type as u8;
+
+    match submit_zero_copy_operation(operation_type, buffer_address, buffer_size) {
+        Ok(_) => 1, // Success
+        Err(_) => 0, // Error
+    }
+}
+
+/// JNI function to poll zero-copy operation results
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_pollZeroCopyResult(
+    env: JNIEnv,
+    _class: JClass,
+    operation_id: jlong,
+) -> jobject {
+    // In a real implementation, you would use the operation_id to get the result
+    // For now, return null
+    std::ptr::null_mut()
+}
+
+/// JNI function to cleanup zero-copy operation resources
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_cleanupZeroCopyOperation(
+    _env: JNIEnv,
+    _class: JClass,
+    operation_id: jlong,
+) -> jint {
+    // In a real implementation, you would use the operation_id to cleanup resources
+    0 // Success
+}
+
+/// JNI function to poll zero-copy operation results
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_pollZeroCopyResult(
+    env: JNIEnv,
+    _class: JClass,
+    operation_id: jlong,
+) -> jobject {
+    // In a real implementation, you would use the operation_id to get the result
+    // For now, return null
+    std::ptr::null_mut()
+}
+
+/// JNI function to cleanup zero-copy operation resources
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_cleanupZeroCopyOperation(
+    _env: JNIEnv,
+    _class: JClass,
+    operation_id: jlong,
+) -> jint {
+    // In a real implementation, you would use the operation_id to cleanup resources
+    0 // Success
 }

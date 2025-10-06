@@ -416,12 +416,21 @@ public class RustPerformance {
   }
 
   /** Free float buffer native. */
- public static void freeFloatBufferNative(ByteBuffer buffer) {
-   ensureInitialized();
-   NATIVE_MANAGER.freeFloatBuffer(buffer);
- }
+  public static void freeFloatBufferNative(ByteBuffer buffer) {
+    ensureInitialized();
+    NATIVE_MANAGER.freeFloatBuffer(buffer);
+  }
 
- /** Record JNI call performance metrics (native integration). */
+  /** Submit zero-copy operation to native batch processor. */
+  public static native void submitZeroCopyOperation(long workerHandle, long bufferAddress, int bufferSize, int operationType);
+
+  /** Poll for zero-copy operation results. */
+  public static native ByteBuffer pollZeroCopyResult(long operationId);
+
+  /** Clean up zero-copy operation resources. */
+  public static native void cleanupZeroCopyOperation(long operationId);
+
+  /** Record JNI call performance metrics (native integration). */
  public static native void recordJniCallNative(String callType, long durationMs);
  
  /** Record lock wait performance metrics (native integration). */

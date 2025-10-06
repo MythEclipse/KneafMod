@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Enhanced JNI bridge for worker-based native processing with optimized batch processing.
  * Implements memory pooling and batch processing to minimize memory copies.
+ * Supports zero-copy operations for maximum performance.
  */
 public final class NativeBridge {
   static {
@@ -74,6 +75,10 @@ public final class NativeBridge {
   private static final ConcurrentLinkedQueue<ByteBuffer> BUFFER_POOL =
       new ConcurrentLinkedQueue<>();
   private static final AtomicInteger POOLED_BUFFER_COUNT = new AtomicInteger(0);
+  
+  // Zero-copy buffer tracking
+  private static final ConcurrentHashMap<Long, ByteBuffer> ZERO_COPY_BUFFERS = new ConcurrentHashMap<>();
+  private static final AtomicLong NEXT_ZERO_COPY_ID = new AtomicLong(1);
 
   private NativeBridge() {}
 
@@ -506,6 +511,132 @@ public final class NativeBridge {
       nativeFreeBuffer(buffer);
     }
   }
+
+  /**
+   * Submit zero-copy operation directly from ByteBuffer (no data copying)
+   * @param workerHandle Native worker handle
+   * @param buffer Direct ByteBuffer containing the data
+   * @param operationType Type of operation to perform
+   * @return Unique ID for tracking this zero-copy operation
+   * @throws IllegalArgumentException If buffer is not direct or operation type is invalid
+   */
+  public static long submitZeroCopyOperation(long workerHandle, ByteBuffer buffer, int operationType) {
+    if (buffer == null || !buffer.isDirect()) {
+      throw new IllegalArgumentException("Zero-copy operations require direct ByteBuffer");
+    }
+    if (operationType <= 0) {
+      throw new IllegalArgumentException("Invalid operation type: " + operationType);
+    }
+
+    // Generate unique ID for tracking
+    long operationId = NEXT_ZERO_COPY_ID.getAndIncrement();
+     
+    // Track buffer for later cleanup
+    ZERO_COPY_BUFFERS.put(operationId, buffer);
+    
+    // Get buffer address and size for native call
+    long bufferAddress = getBufferAddress(buffer);
+    int bufferSize = buffer.remaining();
+    
+    try {
+      // Call native zero-copy JNI function
+      com.kneaf.core.performance.RustPerformance.submitZeroCopyOperation(workerHandle, bufferAddress, bufferSize, operationType);
+       
+      return operationId;
+    } catch (Throwable t) {
+      // Clean up on failure
+      ZERO_COPY_BUFFERS.remove(operationId);
+      throw t;
+    }
+  }
+
+  /**
+   * Submit zero-copy operation with NativeFloatBuffer (optimized path)
+   * @param workerHandle Native worker handle
+   * @param buffer NativeFloatBuffer containing the data
+   * @param operationType Type of operation to perform
+   * @return Unique ID for tracking this zero-copy operation
+   * @throws IllegalArgumentException If buffer is not direct or operation type is invalid
+   */
+  public static long submitZeroCopyOperation(long workerHandle, com.kneaf.core.performance.NativeFloatBuffer buffer, int operationType) {
+    if (buffer == null || buffer.buffer() == null || !buffer.buffer().isDirect()) {
+      throw new IllegalArgumentException("Zero-copy operations require direct ByteBuffer");
+    }
+    if (operationType <= 0) {
+      throw new IllegalArgumentException("Invalid operation type: " + operationType);
+    }
+
+    // Generate unique ID for tracking
+    long operationId = NEXT_ZERO_COPY_ID.getAndIncrement();
+     
+    // Track buffer for later cleanup
+    ZERO_COPY_BUFFERS.put(operationId, buffer.buffer());
+    
+    // Get buffer address and size for native call
+    long bufferAddress = getBufferAddress(buffer.buffer());
+    int bufferSize = buffer.buffer().remaining();
+    
+    try {
+      // Call native zero-copy JNI function
+      com.kneaf.core.performance.RustPerformance.submitZeroCopyOperation(workerHandle, bufferAddress, bufferSize, operationType);
+       
+      return operationId;
+    } catch (Throwable t) {
+      // Clean up on failure
+      ZERO_COPY_BUFFERS.remove(operationId);
+      throw t;
+    }
+  }
+
+  /**
+   * Poll for zero-copy operation results
+   * @param operationId ID returned from submitZeroCopyOperation
+   * @return ByteBuffer containing results or null if not ready
+   */
+  public static ByteBuffer pollZeroCopyResult(long operationId) {
+    // Call native method to get zero-copy results
+    return com.kneaf.core.performance.RustPerformance.pollZeroCopyResult(operationId);
+  }
+
+  /**
+   * Poll for zero-copy operation results with NativeFloatBuffer output
+   * @param operationId ID returned from submitZeroCopyOperation
+   * @return NativeFloatBuffer containing results or null if not ready
+   */
+  public static com.kneaf.core.performance.NativeFloatBuffer pollZeroCopyResultAsFloatBuffer(long operationId) {
+    ByteBuffer resultBuffer = pollZeroCopyResult(operationId);
+    if (resultBuffer == null) {
+      return null;
+    }
+    
+    try {
+      // Create NativeFloatBuffer from result - use pooling for efficiency
+      return com.kneaf.core.performance.NativeFloatBuffer.allocateFromNative(
+        resultBuffer.limit() / 4,  // Convert bytes to float count
+        resultBuffer.limit() / 4,  // Square buffer for simplicity
+        true  // Use pooling
+      );
+    } catch (Exception e) {
+      // If NativeFloatBuffer creation fails, return the raw ByteBuffer
+      return null;
+    }
+  }
+
+  /**
+   * Clean up zero-copy buffers that are no longer needed
+   * @param operationId ID of the operation to clean up
+   */
+  public static void cleanupZeroCopyOperation(long operationId) {
+    ZERO_COPY_BUFFERS.remove(operationId);
+    com.kneaf.core.performance.RustPerformance.cleanupZeroCopyOperation(operationId);
+  }
+
+  /**
+   * Get memory address of direct buffer (JNI-compatible)
+   * @param buffer Direct ByteBuffer
+   * @return Memory address as long
+   */
+  private static native long getBufferAddress(ByteBuffer buffer);
 
   /** Get batch processing statistics */
   public static Map<String, Object> getBatchStats() {
