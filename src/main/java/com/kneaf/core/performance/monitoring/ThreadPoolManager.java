@@ -1,7 +1,9 @@
 package com.kneaf.core.performance.monitoring;
 
 import com.mojang.logging.LogUtils;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -20,6 +22,10 @@ public class ThreadPoolManager {
   // Advanced ThreadPoolExecutor with dynamic sizing and monitoring
   private static ThreadPoolExecutor serverTaskExecutor = null;
   private static final Object EXECUTOR_LOCK = new Object();
+
+  // Adaptive scaling scheduler
+  private static ScheduledExecutorService adaptiveScheduler = null;
+  private static final Object SCHEDULER_LOCK = new Object();
 
   // Executor monitoring and metrics
   public static final class ExecutorMetrics {
@@ -68,6 +74,7 @@ public class ThreadPoolManager {
     synchronized (EXECUTOR_LOCK) {
       if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
         createAdvancedThreadPool();
+        startAdaptiveScaling();
       }
       return serverTaskExecutor;
     }
@@ -162,6 +169,78 @@ public class ThreadPoolManager {
   }
 
   /**
+   * Perform adaptive thread pool scaling based on CPU load.
+   */
+  private static void performAdaptiveScaling() {
+    synchronized (EXECUTOR_LOCK) {
+      if (serverTaskExecutor == null || serverTaskExecutor.isShutdown()) {
+        return;
+      }
+
+      double cpuLoad = getSystemCpuLoad();
+      int currentCore = serverTaskExecutor.getCorePoolSize();
+      int currentMax = serverTaskExecutor.getMaximumPoolSize();
+      int minThreads = CONFIG.getMinThreadpoolSize();
+      int maxThreads = CONFIG.getMaxThreadpoolSize();
+
+      // Scale up when CPU load is low (more capacity available)
+      if (cpuLoad < CONFIG.getCpuLoadThreshold() * 0.7) { // Scale up threshold: 70% of config threshold
+        int newCore = Math.min(currentCore + 1, maxThreads);
+        int newMax = Math.min(currentMax + 2, maxThreads);
+
+        if (newCore > currentCore || newMax > currentMax) {
+          serverTaskExecutor.setCorePoolSize(newCore);
+          serverTaskExecutor.setMaximumPoolSize(newMax);
+          EXECUTOR_METRICS.lastScaleUpTime = System.currentTimeMillis();
+          EXECUTOR_METRICS.scaleUpCount++;
+          EXECUTOR_METRICS.currentThreadCount = newCore;
+          EXECUTOR_METRICS.peakThreadCount = Math.max(EXECUTOR_METRICS.peakThreadCount, newCore);
+          LOGGER.debug("Scaled up thread pool: core={}, max={}", newCore, newMax);
+        }
+      }
+      // Scale down when CPU load is high (reduce resource usage)
+      else if (cpuLoad > CONFIG.getCpuLoadThreshold() * 1.3) { // Scale down threshold: 130% of config threshold
+        int newCore = Math.max(currentCore - 1, minThreads);
+        int newMax = Math.max(currentMax - 1, minThreads);
+
+        if (newCore < currentCore || newMax < currentMax) {
+          serverTaskExecutor.setCorePoolSize(newCore);
+          serverTaskExecutor.setMaximumPoolSize(newMax);
+          EXECUTOR_METRICS.lastScaleDownTime = System.currentTimeMillis();
+          EXECUTOR_METRICS.scaleDownCount++;
+          EXECUTOR_METRICS.currentThreadCount = newCore;
+          LOGGER.debug("Scaled down thread pool: core={}, max={}", newCore, newMax);
+        }
+      }
+    }
+  }
+
+  /**
+   * Start adaptive scaling scheduler.
+   */
+  private static void startAdaptiveScaling() {
+    synchronized (SCHEDULER_LOCK) {
+      if (adaptiveScheduler == null || adaptiveScheduler.isShutdown()) {
+        adaptiveScheduler = Executors.newScheduledThreadPool(1, r -> {
+          Thread t = new Thread(r, "kneaf-adaptive-scaler");
+          t.setDaemon(true);
+          return t;
+        });
+
+        // Schedule adaptive scaling every 10 seconds
+        adaptiveScheduler.scheduleAtFixedRate(
+            ThreadPoolManager::performAdaptiveScaling,
+            10, // Initial delay
+            10, // Period
+            TimeUnit.SECONDS
+        );
+
+        LOGGER.debug("Started adaptive thread scaling scheduler");
+      }
+    }
+  }
+
+  /**
    * Helper method to clamp values between min and max.
    */
   public static int clamp(int v, int min, int max) {
@@ -195,6 +274,23 @@ public class ThreadPoolManager {
           serverTaskExecutor.shutdownNow();
         } finally {
           serverTaskExecutor = null;
+        }
+      }
+    }
+
+    // Shutdown adaptive scheduler
+    synchronized (SCHEDULER_LOCK) {
+      if (adaptiveScheduler != null) {
+        try {
+          adaptiveScheduler.shutdown();
+          if (!adaptiveScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+            adaptiveScheduler.shutdownNow();
+          }
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          adaptiveScheduler.shutdownNow();
+        } finally {
+          adaptiveScheduler = null;
         }
       }
     }
