@@ -7,6 +7,8 @@ import com.kneaf.core.performance.monitoring.PerformanceManager;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.CompletableFuture;
+import com.kneaf.core.performance.monitoring.EntityProcessor;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -142,14 +144,32 @@ public class NeoForgeEventIntegration {
     try {
       MinecraftServer server = event.getServer();
 
-      // Process predictive chunk loading
-      processPredictiveChunkLoading(server);
+      // Process predictive chunk loading asynchronously
+      CompletableFuture.runAsync(() -> processPredictiveChunkLoading(server))
+          .exceptionally(ex -> {
+            LOGGER.warn("Predictive chunk loading failed asynchronously", ex);
+            return null;
+          });
 
-      // Villager optimizations are handled by PerformanceManager
-      // processVillagerOptimizations(server);
+      // Use EntityProcessor for villager and entity optimizations (async)
+      if (entityProcessor == null) {
+        entityProcessor = new EntityProcessor();
+      }
 
-      // Process SIMD operations
-      processSIMDOperations(server);
+      entityProcessor.onServerTickAsync(server)
+          .exceptionally(ex -> {
+            LOGGER.warn("Entity processing failed asynchronously", ex);
+            // Fall back to synchronous processing if async fails
+            entityProcessor.onServerTick(server);
+            return null;
+          });
+
+      // Process SIMD operations asynchronously
+      CompletableFuture.runAsync(() -> processSIMDOperations(server))
+          .exceptionally(ex -> {
+            LOGGER.warn("SIMD operations failed asynchronously", ex);
+            return null;
+          });
 
       // Update performance metrics
       updatePerformanceMetrics(server, tickStartTime);
@@ -161,6 +181,9 @@ public class NeoForgeEventIntegration {
       LOGGER.error("Error during server tick processing", e);
     }
   }
+  
+  // Lazy-loaded EntityProcessor for async optimizations
+  private static EntityProcessor entityProcessor;
 
   // Villager processing is now integrated into the main server tick event
   // for better performance and reduced event overhead

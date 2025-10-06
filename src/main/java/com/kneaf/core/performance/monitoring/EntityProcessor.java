@@ -1,5 +1,6 @@
 package com.kneaf.core.performance.monitoring;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.MobData;
@@ -19,7 +20,9 @@ import net.minecraft.world.phys.AABB;
 import org.slf4j.Logger;
 
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Processes entity data collection, optimization, and management.
@@ -34,6 +37,12 @@ public class EntityProcessor {
   // Spatial grid for efficient player position queries per level
   private static final Map<ServerLevel, SpatialGrid> LEVEL_SPATIAL_GRIDS = new HashMap<>();
   private static final Object SPATIAL_GRID_LOCK = new Object();
+  private static final int ASYNC_COLLECTION_THREADS = Runtime.getRuntime().availableProcessors() / 2;
+  
+  // Adaptive memory pool configuration
+  private static final int MEMORY_POOL_INITIAL_CAPACITY = 1024;
+  private static final float MEMORY_POOL_LOAD_FACTOR = 0.75f;
+  private static final int MEMORY_POOL_MAX_SIZE = 4096;
 
   // Per-level distance state maps for restore and smoothing
   private static final Map<ServerLevel, Integer> ORIGINAL_VIEW_DISTANCE =
@@ -69,12 +78,67 @@ public class EntityProcessor {
   private static final int DEFAULT_TRANSITION_TICKS = 20;
   private static final int TRANSITION_TICKS = DEFAULT_TRANSITION_TICKS;
 
-  public EntityProcessor() {}
+  // Adaptive entity memory pool (maps entityId -> EntityData)
+  private final Map<Long, EntityData> entityMemoryPool = new ConcurrentHashMap<>(MEMORY_POOL_INITIAL_CAPACITY, MEMORY_POOL_LOAD_FACTOR);
+  private final AtomicLong poolSize = new AtomicLong(0);
+
+  public EntityProcessor() {
+    // Initialize thread pool for async entity collection
+    this.asyncCollector = Executors.newFixedThreadPool(
+        ASYNC_COLLECTION_THREADS,
+        new ThreadFactoryBuilder()
+            .setNameFormat("EntityCollector-%d")
+            .setDaemon(true)
+            .build()
+    );
+  }
+  
+  private final ExecutorService asyncCollector;
 
   /**
-   * Collect and consolidate entity data from the server.
+   * Collect and consolidate entity data from the server asynchronously.
+   */
+  public CompletableFuture<EntityDataCollection> collectAndConsolidateAsync(MinecraftServer server, boolean shouldProfile) {
+    long collectionStart = shouldProfile ? System.nanoTime() : 0;
+    
+    return CompletableFuture.supplyAsync(() -> collectEntityData(server), asyncCollector)
+        .thenApply(rawData -> {
+          if (shouldProfile) {
+            long durationMs = (System.nanoTime() - collectionStart) / 1_000_000;
+            PerformanceMetricsLogger.logLine(String.format("PERF: entity_collection duration=%dms", durationMs));
+          }
+          return rawData;
+        })
+        .thenApplyAsync(rawData -> {
+          long consolidationStart = shouldProfile ? System.nanoTime() : 0;
+          List<ItemEntityData> consolidatedItems = consolidateItemEntities(rawData.items());
+          
+          if (shouldProfile) {
+            long durationMs = (System.nanoTime() - consolidationStart) / 1_000_000;
+            PerformanceMetricsLogger.logLine(String.format("PERF: item_consolidation duration=%dms", durationMs));
+          }
+
+          return new EntityDataCollection(
+              rawData.entities(), consolidatedItems, rawData.mobs(), rawData.blockEntities(), rawData.players());
+        }, asyncCollector);
+  }
+
+  /**
+   * Collect and consolidate entity data from the server (synchronous fallback).
    */
   public EntityDataCollection collectAndConsolidate(MinecraftServer server, boolean shouldProfile) {
+    try {
+      return collectAndConsolidateAsync(server, shouldProfile).join();
+    } catch (CompletionException e) {
+      LOGGER.warn("Async entity collection failed, falling back to synchronous mode", e);
+      return collectAndConsolidateSync(server, shouldProfile);
+    }
+  }
+
+  /**
+   * Synchronous entity collection (fallback for async failures).
+   */
+  private EntityDataCollection collectAndConsolidateSync(MinecraftServer server, boolean shouldProfile) {
     long entityCollectionStart = shouldProfile ? System.nanoTime() : 0;
     EntityDataCollection rawData = collectEntityData(server);
     
@@ -96,6 +160,10 @@ public class EntityProcessor {
   }
 
   private EntityDataCollection collectEntityData(MinecraftServer server) {
+    if (server == null) {
+      return new EntityDataCollection(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+    }
+
     // Pre-size collections to avoid repeated resizing
     int estimatedEntities = Math.min(CONFIG.getMaxEntitiesToCollect(), 5000);
     List<EntityData> entities = new ArrayList<>(estimatedEntities);
@@ -109,7 +177,18 @@ public class EntityProcessor {
     String[] excludedTypes = CONFIG.getExcludedEntityTypes();
     double cutoffSq = distanceCutoff * distanceCutoff;
 
+    List<CompletableFuture<Void>> levelFutures = new ArrayList<>();
+    // Convert to list first to get size
+    List<ServerLevel> levels = new ArrayList<>();
     for (ServerLevel level : server.getAllLevels()) {
+      levels.add(level);
+    }
+    int maxParallelLevels = Math.min(levels.size(), ASYNC_COLLECTION_THREADS);
+    int levelsProcessed = 0;
+
+    for (ServerLevel level : levels) {
+      if (levelsProcessed >= maxParallelLevels) break;
+      
       List<ServerPlayer> serverPlayers = level.players();
       List<PlayerData> levelPlayers = new ArrayList<>(serverPlayers.size());
 
@@ -117,14 +196,31 @@ public class EntityProcessor {
         levelPlayers.add(new PlayerData(p.getId(), p.getX(), p.getY(), p.getZ()));
       }
 
-      collectEntitiesFromLevel(
-          level,
-          new EntityCollectionContext(
-              entities, items, mobs, maxEntities, distanceCutoff, levelPlayers, excludedTypes, cutoffSq));
+      levelFutures.add(CompletableFuture.runAsync(() -> {
+        try {
+          collectEntitiesFromLevel(
+              level,
+              new EntityCollectionContext(
+                  entities, items, mobs, maxEntities, distanceCutoff, levelPlayers, excludedTypes, cutoffSq));
+        } catch (Exception e) {
+          LOGGER.debug("Error collecting entities from level {}: {}", level.dimension(), e.getMessage());
+        }
+      }, asyncCollector));
 
       players.addAll(levelPlayers);
-      if (entities.size() >= maxEntities) break;
+      levelsProcessed++;
+      
+      if (entities.size() >= maxEntities) {
+        break;
+      }
     }
+
+    try {
+      CompletableFuture.allOf(levelFutures.toArray(new CompletableFuture[0])).join();
+    } catch (CompletionException e) {
+      LOGGER.debug("Some levels failed entity collection, continuing with available data", e);
+    }
+
     return new EntityDataCollection(entities, items, mobs, blockEntities, players);
   }
 
@@ -245,13 +341,64 @@ public class EntityProcessor {
     if (isExcludedType(typeStr, excluded)) return;
     
     double distance = Math.sqrt(minSq);
-    entities.add(new EntityData(entity.getId(), entity.getX(), entity.getY(), entity.getZ(), distance, false, typeStr));
+    long entityId = entity.getId();
+    
+    // Use adaptive memory pool to reuse entity data objects
+    EntityData entityData = getFromMemoryPool(entityId);
+    if (entityData == null) {
+      entityData = new EntityData(entityId, entity.getX(), entity.getY(), entity.getZ(), distance, false, typeStr);
+      putInMemoryPool(entityId, entityData);
+    } else {
+      // Update existing entity data with new position/distance
+      entityData = new EntityData(entityId, entity.getX(), entity.getY(), entity.getZ(), distance, false, typeStr);
+    }
+
+    entities.add(entityData);
 
     if (entity instanceof ItemEntity itemEntity) {
       collectItemEntity(entity, itemEntity, items);
     } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
       collectMobEntity(entity, mob, mobs, distance, typeStr);
     }
+  }
+  
+  /**
+   * Get entity data from adaptive memory pool
+   */
+  private EntityData getFromMemoryPool(long entityId) {
+    return entityMemoryPool.get(entityId);
+  }
+  
+  /**
+   * Put entity data into adaptive memory pool with size control
+   */
+  private void putInMemoryPool(long entityId, EntityData entityData) {
+    if (poolSize.get() >= MEMORY_POOL_MAX_SIZE) {
+      // Evict least recently used entity (simple implementation - could be enhanced with LRU)
+      evictFromMemoryPool();
+    }
+    entityMemoryPool.put(entityId, entityData);
+    poolSize.incrementAndGet();
+  }
+  
+  /**
+   * Evict entity from memory pool (simple implementation)
+   */
+  private void evictFromMemoryPool() {
+    if (entityMemoryPool.isEmpty()) return;
+    
+    // Simple eviction: remove first entry (could be enhanced with LRU strategy)
+    Map.Entry<Long, EntityData> entry = entityMemoryPool.entrySet().iterator().next();
+    entityMemoryPool.remove(entry.getKey());
+    poolSize.decrementAndGet();
+  }
+  
+  /**
+   * Clear memory pool (called during server ticks or when needed)
+   */
+  public void clearMemoryPool() {
+    entityMemoryPool.clear();
+    poolSize.set(0);
   }
 
   private boolean isExcludedType(String typeStr, String[] excluded) {
@@ -772,9 +919,7 @@ public class EntityProcessor {
   /**
    * Main entry point for server tick processing - mirrors PerformanceManager interface
    */
-  public void onServerTick(MinecraftServer server) {
-    // Implement the core tick logic that was in PerformanceManager
-    // This is a simplified version that maintains the original functionality
+  public CompletableFuture<Void> onServerTickAsync(MinecraftServer server) {
     updateTPS();
     TICK_COUNTER++;
 
@@ -785,28 +930,91 @@ public class EntityProcessor {
 
     // Respect configured scan interval to reduce overhead on busy servers
     if (!shouldPerformScan()) {
-      return;
+      return CompletableFuture.completedFuture(null);
     }
 
-    // Collect and consolidate data
-    EntityDataCollection data = collectAndConsolidate(server, false);
+    // Collect and consolidate data asynchronously
+    return collectAndConsolidateAsync(server, false)
+        .thenComposeAsync(data -> {
+          // Apply any pending distance transitions
+          CompletableFuture<Void> transitionFuture = CompletableFuture.runAsync(() -> {
+            try {
+              applyDistanceTransitions(server);
+            } catch (Throwable t) {
+              LOGGER.debug("Error applying distance transitions: {}", t.getMessage());
+            }
+          }, asyncCollector);
 
-    // Apply any pending distance transitions each tick
+          // Decide whether to offload heavy processing based on rolling TPS
+          double avgTps = getRollingAvgTPS();
+          CompletableFuture<Void> processingFuture;
+
+          if (avgTps >= currentTpsThreshold) {
+            processingFuture = runAsynchronousOptimizations(server, data, false);
+          } else {
+            processingFuture = runSynchronousOptimizationsAsync(server, data, false);
+          }
+
+          // Wait for both transitions and processing to complete
+          return CompletableFuture.allOf(transitionFuture, processingFuture)
+              .thenRun(() -> {});
+        }, asyncCollector);
+  }
+
+  /**
+   * Main entry point for server tick processing (synchronous fallback)
+   */
+  public void onServerTick(MinecraftServer server) {
     try {
-      applyDistanceTransitions(server);
-    } catch (Throwable t) {
-      LOGGER.debug("Error applying distance transitions: {}", t.getMessage());
-    }
+      onServerTickAsync(server).join();
+    } catch (CompletionException e) {
+      LOGGER.warn("Async tick processing failed, falling back to synchronous mode", e);
+      // Fall back to original synchronous processing
+      updateTPS();
+      TICK_COUNTER++;
+      
+      if (!shouldPerformScan()) {
+        return;
+      }
 
-    // Decide whether to offload heavy processing based on rolling TPS
-    double avgTps = getRollingAvgTPS();
-    if (avgTps >= currentTpsThreshold) {
-      // In a complete implementation, we would use ThreadPoolManager here
-      // For now, we'll just run synchronously
-      runSynchronousOptimizations(server, data, false);
-    } else {
-      runSynchronousOptimizations(server, data, false);
+      EntityDataCollection data = collectAndConsolidate(server, false);
+      
+      try {
+        applyDistanceTransitions(server);
+      } catch (Throwable t) {
+        LOGGER.debug("Error applying distance transitions: {}", t.getMessage());
+      }
+
+      double avgTps = getRollingAvgTPS();
+      if (avgTps >= currentTpsThreshold) {
+        runSynchronousOptimizations(server, data, false);
+      } else {
+        runSynchronousOptimizations(server, data, false);
+      }
     }
+  }
+
+  /**
+   * Run optimizations asynchronously using the async collector
+   */
+  private CompletableFuture<Void> runAsynchronousOptimizations(MinecraftServer server, EntityDataCollection data, boolean shouldProfile) {
+    return CompletableFuture.runAsync(() -> {
+      try {
+        OptimizationResults results = processOptimizations(data);
+        applyOptimizations(server, results);
+      } catch (Exception ex) {
+        LOGGER.warn("Error processing optimizations asynchronously", ex);
+      }
+    }, asyncCollector);
+  }
+
+  /**
+   * Run synchronous optimizations wrapped in CompletableFuture for consistency
+   */
+  private CompletableFuture<Void> runSynchronousOptimizationsAsync(MinecraftServer server, EntityDataCollection data, boolean shouldProfile) {
+    return CompletableFuture.runAsync(() -> {
+      runSynchronousOptimizations(server, data, shouldProfile);
+    }, asyncCollector);
   }
 
   /** Helper method to maintain compatibility with original PerformanceManager */

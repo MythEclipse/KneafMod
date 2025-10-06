@@ -4,6 +4,7 @@ import com.kneaf.core.KneafCore;
 import com.kneaf.core.binary.ManualSerializers;
 import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.MobData;
+import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.item.ItemEntityData;
 import com.kneaf.core.exceptions.OptimizedProcessingException;
 import com.kneaf.core.performance.bridge.NativeBridgeUtils;
@@ -16,6 +17,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.CompletionException;
+import com.kneaf.core.performance.RustPerformance;
 
 /** Handles batch processing of performance operations with optimized memory management. */
 @SuppressWarnings({"deprecation"})
@@ -27,6 +30,7 @@ public class BatchProcessor {
   private final EntityProcessor entityProcessor;
   private final PerformanceMonitor monitor;
   private final NativeBridgeProvider bridgeProvider;
+  // No runtime circuit-breaker dependency: use simple async execution for native bridge calls.
 
   private volatile boolean BATCH_PROCESSOR_RUNNING = false;
   private final Object batchLock = new Object();
@@ -40,6 +44,22 @@ public class BatchProcessor {
     this.entityProcessor = entityProcessor;
     this.monitor = monitor;
     this.bridgeProvider = bridgeProvider;
+  // No circuit-breaker initialization (resilience4j not required at runtime)
+  }
+
+  /**
+   * Synchronous wrapper for existing call-sites that expect a blocking method.
+   * Delegates to the async implementation and waits for completion.
+   */
+  private void processBatchWithNativeBridge(List<BatchRequest<?>> batch) throws OptimizedProcessingException {
+    try {
+      processBatchWithNativeBridgeAsync(batch).join();
+    } catch (CompletionException e) {
+      Throwable cause = e.getCause();
+      if (cause instanceof OptimizedProcessingException) throw (OptimizedProcessingException) cause;
+      throw OptimizedProcessingException.nativeLibraryError(
+          "processBatchWithNativeBridge", "Native bridge processing failed", e);
+    }
   }
 
   /** Submit batch request and return future result without blocking. */
@@ -109,6 +129,7 @@ public class BatchProcessor {
     if (bridgeProvider.isNativeAvailable()
         && batch.size() >= NativeBridgeUtils.calculateOptimalBatchSize(1, 25, 200)) {
       try {
+        // existing call sites expect a synchronous call; delegate to the async implementation and wait
         processBatchWithNativeBridge(batch);
       } catch (OptimizedProcessingException e) {
         KneafCore.LOGGER.warn(
@@ -154,43 +175,67 @@ public class BatchProcessor {
   }
 
   /** Process batch using optimized NativeBridge. */
-  private void processBatchWithNativeBridge(List<BatchRequest<?>> batch)
-      throws OptimizedProcessingException {
-    Map<String, List<BatchRequest<?>>> batchedByType = new HashMap<>();
-    for (BatchRequest<?> req : batch) {
-      batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
-    }
+  private CompletableFuture<Void> processBatchWithNativeBridgeAsync(List<BatchRequest<?>> batch) {
+    // Run native bridge processing asynchronously. CircuitBreaker integration removed
+    // to avoid compile-time API mismatches; failures are translated to OptimizedProcessingException.
+    return CompletableFuture.runAsync(() -> {
+          Map<String, List<BatchRequest<?>>> batchedByType = new HashMap<>();
+          for (BatchRequest<?> req : batch) {
+              batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
+          }
 
-    // Process each type batch using NativeBridge
-    for (Map.Entry<String, List<BatchRequest<?>>> entry : batchedByType.entrySet()) {
-      String type = entry.getKey();
-      List<BatchRequest<?>> typeBatch = entry.getValue();
+          // Process each type batch using NativeBridge
+          for (Map.Entry<String, List<BatchRequest<?>>> entry : batchedByType.entrySet()) {
+              String type = entry.getKey();
+              List<BatchRequest<?>> typeBatch = entry.getValue();
 
-      try {
-        switch (type) {
-          case PerformanceConstants.ENTITIES_KEY:
-            entityProcessor.processEntityBatchOptimized(convertBatchRequests(typeBatch));
-            break;
-          case PerformanceConstants.ITEMS_KEY:
-            processItemBatchOptimized(typeBatch);
-            break;
-          case PerformanceConstants.MOBS_KEY:
-            processMobBatchOptimized(typeBatch);
-            break;
-          case PerformanceConstants.BLOCKS_KEY:
-            processBlockBatchOptimized(typeBatch);
-            break;
-          default:
-            // Fallback to individual processing
-            for (BatchRequest<?> req : typeBatch) {
-              completeFutureAsync(req.future, processIndividualRequest(req.type, req.data));
-            }
-        }
-      } catch (Exception e) {
-        KneafCore.LOGGER.error("Error processing {} batch of size {}", type, typeBatch.size(), e);
-        // Complete all futures with exception asynchronously
-        completeBatchFuturesWithExceptionAsync(typeBatch, e);
+              try {
+                  switch (type) {
+                      case PerformanceConstants.ENTITIES_KEY:
+                          processEntitiesBatchOptimized(typeBatch);
+                          break;
+                      case PerformanceConstants.ITEMS_KEY:
+                          processItemBatchOptimized(typeBatch);
+                          break;
+                      case PerformanceConstants.MOBS_KEY:
+                          processMobBatchOptimized(typeBatch);
+                          break;
+                      case PerformanceConstants.BLOCKS_KEY:
+                          processBlockBatchOptimized(typeBatch);
+                          break;
+                      default:
+                          // Fallback to individual processing
+                          for (BatchRequest<?> req : typeBatch) {
+                              completeFutureAsync(req.future, processIndividualRequest(req.type, req.data));
+                          }
+                  }
+              } catch (Exception e) {
+                  KneafCore.LOGGER.error("Error processing {} batch of size {}", type, typeBatch.size(), e);
+                  // Complete all futures with exception asynchronously
+                  completeBatchFuturesWithExceptionAsync(typeBatch, e);
+              }
+          }
+    });
+  }
+
+  private void processEntitiesBatchOptimized(List<BatchRequest<?>> batch) throws OptimizedProcessingException {
+    if (batch.isEmpty()) return;
+
+    try {
+      List<EntityData> allEntities = new ArrayList<>();
+      for (BatchRequest<?> req : batch) {
+        List<EntityData> entities = (List<EntityData>) req.data;
+        allEntities.addAll(entities);
       }
+
+      List<Long> result = RustPerformance.getEntitiesToTick(allEntities, new ArrayList<>());
+      
+      for (BatchRequest<?> req : batch) {
+        completeFutureAsync(req.future, result);
+      }
+    } catch (Exception e) {
+      throw OptimizedProcessingException.batchProcessingError(
+          "processEntitiesBatchOptimized", "Failed to process entity batch of size " + batch.size(), e);
     }
   }
 
