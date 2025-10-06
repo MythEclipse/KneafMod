@@ -8,6 +8,9 @@ import com.kneaf.core.chunkstorage.database.RustDatabaseAdapter;
 import com.kneaf.core.chunkstorage.serialization.ChunkSerializer;
 import com.kneaf.core.chunkstorage.serialization.NbtChunkSerializer;
 import com.kneaf.core.chunkstorage.swap.SwapManager;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -24,6 +27,76 @@ import org.slf4j.LoggerFactory;
  */
 public class ChunkStorageManager {
   private static final Logger LOGGER = LoggerFactory.getLogger(ChunkStorageManager.class);
+
+  // Pre-resolved MethodHandles for performance optimization
+  private static final MethodHandle LEVEL_CHUNK_GET_POS;
+  private static final MethodHandle CHUNK_POS_X;
+  private static final MethodHandle CHUNK_POS_Z;
+  private static final MethodHandle SERVER_LEVEL_DIMENSION;
+  private static final MethodHandle DIMENSION_LOCATION;
+  private static final MethodHandle STATS_GET_TOTAL_CHUNKS;
+  private static final MethodHandle STATS_GET_READ_LATENCY_MS;
+  private static final MethodHandle STATS_GET_WRITE_LATENCY_MS;
+  private static final MethodHandle STATS_GET_CACHE_SIZE;
+  private static final MethodHandle STATS_GET_HIT_RATE;
+
+  static {
+    MethodHandles.Lookup lookup = MethodHandles.lookup();
+    MethodHandle levelChunkGetPos = null;
+    MethodHandle chunkPosX = null;
+    MethodHandle chunkPosZ = null;
+    MethodHandle serverLevelDimension = null;
+    MethodHandle dimensionLocation = null;
+    MethodHandle statsGetTotalChunks = null;
+    MethodHandle statsGetReadLatencyMs = null;
+    MethodHandle statsGetWriteLatencyMs = null;
+    MethodHandle statsGetCacheSize = null;
+    MethodHandle statsGetHitRate = null;
+
+    try {
+      // Resolve LevelChunk methods
+      Class<?> levelChunkClass = Class.forName("net.minecraft.world.level.chunk.LevelChunk");
+      levelChunkGetPos = lookup.findVirtual(levelChunkClass, "getPos", MethodType.methodType(Object.class));
+
+      // Resolve ChunkPos methods
+      Class<?> chunkPosClass = Class.forName("net.minecraft.world.level.ChunkPos");
+      chunkPosX = lookup.findVirtual(chunkPosClass, "x", MethodType.methodType(int.class));
+      chunkPosZ = lookup.findVirtual(chunkPosClass, "z", MethodType.methodType(int.class));
+
+      // Resolve ServerLevel methods
+      Class<?> serverLevelClass = Class.forName("net.minecraft.server.level.ServerLevel");
+      serverLevelDimension = lookup.findVirtual(serverLevelClass, "dimension", MethodType.methodType(Object.class));
+
+      // Resolve Dimension methods
+      Class<?> dimensionClass = Class.forName("net.minecraft.world.level.dimension.Dimension");
+      dimensionLocation = lookup.findVirtual(dimensionClass, "location", MethodType.methodType(Object.class));
+
+      // Resolve stats methods (generic, will work with any stats object that has these methods)
+      MethodType longReturn = MethodType.methodType(long.class);
+      MethodType intReturn = MethodType.methodType(int.class);
+      MethodType doubleReturn = MethodType.methodType(double.class);
+
+      statsGetTotalChunks = lookup.findVirtual(Object.class, "getTotalChunks", longReturn);
+      statsGetReadLatencyMs = lookup.findVirtual(Object.class, "getReadLatencyMs", longReturn);
+      statsGetWriteLatencyMs = lookup.findVirtual(Object.class, "getWriteLatencyMs", longReturn);
+      statsGetCacheSize = lookup.findVirtual(Object.class, "getCacheSize", intReturn);
+      statsGetHitRate = lookup.findVirtual(Object.class, "getHitRate", doubleReturn);
+
+    } catch (Exception e) {
+      LOGGER.warn("Failed to resolve MethodHandles for Minecraft classes: {}", e.getMessage());
+    }
+
+    LEVEL_CHUNK_GET_POS = levelChunkGetPos;
+    CHUNK_POS_X = chunkPosX;
+    CHUNK_POS_Z = chunkPosZ;
+    SERVER_LEVEL_DIMENSION = serverLevelDimension;
+    DIMENSION_LOCATION = dimensionLocation;
+    STATS_GET_TOTAL_CHUNKS = statsGetTotalChunks;
+    STATS_GET_READ_LATENCY_MS = statsGetReadLatencyMs;
+    STATS_GET_WRITE_LATENCY_MS = statsGetWriteLatencyMs;
+    STATS_GET_CACHE_SIZE = statsGetCacheSize;
+    STATS_GET_HIT_RATE = statsGetHitRate;
+  }
 
   private final ChunkSerializer serializer;
   private final DatabaseAdapter database;
@@ -459,26 +532,32 @@ public class ChunkStorageManager {
       double cacheHitRate = 0.0;
 
       if (dbStatsObj != null) {
-        // Try to extract database Stats using reflection
+        // Try to extract database Stats using pre-resolved MethodHandles
         try {
-          totalChunks = (long) dbStatsObj.getClass().getMethod("getTotalChunks").invoke(dbStatsObj);
-          readLatency =
-              (long) dbStatsObj.getClass().getMethod("getReadLatencyMs").invoke(dbStatsObj);
-          writeLatency =
-              (long) dbStatsObj.getClass().getMethod("getWriteLatencyMs").invoke(dbStatsObj);
-        } catch (Exception e) {
+          if (STATS_GET_TOTAL_CHUNKS != null) {
+            totalChunks = (long) STATS_GET_TOTAL_CHUNKS.invoke(dbStatsObj);
+          }
+          if (STATS_GET_READ_LATENCY_MS != null) {
+            readLatency = (long) STATS_GET_READ_LATENCY_MS.invoke(dbStatsObj);
+          }
+          if (STATS_GET_WRITE_LATENCY_MS != null) {
+            writeLatency = (long) STATS_GET_WRITE_LATENCY_MS.invoke(dbStatsObj);
+          }
+        } catch (Throwable e) {
           LOGGER.warn("Failed to extract database statistics", e);
         }
       }
 
       if (cacheStatsObj != null) {
-        // Try to extract cache Stats using reflection
+        // Try to extract cache Stats using pre-resolved MethodHandles
         try {
-          cachedChunks =
-              (int) cacheStatsObj.getClass().getMethod("getCacheSize").invoke(cacheStatsObj);
-          cacheHitRate =
-              (double) cacheStatsObj.getClass().getMethod("getHitRate").invoke(cacheStatsObj);
-        } catch (Exception e) {
+          if (STATS_GET_CACHE_SIZE != null) {
+            cachedChunks = (int) STATS_GET_CACHE_SIZE.invoke(cacheStatsObj);
+          }
+          if (STATS_GET_HIT_RATE != null) {
+            cacheHitRate = (double) STATS_GET_HIT_RATE.invoke(cacheStatsObj);
+          }
+        } catch (Throwable e) {
           LOGGER.warn("Failed to extract cache statistics", e);
         }
       }
@@ -719,12 +798,20 @@ public class ChunkStorageManager {
   /** Create chunk key from LevelChunk. */
   private String createChunkKey(Object chunk) {
     try {
-      // Use reflection to get chunk position
-      Object chunkPos = chunk.getClass().getMethod("getPos").invoke(chunk);
-      int x = (int) chunkPos.getClass().getMethod("x").invoke(chunkPos);
-      int z = (int) chunkPos.getClass().getMethod("z").invoke(chunkPos);
-      return String.format("%s:%d:%d", worldName, x, z);
-    } catch (Exception e) {
+      // Use pre-resolved MethodHandles for performance
+      if (LEVEL_CHUNK_GET_POS != null && CHUNK_POS_X != null && CHUNK_POS_Z != null) {
+        Object chunkPos = LEVEL_CHUNK_GET_POS.invoke(chunk);
+        int x = (int) CHUNK_POS_X.invoke(chunkPos);
+        int z = (int) CHUNK_POS_Z.invoke(chunkPos);
+        return String.format("%s:%d:%d", worldName, x, z);
+      } else {
+        // Fallback to reflection if MethodHandles not available
+        Object chunkPos = chunk.getClass().getMethod("getPos").invoke(chunk);
+        int x = (int) chunkPos.getClass().getMethod("x").invoke(chunkPos);
+        int z = (int) chunkPos.getClass().getMethod("z").invoke(chunkPos);
+        return String.format("%s:%d:%d", worldName, x, z);
+      }
+    } catch (Throwable e) {
       LOGGER.error("Failed to create chunk key from chunk object", e);
       return String.format("%s:unknown", worldName);
     }
@@ -733,12 +820,20 @@ public class ChunkStorageManager {
   /** Create chunk key from coordinates. */
   private String createChunkKey(Object level, int chunkX, int chunkZ) {
     try {
-      // Use reflection to get dimension location
-      Object dimension = level.getClass().getMethod("dimension").invoke(level);
-      Object location = dimension.getClass().getMethod("location").invoke(dimension);
-      String dimensionName = location.toString();
-      return String.format("%s:%d:%d", dimensionName, chunkX, chunkZ);
-    } catch (Exception e) {
+      // Use pre-resolved MethodHandles for performance
+      if (SERVER_LEVEL_DIMENSION != null && DIMENSION_LOCATION != null) {
+        Object dimension = SERVER_LEVEL_DIMENSION.invoke(level);
+        Object location = DIMENSION_LOCATION.invoke(dimension);
+        String dimensionName = location.toString();
+        return String.format("%s:%d:%d", dimensionName, chunkX, chunkZ);
+      } else {
+        // Fallback to reflection if MethodHandles not available
+        Object dimension = level.getClass().getMethod("dimension").invoke(level);
+        Object location = dimension.getClass().getMethod("location").invoke(dimension);
+        String dimensionName = location.toString();
+        return String.format("%s:%d:%d", dimensionName, chunkX, chunkZ);
+      }
+    } catch (Throwable e) {
       LOGGER.error("Failed to create chunk key from level object", e);
       return String.format("unknown:%d:%d", chunkX, chunkZ);
     }

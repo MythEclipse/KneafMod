@@ -44,6 +44,12 @@ public final class NativeBridge {
             / 4);
   }
 
+  // Batch buffer for entity operations - buffers multiple small JNI calls
+  private static final ConcurrentLinkedQueue<byte[]> ENTITY_BATCH_BUFFER =
+      new ConcurrentLinkedQueue<>();
+  private static final AtomicInteger ENTITY_BATCH_SIZE = new AtomicInteger(0);
+  private static final Object ENTITY_BATCH_LOCK = new Object();
+
   // Memory pool configuration
   private static int bufferPoolSize() {
     return Math.max(
@@ -538,5 +544,71 @@ public final class NativeBridge {
       int batchSize = Math.round(requestedSize / 25.0f) * 25;
       return Math.max(minBatchSize(), Math.min(maxBatchSize(), batchSize));
     }
+  }
+
+  /** Buffer entity operation for batch processing - reduces JNI crossing overhead */
+  public static void bufferEntityOperation(byte[] payload) {
+    if (payload == null || payload.length == 0) {
+      return;
+    }
+
+    ENTITY_BATCH_BUFFER.offer(payload);
+    int currentSize = ENTITY_BATCH_SIZE.incrementAndGet();
+
+    // Auto-flush when batch reaches optimal size to maintain throughput
+    if (currentSize >= maxBatchSize()) {
+      flushEntityBatch();
+    }
+  }
+
+  /** Flush buffered entity operations in a single large batch */
+  public static void flushEntityBatch() {
+    synchronized (ENTITY_BATCH_LOCK) {
+      int batchSize = ENTITY_BATCH_SIZE.get();
+      if (batchSize == 0) {
+        return; // Nothing to flush
+      }
+
+      // Collect all buffered operations
+      byte[][] batchPayloads = new byte[batchSize][];
+      int collected = 0;
+      byte[] payload;
+      while ((payload = ENTITY_BATCH_BUFFER.poll()) != null && collected < batchSize) {
+        batchPayloads[collected++] = payload;
+      }
+
+      // Reset batch size counter
+      ENTITY_BATCH_SIZE.addAndGet(-collected);
+
+      // Process batch if we collected operations
+      if (collected > 0) {
+        // Use default worker handle (0) for batched operations
+        // In production, this should be configurable
+        long workerHandle = 0;
+
+        // Find an active worker or create one
+        if (WORKERS.isEmpty()) {
+          workerHandle = createOptimizedWorker(4);
+        } else {
+          workerHandle = WORKERS.keySet().iterator().next();
+        }
+
+        if (workerHandle != 0) {
+          pushBatchOptimized(workerHandle, batchPayloads);
+          TOTAL_BATCHES_PROCESSED.incrementAndGet();
+          TOTAL_TASKS_PROCESSED.addAndGet(collected);
+        }
+      }
+    }
+  }
+
+  /** Get current entity batch buffer size */
+  public static int getEntityBatchBufferSize() {
+    return ENTITY_BATCH_SIZE.get();
+  }
+
+  /** Force flush entity batch regardless of size */
+  public static void forceFlushEntityBatch() {
+    flushEntityBatch();
   }
 }

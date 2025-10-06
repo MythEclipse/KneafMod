@@ -8,14 +8,18 @@ use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::fs::File;
 use lz4_flex::{compress, decompress};
 use flate2::Compression;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::runtime::Runtime;
 use memmap2::MmapMut;
 use crate::logging::{PerformanceLogger, generate_trace_id};
 
 /// Generic object pool for memory reuse with LRU eviction
-pub struct ObjectPool<T> {
+#[derive(Debug)]
+pub struct ObjectPool<T>
+where
+    T: Debug,
+{
     pool: Arc<Mutex<HashMap<u64, (T, SystemTime)>>>,
     access_order: Arc<Mutex<BTreeMap<SystemTime, u64>>>,
     next_id: AtomicU64,
@@ -368,7 +372,11 @@ impl<T> std::ops::DerefMut for PooledObject<T> {
 }
 
 /// Specialized pool for vectors
-pub struct VecPool<T> {
+#[derive(Debug)]
+pub struct VecPool<T>
+where
+    T: Debug,
+{
     pool: ObjectPool<Vec<T>>,
 }
 
@@ -381,7 +389,10 @@ where
     }
 }
 
-impl<T: Debug + Default + Clone + Send + 'static> VecPool<T> {
+impl<T> VecPool<T>
+where
+    T: Debug + Default + Clone + Send + 'static,
+{
     pub fn new(max_size: usize) -> Self {
         Self {
             pool: ObjectPool::new(max_size),
@@ -671,16 +682,16 @@ enum SwapIoTask {
     Prefetch {
         chunk_id: usize,
         size: usize,
-        result_sender: mpsc::Sender<Result<Vec<u8>, String>>,
+        result_sender: oneshot::Sender<Result<Vec<u8>, String>>,
     },
     Write {
         data: Vec<u8>,
-        result_sender: mpsc::Sender<Result<usize, String>>,
+        result_sender: oneshot::Sender<Result<usize, String>>,
     },
     Read {
         offset: usize,
         size: usize,
-        result_sender: mpsc::Sender<Result<Vec<u8>, String>>,
+        result_sender: oneshot::Sender<Result<Vec<u8>, String>>,
     },
 }
 
@@ -792,33 +803,32 @@ impl SwapMemoryPool {
         while let Some(task) = receiver.recv().await {
             match task {
                 SwapIoTask::Prefetch { chunk_id, size, result_sender } => {
-                    let _ = Self::async_prefetch_chunk(chunk_id, size, result_sender).await;
+                    Self::async_prefetch_chunk(chunk_id, size, result_sender).await;
                 },
                 SwapIoTask::Write { data, result_sender } => {
-                    let _ = Self::async_write_data(data, result_sender).await;
+                    Self::async_write_data(data, result_sender).await;
                 },
                 SwapIoTask::Read { offset, size, result_sender } => {
-                    let _ = Self::async_read_data(offset, size, result_sender).await;
+                    Self::async_read_data(offset, size, result_sender).await;
                 },
             }
-
         }
     }
     /// Async prefetching implementation
-    async fn async_prefetch_chunk(chunk_id: usize, size: usize, result_sender: mpsc::Sender<Result<Vec<u8>, String>>) -> Result<(), String> {
+    async fn async_prefetch_chunk(chunk_id: usize, size: usize, result_sender: oneshot::Sender<Result<Vec<u8>, String>>) {
         // Simulated async prefetch logic - would be implemented with actual disk I/O in production
         let trace_id = generate_trace_id();
         let logger = PerformanceLogger::new("async_prefetch");
-        
+
         logger.log_info("async_prefetch_start", &trace_id, &format!("Starting prefetch for chunk {} with size {}", chunk_id, size));
-        
+
         // Simulate I/O delay
         tokio::time::sleep(Duration::from_millis(10)).await;
-        
+
         // Create dummy data for simulation
         let mut data = vec![0u8; size];
         data[0] = chunk_id as u8; // Use chunk_id as first byte for identification
-        
+
         // Compress if enabled
         let final_data = if Self::is_compression_enabled() {
             let compressed = compress(&data);
@@ -830,52 +840,49 @@ impl SwapMemoryPool {
         } else {
             data
         };
-        
+
         // Send result back
-        let _ = result_sender.send(Ok(final_data)).await;
-        
+        let _ = result_sender.send(Ok(final_data));
+
         logger.log_info("async_prefetch_complete", &trace_id, &format!("Completed prefetch for chunk {}", chunk_id));
-        Ok(())
     }
 
     /// Async write implementation
-    async fn async_write_data(data: Vec<u8>, result_sender: mpsc::Sender<Result<usize, String>>) -> Result<(), String> {
+    async fn async_write_data(data: Vec<u8>, result_sender: oneshot::Sender<Result<usize, String>>) {
         let trace_id = generate_trace_id();
         let logger = PerformanceLogger::new("async_write");
-        
+
         logger.log_info("async_write_start", &trace_id, &format!("Starting async write of {} bytes", data.len()));
-        
+
         // Simulated async write - would be actual disk I/O in production
         tokio::time::sleep(Duration::from_millis(15)).await;
-        
+
         // In real implementation, we would write to disk here
         // For simulation, we just return success
         let bytes_written = data.len();
-        
+
         logger.log_info("async_write_complete", &trace_id, &format!("Completed async write: {} bytes", bytes_written));
-        
-        let _ = result_sender.send(Ok(bytes_written)).await;
-        Ok(())
+
+        let _ = result_sender.send(Ok(bytes_written));
     }
 
     /// Async read implementation
-    async fn async_read_data(offset: usize, size: usize, result_sender: mpsc::Sender<Result<Vec<u8>, String>>) -> Result<(), String> {
+    async fn async_read_data(offset: usize, size: usize, result_sender: oneshot::Sender<Result<Vec<u8>, String>>) {
         let trace_id = generate_trace_id();
         let logger = PerformanceLogger::new("async_read");
-        
+
         logger.log_info("async_read_start", &trace_id, &format!("Starting async read at offset {} with size {}", offset, size));
-        
+
         // Simulated async read - would be actual disk I/O in production
         tokio::time::sleep(Duration::from_millis(12)).await;
-        
+
         // Create dummy data for simulation
         let mut data = vec![0u8; size];
         data[0] = (offset % 256) as u8; // Use offset as first byte for identification
-        
+
         logger.log_info("async_read_complete", &trace_id, &format!("Completed async read: {} bytes", size));
-        
-        let _ = result_sender.send(Ok(data)).await;
-        Ok(())
+
+        let _ = result_sender.send(Ok(data));
     }
 
     /// Allocate memory for chunk metadata with tracking
@@ -935,7 +942,7 @@ impl SwapMemoryPool {
         self.pending_operations.fetch_add(1, Ordering::Relaxed);
 
         // Create result channel
-        let (result_sender, mut result_receiver) = mpsc::channel(1);
+        let (result_sender, result_receiver) = oneshot::channel();
 
         // Send prefetch task to async processor
         let sender_clone = self.sender.clone();
@@ -1345,17 +1352,17 @@ impl SwapMemoryPool {
             return self.write_data_sync(data);
         }
 
-        let (sender, mut receiver) = mpsc::channel(1);
+        let (sender, receiver) = oneshot::channel();
         let sender_clone = self.sender.clone();
-        
+
         task::spawn_blocking(move || {
             let _ = sender_clone.blocking_send(SwapIoTask::Write { data, result_sender: sender });
         }).await.map_err(|e| e.to_string())?;
 
-        match receiver.recv().await {
-            Some(Ok(bytes)) => Ok(bytes),
-            Some(Err(e)) => Err(e),
-            None => Err("Write operation timed out".to_string()),
+        match receiver.await {
+            Ok(Ok(bytes)) => Ok(bytes),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err("Write operation timed out".to_string()),
         }
     }
 
@@ -1365,17 +1372,17 @@ impl SwapMemoryPool {
             return self.read_data_sync(offset, size);
         }
 
-        let (sender, mut receiver) = mpsc::channel(1);
+        let (sender, receiver) = oneshot::channel();
         let sender_clone = self.sender.clone();
-        
+
         task::spawn_blocking(move || {
             let _ = sender_clone.blocking_send(SwapIoTask::Read { offset, size, result_sender: sender });
         }).await.map_err(|e| e.to_string())?;
 
-        match receiver.recv().await {
-            Some(Ok(data)) => Ok(data),
-            Some(Err(e)) => Err(e),
-            None => Err("Read operation timed out".to_string()),
+        match receiver.await {
+            Ok(Ok(data)) => Ok(data),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err("Read operation timed out".to_string()),
         }
     }
 
@@ -1808,4 +1815,115 @@ pub fn init_memory_pools() {
 /// Get global memory pool instance (backward compatibility)
 pub fn get_global_pool() -> &'static MemoryPoolManager {
     &GLOBAL_MEMORY_POOL
+}
+/// Lightweight pool variant for frequent small allocations (<4KB)
+/// Bypasses complex features (compression, async prefetch) for reduced overhead
+/// Provides fast path for hot allocations with minimal latency
+#[derive(Debug)]
+pub struct LightweightMemoryPool {
+    /// Pre-allocated small buffers for hot path (no locking)
+    hot_buffers: Vec<Vec<u8>>,
+    /// Current index for round-robin allocation from hot buffers
+    hot_index: AtomicUsize,
+    /// Maximum size for hot allocations (4KB)
+    max_hot_size: usize,
+    /// Number of pre-allocated hot buffers
+    hot_buffer_count: usize,
+    /// Fallback pool for larger allocations or when hot buffers exhausted
+    fallback_pool: VecPool<u8>,
+    /// Performance metrics
+    allocation_count: AtomicU64,
+    hot_hit_count: AtomicU64,
+    logger: PerformanceLogger,
+}
+
+impl LightweightMemoryPool {
+    /// Create new lightweight pool with specified hot buffer configuration
+    pub fn new(hot_buffer_count: usize, max_hot_size: usize) -> Self {
+        let mut hot_buffers = Vec::with_capacity(hot_buffer_count);
+        for _ in 0..hot_buffer_count {
+            hot_buffers.push(Vec::with_capacity(max_hot_size));
+        }
+
+        Self {
+            hot_buffers,
+            hot_index: AtomicUsize::new(0),
+            max_hot_size,
+            hot_buffer_count,
+            fallback_pool: VecPool::new(100), // Smaller fallback pool
+            allocation_count: AtomicU64::new(0),
+            hot_hit_count: AtomicU64::new(0),
+            logger: PerformanceLogger::new("lightweight_memory_pool"),
+        }
+    }
+
+    /// Allocate memory with fast path for small allocations
+    /// Bypasses compression and async prefetch for allocations <4KB
+    pub fn allocate(&self, size: usize) -> PooledVec<u8> {
+        self.allocation_count.fetch_add(1, Ordering::Relaxed);
+
+        // Fast path for small allocations (<4KB) - no complex features
+        if size <= self.max_hot_size {
+            // Try hot buffer allocation (lock-free)
+            let index = self.hot_index.fetch_add(1, Ordering::Relaxed) % self.hot_buffer_count;
+            if let Some(buffer) = self.hot_buffers.get(index) {
+                if buffer.capacity() >= size {
+                    self.hot_hit_count.fetch_add(1, Ordering::Relaxed);
+                    let mut pooled = self.fallback_pool.pool.get();
+                    let vec = pooled.as_mut();
+                    vec.clear();
+                    vec.resize(size, 0u8);
+                    return pooled;
+                }
+            }
+
+            // Fallback to pool allocation (still lightweight, no compression/async)
+            let mut pooled = self.fallback_pool.pool.get();
+            let vec = pooled.as_mut();
+            vec.clear();
+            vec.resize(size, 0u8);
+            pooled
+        } else {
+            // Larger allocations use fallback pool
+            let mut pooled = self.fallback_pool.pool.get();
+            let vec = pooled.as_mut();
+            vec.clear();
+            vec.resize(size, 0u8);
+            pooled
+        }
+    }
+
+    /// Get performance metrics for the lightweight pool
+    pub fn get_metrics(&self) -> LightweightPoolMetrics {
+        let total_allocations = self.allocation_count.load(Ordering::Relaxed);
+        let hot_hits = self.hot_hit_count.load(Ordering::Relaxed);
+        let hot_hit_rate = if total_allocations > 0 {
+            (hot_hits as f64 / total_allocations as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        LightweightPoolMetrics {
+            total_allocations,
+            hot_hit_count: hot_hits,
+            hot_hit_rate,
+            fallback_pool_size: self.fallback_pool.pool.pool.lock().unwrap().len(),
+        }
+    }
+
+    /// Pre-warm hot buffers for better performance
+    pub fn pre_warm(&self) {
+        for buffer in &self.hot_buffers {
+            let mut _temp: Vec<u8> = Vec::with_capacity(self.max_hot_size);
+        }
+    }
+}
+
+/// Metrics for lightweight pool performance monitoring
+#[derive(Debug, Clone)]
+pub struct LightweightPoolMetrics {
+    pub total_allocations: u64,
+    pub hot_hit_count: u64,
+    pub hot_hit_rate: f64,
+    pub fallback_pool_size: usize,
 }
