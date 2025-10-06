@@ -8,6 +8,7 @@ import com.kneaf.core.data.entity.VillagerData;
 import com.kneaf.core.performance.bridge.NativeIntegrationManager;
 import com.kneaf.core.performance.monitoring.PerformanceManager;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -88,47 +89,54 @@ public class PerformanceOptimizer {
   }
 
   /** Optimize entity processing based on current performance metrics. */
-  public List<Long> optimizeEntities(List<EntityData> entities, List<PlayerData> players) {
-    long startTime = System.currentTimeMillis();
+ public CompletableFuture<List<Long>> optimizeEntities(List<EntityData> entities, List<PlayerData> players) {
+   long startTime = System.currentTimeMillis();
 
-    try {
-      // Apply adaptive optimization based on current load
-      OptimizationLevel level = determineOptimizationLevel(entities.size(), players.size());
+   try {
+     // Apply adaptive optimization based on current load
+     OptimizationLevel level = determineOptimizationLevel(entities.size(), players.size());
 
-      // Limit entities based on optimization level
-      List<EntityData> entitiesToProcess = applyEntityLimit(entities, level);
+     // Limit entities based on optimization level
+     List<EntityData> entitiesToProcess = applyEntityLimit(entities, level);
 
-      // Process entities using appropriate method
-      List<Long> result;
-      if (shouldUseBatchProcessing(entitiesToProcess.size())) {
-        // Pass the typed EntityInput expected by EntityProcessor when processing batches
-        result =
-            batchProcessor.submitBatchRequest(
-                PerformanceConstants.ENTITIES_KEY,
-                new com.kneaf.core.performance.core.EntityProcessor.EntityInput(
-                    entitiesToProcess, players));
-      } else {
-        result = entityProcessor.processEntities(entitiesToProcess, players);
-      }
+     // Process entities using appropriate method
+     if (shouldUseBatchProcessing(entitiesToProcess.size())) {
+       // Pass the typed EntityInput expected by EntityProcessor when processing batches
+       return batchProcessor.submitLongListRequest(
+               PerformanceConstants.ENTITIES_KEY,
+               new com.kneaf.core.performance.core.EntityProcessor.EntityInput(
+                   entitiesToProcess, players))
+           .thenApply(result -> {
+             // Update statistics
+             totalEntitiesProcessed.addAndGet(entitiesToProcess.size());
+             totalOptimizationsApplied.incrementAndGet();
+             updateOptimizationStats(
+                 "entities",
+                 entitiesToProcess.size(),
+                 result.size(),
+                 System.currentTimeMillis() - startTime);
+             return result;
+           });
+     } else {
+       List<Long> result = entityProcessor.processEntities(entitiesToProcess, players);
+       
+       // Update statistics
+       totalEntitiesProcessed.addAndGet(entitiesToProcess.size());
+       totalOptimizationsApplied.incrementAndGet();
+       updateOptimizationStats(
+           "entities",
+           entitiesToProcess.size(),
+           result.size(),
+           System.currentTimeMillis() - startTime);
+       
+       return CompletableFuture.completedFuture(result);
+     }
 
-      // Update statistics
-      totalEntitiesProcessed.addAndGet(entitiesToProcess.size());
-      totalOptimizationsApplied.incrementAndGet();
-      updateOptimizationStats(
-          "entities",
-          entitiesToProcess.size(),
-          result.size(),
-          System.currentTimeMillis() - startTime);
-
-      // Monitoring: detailed entity optimization logging removed to reduce server log spam
-
-      return result;
-
-    } catch (Exception e) {
-      KneafCore.LOGGER.error("Error optimizing entities", e);
-      throw new RuntimeException("Failed to optimize " + entities.size() + " entities", e);
-    }
-  }
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error optimizing entities", e);
+     return CompletableFuture.failedFuture(new RuntimeException("Failed to optimize " + entities.size() + " entities", e));
+   }
+ }
 
   /** Optimize villager processing with spatial awareness. */
   public List<Long> optimizeVillagers(

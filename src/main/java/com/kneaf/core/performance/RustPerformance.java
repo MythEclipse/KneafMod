@@ -41,22 +41,58 @@ public class RustPerformance {
   }
 
   /** Get entities that should be ticked based on optimization criteria. */
-  public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
-    ensureInitialized();
-    return FACADE.getEntitiesToTick(entities, players);
-  }
+ public static CompletableFuture<List<Long>> getEntitiesToTickAsync(List<EntityData> entities, List<PlayerData> players) {
+   ensureInitialized();
+   return FACADE.getEntitiesToTick(entities, players);
+ }
 
-  /** Process item entities for merging and optimization. */
-  public static ItemProcessResult processItemEntities(List<ItemEntityData> items) {
-    ensureInitialized();
-    return FACADE.processItemEntities(items);
-  }
+ /** Get entities that should be ticked based on optimization criteria (synchronous fallback for legacy code). */
+ public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
+   ensureInitialized();
+   try {
+     return FACADE.getEntitiesToTick(entities, players).join();
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error getting entities to tick", e);
+     // Fallback: return all entities
+     return entities.stream().map(entity -> entity.getId()).toList();
+   }
+ }
 
-  /** Process mob AI for optimization. */
-  public static MobProcessResult processMobAI(List<MobData> mobs) {
-    ensureInitialized();
-    return FACADE.processMobAI(mobs);
-  }
+  /** Process item entities for merging and optimization (asynchronous). */
+ public static CompletableFuture<ItemProcessResult> processItemEntitiesAsync(List<ItemEntityData> items) {
+   ensureInitialized();
+   return FACADE.processItemEntities(items);
+ }
+
+ /** Process item entities for merging and optimization (synchronous fallback for legacy code). */
+ public static ItemProcessResult processItemEntities(List<ItemEntityData> items) {
+   ensureInitialized();
+   try {
+     return FACADE.processItemEntities(items).join();
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error processing item entities", e);
+     // Fallback: no optimization
+     return new ItemProcessResult(new java.util.ArrayList<Long>(), 0, 0, new java.util.ArrayList<>());
+   }
+ }
+
+  /** Process mob AI for optimization (asynchronous). */
+ public static CompletableFuture<MobProcessResult> processMobAIAsync(List<MobData> mobs) {
+   ensureInitialized();
+   return FACADE.processMobAI(mobs);
+ }
+
+ /** Process mob AI for optimization (synchronous fallback for legacy code). */
+ public static MobProcessResult processMobAI(List<MobData> mobs) {
+   ensureInitialized();
+   try {
+     return FACADE.processMobAI(mobs).join();
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error processing mob AI", e);
+     // Fallback: no optimization
+     return new MobProcessResult(new java.util.ArrayList<Long>(), new java.util.ArrayList<Long>());
+   }
+ }
 
   /** Process villager AI for optimization. */
   /**
@@ -115,11 +151,23 @@ public class RustPerformance {
         new java.util.ArrayList<com.kneaf.core.performance.VillagerGroup>());
   }
 
-  /** Get block entities that should be ticked. */
-  public static List<Long> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
-    ensureInitialized();
-    return FACADE.getBlockEntitiesToTick(blockEntities);
-  }
+  /** Get block entities that should be ticked (asynchronous). */
+ public static CompletableFuture<List<Long>> getBlockEntitiesToTickAsync(List<BlockEntityData> blockEntities) {
+   ensureInitialized();
+   return FACADE.getBlockEntitiesToTick(blockEntities);
+ }
+
+ /** Get block entities that should be ticked (synchronous fallback for legacy code). */
+ public static List<Long> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
+   ensureInitialized();
+   try {
+     return FACADE.getBlockEntitiesToTick(blockEntities).join();
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error getting block entities to tick", e);
+     // Fallback: return all block entities
+     return blockEntities.stream().map(block -> block.getId()).toList();
+   }
+ }
 
   /** Optimize villager processing with spatial awareness. */
   public static List<Long> optimizeVillagers(

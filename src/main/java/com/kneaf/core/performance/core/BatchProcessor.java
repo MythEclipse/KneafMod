@@ -5,24 +5,25 @@ import com.kneaf.core.binary.ManualSerializers;
 import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.MobData;
 import com.kneaf.core.data.item.ItemEntityData;
-import com.kneaf.core.exceptions.AsyncProcessingException;
 import com.kneaf.core.exceptions.OptimizedProcessingException;
 import com.kneaf.core.performance.bridge.NativeBridgeUtils;
+
 import java.nio.ByteBuffer;
-// cleaned: removed unused imports
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Handles batch processing of performance operations with optimized memory management. */
 @SuppressWarnings({"deprecation"})
 public class BatchProcessor {
 
-  private final ConcurrentLinkedQueue<BatchRequest> pendingRequests = new ConcurrentLinkedQueue<>();
+  // Use a parameterized queue to avoid raw-type usage
+  private final ConcurrentLinkedQueue<BatchRequest<?>> pendingRequests =
+      new ConcurrentLinkedQueue<>();
   private final EntityProcessor entityProcessor;
   private final PerformanceMonitor monitor;
   private final NativeBridgeProvider bridgeProvider;
@@ -39,14 +40,12 @@ public class BatchProcessor {
     this.entityProcessor = entityProcessor;
     this.monitor = monitor;
     this.bridgeProvider = bridgeProvider;
-
-    // Timeout is computed dynamically per-request from adaptive batch timeout (ms -> seconds)
   }
 
-  /** Submit batch request and return result. */
-  public <T> T submitBatchRequest(String type, Object data) {
-    CompletableFuture<Object> future = new CompletableFuture<>();
-    BatchRequest request = new BatchRequest(type, data, future);
+  /** Submit batch request and return future result without blocking. */
+  public <T> CompletableFuture<T> submitBatchRequest(String type, Object data) {
+    CompletableFuture<T> future = new CompletableFuture<>();
+    BatchRequest<T> request = new BatchRequest<>(type, data, future);
 
     pendingRequests.offer(request);
 
@@ -55,21 +54,23 @@ public class BatchProcessor {
       startBatchProcessor();
     }
 
-    try {
-      // Calculate adaptive timeout per-request
-      long timeoutMs = getBatchTimeoutMs();
-      long timeoutSeconds = Math.max(1, TimeUnit.MILLISECONDS.toSeconds(timeoutMs));
-      T result = (T) future.get(timeoutSeconds, TimeUnit.SECONDS);
-      return result;
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw AsyncProcessingException.batchRequestInterrupted(type, e);
-    } catch (Exception e) {
-      KneafCore.LOGGER.error("Batch request timeout or error for type: { }", type, e);
-      // Fallback to direct processing
-      T result = (T) processIndividualRequest(type, data);
-      return result;
-    }
+    // Return future immediately without blocking
+    return future;
+  }
+  
+  /** Submit batch request for List<Long> result type. */
+  public CompletableFuture<List<Long>> submitLongListRequest(String type, Object data) {
+    return submitBatchRequest(type, data);
+  }
+  
+  /** Submit batch request for ItemProcessResult type. */
+  public CompletableFuture<ItemProcessResult> submitItemRequest(String type, Object data) {
+    return submitBatchRequest(type, data);
+  }
+  
+  /** Submit batch request for MobProcessResult type. */
+  public CompletableFuture<MobProcessResult> submitMobRequest(String type, Object data) {
+    return submitBatchRequest(type, data);
   }
 
   /** Start batch processor if not already running. */
@@ -78,29 +79,29 @@ public class BatchProcessor {
       if (BATCH_PROCESSOR_RUNNING) return;
       BATCH_PROCESSOR_RUNNING = true;
 
-      CompletableFuture.runAsync(
-          () -> {
-            while (BATCH_PROCESSOR_RUNNING) {
-              try {
-                processBatchOptimized();
-                Thread.sleep(getBatchProcessorSleepMs());
-              } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-              } catch (OptimizedProcessingException e) {
-                KneafCore.LOGGER.error(
-                    "Optimized processing error in batch processor: { }", e.getMessage(), e);
-              } catch (Exception e) {
-                KneafCore.LOGGER.error("Unexpected error in batch processor", e);
-              }
-            }
-          });
+      CompletableFuture.runAsync(() -> {
+        while (BATCH_PROCESSOR_RUNNING) {
+          try {
+            // Process batch directly without unnecessary nested async
+            processBatchOptimized();
+            
+            // Non-blocking sleep with proper interruption handling
+            Thread.sleep(getBatchProcessorSleepMs());
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            break;
+          }
+        }
+      }).exceptionally(ex -> {
+        KneafCore.LOGGER.error("Error in batch processor main loop", ex);
+        return null;
+      });
     }
   }
 
-  /** Process batch using optimized NativeBridge. */
-  private void processBatchOptimized() throws OptimizedProcessingException {
-    List<BatchRequest> batch = collectBatch();
+  /** Process batch using optimized NativeBridge asynchronously. */
+  private void processBatchOptimized() {
+    List<BatchRequest<?>> batch = collectBatch();
 
     if (batch.isEmpty()) return;
 
@@ -109,35 +110,61 @@ public class BatchProcessor {
         && batch.size() >= NativeBridgeUtils.calculateOptimalBatchSize(1, 25, 200)) {
       try {
         processBatchWithNativeBridge(batch);
-        return;
       } catch (OptimizedProcessingException e) {
         KneafCore.LOGGER.warn(
-            "NativeBridge batch processing failed, falling back to regular processing: { }",
+            "NativeBridge batch processing failed, falling back to regular processing: {}",
             e.getMessage());
-        // Fall through to regular processing
+        // Fall through to regular processing directly (async handling already in place)
+        Map<String, List<BatchRequest<?>>> batchedByType = new HashMap<>();
+        for (BatchRequest<?> req : batch) {
+          batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
+        }
+        processBatchedRequests(batchedByType);
+      } catch (Exception e) {
+        KneafCore.LOGGER.error("Unexpected error in native batch processing", e);
+        completeBatchRequestsWithException(batch, e);
       }
+      return;
     }
 
-    // Regular batch processing
-    Map<String, List<BatchRequest>> batchedByType = new HashMap<>();
-    for (BatchRequest req : batch) {
-      batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
+    // Regular batch processing directly (remove unnecessary nested async)
+    try {
+      Map<String, List<BatchRequest<?>>> batchedByType = new HashMap<>();
+      for (BatchRequest<?> req : batch) {
+        batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
+      }
+      processBatchedRequests(batchedByType);
+    } catch (Exception e) {
+      KneafCore.LOGGER.error("Unexpected error in regular batch processing", e);
+      completeBatchRequestsWithException(batch, e);
     }
-    processBatchedRequests(batchedByType);
+  }
+  
+  
+  /** Complete all batch requests with exception asynchronously. */
+  private void completeBatchRequestsWithException(List<BatchRequest<?>> batch, Throwable exception) {
+    CompletableFuture.runAsync(() -> {
+      for (BatchRequest<?> req : batch) {
+        // completeExceptionally is safe to call on a typed CompletableFuture
+        if (!req.future.isDone()) {
+          req.future.completeExceptionally(exception);
+        }
+      }
+    });
   }
 
   /** Process batch using optimized NativeBridge. */
-  private void processBatchWithNativeBridge(List<BatchRequest> batch)
+  private void processBatchWithNativeBridge(List<BatchRequest<?>> batch)
       throws OptimizedProcessingException {
-    Map<String, List<BatchRequest>> batchedByType = new HashMap<>();
-    for (BatchRequest req : batch) {
+    Map<String, List<BatchRequest<?>>> batchedByType = new HashMap<>();
+    for (BatchRequest<?> req : batch) {
       batchedByType.computeIfAbsent(req.type, k -> new ArrayList<>()).add(req);
     }
 
     // Process each type batch using NativeBridge
-    for (Map.Entry<String, List<BatchRequest>> entry : batchedByType.entrySet()) {
+    for (Map.Entry<String, List<BatchRequest<?>>> entry : batchedByType.entrySet()) {
       String type = entry.getKey();
-      List<BatchRequest> typeBatch = entry.getValue();
+      List<BatchRequest<?>> typeBatch = entry.getValue();
 
       try {
         switch (type) {
@@ -155,28 +182,26 @@ public class BatchProcessor {
             break;
           default:
             // Fallback to individual processing
-            for (BatchRequest req : typeBatch) {
-              req.future.complete(processIndividualRequest(req.type, req.data));
+            for (BatchRequest<?> req : typeBatch) {
+              completeFutureAsync(req.future, processIndividualRequest(req.type, req.data));
             }
         }
       } catch (Exception e) {
-        KneafCore.LOGGER.error("Error processing { } batch of size { }", type, typeBatch.size(), e);
-        // Complete all futures with exception
-        for (BatchRequest req : typeBatch) {
-          req.future.completeExceptionally(e);
-        }
+        KneafCore.LOGGER.error("Error processing {} batch of size {}", type, typeBatch.size(), e);
+        // Complete all futures with exception asynchronously
+        completeBatchFuturesWithExceptionAsync(typeBatch, e);
       }
     }
   }
 
   /** Process item batch using optimized NativeBridge. */
-  private void processItemBatchOptimized(List<BatchRequest> batch)
+  private void processItemBatchOptimized(List<BatchRequest<?>> batch)
       throws OptimizedProcessingException {
     if (batch.isEmpty()) return;
 
     try {
       List<ItemEntityData> allItems = new ArrayList<>();
-      for (BatchRequest req : batch) {
+      for (BatchRequest<?> req : batch) {
         List<ItemEntityData> items = (List<ItemEntityData>) req.data;
         allItems.addAll(items);
       }
@@ -184,8 +209,9 @@ public class BatchProcessor {
       ItemProcessResult result = processItemEntitiesDirect(allItems);
 
       // For simplicity, distribute results equally among batch requests
-      for (BatchRequest req : batch) {
-        req.future.complete(result);
+      for (BatchRequest<?> req : batch) {
+        // use helper that performs an unchecked-complete under a single suppressed cast
+        completeFutureAsync(req.future, result);
       }
     } catch (Exception e) {
       throw OptimizedProcessingException.batchProcessingError(
@@ -194,22 +220,21 @@ public class BatchProcessor {
   }
 
   /** Process mob batch using optimized NativeBridge. */
-  private void processMobBatchOptimized(List<BatchRequest> batch)
+  private void processMobBatchOptimized(List<BatchRequest<?>> batch)
       throws OptimizedProcessingException {
     if (batch.isEmpty()) return;
 
     try {
       List<MobData> allMobs = new ArrayList<>();
-      for (BatchRequest req : batch) {
+      for (BatchRequest<?> req : batch) {
         List<MobData> mobs = (List<MobData>) req.data;
         allMobs.addAll(mobs);
       }
 
       MobProcessResult result = processMobAIDirect(allMobs);
 
-      // Distribute results equally among batch requests
-      for (BatchRequest req : batch) {
-        req.future.complete(result);
+      for (BatchRequest<?> req : batch) {
+        completeFutureAsync(req.future, result);
       }
     } catch (Exception e) {
       throw OptimizedProcessingException.batchProcessingError(
@@ -218,22 +243,21 @@ public class BatchProcessor {
   }
 
   /** Process block batch using optimized NativeBridge. */
-  private void processBlockBatchOptimized(List<BatchRequest> batch)
+  private void processBlockBatchOptimized(List<BatchRequest<?>> batch)
       throws OptimizedProcessingException {
     if (batch.isEmpty()) return;
 
     try {
       List<BlockEntityData> allBlocks = new ArrayList<>();
-      for (BatchRequest req : batch) {
+      for (BatchRequest<?> req : batch) {
         List<BlockEntityData> blocks = (List<BlockEntityData>) req.data;
         allBlocks.addAll(blocks);
       }
 
       List<Long> results = getBlockEntitiesToTickDirect(allBlocks);
 
-      // Distribute results equally among batch requests
-      for (BatchRequest req : batch) {
-        req.future.complete(results);
+      for (BatchRequest<?> req : batch) {
+        completeFutureAsync(req.future, results);
       }
     } catch (Exception e) {
       throw OptimizedProcessingException.batchProcessingError(
@@ -241,33 +265,32 @@ public class BatchProcessor {
     }
   }
 
-  /** Collect batch requests with timeout. */
-  private List<BatchRequest> collectBatch() {
-    List<BatchRequest> batch = new ArrayList<>();
-    BatchRequest request;
+  /** Collect all pending requests without timeout waiting. */
+  private List<BatchRequest<?>> collectBatch() {
+    List<BatchRequest<?>> batch = new ArrayList<>();
+    BatchRequest<?> request;
 
-    // Collect batch with timeout
-    long startTime = System.currentTimeMillis();
-    boolean continueCollecting = true;
-    while (continueCollecting
-        && batch.size() < getBatchSize()
-        && (System.currentTimeMillis() - startTime) < getBatchTimeoutMs()) {
-      request = pendingRequests.poll();
-      if (request != null) {
-        batch.add(request);
-      } else {
-        // No more requests, break if we have some or wait a bit
-        if (!batch.isEmpty()) {
-          continueCollecting = false;
-        } else {
-          try {
-            Thread.sleep(5); // Small wait for new requests
-          } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            continueCollecting = false;
-          }
-        }
-      }
+    // Collect all available requests up to batch size limit
+    int targetSize = getBatchSize();
+    while (batch.size() < targetSize && (request = pendingRequests.poll()) != null) {
+      batch.add(request);
+    }
+
+    // If we collected some requests, return immediately
+    if (!batch.isEmpty()) {
+      return batch;
+    }
+
+    // If no requests available, wait briefly but don't block indefinitely
+    try {
+      Thread.sleep(1);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
+
+    // Try one more time to collect any requests that arrived during the sleep
+    while (batch.size() < targetSize && (request = pendingRequests.poll()) != null) {
+      batch.add(request);
     }
 
     return batch;
@@ -289,18 +312,6 @@ public class BatchProcessor {
             (NativeBridgeUtils.calculateOptimalBatchSize(base, 25, 200) * tpsFactor * delayFactor));
   }
 
-  private long getBatchTimeoutMs() {
-    double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
-    // If TPS low, wait longer to aggregate more requests
-    long tickDelay =
-        com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs();
-    if (tps < 15.0)
-      return Math.max(20, PerformanceConstants.getAdaptiveBatchTimeoutMs(tps, tickDelay) * 2);
-    if (tps < 18.0)
-      return Math.max(10, PerformanceConstants.getAdaptiveBatchTimeoutMs(tps, tickDelay));
-    return PerformanceConstants.getAdaptiveBatchTimeoutMs(tps, tickDelay);
-  }
-
   private int getBatchProcessorSleepMs() {
     double tps = com.kneaf.core.performance.monitoring.PerformanceManager.getAverageTPS();
     if (tps < 15.0)
@@ -309,96 +320,125 @@ public class BatchProcessor {
     return Math.max(1, PerformanceConstants.getAdaptiveBatchProcessorSleepMs(tps) * 2);
   }
 
-  /** Process batch based on type. */
-  private void processBatchedRequests(Map<String, List<BatchRequest>> batchedByType) {
-    // Process each type batch
-    for (Map.Entry<String, List<BatchRequest>> entry : batchedByType.entrySet()) {
+  /** Process batch based on type with asynchronous error handling. */
+  private void processBatchedRequests(Map<String, List<BatchRequest<?>>> batchedByType) {
+    // Process each type batch asynchronously
+    List<CompletableFuture<?>> processingTasks = new ArrayList<>();
+    
+    for (Map.Entry<String, List<BatchRequest<?>>> entry : batchedByType.entrySet()) {
       String type = entry.getKey();
-      List<BatchRequest> typeBatch = entry.getValue();
+      List<BatchRequest<?>> typeBatch = entry.getValue();
 
-      try {
-        switch (type) {
-          case PerformanceConstants.ENTITIES_KEY:
-            entityProcessor.processEntityBatchOptimized(convertBatchRequests(typeBatch));
-            break;
-          case PerformanceConstants.ITEMS_KEY:
-            processItemBatch(typeBatch);
-            break;
-          case PerformanceConstants.MOBS_KEY:
-            processMobBatch(typeBatch);
-            break;
-          case PerformanceConstants.BLOCKS_KEY:
-            processBlockBatch(typeBatch);
-            break;
-          default:
-            // Fallback to individual processing
-            for (BatchRequest req : typeBatch) {
-              req.future.complete(processIndividualRequest(req.type, req.data));
-            }
+      CompletableFuture.runAsync(() -> {
+        try {
+          switch (type) {
+            case PerformanceConstants.ENTITIES_KEY:
+              entityProcessor.processEntityBatchOptimized(convertBatchRequests(typeBatch));
+              break;
+            case PerformanceConstants.ITEMS_KEY:
+              processItemBatchAsync(typeBatch);
+              break;
+            case PerformanceConstants.MOBS_KEY:
+              processMobBatchAsync(typeBatch);
+              break;
+            case PerformanceConstants.BLOCKS_KEY:
+              processBlockBatchAsync(typeBatch);
+              break;
+            default:
+              // Fallback to individual processing (already uses async completion)
+              for (BatchRequest<?> req : typeBatch) {
+                completeFutureAsync(req.future, processIndividualRequest(req.type, req.data));
+              }
+          }
+        } catch (Exception e) {
+          KneafCore.LOGGER.error("Error processing {} batch of size {}", type, typeBatch.size(), e);
+          // Complete all futures with exception asynchronously
+          completeBatchFuturesWithExceptionAsync(typeBatch, e);
         }
-      } catch (Exception e) {
-        KneafCore.LOGGER.error("Error processing { } batch of size { }", type, typeBatch.size(), e);
-        // Complete all futures with exception
-        for (BatchRequest req : typeBatch) {
-          req.future.completeExceptionally(e);
-        }
-      }
+      });
+    }
+    
+    // Wait for all processing tasks to complete (safe even with empty list)
+    if (!processingTasks.isEmpty()) {
+      CompletableFuture.allOf(processingTasks.toArray(new CompletableFuture[0])).join();
     }
   }
-
-  /** Process item batch. */
-  private void processItemBatch(List<BatchRequest> batch) {
+  
+  /** Process item batch asynchronously. */
+  private void processItemBatchAsync(List<BatchRequest<?>> batch) {
     if (batch.isEmpty()) return;
 
     List<ItemEntityData> allItems = new ArrayList<>();
-    for (BatchRequest req : batch) {
+    for (BatchRequest<?> req : batch) {
       List<ItemEntityData> items = (List<ItemEntityData>) req.data;
       allItems.addAll(items);
     }
 
     ItemProcessResult result = processItemEntitiesDirect(allItems);
 
-    // For simplicity, distribute results equally among batch requests
-    for (BatchRequest req : batch) {
-      req.future.complete(result);
+    for (BatchRequest<?> req : batch) {
+      completeFutureAsync(req.future, result);
     }
   }
-
-  /** Process mob batch. */
-  private void processMobBatch(List<BatchRequest> batch) {
+  
+  /** Process mob batch asynchronously. */
+  private void processMobBatchAsync(List<BatchRequest<?>> batch) {
     if (batch.isEmpty()) return;
 
     List<MobData> allMobs = new ArrayList<>();
-    for (BatchRequest req : batch) {
+    for (BatchRequest<?> req : batch) {
       List<MobData> mobs = (List<MobData>) req.data;
       allMobs.addAll(mobs);
     }
 
     MobProcessResult result = processMobAIDirect(allMobs);
 
-    // Distribute results equally among batch requests
-    for (BatchRequest req : batch) {
-      req.future.complete(result);
+    for (BatchRequest<?> req : batch) {
+      completeFutureAsync(req.future, result);
     }
   }
-
-  /** Process block batch. */
-  private void processBlockBatch(List<BatchRequest> batch) {
+  
+  /** Process block batch asynchronously. */
+  private void processBlockBatchAsync(List<BatchRequest<?>> batch) {
     if (batch.isEmpty()) return;
 
     List<BlockEntityData> allBlocks = new ArrayList<>();
-    for (BatchRequest req : batch) {
+    for (BatchRequest<?> req : batch) {
       List<BlockEntityData> blocks = (List<BlockEntityData>) req.data;
       allBlocks.addAll(blocks);
     }
 
     List<Long> results = getBlockEntitiesToTickDirect(allBlocks);
 
-    // Distribute results equally among batch requests
-    for (BatchRequest req : batch) {
-      req.future.complete(results);
+    for (BatchRequest<?> req : batch) {
+      completeFutureAsync(req.future, results);
     }
   }
+  
+  /** Complete future asynchronously. */
+  @SuppressWarnings("unchecked")
+  private void completeFutureAsync(CompletableFuture<?> future, Object result) {
+    CompletableFuture<Object> f = (CompletableFuture<Object>) future;
+    CompletableFuture.runAsync(() -> {
+      if (!f.isDone()) {
+        f.complete(result);
+      } else {
+        KneafCore.LOGGER.warn("Attempted to complete already done future, skipping");
+      }
+    });
+  }
+  
+  /** Complete all batch futures with exception asynchronously. */
+  private void completeBatchFuturesWithExceptionAsync(List<BatchRequest<?>> batch, Throwable exception) {
+    CompletableFuture.runAsync(() -> {
+      for (BatchRequest<?> req : batch) {
+        if (!req.future.isDone()) {
+          req.future.completeExceptionally(exception);
+        }
+      }
+    });
+  }
+
 
   /** Process item entities directly. */
   private ItemProcessResult processItemEntitiesDirect(List<ItemEntityData> items) {
@@ -407,7 +447,7 @@ public class BatchProcessor {
     try {
       // Use binary protocol if available, fallback to JSON
       if (bridgeProvider.isNativeAvailable()) {
-        ByteBuffer inputBuffer = ManualSerializers.serializeItemInput(tickCount, items);
+        ByteBuffer inputBuffer = ManualSerializers.serializeItemInput(tickCount.get(), items);
         byte[] resultBytes = bridgeProvider.processItemEntitiesBinary(inputBuffer);
 
         if (NativeBridgeUtils.isValidNativeResult(resultBytes)) {
@@ -485,7 +525,7 @@ public class BatchProcessor {
     try {
       // Use binary protocol if available, fallback to JSON
       if (bridgeProvider.isNativeAvailable()) {
-        ByteBuffer inputBuffer = ManualSerializers.serializeMobInput(tickCount, mobs);
+        ByteBuffer inputBuffer = ManualSerializers.serializeMobInput(tickCount.get(), mobs);
         byte[] resultBytes = bridgeProvider.processMobAiBinary(inputBuffer);
 
         if (NativeBridgeUtils.isValidNativeResult(resultBytes)) {
@@ -542,7 +582,9 @@ public class BatchProcessor {
     try {
       // Use binary protocol if available, fallback to JSON
       if (bridgeProvider.isNativeAvailable()) {
-        ByteBuffer inputBuffer = ManualSerializers.serializeBlockInput(tickCount++, blockEntities);
+        long currentTick = tickCount.incrementAndGet();
+        KneafCore.LOGGER.debug("Incrementing tickCount to {} for block processing", currentTick);
+        ByteBuffer inputBuffer = ManualSerializers.serializeBlockInput(currentTick, blockEntities);
         byte[] resultBytes = bridgeProvider.processBlockEntitiesBinary(inputBuffer);
 
         if (NativeBridgeUtils.isValidNativeResult(resultBytes)) {
@@ -559,12 +601,14 @@ public class BatchProcessor {
       }
 
       // JSON fallback
+      long currentTick = tickCount.incrementAndGet();
+      KneafCore.LOGGER.debug("Incrementing tickCount to {} for block JSON processing", currentTick + 1);
       String jsonInput =
           new com.google.gson.Gson()
               .toJson(
                   Map.of(
                       PerformanceConstants.TICK_COUNT_KEY,
-                      tickCount++,
+                      currentTick,
                       "block_entities",
                       blockEntities));
       String jsonResult = bridgeProvider.processBlockEntitiesJson(jsonInput);
@@ -590,10 +634,12 @@ public class BatchProcessor {
 
   /** Convert BatchProcessor.BatchRequest to EntityProcessor.BatchRequest. */
   private List<EntityProcessor.BatchRequest> convertBatchRequests(
-      List<BatchRequest> batchRequests) {
+      List<BatchRequest<?>> batchRequests) {
     List<EntityProcessor.BatchRequest> converted = new ArrayList<>();
-    for (BatchRequest req : batchRequests) {
-      converted.add(new EntityProcessor.BatchRequest(req.type, req.data, req.future));
+    for (BatchRequest<?> req : batchRequests) {
+      // cast future to a typed CompletableFuture<Object> for EntityProcessor compatibility
+      CompletableFuture<Object> f = (CompletableFuture<Object>) req.future;
+      converted.add(new EntityProcessor.BatchRequest(req.type, req.data, f));
     }
     return converted;
   }
@@ -605,15 +651,15 @@ public class BatchProcessor {
   }
 
   // Gson is intentionally omitted; JSON fallback uses local Gson instances to avoid shared state
-  private long tickCount = 0;
+  private final AtomicLong tickCount = new AtomicLong(0);
 
-  /** Batch request wrapper. */
-  public static class BatchRequest {
+  /** Batch request wrapper with generic type support. */
+  public static class BatchRequest<T> {
     public final String type;
     public final Object data;
-    public final CompletableFuture<Object> future;
+    public final CompletableFuture<T> future;
 
-    public BatchRequest(String type, Object data, CompletableFuture<Object> future) {
+    public BatchRequest(String type, Object data, CompletableFuture<T> future) {
       this.type = type;
       this.data = data;
       this.future = future;

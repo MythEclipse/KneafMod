@@ -228,94 +228,107 @@ public class RustPerformanceFacade {
   }
 
   /** Get entities that should be ticked based on optimization criteria. */
-  public List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
-    ensureInitialized();
+ public CompletableFuture<List<Long>> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
+   ensureInitialized();
 
-    try {
-      return optimizer.optimizeEntities(entities, players);
-    } catch (Exception e) {
-      KneafCore.LOGGER.error("Error getting entities to tick", e);
-      // Fallback: return all entities
-      return entities.stream().map(entity -> entity.getId()).toList();
-    }
-  }
+   try {
+     return optimizer.optimizeEntities(entities, players)
+         .exceptionally(ex -> {
+           KneafCore.LOGGER.error("Error getting entities to tick", ex);
+           // Fallback: return all entities
+           return entities.stream().map(entity -> entity.getId()).toList();
+         });
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error getting entities to tick", e);
+     // Fallback: return all entities
+     return CompletableFuture.completedFuture(
+         entities.stream().map(entity -> entity.getId()).toList());
+   }
+ }
 
   /** Process item entities for merging and optimization. */
-  public ItemProcessResult processItemEntities(List<ItemEntityData> items) {
-    ensureInitialized();
+ public CompletableFuture<ItemProcessResult> processItemEntities(List<ItemEntityData> items) {
+   ensureInitialized();
 
-    try {
-      // Use batch processing for large item collections
-      if (items.size() >= 25 && NATIVE_MANAGER.isNativeAvailable()) {
-        return batchProcessor.submitBatchRequest(PerformanceConstants.ITEMS_KEY, items);
-      } else {
-        // Direct processing for small collections
-        return entityProcessor.processItemEntities(items);
-      }
-    } catch (Exception e) {
-      KneafCore.LOGGER.error("Error processing item entities", e);
-      // Fallback: no optimization
-      return new ItemProcessResult(new ArrayList<Long>(), 0, 0, new ArrayList<>());
-    }
-  }
+   try {
+     // Use batch processing for large item collections
+     if (items.size() >= 25 && NATIVE_MANAGER.isNativeAvailable()) {
+       return batchProcessor.submitItemRequest(PerformanceConstants.ITEMS_KEY, items);
+     } else {
+       // Direct processing for small collections
+       ItemProcessResult result = entityProcessor.processItemEntities(items);
+       return CompletableFuture.completedFuture(result);
+     }
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error processing item entities", e);
+     // Fallback: no optimization
+     return CompletableFuture.completedFuture(
+         new ItemProcessResult(new ArrayList<Long>(), 0, 0, new ArrayList<>()));
+   }
+ }
 
   /** Process mob AI for optimization. */
-  public MobProcessResult processMobAI(List<MobData> mobs) {
-    ensureInitialized();
+ public CompletableFuture<MobProcessResult> processMobAI(List<MobData> mobs) {
+   ensureInitialized();
 
-    try {
-      // Use batch processing for large mob collections
-      if (mobs.size() >= 25 && NATIVE_MANAGER.isNativeAvailable()) {
-        return batchProcessor.submitBatchRequest(PerformanceConstants.MOBS_KEY, mobs);
-      } else {
-        // Direct processing for small collections
-        return entityProcessor.processMobAI(mobs);
-      }
-    } catch (Exception e) {
-      KneafCore.LOGGER.error("Error processing mob AI", e);
-      // Fallback: no optimization
-      return new MobProcessResult(new ArrayList<Long>(), new ArrayList<Long>());
-    }
-  }
+   try {
+     // Use batch processing for large mob collections
+     if (mobs.size() >= 25 && NATIVE_MANAGER.isNativeAvailable()) {
+       return batchProcessor.submitMobRequest(PerformanceConstants.MOBS_KEY, mobs);
+     } else {
+       // Direct processing for small collections
+       MobProcessResult result = entityProcessor.processMobAI(mobs);
+       return CompletableFuture.completedFuture(result);
+     }
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error processing mob AI", e);
+     // Fallback: no optimization
+     return CompletableFuture.completedFuture(
+         new MobProcessResult(new ArrayList<Long>(), new ArrayList<Long>()));
+   }
+ }
 
   /** Process villager AI for optimization. */
-  public List<Long> processVillagerAI(List<VillagerData> villagers) {
-    ensureInitialized();
+ public CompletableFuture<List<Long>> processVillagerAI(List<VillagerData> villagers) {
+   ensureInitialized();
 
-    try {
-      // Use batch processing for large villager collections
-      if (villagers.size() >= 25 && NATIVE_MANAGER.isNativeAvailable()) {
-        return batchProcessor.submitBatchRequest("villagers", villagers);
-      } else {
-        // Direct processing for small collections
-        return entityProcessor.processVillagerAI(villagers);
-      }
-    } catch (Exception e) {
-      KneafCore.LOGGER.error("Error processing villager AI", e);
-      // Fallback: no optimization
-      // Create a simple VillagerProcessResult equivalent
-      return new ArrayList<Long>();
-    }
-  }
+   try {
+     // Use batch processing for large villager collections
+     if (villagers.size() >= 25 && NATIVE_MANAGER.isNativeAvailable()) {
+       return batchProcessor.submitLongListRequest("villagers", villagers);
+     } else {
+       // Direct processing for small collections
+       List<Long> result = entityProcessor.processVillagerAI(villagers);
+       return CompletableFuture.completedFuture(result);
+     }
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error processing villager AI", e);
+     // Fallback: no optimization
+     // Create a simple VillagerProcessResult equivalent
+     return CompletableFuture.completedFuture(new ArrayList<Long>());
+   }
+ }
 
   /** Get block entities that should be ticked. */
-  public List<Long> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
-    ensureInitialized();
+ public CompletableFuture<List<Long>> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
+   ensureInitialized();
 
-    try {
-      // Use batch processing for large block entity collections
-      if (blockEntities.size() >= 25 && NATIVE_MANAGER.isNativeAvailable()) {
-        return batchProcessor.submitBatchRequest(PerformanceConstants.BLOCKS_KEY, blockEntities);
-      } else {
-        // Direct processing for small collections
-        return entityProcessor.getBlockEntitiesToTick(blockEntities);
-      }
-    } catch (Exception e) {
-      KneafCore.LOGGER.error("Error getting block entities to tick", e);
-      // Fallback: return all block entities
-      return blockEntities.stream().map(block -> block.getId()).toList();
-    }
-  }
+   try {
+     // Use batch processing for large block entity collections
+     if (blockEntities.size() >= 25 && NATIVE_MANAGER.isNativeAvailable()) {
+       return batchProcessor.submitLongListRequest(PerformanceConstants.BLOCKS_KEY, blockEntities);
+     } else {
+       // Direct processing for small collections
+       List<Long> result = entityProcessor.getBlockEntitiesToTick(blockEntities);
+       return CompletableFuture.completedFuture(result);
+     }
+   } catch (Exception e) {
+     KneafCore.LOGGER.error("Error getting block entities to tick", e);
+     // Fallback: return all block entities
+     return CompletableFuture.completedFuture(
+         blockEntities.stream().map(block -> block.getId()).toList());
+   }
+ }
 
   /** Optimize villager processing with spatial awareness. */
   public List<Long> optimizeVillagers(
