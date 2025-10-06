@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
 use std::fmt::Debug;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
@@ -15,9 +15,11 @@ use tokio::runtime::Runtime;
 use memmap2::MmapMut;
 use crate::logging::{PerformanceLogger, generate_trace_id};
 
-/// Generic object pool for memory reuse
+/// Generic object pool for memory reuse with LRU eviction
 pub struct ObjectPool<T> {
-    pool: Arc<Mutex<VecDeque<T>>>,
+    pool: Arc<Mutex<HashMap<u64, (T, SystemTime)>>>,
+    access_order: Arc<Mutex<BTreeMap<SystemTime, u64>>>,
+    next_id: AtomicU64,
     max_size: usize,
     logger: PerformanceLogger,
     high_water_mark: AtomicUsize,
@@ -33,7 +35,9 @@ where
 {
     pub fn new(max_size: usize) -> Self {
         Self {
-            pool: Arc::new(Mutex::new(VecDeque::with_capacity(max_size))),
+            pool: Arc::new(Mutex::new(HashMap::new())),
+            access_order: Arc::new(Mutex::new(BTreeMap::new())),
+            next_id: AtomicU64::new(0),
             max_size,
             logger: PerformanceLogger::new("memory_pool"),
             high_water_mark: AtomicUsize::new(0),
@@ -51,6 +55,8 @@ where
     pub fn clone_shallow(&self) -> Self {
         Self {
             pool: Arc::clone(&self.pool),
+            access_order: Arc::clone(&self.access_order),
+            next_id: AtomicU64::new(self.next_id.load(Ordering::Relaxed)),
             max_size: self.max_size,
             logger: self.logger.clone(),
             high_water_mark: AtomicUsize::new(self.high_water_mark.load(Ordering::Relaxed)),
@@ -113,27 +119,38 @@ where
     /// Get an object from the pool, creating a new one if none available
     pub fn get(&self) -> PooledObject<T> {
         let trace_id = generate_trace_id();
-        
+
         // Perform lazy cleanup before allocation if needed
         self.lazy_cleanup(0.9); // Cleanup when usage exceeds 90%
-        
-        let mut guard = self.pool.lock().unwrap();
-        let obj = guard.pop_front().unwrap_or_else(|| {
+
+        let mut pool_guard = self.pool.lock().unwrap();
+        let mut access_order_guard = self.access_order.lock().unwrap();
+
+        let obj = if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
+            // Remove from access order
+            access_order_guard.remove(&lru_time);
+            // Remove from pool and get the object
+            pool_guard.remove(&lru_id).map(|(obj, _)| obj).unwrap()
+        } else {
             self.logger.log_operation("pool_miss", &trace_id, || {
                 log::debug!("Pool miss for type {}, creating new object", std::any::type_name::<T>());
                 T::default()
             })
-        });
+        };
 
         // Record allocation for monitoring
         self.record_allocation();
 
-        // Clone the Arc to the pool so the PooledObject can return the object on drop
+        // Clone the Arcs for the PooledObject
         let pool_arc = Arc::clone(&self.pool);
+        let access_order_arc = Arc::clone(&self.access_order);
+        let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         PooledObject {
             object: Some(obj),
             pool: pool_arc,
+            access_order: access_order_arc,
+            id: next_id,
             max_size: self.max_size,
             size_bytes: None,
             allocation_tracker: None,
@@ -150,31 +167,42 @@ where
         allocation_type: &str,
     ) -> PooledObject<T> {
         let trace_id = generate_trace_id();
-          
+
         // Record allocation before getting object
         if let Ok(mut metrics) = allocation_tracker.write() {
             metrics.record_allocation(size_bytes, allocation_type);
         }
-        
+
         // Perform lazy cleanup before allocation if needed
         self.lazy_cleanup(0.9); // Cleanup when usage exceeds 90%
-          
-        let mut guard = self.pool.lock().unwrap();
-        let obj = guard.pop_front().unwrap_or_else(|| {
+
+        let mut pool_guard = self.pool.lock().unwrap();
+        let mut access_order_guard = self.access_order.lock().unwrap();
+
+        let obj = if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
+            // Remove from access order
+            access_order_guard.remove(&lru_time);
+            // Remove from pool and get the object
+            pool_guard.remove(&lru_id).map(|(obj, _)| obj).unwrap()
+        } else {
             self.logger.log_operation("pool_miss_tracked", &trace_id, || {
                 log::debug!("Pool miss for tracked type {}, creating new object", std::any::type_name::<T>());
                 T::default()
             })
-        });
+        };
 
         // Record allocation for monitoring
         self.record_allocation();
 
         let pool_arc = Arc::clone(&self.pool);
+        let access_order_arc = Arc::clone(&self.access_order);
+        let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         PooledObject {
             object: Some(obj),
             pool: pool_arc,
+            access_order: access_order_arc,
+            id: next_id,
             max_size: self.max_size,
             size_bytes: Some(size_bytes),
             allocation_tracker: Some(allocation_tracker),
@@ -187,13 +215,13 @@ where
     pub fn get_monitoring_stats(&self) -> ObjectPoolMonitoringStats {
         let trace_id = generate_trace_id();
         self.logger.log_operation("get_monitoring_stats", &trace_id, || {
-            let pool = self.pool.lock().unwrap();
+            let pool_len = self.pool.lock().unwrap().len();
             ObjectPoolMonitoringStats {
-                available_objects: pool.len(),
+                available_objects: pool_len,
                 max_size: self.max_size,
                 high_water_mark: self.high_water_mark.load(Ordering::Relaxed),
                 allocation_count: self.allocation_count.load(Ordering::Relaxed),
-                current_usage_ratio: pool.len() as f64 / self.max_size as f64,
+                current_usage_ratio: pool_len as f64 / self.max_size as f64,
                 last_cleanup_time: self.last_cleanup_time.load(Ordering::Relaxed),
             }
         })
@@ -221,38 +249,46 @@ where
             .unwrap_or_default()
             .as_secs() as usize;
         let last_cleanup = self.last_cleanup_time.load(Ordering::Relaxed);
-        
+
         // Only cleanup if enough time has passed (1 second)
         if current_time - last_cleanup < 1 {
             return false;
         }
 
-    let mut pool = self.pool.lock().unwrap();
-    let usage_ratio = pool.len() as f64 / self.max_size as f64;
-        
+        let mut pool_guard = self.pool.lock().unwrap();
+        let mut access_order_guard = self.access_order.lock().unwrap();
+        let usage_ratio = pool_guard.len() as f64 / self.max_size as f64;
+
         if usage_ratio > threshold {
             self.logger.log_info("lazy_cleanup", &trace_id, &format!("Performing lazy cleanup - usage ratio: {:.2}", usage_ratio));
-            
-            // Remove excess objects beyond high water mark
+
+            // Remove excess objects: evict LRU objects beyond high water mark
             let target_size = (self.high_water_mark.load(Ordering::Relaxed) as f64 * 0.7) as usize;
-            while pool.len() > target_size && pool.len() > 5 { // Keep at least 5 objects
-                pool.pop_back();
+            while pool_guard.len() > target_size && pool_guard.len() > 5 { // Keep at least 5 objects
+                if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
+                    access_order_guard.remove(&lru_time);
+                    pool_guard.remove(&lru_id);
+                } else {
+                    break;
+                }
             }
-            
+
             self.last_cleanup_time.store(current_time, Ordering::Relaxed);
-            self.logger.log_info("lazy_cleanup", &trace_id, &format!("Reduced pool from {} to {}", self.high_water_mark.load(Ordering::Relaxed), pool.len()));
+            self.logger.log_info("lazy_cleanup", &trace_id, &format!("Reduced pool from {} to {}", self.high_water_mark.load(Ordering::Relaxed), pool_guard.len()));
             return true;
         }
-        
+
         false
     }
 }
 
-/// Enhanced wrapper for pooled objects with swap tracking and critical operation protection
+/// Enhanced wrapper for pooled objects with LRU access tracking and swap tracking
 #[allow(dead_code)]
 pub struct PooledObject<T> {
     object: Option<T>,
-    pool: Arc<Mutex<VecDeque<T>>>,
+    pool: Arc<Mutex<HashMap<u64, (T, SystemTime)>>>,
+    access_order: Arc<Mutex<BTreeMap<SystemTime, u64>>>,
+    id: u64,
     max_size: usize,
     size_bytes: Option<u64>,
     allocation_tracker: Option<Arc<RwLock<SwapAllocationMetrics>>>,
@@ -287,26 +323,33 @@ impl<T> Drop for PooledObject<T> {
                 }
             }
 
-            // Record deallocation for monitoring
-            let pool_arc = Arc::clone(&self.pool);
-            let mut pool = pool_arc.lock().unwrap();
-            
+            let now = SystemTime::now();
+            let mut pool_guard = self.pool.lock().unwrap();
+            let mut access_order_guard = self.access_order.lock().unwrap();
+
             // Only return to pool if we're not at critical levels
-            let usage_ratio = pool.len() as f64 / self.max_size as f64;
+            let usage_ratio = pool_guard.len() as f64 / self.max_size as f64;
             if usage_ratio < 0.95 { // Only add back if usage is below 95%
-                if pool.len() < self.max_size {
-                    pool.push_front(obj);
+                if pool_guard.len() < self.max_size {
+                    // Add to pool with current access time
+                    pool_guard.insert(self.id, (obj, now));
+                    access_order_guard.insert(now, self.id);
+                } else {
+                    // Pool is full, evict LRU and add this one
+                    if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
+                        access_order_guard.remove(&lru_time);
+                        pool_guard.remove(&lru_id);
+                        // Now add the new object
+                        pool_guard.insert(self.id, (obj, now));
+                        access_order_guard.insert(now, self.id);
+                    }
                 }
             } else {
                 // Don't add back to pool if it's already full to prevent overflow
                 log::debug!("Not returning object to pool - usage at critical level: {:.2}", usage_ratio);
             }
-            
-            // NOTE: previously attempted to call self.record_deallocation(),
-            // but that method belongs to the ObjectPool manager. The PooledObject
-            // does not have access to the parent ObjectPool instance here. The
-            // deallocation accounting is already handled when the pool drains or
-            // via allocation trackers; leave this as a no-op to avoid double-counting.
+
+            // NOTE: deallocation accounting is handled via allocation trackers
         }
     }
 }
@@ -1054,41 +1097,44 @@ impl SwapMemoryPool {
     pub fn perform_light_cleanup(&self) {
         let trace_id = generate_trace_id();
         self.logger.log_info("light_cleanup", &trace_id, "Performing light memory cleanup");
-          
-        // Reduce pool sizes by removing excess objects
-        if let Ok(mut pool) = self.chunk_metadata_pool.pool.pool.lock() {
-            let current_size = pool.len();
-            let target_size = (current_size as f64 * 0.8) as usize;
-            while pool.len() > target_size && pool.len() > 10 {
-                pool.pop_back();
-            }
-            self.logger.log_info("light_cleanup", &trace_id, &format!("Reduced chunk metadata pool from {} to {}", current_size, pool.len()));
-        }
 
-        if let Ok(mut pool) = self.compressed_data_pool.pool.pool.lock() {
-            let current_size = pool.len();
-            let target_size = (current_size as f64 * 0.8) as usize;
-            while pool.len() > target_size && pool.len() > 5 {
-                pool.pop_back();
-            }
-            self.logger.log_info("light_cleanup", &trace_id, &format!("Reduced compressed data pool from {} to {}", current_size, pool.len()));
-        }
+        // Reduce pool sizes by evicting LRU objects
+        self.cleanup_pool_light(&self.chunk_metadata_pool, 0.8, 10);
+        self.cleanup_pool_light(&self.compressed_data_pool, 0.8, 5);
+        self.cleanup_pool_light(&self.temporary_buffer_pool, 0.8, 2);
 
-        if let Ok(mut pool) = self.temporary_buffer_pool.pool.pool.lock() {
-            let current_size = pool.len();
-            let target_size = (current_size as f64 * 0.8) as usize;
-            while pool.len() > target_size && pool.len() > 2 {
-                pool.pop_back();
-            }
-            self.logger.log_info("light_cleanup", &trace_id, &format!("Reduced temporary buffer pool from {} to {}", current_size, pool.len()));
-        }
-        
         // Update last cleanup time
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as usize;
         self.last_cleanup_time.store(current_time, Ordering::Relaxed);
+    }
+
+    /// Helper to perform light cleanup on a VecPool
+    fn cleanup_pool_light(&self, pool: &VecPool<u8>, ratio: f64, min_keep: usize) {
+        let trace_id = generate_trace_id();
+        if let Ok(mut inner_pool) = pool.pool.pool.lock() {
+            if let Ok(mut access_order) = pool.pool.access_order.lock() {
+                let current_size = inner_pool.len();
+                let target_size = (current_size as f64 * ratio) as usize;
+                let safe_target = target_size.max(min_keep);
+
+                let removed = current_size.saturating_sub(safe_target);
+                while inner_pool.len() > safe_target {
+                    if let Some((lru_time, lru_id)) = access_order.iter().next().map(|(&t, &id)| (t, id)) {
+                        access_order.remove(&lru_time);
+                        inner_pool.remove(&lru_id);
+                    } else {
+                        break;
+                    }
+                }
+
+                if removed > 0 {
+                    self.logger.log_info("pool_light_cleanup", &trace_id, &format!("Removed {} objects from pool ({} -> {})", removed, current_size, inner_pool.len()));
+                }
+            }
+        }
     }
 
     /// Perform aggressive cleanup (force pool resizing)
@@ -1182,24 +1228,31 @@ impl SwapMemoryPool {
     /// Helper function to cleanup a specific pool with intelligent size calculation
     fn cleanup_pool(&self, pool: &VecPool<u8>, cleanup_ratio: f64, min_keep: usize) {
         let trace_id = generate_trace_id();
-        
+
         if let Ok(mut inner_pool) = pool.pool.pool.lock() {
-            let current_size = inner_pool.len();
-            if current_size <= min_keep {
-                return;
+            if let Ok(mut access_order) = pool.pool.access_order.lock() {
+                let current_size = inner_pool.len();
+                if current_size <= min_keep {
+                    return;
+                }
+
+                // Calculate target size with safeguards
+                let target_size = (current_size as f64 * (1.0 - cleanup_ratio)) as usize;
+                let safe_target = target_size.max(min_keep);
+
+                let removed = current_size - safe_target;
+                while inner_pool.len() > safe_target {
+                    if let Some((lru_time, lru_id)) = access_order.iter().next().map(|(&t, &id)| (t, id)) {
+                        access_order.remove(&lru_time);
+                        inner_pool.remove(&lru_id);
+                    } else {
+                        break;
+                    }
+                }
+
+                self.logger.log_info("pool_cleanup", &trace_id, &format!("Cleaned up pool: removed {} objects ({}%), from {} to {}",
+                    removed, (removed as f64 / current_size as f64 * 100.0).round(), current_size, inner_pool.len()));
             }
-            
-            // Calculate target size with safeguards
-            let target_size = (current_size as f64 * (1.0 - cleanup_ratio)) as usize;
-            let safe_target = target_size.max(min_keep);
-            
-            let removed = current_size - safe_target;
-            while inner_pool.len() > safe_target {
-                inner_pool.pop_back();
-            }
-            
-            self.logger.log_info("pool_cleanup", &trace_id, &format!("Cleaned up pool: removed {} objects ({}%), from {} to {}",
-                removed, (removed as f64 / current_size as f64 * 100.0).round(), current_size, inner_pool.len()));
         }
     }
 

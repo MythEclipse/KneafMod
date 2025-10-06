@@ -6,6 +6,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 
 /**
@@ -52,6 +53,11 @@ public class ThreadPoolManager {
   }
 
   private static final ExecutorMetrics EXECUTOR_METRICS = new ExecutorMetrics();
+
+  // CPU load cache to reduce syscall overhead
+  private static final AtomicReference<Double> CPU_LOAD_CACHE = new AtomicReference<>();
+  private static volatile long CPU_LOAD_CACHE_TIMESTAMP = 0;
+  private static final long CPU_LOAD_CACHE_TTL_MS = 3000; // 3 detik TTL
 
   public ThreadPoolManager() {}
 
@@ -125,20 +131,31 @@ public class ThreadPoolManager {
 
   /**
    * Get system CPU load for dynamic thread pool sizing.
+   * Uses cache with TTL to reduce syscall overhead.
    */
   private static double getSystemCpuLoad() {
+    long now = System.currentTimeMillis();
+    Double cached = CPU_LOAD_CACHE.get();
+    if (cached != null && (now - CPU_LOAD_CACHE_TIMESTAMP) < CPU_LOAD_CACHE_TTL_MS) {
+      return cached;
+    }
+
     try {
-      java.lang.management.OperatingSystemMXBean osBean = 
+      java.lang.management.OperatingSystemMXBean osBean =
           java.lang.management.ManagementFactory.getOperatingSystemMXBean();
       double systemLoad = osBean.getSystemLoadAverage();
-      
+
       if (systemLoad < 0) {
         int availableProcessors = osBean.getAvailableProcessors();
-        return Math.min(1.0, systemLoad / availableProcessors);
+        systemLoad = Math.min(1.0, systemLoad / availableProcessors);
+      } else {
+        int availableProcessors = osBean.getAvailableProcessors();
+        systemLoad = Math.min(1.0, systemLoad / availableProcessors);
       }
-      
-      int availableProcessors = osBean.getAvailableProcessors();
-      return Math.min(1.0, systemLoad / availableProcessors);
+
+      CPU_LOAD_CACHE.set(systemLoad);
+      CPU_LOAD_CACHE_TIMESTAMP = now;
+      return systemLoad;
     } catch (Exception e) {
       return 0.0;
     }

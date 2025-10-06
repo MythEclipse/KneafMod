@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use std::thread;
 use rayon::prelude::*;
 use serde::{Serialize, Deserialize};
+use dashmap::DashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProfilingData {
@@ -237,7 +238,7 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
     // Monitor and adjust thread pool based on workload
     monitor_and_adjust_thread_pool(total_items);
 
-    // Build chunk_map in parallel with timing
+    // Build chunk_map in parallel with timing using map-reduce pattern with DashMap for memory efficiency
     let grouping_timer = OperationTimer::new("item_grouping").with_items(total_items);
     // Better estimate: use density-based calculation for more accurate memory allocation
     let estimated_chunks = if total_items > 1000 {
@@ -250,22 +251,13 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
     } else {
         10
     };
-    
-    let chunk_map: HashMap<(i32, i32), Vec<&ItemEntityData>> = input.items.par_iter().fold(
-        || HashMap::with_capacity(estimated_chunks.min(500)), // Reduced max cap for memory efficiency
-        |mut acc, item| {
-            acc.entry((item.chunk_x, item.chunk_z)).or_insert_with(|| Vec::with_capacity(estimated_items_per_chunk)).push(item);
-            acc
-        }
-    ).reduce(
-        || HashMap::with_capacity(estimated_chunks.min(500)),
-        |mut acc, map| {
-            for (key, value) in map {
-                acc.entry(key).or_insert_with(|| Vec::with_capacity(value.len())).extend(value);
-            }
-            acc
-        }
-    );
+
+    let chunk_dashmap: DashMap<(i32, i32), Vec<&ItemEntityData>> = DashMap::new();
+    input.items.par_iter().for_each(|item| {
+        let mut entry = chunk_dashmap.entry((item.chunk_x, item.chunk_z)).or_insert_with(|| Vec::with_capacity(estimated_items_per_chunk));
+        entry.push(item);
+    });
+    let chunk_map: HashMap<(i32, i32), Vec<&ItemEntityData>> = chunk_dashmap.into_iter().collect();
     let chunk_count = chunk_map.len();
     let _grouping_duration = grouping_timer.with_chunks(chunk_count).finish();
 
@@ -296,22 +288,13 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
             } else {
                 5
             };
-            
-            let type_map: HashMap<&str, Vec<&ItemEntityData>> = items.par_iter().fold(
-                || HashMap::with_capacity(estimated_types),
-                |mut acc, item| {
-                    acc.entry(item.item_type.as_str()).or_insert_with(|| Vec::with_capacity(estimated_items_per_type)).push(*item);
-                    acc
-                }
-            ).reduce(
-                || HashMap::with_capacity(estimated_types),
-                |mut acc, map| {
-                    for (key, value) in map {
-                        acc.entry(key).or_insert_with(|| Vec::with_capacity(value.len())).extend(value);
-                    }
-                    acc
-                }
-            );
+
+            let type_dashmap: DashMap<&str, Vec<&ItemEntityData>> = DashMap::new();
+            items.par_iter().for_each(|item| {
+                let mut entry = type_dashmap.entry(item.item_type.as_str()).or_insert_with(|| Vec::with_capacity(estimated_items_per_type));
+                entry.push(*item);
+            });
+            let type_map: HashMap<&str, Vec<&ItemEntityData>> = type_dashmap.into_iter().collect();
 
             for (_type, type_items) in type_map {
                 if type_items.len() > 1 {
