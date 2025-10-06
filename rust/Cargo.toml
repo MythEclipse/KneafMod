@@ -41,6 +41,7 @@ fastnbt = "2.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 libc = "0.2"
 flate2 = "1.0"
+lz4_flex = "0.11"
 parking_lot = "0.12"
 crossbeam-epoch = "0.9"
 crossbeam-queue = "0.3"

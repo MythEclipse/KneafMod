@@ -6,8 +6,7 @@ use std::thread;
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU64};
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::fs::File;
-use flate2::read::ZlibDecoder;
-use flate2::write::ZlibEncoder;
+use lz4_flex::{compress, decompress};
 use flate2::Compression;
 use tokio::sync::mpsc;
 use tokio::task;
@@ -822,11 +821,12 @@ impl SwapMemoryPool {
         
         // Compress if enabled
         let final_data = if Self::is_compression_enabled() {
-            let mut encoder = ZlibEncoder::new(Vec::new(), Self::get_default_compression_level());
-            encoder.write_all(&data).map_err(|e| e.to_string())?;
-            let compressed = encoder.finish().map_err(|e| e.to_string())?;
-            logger.log_info("async_prefetch_compressed", &trace_id, &format!("Compressed chunk {}: {} -> {} bytes", chunk_id, size, compressed.len()));
-            compressed
+            let compressed = compress(&data);
+            let mut result = Vec::with_capacity(4 + compressed.len());
+            result.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            result.extend_from_slice(&compressed);
+            logger.log_info("async_prefetch_compressed", &trace_id, &format!("Compressed chunk {}: {} -> {} bytes", chunk_id, size, result.len()));
+            result
         } else {
             data
         };
@@ -1297,11 +1297,13 @@ impl SwapMemoryPool {
             return Ok(data.to_vec());
         }
 
-        let mut encoder = ZlibEncoder::new(Vec::new(), self.compression_level);
-        encoder.write_all(data).map_err(|e| e.to_string())?;
-        let compressed = encoder.finish().map_err(|e| e.to_string())?;
-        
-        Ok(compressed)
+        let compressed = compress(data);
+        // Prepend original size as 4 bytes little endian
+        let mut result = Vec::with_capacity(4 + compressed.len());
+        result.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        result.extend_from_slice(&compressed);
+
+        Ok(result)
     }
 
     /// Decompress data with current settings
@@ -1310,10 +1312,14 @@ impl SwapMemoryPool {
             return Ok(data.to_vec());
         }
 
-        let mut decoder = ZlibDecoder::new(data);
-        let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed).map_err(|e| e.to_string())?;
-        
+        if data.len() < 4 {
+            return Err("Data too short for LZ4 decompression".to_string());
+        }
+
+        let original_size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        let compressed_data = &data[4..];
+        let decompressed = decompress(compressed_data, original_size).map_err(|e| e.to_string())?;
+
         Ok(decompressed)
     }
 
