@@ -3,9 +3,11 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::fmt::Debug;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::thread;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU64};
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::fs::File;
+use std::ptr::NonNull;
 use lz4_flex::{compress, decompress};
 use flate2::Compression;
 use tokio::sync::{mpsc, oneshot};
@@ -453,16 +455,71 @@ pub enum SizeClass {
     Tiny64B,      // 64 bytes
     Small256B,    // 256 bytes
     Medium1KB,    // 1KB
-    Medium2KB,    // 2KB (new)
+    Medium2KB,    // 2KB
     Medium4KB,    // 4KB
-    Medium8KB,    // 8KB (new)
+    Medium8KB,    // 8KB
     Large16KB,    // 16KB
-    Large32KB,    // 32KB (new)
-    Large64KB,    // 64KB (new)
-    Huge128KB,    // 128KB (new)
-    Huge256KB,    // 256KB (new)
-    Huge512KB,    // 512KB (new)
+    Large32KB,    // 32KB
+    Large64KB,    // 64KB
+    Huge128KB,    // 128KB
+    Huge256KB,    // 256KB
+    Huge512KB,    // 512KB
     Huge1MBPlus,  // 1MB+ (dynamic)
+}
+
+/// Slab allocation structure for fixed-size memory blocks
+#[derive(Debug)]
+pub struct Slab {
+    /// Memory block containing fixed-size objects
+    memory: Vec<u8>,
+    /// Bitmask tracking which slots are allocated (1 = allocated, 0 = free)
+    allocation_mask: Vec<bool>,
+    /// Current number of allocated objects
+    allocated_count: AtomicUsize,
+    /// Total number of slots in this slab
+    total_slots: usize,
+    /// Size of each object slot
+    slot_size: usize,
+    /// Lock for thread-safe operations
+    lock: Mutex<()>,
+}
+
+/// Slab allocator for efficient fixed-size memory management
+#[derive(Debug)]
+pub struct SlabAllocator<T> {
+    /// Map of size classes to their respective slabs
+    slabs: HashMap<SizeClass, Vec<Slab>>,
+    _phantom: PhantomData<T>,
+    /// Current slab for each size class (for round-robin allocation)
+    current_slab: HashMap<SizeClass, AtomicUsize>,
+    /// Configuration for slab allocation
+    config: SlabAllocatorConfig,
+    /// Logger for performance monitoring
+    logger: PerformanceLogger,
+}
+
+/// Configuration for slab allocator
+#[derive(Debug, Clone)]
+pub struct SlabAllocatorConfig {
+    /// Number of objects per slab
+    slab_size: usize,
+    /// Maximum number of slabs per size class
+    max_slabs_per_class: usize,
+    /// Pre-allocate initial slabs
+    pre_allocate: bool,
+    /// Enable overcommitment
+    allow_overcommit: bool,
+}
+
+impl Default for SlabAllocatorConfig {
+    fn default() -> Self {
+        Self {
+            slab_size: 1024,       // 1024 objects per slab by default
+            max_slabs_per_class: 8, // Max 8 slabs per size class
+            pre_allocate: true,
+            allow_overcommit: false,
+        }
+    }
 }
 
 impl SizeClass {
@@ -1307,6 +1364,8 @@ pub struct SwapMemoryPool {
     min_allocation_guard: f64,
     last_cleanup_time: AtomicUsize,
     is_critical_operation: AtomicBool,
+    defragmentation_threshold: f64,
+    last_defragmentation_time: AtomicUsize,
     
     // Swap I/O Optimization Fields
     async_prefetching: AtomicBool,
@@ -1352,42 +1411,47 @@ impl SwapMemoryPool {
         }
 
         Self {
-            chunk_metadata_pool: VecPool::new(1000),
-            compressed_data_pool: VecPool::new(500),
-            temporary_buffer_pool: VecPool::new(200),
-            metrics: Arc::new(RwLock::new(SwapAllocationMetrics::new())),
-            logger: PerformanceLogger::new("swap_memory_pool"),
-            max_memory_bytes,
-            pressure_threshold: 0.8,
-            resize_factor: 0.75,
-            lazy_allocation_threshold: 0.9, // Start lazy allocation when 90% used
-            aggressive_cleanup_threshold: 0.95, // Aggressive cleanup at 95%
-            critical_cleanup_threshold: 0.98, // Critical threshold at 98%
-            min_allocation_guard: 0.05, // Minimum allocation guard to prevent thrashing
-            last_cleanup_time: AtomicUsize::new(SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as usize),
-            is_critical_operation: AtomicBool::new(false),
-            
-            // Swap I/O Optimization Fields
-            async_prefetching: AtomicBool::new(false),
-            compression_enabled: AtomicBool::new(false),
-            compression_level: Compression::default(),
-            memory_mapped_files: AtomicBool::new(false),
-            non_blocking_io: AtomicBool::new(false),
-            prefetch_buffer_size: 64 * 1024 * 1024, // 64MB default
-            mmap_cache: Arc::new(RwLock::new(HashMap::new())),
-            mmap_write_cache: Arc::new(RwLock::new(HashMap::new())),
-            mmap_file_paths: Arc::new(RwLock::new(HashMap::new())),
-            async_prefetch_limit: 8, // Increased for better prefetching
-            prefetch_queue: Arc::new(Mutex::new(VecDeque::new())),
-            runtime,
-            sender,
-            pending_operations: AtomicU64::new(0),
-            read_heavy_mode: AtomicBool::new(false),
-            mmap_cache_size: 16, // 16MB default cache size
-        }
+                    chunk_metadata_pool: VecPool::new(1000),
+                    compressed_data_pool: VecPool::new(500),
+                    temporary_buffer_pool: VecPool::new(200),
+                    metrics: Arc::new(RwLock::new(SwapAllocationMetrics::new())),
+                    logger: PerformanceLogger::new("swap_memory_pool"),
+                    max_memory_bytes,
+                    pressure_threshold: 0.8,
+                    resize_factor: 0.75,
+                    lazy_allocation_threshold: 0.9, // Start lazy allocation when 90% used
+                    aggressive_cleanup_threshold: 0.95, // Aggressive cleanup at 95%
+                    critical_cleanup_threshold: 0.98, // Critical threshold at 98%
+                    min_allocation_guard: 0.05, // Minimum allocation guard to prevent thrashing
+                    defragmentation_threshold: 0.7, // Start defragmentation when 70% used
+                    last_cleanup_time: AtomicUsize::new(SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as usize),
+                    last_defragmentation_time: AtomicUsize::new(SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as usize),
+                    is_critical_operation: AtomicBool::new(false),
+                    
+                    // Swap I/O Optimization Fields
+                    async_prefetching: AtomicBool::new(false),
+                    compression_enabled: AtomicBool::new(false),
+                    compression_level: Compression::default(),
+                    memory_mapped_files: AtomicBool::new(false),
+                    non_blocking_io: AtomicBool::new(false),
+                    prefetch_buffer_size: 64 * 1024 * 1024, // 64MB default
+                    mmap_cache: Arc::new(RwLock::new(HashMap::new())),
+                    mmap_write_cache: Arc::new(RwLock::new(HashMap::new())),
+                    mmap_file_paths: Arc::new(RwLock::new(HashMap::new())),
+                    async_prefetch_limit: 8, // Increased for better prefetching
+                    prefetch_queue: Arc::new(Mutex::new(VecDeque::new())),
+                    runtime,
+                    sender,
+                    pending_operations: AtomicU64::new(0),
+                    read_heavy_mode: AtomicBool::new(false),
+                    mmap_cache_size: 16, // 16MB default cache size
+                }
     }
 
     /// Process async swap I/O tasks in background
@@ -1779,38 +1843,42 @@ impl SwapMemoryPool {
     }
 
     /// Check memory pressure and trigger automatic pool management if needed
-    fn check_memory_pressure(&self) -> Result<(), String> {
-        let pressure = self.get_memory_pressure();
-        let trace_id = generate_trace_id();
-
-        if let Ok(mut metrics) = self.metrics.write() {
-            metrics.update_pressure_check();
+        fn check_memory_pressure(&self) -> Result<(), String> {
+            let pressure = self.get_memory_pressure();
+            let trace_id = generate_trace_id();
+    
+            if let Ok(mut metrics) = self.metrics.write() {
+                metrics.update_pressure_check();
+            }
+    
+            match pressure {
+                MemoryPressureLevel::Normal => {
+                    // Check for defragmentation opportunities in normal pressure state
+                    self.check_defragmentation_needed();
+                    Ok(())
+                },
+                MemoryPressureLevel::Moderate => {
+                    self.logger.log_info("memory_pressure_check", &trace_id, "Moderate memory pressure detected");
+                    self.perform_light_cleanup();
+                    Ok(())
+                },
+                MemoryPressureLevel::High => {
+                    self.logger.log_warning("memory_pressure_check", &trace_id, "High memory pressure detected - performing aggressive cleanup");
+                    self.perform_aggressive_cleanup();
+                    Ok(())
+                },
+                MemoryPressureLevel::Critical => {
+                    self.logger.log_error("memory_pressure_check", &trace_id, "Critical memory pressure - allocation may fail", "MEMORY_PRESSURE_CRITICAL");
+                    
+                    // Record aggressive cleanup for critical pressure
+                    if let Ok(mut metrics) = self.metrics.write() {
+                        metrics.record_aggressive_cleanup();
+                    }
+                    
+                    Err("Critical memory pressure - allocation denied".to_string())
+                },
+            }
         }
-
-        match pressure {
-            MemoryPressureLevel::Normal => Ok(()),
-            MemoryPressureLevel::Moderate => {
-                self.logger.log_info("memory_pressure_check", &trace_id, "Moderate memory pressure detected");
-                self.perform_light_cleanup();
-                Ok(())
-            },
-            MemoryPressureLevel::High => {
-                self.logger.log_warning("memory_pressure_check", &trace_id, "High memory pressure detected - performing aggressive cleanup");
-                self.perform_aggressive_cleanup();
-                Ok(())
-            },
-            MemoryPressureLevel::Critical => {
-                self.logger.log_error("memory_pressure_check", &trace_id, "Critical memory pressure - allocation may fail", "MEMORY_PRESSURE_CRITICAL");
-                
-                // Record aggressive cleanup for critical pressure
-                if let Ok(mut metrics) = self.metrics.write() {
-                    metrics.record_aggressive_cleanup();
-                }
-                
-                Err("Critical memory pressure - allocation denied".to_string())
-            },
-        }
-    }
 
     /// Perform light cleanup (reduce pool sizes)
     pub fn perform_light_cleanup(&self) {
@@ -1897,52 +1965,205 @@ impl SwapMemoryPool {
     }
 
     /// Perform lazy allocation cleanup to prevent memory exhaustion
-    fn perform_lazy_allocation_cleanup(&self) {
-        let trace_id = generate_trace_id();
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as usize;
-        let last_cleanup = self.last_cleanup_time.load(Ordering::Relaxed);
-        
-        // Only cleanup if enough time has passed (1 second) to prevent thrashing
-        if current_time - last_cleanup < 1 {
-            return;
+        fn perform_lazy_allocation_cleanup(&self) {
+            let trace_id = generate_trace_id();
+            let current_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as usize;
+            let last_cleanup = self.last_cleanup_time.load(Ordering::Relaxed);
+            
+            // Only cleanup if enough time has passed (1 second) to prevent thrashing
+            if current_time - last_cleanup < 1 {
+                return;
+            }
+    
+            self.logger.log_info("lazy_allocation_cleanup", &trace_id, "Performing lazy allocation cleanup");
+            
+            // Get current metrics for intelligent cleanup
+            let metrics = self.metrics.read().unwrap();
+            let usage_ratio = metrics.current_usage_bytes as f64 / self.max_memory_bytes as f64;
+            drop(metrics);
+            
+            // Calculate cleanup ratio based on current pressure (more aggressive when closer to limits)
+            let cleanup_ratio = 0.2 + ((usage_ratio - self.lazy_allocation_threshold) * 0.8)
+                .clamp(0.0, 0.8); // 20-100% cleanup ratio
+            
+            self.logger.log_info("lazy_allocation_cleanup", &trace_id, &format!("Using dynamic cleanup ratio: {:.1}%", cleanup_ratio * 100.0));
+            
+            // Clean up pools with dynamic ratios while preserving minimum objects
+            self.cleanup_pool(&self.chunk_metadata_pool, cleanup_ratio, 10);
+            self.cleanup_pool(&self.compressed_data_pool, cleanup_ratio * 0.7, 5); // More conservative for compressed data
+            self.cleanup_pool(&self.temporary_buffer_pool, cleanup_ratio * 0.5, 2); // Most conservative for temporary buffers
+            
+            // Record cleanup event
+            if let Ok(mut metrics) = self.metrics.write() {
+                metrics.record_lazy_cleanup();
+            }
+            
+            // Update last cleanup time
+            self.last_cleanup_time.store(current_time, Ordering::Relaxed);
+            
+            // Log cleanup results
+            if let Ok(metrics) = self.metrics.read() {
+                let new_usage_ratio = metrics.current_usage_bytes as f64 / self.max_memory_bytes as f64;
+                self.logger.log_info("lazy_allocation_cleanup", &trace_id, &format!("Memory usage: {:.2}% → {:.2}% (reduced by {:.1}%)",
+                    usage_ratio * 100.0, new_usage_ratio * 100.0, (usage_ratio - new_usage_ratio) * 100.0));
+            }
         }
-
-        self.logger.log_info("lazy_allocation_cleanup", &trace_id, "Performing lazy allocation cleanup");
-        
-        // Get current metrics for intelligent cleanup
-        let metrics = self.metrics.read().unwrap();
-        let usage_ratio = metrics.current_usage_bytes as f64 / self.max_memory_bytes as f64;
-        drop(metrics);
-        
-        // Calculate cleanup ratio based on current pressure (more aggressive when closer to limits)
-        let cleanup_ratio = 0.2 + ((usage_ratio - self.lazy_allocation_threshold) * 0.8)
-            .clamp(0.0, 0.8); // 20-100% cleanup ratio
-        
-        self.logger.log_info("lazy_allocation_cleanup", &trace_id, &format!("Using dynamic cleanup ratio: {:.1}%", cleanup_ratio * 100.0));
-        
-        // Clean up pools with dynamic ratios while preserving minimum objects
-        self.cleanup_pool(&self.chunk_metadata_pool, cleanup_ratio, 10);
-        self.cleanup_pool(&self.compressed_data_pool, cleanup_ratio * 0.7, 5); // More conservative for compressed data
-        self.cleanup_pool(&self.temporary_buffer_pool, cleanup_ratio * 0.5, 2); // Most conservative for temporary buffers
-        
-        // Record cleanup event
-        if let Ok(mut metrics) = self.metrics.write() {
-            metrics.record_lazy_cleanup();
+    
+        /// Check if defragmentation is needed and perform it if appropriate
+        fn check_defragmentation_needed(&self) {
+            let trace_id = generate_trace_id();
+            let current_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as usize;
+            let last_defrag = self.last_defragmentation_time.load(Ordering::Relaxed);
+    
+            // Only check defragmentation every 5 seconds to prevent excessive overhead
+            if current_time - last_defrag < 5 {
+                return;
+            }
+    
+            // Get current memory usage
+            let metrics = self.metrics.read().unwrap();
+            let usage_ratio = metrics.current_usage_bytes as f64 / self.max_memory_bytes as f64;
+            drop(metrics);
+    
+            // Only defragment when usage is above threshold but not critical
+            if usage_ratio >= self.defragmentation_threshold && usage_ratio < self.aggressive_cleanup_threshold {
+                self.logger.log_info("defragmentation_check", &trace_id, &format!("Defragmentation needed - usage: {:.2}%", usage_ratio * 100.0));
+                self.perform_defragmentation();
+            } else {
+                self.logger.log_debug("defragmentation_check", &trace_id, &format!("No defragmentation needed - usage: {:.2}%", usage_ratio * 100.0));
+            }
         }
-        
-        // Update last cleanup time
-        self.last_cleanup_time.store(current_time, Ordering::Relaxed);
-        
-        // Log cleanup results
-        if let Ok(metrics) = self.metrics.read() {
-            let new_usage_ratio = metrics.current_usage_bytes as f64 / self.max_memory_bytes as f64;
-            self.logger.log_info("lazy_allocation_cleanup", &trace_id, &format!("Memory usage: {:.2}% → {:.2}% (reduced by {:.1}%)",
-                usage_ratio * 100.0, new_usage_ratio * 100.0, (usage_ratio - new_usage_ratio) * 100.0));
+    
+        /// Perform defragmentation of all swap memory pools
+        pub fn perform_defragmentation(&self) -> bool {
+            let trace_id = generate_trace_id();
+            let current_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as usize;
+            
+            self.logger.log_info("defragmentation_start", &trace_id, "Starting defragmentation process");
+    
+            let mut defragmented = false;
+            let mut total_fragmentation_recovered = 0usize;
+    
+            // Defragment each pool with appropriate strategies
+            let chunk_results = self.defragment_specific_pool(&self.chunk_metadata_pool, "chunk_metadata", 0.6);
+            let compressed_results = self.defragment_specific_pool(&self.compressed_data_pool, "compressed_data", 0.5);
+            let temp_results = self.defragment_specific_pool(&self.temporary_buffer_pool, "temporary_buffer", 0.4);
+    
+            if let (Ok(chunk_defrag), Ok(compressed_defrag), Ok(temp_defrag)) = (chunk_results, compressed_results, temp_results) {
+                if chunk_defrag != 0 {
+                    defragmented = true;
+                    total_fragmentation_recovered += chunk_defrag;
+                }
+                if compressed_defrag != 0 {
+                    defragmented = true;
+                    total_fragmentation_recovered += compressed_defrag;
+                }
+                if temp_defrag != 0 {
+                    defragmented = true;
+                    total_fragmentation_recovered += temp_defrag;
+                }
+            }
+    
+            if defragmented {
+                self.logger.log_info("defragmentation_complete", &trace_id, &format!(
+                    "Defragmentation completed - recovered {} KB of fragmented memory",
+                    total_fragmentation_recovered as f64 / 1024.0
+                ));
+                
+                // Update metrics to reflect defragmentation
+                if let Ok(mut metrics) = self.metrics.write() {
+                    metrics.current_usage_bytes = metrics.current_usage_bytes.saturating_sub(total_fragmentation_recovered as u64);
+                }
+                
+                // Update last defragmentation time
+                self.last_defragmentation_time.store(current_time, Ordering::Relaxed);
+            } else {
+                self.logger.log_info("defragmentation_complete", &trace_id, "No fragmentation found - defragmentation skipped");
+            }
+    
+            defragmented
         }
-    }
+    
+        /// Defragment a specific pool with given fragmentation threshold
+        fn defragment_specific_pool(&self, pool: &VecPool<u8>, pool_name: &str, fragmentation_threshold: f64) -> Result<usize, String> {
+            let trace_id = generate_trace_id();
+            let mut pool_guard = pool.pool.pool.lock().map_err(|e| format!("Failed to lock {} pool: {}", pool_name, e))?;
+            let mut access_order_guard = pool.pool.access_order.lock().map_err(|e| format!("Failed to lock {} access order: {}", pool_name, e))?;
+    
+            let current_size = pool_guard.len();
+            if current_size == 0 {
+                return Ok(0);
+            }
+    
+            let mut fragmented_objects = Vec::new();
+            let mut total_fragmentation = 0;
+    
+            self.logger.log_debug("defragment_pool", &trace_id, &format!("Analyzing {} pool for fragmentation", pool_name));
+    
+            // Analyze each object for fragmentation
+            for (&id, (obj, _)) in pool_guard.iter() {
+                let usage_ratio = if obj.capacity() == 0 { 0.0 } else { obj.len() as f64 / obj.capacity() as f64 };
+                
+                // Consider objects significantly underutilized as fragmented
+                if usage_ratio < fragmentation_threshold {
+                    let fragmentation = obj.capacity() - obj.len();
+                    fragmented_objects.push((id, obj.len(), obj.capacity(), fragmentation));
+                    total_fragmentation += fragmentation;
+                }
+            }
+    
+            if fragmented_objects.is_empty() {
+                self.logger.log_debug("defragment_pool", &trace_id, &format!("No fragmentation found in {} pool", pool_name));
+                return Ok(0);
+            }
+    
+            self.logger.log_info("defragment_pool", &trace_id, &format!(
+                "Found {} fragmented objects in {} pool ({:.1}KB total fragmentation)",
+                fragmented_objects.len(), pool_name, total_fragmentation as f64 / 1024.0
+            ));
+    
+            // Remove fragmented objects
+            for (id, _, _, _) in &fragmented_objects {
+                pool_guard.remove(&id);
+                
+                // Also remove from access order
+                if let Some((&time, &obj_id)) = access_order_guard.iter().find(|&(_, obj_id)| *obj_id == *id) {
+                    access_order_guard.remove(&time);
+                }
+            }
+    
+            // Reallocate surviving objects to consolidate memory
+            let surviving_objects: Vec<_> = pool_guard.drain().map(|(id, (obj, time))| (id, obj, time)).collect();
+            access_order_guard.clear();
+    
+            for (id, obj, time) in surviving_objects {
+                let now = SystemTime::now();
+                pool_guard.insert(id, (obj, now));
+                access_order_guard.insert(now, id);
+            }
+    
+            self.logger.log_info("defragment_pool", &trace_id, &format!(
+                "Defragmented {} pool: removed {} fragmented objects, recovered {} KB",
+                pool_name, fragmented_objects.len(), total_fragmentation as f64 / 1024.0
+            ));
+    
+            Ok(total_fragmentation)
+        }
+    
+        /// Update pool configuration with defragmentation settings
+        pub fn update_defragmentation_config(&mut self, defragmentation_threshold: f64) {
+            self.defragmentation_threshold = defragmentation_threshold.clamp(0.1, 0.9);
+            self.logger.log_info("config_update", "defragmentation", &format!("Updated defragmentation threshold to {:.1}%", defragmentation_threshold * 100.0));
+        }
 
     /// Helper function to cleanup a specific pool with intelligent size calculation
     fn cleanup_pool(&self, pool: &VecPool<u8>, cleanup_ratio: f64, min_keep: usize) {

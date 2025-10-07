@@ -84,6 +84,7 @@ public class PerformanceConfiguration {
   }
 
   private void validate() {
+    // Validate basic thread pool constraints
     if (minThreadpoolSize > maxThreadpoolSize) {
       throw new IllegalArgumentException(
           "minThreadpoolSize ("
@@ -92,6 +93,8 @@ public class PerformanceConfiguration {
               + maxThreadpoolSize
               + ")");
     }
+    
+    // Validate thread scaling thresholds
     if (threadScaleUpThreshold <= threadScaleDownThreshold) {
       throw new IllegalArgumentException(
           "threadScaleUpThreshold ("
@@ -100,14 +103,137 @@ public class PerformanceConfiguration {
               + threadScaleDownThreshold
               + ")");
     }
+    
+    // Validate interval constraints
     if (scanIntervalTicks < 1 || scanIntervalTicks > 100) {
       throw new IllegalArgumentException(
           "scanIntervalTicks must be between 1 and 100, got: " + scanIntervalTicks);
     }
+    
+    // Validate TPS threshold
     if (tpsThresholdForAsync < 10.0 || tpsThresholdForAsync > 20.0) {
       throw new IllegalArgumentException(
           "tpsThresholdForAsync must be between 10.0 and 20.0, got: " + tpsThresholdForAsync);
     }
+    
+    // Cross-validate thread scaling configurations (High Priority Fix)
+    validateThreadScalingConfiguration();
+    
+    // Validate configuration consistency
+    validateConfigurationConsistency();
+  }
+  
+  /**
+   * Cross-validate dynamicThreadScaling and adaptiveThreadPool configurations
+   * to prevent inconsistent thread management strategies.
+   */
+  private void validateThreadScalingConfiguration() {
+    // Both dynamicThreadScaling and adaptiveThreadPool enabled - validate compatibility
+    if (dynamicThreadScaling && adaptiveThreadPool) {
+      if (threadpoolSize < minThreadpoolSize) {
+        throw new IllegalArgumentException(
+            "When both dynamicThreadScaling and adaptiveThreadPool are enabled, " +
+            "threadpoolSize (" + threadpoolSize + ") must be >= minThreadpoolSize (" + minThreadpoolSize + ")");
+      }
+      
+      if (maxThreadpoolSize < threadpoolSize) {
+        throw new IllegalArgumentException(
+            "When both dynamicThreadScaling and adaptiveThreadPool are enabled, " +
+            "maxThreadpoolSize (" + maxThreadpoolSize + ") must be >= threadpoolSize (" + threadpoolSize + ")");
+      }
+    }
+    
+    // When only dynamicThreadScaling is enabled, ensure proper min/max configuration
+    if (dynamicThreadScaling && !adaptiveThreadPool) {
+      if (minThreadpoolSize == maxThreadpoolSize) {
+        throw new IllegalArgumentException(
+            "When dynamicThreadScaling is enabled without adaptiveThreadPool, " +
+            "minThreadpoolSize and maxThreadpoolSize must be different to allow scaling");
+      }
+    }
+    
+    // When only adaptiveThreadPool is enabled, ensure proper configuration
+    if (!dynamicThreadScaling && adaptiveThreadPool) {
+      if (threadpoolSize == minThreadpoolSize && threadpoolSize == maxThreadpoolSize) {
+        throw new IllegalArgumentException(
+            "When adaptiveThreadPool is enabled without dynamicThreadScaling, " +
+            "threadpoolSize should be different from minThreadpoolSize/maxThreadpoolSize to allow adaptation");
+      }
+    }
+  }
+  
+  /**
+   * Validate overall configuration consistency and prevent conflicting settings.
+   */
+  private void validateConfigurationConsistency() {
+    // Validate work stealing configuration
+    if (workStealingEnabled && workStealingQueueSize <= 0) {
+      throw new IllegalArgumentException(
+          "workStealingQueueSize must be positive when workStealingEnabled is true, got: " + workStealingQueueSize);
+    }
+    
+    // Validate CPU awareness configuration
+    if (cpuAwareThreadSizing && cpuLoadThreshold < 0.0 || cpuLoadThreshold > 1.0) {
+      throw new IllegalArgumentException(
+          "cpuLoadThreshold must be between 0.0 and 1.0 when cpuAwareThreadSizing is enabled, got: " + cpuLoadThreshold);
+    }
+    
+    // Validate thread pool keep alive configuration
+    if (threadPoolKeepAliveSeconds < 0) {
+      throw new IllegalArgumentException(
+          "threadPoolKeepAliveSeconds must be non-negative, got: " + threadPoolKeepAliveSeconds);
+    }
+    
+    // Validate distance calculation configuration
+    if (distanceCacheSize <= 0) {
+      throw new IllegalArgumentException(
+          "distanceCacheSize must be positive, got: " + distanceCacheSize);
+    }
+    
+    // Validate interval multipliers
+    if (itemProcessingIntervalMultiplier <= 0) {
+      throw new IllegalArgumentException(
+          "itemProcessingIntervalMultiplier must be positive, got: " + itemProcessingIntervalMultiplier);
+    }
+  }
+  
+  /**
+   * Check if the configuration is consistent at runtime.
+   * This method should be called periodically during operation
+   * to detect and resolve configuration drift.
+   */
+  public void checkRuntimeConsistency() {
+    // Check for thread pool size consistency
+    if (dynamicThreadScaling && getCurrentThreadpoolSize() < minThreadpoolSize) {
+      throw new IllegalStateException(
+          "Runtime threadpool size (" + getCurrentThreadpoolSize() + ") is below minThreadpoolSize (" + minThreadpoolSize + ")");
+    }
+    
+    if (adaptiveThreadPool && getCurrentThreadpoolSize() > maxThreadpoolSize) {
+      throw new IllegalStateException(
+          "Runtime threadpool size (" + getCurrentThreadpoolSize() + ") exceeds maxThreadpoolSize (" + maxThreadpoolSize + ")");
+    }
+    
+    // Check for configuration drift
+    if (dynamicThreadScaling != isDynamicThreadScaling()) {
+      throw new IllegalStateException(
+          "Dynamic thread scaling configuration has drifted - runtime value differs from configured value");
+    }
+    
+    if (adaptiveThreadPool != isAdaptiveThreadPool()) {
+      throw new IllegalStateException(
+          "Adaptive thread pool configuration has drifted - runtime value differs from configured value");
+    }
+  }
+  
+  /**
+   * Get the current actual thread pool size from runtime.
+   * This is a placeholder that should be implemented based on actual runtime thread pool access.
+   */
+  private int getCurrentThreadpoolSize() {
+    // In a real implementation, this would return the actual current thread pool size
+    // For demonstration purposes, we'll return the configured threadpoolSize
+    return threadpoolSize;
   }
 
   // Getters

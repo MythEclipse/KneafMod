@@ -441,6 +441,9 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_nativeGetWorke
     _env: jni::JNIEnv,
     _class: jni::objects::JClass,
 ) -> jni::sys::jdouble {
+    0.0
+}
+
 // Enhanced batch processing native function
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeProcessBatch(
@@ -706,8 +709,6 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeSpa
             std::ptr::null_mut()
         }
     }
-}
-    0.0
 }
 
 // R-tree implementation for O(log n) spatial queries with dynamic node splitting
