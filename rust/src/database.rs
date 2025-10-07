@@ -214,6 +214,7 @@ pub struct RustDatabaseAdapter {
     swap_metadata: Arc<RwLock<HashMap<String, SwapMetadata>>>,
     memory_mapped_files: Arc<RwLock<HashMap<String, Mmap>>>,
     database_type: String,
+    world_name: String,
     checksum_enabled: bool,
     memory_mapping_enabled: bool,
     db_path: String,
@@ -221,30 +222,34 @@ pub struct RustDatabaseAdapter {
 }
 
 impl RustDatabaseAdapter {
-    pub fn new(database_type: &str, checksum_enabled: bool, memory_mapping_enabled: bool) -> Result<Self, String> {
-        // Use absolute path to ensure consistent database location
+    pub fn new(database_type: &str, world_name: &str, checksum_enabled: bool, memory_mapping_enabled: bool) -> Result<Self, String> {
+        // Use standard saves directory structure (where level.dat resides): ./saves/{world_name}/
         let current_dir = std::env::current_dir()
             .map_err(|e| format!("Failed to get current directory: {}", e))?;
-        let db_path = current_dir.join(format!("kneaf_db_{}", database_type));
+        let world_save_path = current_dir.join("saves").join(world_name);
+        let db_path = world_save_path.join("db").join(database_type);
         let db_path_str = db_path.to_str()
             .ok_or("Failed to convert path to string")?;
-        Self::with_path(db_path_str, database_type, checksum_enabled, memory_mapping_enabled)
+        Self::with_path(db_path_str, database_type, world_name, checksum_enabled, memory_mapping_enabled)
     }
      
-    pub fn with_path(db_path: &str, database_type: &str, checksum_enabled: bool, memory_mapping_enabled: bool) -> Result<Self, String> {
-        info!("Initializing RustDatabaseAdapter of type: {} at path: {}", database_type, db_path);
-         
+    pub fn with_path(db_path: &str, database_type: &str, world_name: &str, checksum_enabled: bool, memory_mapping_enabled: bool) -> Result<Self, String> {
+        info!("Initializing RustDatabaseAdapter of type: {} for world: {} at path: {}", database_type, world_name, db_path);
+          
         // Create database directory if it doesn't exist
         let path = Path::new(db_path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create database directory: {}", e))?;
         }
-         
-        // Create swap directory
-        let swap_path = format!("{}/swap", db_path);
-        std::fs::create_dir_all(&swap_path)
-            .map_err(|e| format!("Failed to create swap directory: {}", e))?;
+          
+        // Store swap files DIRECTLY IN world save directory (alongside level.dat, region files, etc.)
+        let world_save_path = Path::new(db_path).parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .ok_or("Invalid database path - cannot determine world save directory")?;
+        let swap_path = world_save_path.to_path_buf(); // Use world save directory directly
+        info!("Swap files will be stored in world save directory: {}", swap_path.display());
          
         // Configure sled database with memory mapping if enabled
         let db = if memory_mapping_enabled {
@@ -286,6 +291,7 @@ impl RustDatabaseAdapter {
             swap_metadata: Arc::new(RwLock::new(swap_metadata)),
             memory_mapped_files: Arc::new(RwLock::new(HashMap::new())),
             database_type: database_type.to_string(),
+            world_name: world_name.to_string(),
             checksum_enabled,
             memory_mapping_enabled,
             db_path: db_path.to_string(),
@@ -684,21 +690,37 @@ impl RustDatabaseAdapter {
         
         // Get the chunk data
         let data = self.db.get(key_bytes)
-            .map_err(|e| format!("Failed to get chunk for swap out: {}", e))?
-            .ok_or_else(|| format!("Chunk not found: {}", key))?;
+            .map_err(|e| format!("Failed to get chunk for swap out from world {}: {}", self.world_name, e))?
+            .ok_or_else(|| format!("Chunk not found in world {}: {}", self.world_name, key))?;
         
         let data_size = data.len() as u64;
         
-        // Create swap file path
-        let swap_file_path = format!("{}/{}.swap", self.swap_path, key.replace(':', "_"));
-        
-        // Write data to swap file
-        std::fs::write(&swap_file_path, &data)
-            .map_err(|e| format!("Failed to write swap file: {}", e))?;
+        // Create swap file path DIRECTLY IN world save directory (alongside level.dat)
+        // Format: {world_name}_chunk_{x}_{z}_{dimension}_{timestamp}.swap for clarity
+        if let Some(coords) = ChunkCoordinates::from_key(key).ok() {
+            let safe_key = format!("chunk_{}_{}_{}", coords.x, coords.z, coords.dimension.replace('/', "_"));
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let swap_file_path = swap_path.join(format!("{}_{}_{}.swap", self.world_name, safe_key, timestamp));
+            
+            // Write data to swap file with atomic operation (temp file + rename) for safety
+            let temp_path = swap_path.join(format!("{}.tmp", swap_file_path.file_name().unwrap_or_else(|| "swap_temp")));
+            std::fs::write(&temp_path, &data)
+                .map_err(|e| format!("Failed to write temp swap file for world {}: {}", self.world_name, e))?;
+            std::fs::rename(&temp_path, &swap_file_path)
+                .map_err(|e| format!("Failed to rename temp file for world {}: {}", self.world_name, e))?;
+            
+            info!("Created swap file for chunk {} at: {}", key, swap_file_path.display());
+            Ok(swap_file_path)
+        } else {
+            return Err(format!("Failed to extract coordinates from chunk key: {}", key));
+        }
         
         // Remove from main database
         self.db.remove(key_bytes)
-            .map_err(|e| format!("Failed to remove chunk from database: {}", e))?;
+            .map_err(|e| format!("Failed to remove chunk from database for world {}: {}", self.world_name, e))?;
         
         // Update swap metadata
         if let Ok(mut swap_meta) = self.swap_metadata.write() {
@@ -716,8 +738,8 @@ impl RustDatabaseAdapter {
             stats.total_size_bytes = stats.total_size_bytes.saturating_sub(data_size);
         }
         
-        info!("Swapped out chunk {} ({} bytes) in {} ms",
-              key, data_size, start_time.elapsed().as_millis());
+        info!("Swapped out chunk {} ({:.2}KB) from world {} to {}",
+              key, data_size as f64 / 1024.0, self.world_name, swap_file_path);
         
         Ok(())
     }
@@ -730,27 +752,49 @@ impl RustDatabaseAdapter {
             return Err("Key cannot be empty".to_string());
         }
         
-        // Check if chunk exists in swap
-        let swap_file_path = format!("{}/{}.swap", self.swap_path, key.replace(':', "_"));
+        // Find matching swap file (supports versioned filenames with timestamps)
+        let safe_key = key.replace(':', "_").replace('/', "-");
+        let swap_dir = Path::new(&self.swap_path);
         
-        if !Path::new(&swap_file_path).exists() {
-            return Err(format!("Swap file not found: {}", swap_file_path));
-        }
+        // Look for any file matching the pattern: {world_name}_{safe_key}_*.swap
+        let matching_files: Vec<_> = std::fs::read_dir(swap_dir)
+            .map_err(|e| format!("Failed to read swap directory for world {}: {}", self.world_name, e))?
+            .filter_map(|entry| {
+                entry.ok().and_then(|e| {
+                    let path = e.path();
+                    if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                        if filename.starts_with(&format!("{}_{}_", self.world_name, safe_key)) && filename.ends_with(".swap") {
+                            Some(path)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
         
-        // Read data from swap file
+        let swap_file_path = matching_files.first()
+            .ok_or_else(|| format!("No swap files found for chunk {} in world {}", key, self.world_name))?
+            .to_path_buf();
+        
+        // Read data from most recent swap file (sort by timestamp in filename)
         let data = std::fs::read(&swap_file_path)
-            .map_err(|e| format!("Failed to read swap file: {}", e))?;
+            .map_err(|e| format!("Failed to read swap file for world {}: {}", self.world_name, swap_file_path.display()))?;
         
         let data_size = data.len() as u64;
         
         // Restore to main database
         let key_bytes = key.as_bytes();
         self.db.insert(key_bytes, data.clone())
-            .map_err(|e| format!("Failed to restore chunk to database: {}", e))?;
+            .map_err(|e| format!("Failed to restore chunk to database for world {}: {}", self.world_name, e))?;
         
-        // Remove swap file
-        std::fs::remove_file(&swap_file_path)
-            .map_err(|e| format!("Failed to remove swap file: {}", e))?;
+        // Remove all matching swap files (clean up all versions)
+        for file_path in matching_files {
+            std::fs::remove_file(&file_path)
+                .map_err(|e| format!("Failed to remove swap file for world {}: {}", self.world_name, file_path.display()))?;
+        }
         
         // Update swap metadata
         if let Ok(mut swap_meta) = self.swap_metadata.write() {
@@ -768,8 +812,8 @@ impl RustDatabaseAdapter {
             stats.total_size_bytes += data_size;
         }
         
-        info!("Swapped in chunk {} ({} bytes) in {} ms",
-              key, data_size, start_time.elapsed().as_millis());
+        info!("Swapped in chunk {} ({:.2}KB) into world {} from {}",
+              key, data_size as f64 / 1024.0, self.world_name, swap_file_path.display());
         
         Ok(data)
     }
@@ -810,25 +854,25 @@ impl RustDatabaseAdapter {
             
             // Get the chunk data first with decompression if needed
             let data_result = self.db.get(key_bytes)
-                .map_err(|e| format!("Failed to get chunk for swap out: {}", e))?;
+                .map_err(|e| format!("Failed to get chunk for swap out in world {}: {}", self.world_name, e))?;
             
             let data = match data_result {
                 Some(raw_data) => self.decompress_if_needed(&raw_data)?,
-                None => return Err(format!("Chunk not found: {}", key))
+                None => return Err(format!("Chunk not found in world {}: {}", self.world_name, key))
             };
             
             let data_size = data.len() as u64;
             
-            // Create swap file path with proper escaping
+            // Create world-specific swap file path with proper escaping
             let safe_key = key.replace(':', "_").replace('/', "-");
-            let swap_file_path = format!("{}/{}.swap", self.swap_path, safe_key);
+            let swap_file_path = format!("{}/{}_{}.swap", self.swap_path, self.world_name, safe_key);
             
             // Write data to swap file with atomic write pattern
             let temp_path = format!("{}.tmp", swap_file_path);
             std::fs::write(&temp_path, &data)
-                .map_err(|e| format!("Failed to write temp swap file: {}", e))?;
+                .map_err(|e| format!("Failed to write temp swap file for world {}: {}", self.world_name, e))?;
             std::fs::rename(&temp_path, &swap_file_path)
-                .map_err(|e| format!("Failed to rename temp file: {}", e))?;
+                .map_err(|e| format!("Failed to rename temp file for world {}: {}", self.world_name, e))?;
             
             // Add remove operation to batch
             batch.remove(key_bytes);
@@ -846,7 +890,7 @@ impl RustDatabaseAdapter {
         
         // Execute batch atomically
         self.db.apply_batch(batch)
-            .map_err(|e| format!("Failed to apply batch: {}", e))?;
+            .map_err(|e| format!("Failed to apply batch for world {}: {}", self.world_name, e))?;
         
         // Update statistics with precise calculations
         if let Ok(mut stats) = self.stats.write() {
@@ -858,8 +902,8 @@ impl RustDatabaseAdapter {
             stats.total_chunks = stats.total_chunks.saturating_sub(success_count as u64);
         }
         
-        info!("Bulk swap out completed: {}/{} chunks swapped successfully in {} ms",
-              success_count, keys.len(), start_time.elapsed().as_millis());
+        info!("Bulk swap out completed for world {}: {}/{} chunks swapped successfully in {} ms",
+              self.world_name, success_count, keys.len(), start_time.elapsed().as_millis());
         
         Ok(success_count)
     }
@@ -1120,6 +1164,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
     mut env: JNIEnv<'a>,
     _class: JClass<'a>,
     database_type: JString<'a>,
+    world_name: JString<'a>,
     checksum_enabled: jboolean,
 ) -> jlong {
     let database_type_str = env.get_string(&database_type)
@@ -1127,10 +1172,16 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
         .to_str()
         .expect("Failed to convert to str")
         .to_string();
-    
+
+    let world_name_str = env.get_string(&world_name)
+        .expect("Failed to get world name string")
+        .to_str()
+        .expect("Failed to convert world name to str")
+        .to_string();
+     
     let checksum = checksum_enabled != 0;
-    
-    match RustDatabaseAdapter::new(&database_type_str, checksum, false) {
+     
+    match RustDatabaseAdapter::new(&database_type_str, &world_name_str, checksum, false) {
         Ok(adapter) => Box::into_raw(Box::new(adapter)) as jlong,
         Err(e) => {
             error!("Failed to initialize database adapter at CWD: {}. Attempting temp-dir fallback", e);
@@ -1139,13 +1190,13 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
             match std::env::temp_dir().to_str() {
                 Some(tmp) => {
                     let fallback_path = format!("{}/kneaf_db_{}_fallback", tmp, database_type_str);
-                    match RustDatabaseAdapter::with_path(&fallback_path, &database_type_str, checksum, false) {
+                    match RustDatabaseAdapter::with_path(&fallback_path, &database_type_str, &world_name_str, checksum, false) {
                         Ok(fallback_adapter) => {
-                            info!("Initialized fallback RustDatabaseAdapter at: {}", fallback_path);
+                            info!("Initialized fallback RustDatabaseAdapter for world {} at: {}", world_name_str, fallback_path);
                             Box::into_raw(Box::new(fallback_adapter)) as jlong
                         }
                         Err(e2) => {
-                            error!("Failed to initialize fallback adapter: {}", e2);
+                            error!("Failed to initialize fallback adapter for world {}: {}", world_name_str, e2);
                             0
                         }
                     }
