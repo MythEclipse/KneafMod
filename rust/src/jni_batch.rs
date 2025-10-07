@@ -1,609 +1,355 @@
-use jni::{JNIEnv, objects::{JClass, JString, JByteBuffer, JObject}, sys::{jstring, jlong, jobject, jint, jbyteArray}};
-use crate::memory_pool::{SwapMemoryPool, SwapIoConfig, MemoryPressureLevel};
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
-use std::time::{Duration, Instant};
-use crossbeam_channel::{bounded, Sender, Receiver};
-use serde_json;
-use log::{error, warn, info};
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+//! JNI batch processing utilities and types
+//! 
+//! This module provides shared types and utilities for batch processing operations
+//! across different JNI interfaces.
 
-/// Configuration for JNI batching
-#[derive(Debug, Clone)]
-pub struct JniBatchConfig {
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use serde::{Serialize, Deserialize};
+
+/// Batch operation types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BatchOperationType {
+    Echo = 0x01,
+    Heavy = 0x02,
+    PanicTest = 0xFF,
+}
+
+impl TryFrom<u8> for BatchOperationType {
+    type Error = String;
+    
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x01 => Ok(BatchOperationType::Echo),
+            0x02 => Ok(BatchOperationType::Heavy),
+            0xFF => Ok(BatchOperationType::PanicTest),
+            _ => Err(format!("Unknown batch operation type: {}", value)),
+        }
+    }
+}
+
+/// Batch processing configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchConfig {
     pub max_batch_size: usize,
-    pub batch_timeout_ms: u64,
-    pub max_queue_size: usize,
+    pub max_wait_time_ms: u64,
+    pub enable_compression: bool,
+    pub enable_zero_copy: bool,
     pub worker_threads: usize,
 }
 
-/// Configuration for zero-copy JNI batching
-#[derive(Debug, Clone)]
-pub struct ZeroCopyBatchConfig {
-    pub max_buffer_size: usize,
-    pub buffer_pool_size: usize,
-    pub direct_buffer_threshold: usize,
-    pub use_memory_mapping: bool,
-    pub async_prefetch: bool,
-    pub compression_enabled: bool,
-}
-
-impl Default for ZeroCopyBatchConfig {
+impl Default for BatchConfig {
     fn default() -> Self {
         Self {
-            max_buffer_size: 1024 * 1024, // 1MB
-            buffer_pool_size: 50,
-            direct_buffer_threshold: 4 * 1024, // 4KB
-            use_memory_mapping: true,
-            async_prefetch: true,
-            compression_enabled: false,
+            max_batch_size: 1000,
+            max_wait_time_ms: 10,
+            enable_compression: true,
+            enable_zero_copy: true,
+            worker_threads: 4,
         }
     }
 }
 
-impl Default for JniBatchConfig {
-    fn default() -> Self {
-        Self {
-            max_batch_size: 100,
-            batch_timeout_ms: 5,
-            max_queue_size: 1000,
-            worker_threads: 2,
-        }
-    }
-}
-
-/// A batched JNI operation request
-#[derive(Debug)]
-pub enum JniOperation {
-    ProcessEntities {
-        input_json: String,
-        response_tx: Sender<Result<String, String>>,
-    },
-    ProcessItems {
-        input_json: String,
-        response_tx: Sender<Result<String, String>>,
-    },
-    ProcessMobs {
-        input_json: String,
-        response_tx: Sender<Result<String, String>>,
-    },
-    ProcessBlocks {
-        input_json: String,
-        response_tx: Sender<Result<String, String>>,
-    },
-    ProcessBinary {
-        operation_type: u8,
-        input_data: Vec<u8>,
-        response_tx: Sender<Result<Vec<u8>, String>>,
-    },
-    ProcessZeroCopy {
-        operation_type: u8,
-        buffer_address: *const u8,
-        buffer_size: usize,
-        response_tx: Sender<Result<ZeroCopyResult, String>>,
-    },
-}
-
-/// Result type for zero-copy operations
+/// Batch operation envelope
 #[derive(Debug, Clone)]
-pub enum ZeroCopyResult {
-    Success {
-        output_buffer: *mut u8,
-        output_size: usize,
-    },
-    Failure {
-        error_message: String,
-    },
+pub struct BatchOperation {
+    pub operation_id: u64,
+    pub operation_type: BatchOperationType,
+    pub payload: Vec<u8>,
+    pub timestamp: std::time::Instant,
 }
 
-/// Batch processor for JNI operations
-pub struct JniBatchProcessor {
-    request_queue: Arc<Mutex<VecDeque<JniOperation>>>,
-    config: JniBatchConfig,
-    metrics: Arc<JniBatchMetrics>,
-    worker_handles: Vec<thread::JoinHandle<()>>,
-}
-
-/// Metrics for JNI batching
-#[derive(Debug)]
-pub struct JniBatchMetrics {
-    pub total_operations: AtomicU64,
-    pub batched_operations: AtomicU64,
-    pub total_batch_time_ns: AtomicU64,
-    pub queue_depth: AtomicUsize,
-    pub failed_operations: AtomicU64,
-}
-
-impl JniBatchMetrics {
-    pub fn new() -> Self {
+impl BatchOperation {
+    pub fn new(operation_type: BatchOperationType, payload: Vec<u8>) -> Self {
+        static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
+        
         Self {
-            total_operations: AtomicU64::new(0),
-            batched_operations: AtomicU64::new(0),
-            total_batch_time_ns: AtomicU64::new(0),
-            queue_depth: AtomicUsize::new(0),
-            failed_operations: AtomicU64::new(0),
+            operation_id: NEXT_OPERATION_ID.fetch_add(1, Ordering::SeqCst),
+            operation_type,
+            payload,
+            timestamp: std::time::Instant::now(),
+        }
+    }
+    
+    /// Serialize operation to bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(21 + self.payload.len());
+        bytes.extend_from_slice(&self.operation_id.to_le_bytes());
+        bytes.push(self.operation_type as u8);
+        bytes.extend_from_slice(&(self.payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&self.payload);
+        bytes
+    }
+    
+    /// Deserialize operation from bytes
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() < 21 {
+            return Err("Batch operation envelope too short".to_string());
+        }
+        
+        let operation_id = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let operation_type = BatchOperationType::try_from(bytes[8])?;
+        let payload_len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
+        
+        if bytes.len() < 13 + payload_len {
+            return Err("Batch operation payload length mismatch".to_string());
+        }
+        
+        let payload = bytes[13..13 + payload_len].to_vec();
+        
+        Ok(Self {
+            operation_id,
+            operation_type,
+            payload,
+            timestamp: std::time::Instant::now(),
+        })
+    }
+}
+
+/// Batch operation result
+#[derive(Debug, Clone)]
+pub struct BatchResult {
+    pub operation_id: u64,
+    pub status: BatchResultStatus,
+    pub payload: Vec<u8>,
+    pub processing_time_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchResultStatus {
+    Success = 0,
+    Error = 1,
+    Timeout = 2,
+    Cancelled = 3,
+}
+
+impl BatchResult {
+    pub fn success(operation_id: u64, payload: Vec<u8>, processing_time_ms: u64) -> Self {
+        Self {
+            operation_id,
+            status: BatchResultStatus::Success,
+            payload,
+            processing_time_ms,
+        }
+    }
+    
+    pub fn error(operation_id: u64, error_message: String, processing_time_ms: u64) -> Self {
+        Self {
+            operation_id,
+            status: BatchResultStatus::Error,
+            payload: error_message.into_bytes(),
+            processing_time_ms,
+        }
+    }
+    
+    /// Serialize result to bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(21 + self.payload.len());
+        bytes.extend_from_slice(&self.operation_id.to_le_bytes());
+        bytes.push(self.status as u8);
+        bytes.extend_from_slice(&(self.payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&self.payload);
+        bytes.extend_from_slice(&self.processing_time_ms.to_le_bytes());
+        bytes
+    }
+}
+
+/// Batch processor statistics
+#[derive(Debug, Clone, Default)]
+pub struct BatchProcessorStats {
+    pub total_operations_processed: u64,
+    pub total_batches_processed: u64,
+    pub average_batch_size: f64,
+    pub average_processing_time_ms: f64,
+    pub total_memory_saved_bytes: u64,
+    pub current_queue_depth: usize,
+    pub zero_copy_operations: u64,
+    pub compression_ratio: f64,
+}
+
+/// Zero-copy buffer information
+#[derive(Debug, Clone)]
+pub struct ZeroCopyBuffer {
+    pub buffer_id: u64,
+    pub address: u64,
+    pub size: usize,
+    pub operation_type: BatchOperationType,
+    pub timestamp: std::time::Instant,
+}
+
+impl ZeroCopyBuffer {
+    pub fn new(address: u64, size: usize, operation_type: BatchOperationType) -> Self {
+        static NEXT_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
+        
+        Self {
+            buffer_id: NEXT_BUFFER_ID.fetch_add(1, Ordering::SeqCst),
+            address,
+            size,
+            operation_type,
+            timestamp: std::time::Instant::now(),
         }
     }
 }
 
-impl JniBatchProcessor {
-    pub fn new(config: JniBatchConfig) -> Self {
-        let request_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let metrics = Arc::new(JniBatchMetrics::new());
-        let mut worker_handles = Vec::new();
+/// Batch processing utilities
+pub struct BatchUtils;
 
-        // Spawn worker threads
-        for worker_id in 0..config.worker_threads {
-            let queue = Arc::clone(&request_queue);
-            let metrics = Arc::clone(&metrics);
-            let config = config.clone();
+impl BatchUtils {
+    /// Calculate optimal batch size based on operation count and available memory
+    pub fn calculate_optimal_batch_size(
+        operation_count: usize,
+        available_memory_bytes: usize,
+        avg_operation_size_bytes: usize,
+    ) -> usize {
+        let memory_based_limit = available_memory_bytes / avg_operation_size_bytes.max(1);
+        let optimal_size = operation_count.min(memory_based_limit).min(1000);
+        
+        // Round to nearest multiple of 25 for alignment
+        ((optimal_size + 12) / 25) * 25
+    }
+    
+    /// Estimate memory usage for a batch of operations
+    pub fn estimate_batch_memory_usage(operations: &[Vec<u8>]) -> usize {
+        operations.iter().map(|op| op.len() + 32).sum::<usize>() + 1024 // overhead
+    }
+    
+    /// Compress batch data if beneficial
+    pub fn compress_batch_data(data: &[u8]) -> Result<Vec<u8>, String> {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+        
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(data).map_err(|e| format!("Compression failed: {}", e))?;
+        encoder.finish().map_err(|e| format!("Compression finalization failed: {}", e))
+    }
+    
+    /// Decompress batch data
+    pub fn decompress_batch_data(compressed_data: &[u8]) -> Result<Vec<u8>, String> {
+        use flate2::read::ZlibDecoder;
+        use std::io::Read;
+        
+        let mut decoder = ZlibDecoder::new(compressed_data);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).map_err(|e| format!("Decompression failed: {}", e))?;
+        Ok(decompressed)
+    }
+}
 
-            let handle = thread::spawn(move || {
-                Self::worker_thread(worker_id, queue, metrics, config);
-            });
-            worker_handles.push(handle);
-        }
+/// Thread-safe batch operation queue
+pub struct BatchOperationQueue {
+    operations: Arc<Mutex<Vec<BatchOperation>>>,
+    max_size: usize,
+}
 
+impl BatchOperationQueue {
+    pub fn new(max_size: usize) -> Self {
         Self {
-            request_queue,
-            config,
-            metrics,
-            worker_handles,
+            operations: Arc::new(Mutex::new(Vec::with_capacity(max_size))),
+            max_size,
         }
     }
-
-    fn worker_thread(
-        worker_id: usize,
-        queue: Arc<Mutex<VecDeque<JniOperation>>>,
-        metrics: Arc<JniBatchMetrics>,
-        config: JniBatchConfig,
-    ) {
-        let mut batch = Vec::new();
-        let mut last_batch_time = Instant::now();
-
-        loop {
-            // Try to get operations from queue
-            {
-                let mut queue_guard = queue.lock().expect("JNI batch queue mutex poisoned");
-                while batch.len() < config.max_batch_size {
-                    if let Some(op) = queue_guard.pop_front() {
-                        batch.push(op);
-                        metrics.queue_depth.fetch_sub(1, Ordering::SeqCst);
-                    } else {
-                        break;
-                    }
-                }
-            }
-
-            // Process batch if we have enough operations or timeout expired
-            let should_process = batch.len() >= config.max_batch_size || 
-                (batch.len() > 0 && last_batch_time.elapsed() >= Duration::from_millis(config.batch_timeout_ms));
-
-            if should_process {
-                let start_time = Instant::now();
-                
-                // Process the batch
-                Self::process_batch(&batch, worker_id);
-                
-                let elapsed = start_time.elapsed();
-                metrics.total_batch_time_ns.fetch_add(elapsed.as_nanos() as u64, Ordering::SeqCst);
-                metrics.batched_operations.fetch_add(batch.len() as u64, Ordering::SeqCst);
-
-                batch.clear();
-                last_batch_time = Instant::now();
-            }
-
-            // Small sleep to prevent busy waiting
-            if batch.is_empty() {
-                thread::sleep(Duration::from_millis(1));
-            }
-        }
-    }
-
-    fn process_batch(batch: &[JniOperation], worker_id: usize) {
-        // Group operations by type for more efficient processing
-        let mut entity_ops = Vec::new();
-        let mut item_ops = Vec::new();
-        let mut mob_ops = Vec::new();
-        let mut block_ops = Vec::new();
-        let mut binary_ops = Vec::new();
-
-        for op in batch {
-            match op {
-                JniOperation::ProcessEntities { input_json, response_tx } => {
-                    entity_ops.push((input_json.clone(), response_tx.clone()));
-                },
-                JniOperation::ProcessItems { input_json, response_tx } => {
-                    item_ops.push((input_json.clone(), response_tx.clone()));
-                },
-                JniOperation::ProcessMobs { input_json, response_tx } => {
-                    mob_ops.push((input_json.clone(), response_tx.clone()));
-                },
-                JniOperation::ProcessBlocks { input_json, response_tx } => {
-                    block_ops.push((input_json.clone(), response_tx.clone()));
-                },
-                JniOperation::ProcessBinary { operation_type, input_data, response_tx } => {
-                    binary_ops.push((*operation_type, input_data.clone(), response_tx.clone()));
-                },
-            }
-        }
-
-        // Process each group in parallel
-        rayon::join(
-            || Self::process_entity_batch(&entity_ops),
-            || {
-                rayon::join(
-                    || Self::process_item_batch(&item_ops),
-                    || {
-                        rayon::join(
-                            || Self::process_mob_batch(&mob_ops),
-                            || {
-                                rayon::join(
-                                    || Self::process_block_batch(&block_ops),
-                                    || Self::process_binary_batch(&binary_ops),
-                                );
-                            },
-                        );
-                    },
-                );
-            },
-        );
-    }
-
-    fn process_entity_batch(ops: &[(String, Sender<Result<String, String>>)]) {
-        use crate::entity::processing::process_entities_json;
+    
+    pub fn push(&self, operation: BatchOperation) -> Result<bool, String> {
+        let mut ops = self.operations.lock()
+            .map_err(|e| format!("Failed to lock operations queue: {}", e))?;
         
-        for (input_json, response_tx) in ops {
-            let result = process_entities_json(input_json);
-            let _ = response_tx.send(result);
+        if ops.len() >= self.max_size {
+            return Ok(false); // Queue full
         }
+        
+        ops.push(operation);
+        Ok(true)
     }
-
-    fn process_item_batch(ops: &[(String, Sender<Result<String, String>>)]) {
-        use crate::item::processing::process_item_entities_json;
+    
+    pub fn pop_batch(&self, batch_size: usize) -> Result<Vec<BatchOperation>, String> {
+        let mut ops = self.operations.lock()
+            .map_err(|e| format!("Failed to lock operations queue: {}", e))?;
         
-        for (input_json, response_tx) in ops {
-            let result = process_item_entities_json(input_json);
-            let _ = response_tx.send(result);
-        }
+        let batch_size = batch_size.min(ops.len());
+        let batch: Vec<_> = ops.drain(0..batch_size).collect();
+        Ok(batch)
     }
-
-    fn process_mob_batch(ops: &[(String, Sender<Result<String, String>>)]) {
-        use crate::mob::processing::process_mob_ai_json;
-        
-        for (input_json, response_tx) in ops {
-            let result = process_mob_ai_json(input_json);
-            let _ = response_tx.send(result);
-        }
+    
+    pub fn len(&self) -> Result<usize, String> {
+        let ops = self.operations.lock()
+            .map_err(|e| format!("Failed to lock operations queue: {}", e))?;
+        Ok(ops.len())
     }
-
-    fn process_block_batch(ops: &[(String, Sender<Result<String, String>>)]) {
-        use crate::block::processing::process_block_entities_json;
-        
-        for (input_json, response_tx) in ops {
-            let result = process_block_entities_json(input_json);
-            let _ = response_tx.send(result);
-        }
+    
+    pub fn is_empty(&self) -> Result<bool, String> {
+        Ok(self.len()? == 0)
     }
-
-    fn process_binary_batch(ops: &[(u8, Vec<u8>, Sender<Result<Vec<u8>, String>>)]) {
-        use crate::binary::conversions::{deserialize_entity_input, serialize_entity_result};
-        use crate::entity::processing::process_entities;
-        
-        for (op_type, input_data, response_tx) in ops {
-            let result = match op_type {
-                1 => {
-                    // Entity processing
-                    if let Some(input) = deserialize_entity_input(input_data) {
-                        let result = process_entities(input);
-                        Ok(serialize_entity_result(&result))
-                    } else {
-                        Err("Failed to deserialize entity input".to_string())
-                    }
-                },
-                _ => Err("Unsupported operation type".to_string()),
-            };
-            let _ = response_tx.send(result);
-        }
-    }
-
-    /// Process zero-copy operations directly from memory addresses
-    fn process_zero_copy_batch(ops: &[(u8, *const u8, usize, Sender<Result<ZeroCopyResult, String>>)]) {
-        use crate::memory_pool::{SwapMemoryPool, MemoryPressureLevel};
-        
-        // Get global swap memory pool instance
-        let swap_pool = crate::memory_pool::get_global_enhanced_pool().get_swap_pool();
-        
-        for (op_type, buffer_address, buffer_size, response_tx) in ops {
-            let result = match op_type {
-                1 => {
-                    // Zero-copy entity processing
-                    // 1. Check memory pressure before processing
-                    let pressure = swap_pool.get_memory_pressure();
-                    if pressure == MemoryPressureLevel::Critical {
-                        return Err("Critical memory pressure - cannot process zero-copy operation".to_string());
-                    }
-
-                    // 2. Allocate temporary buffer from swap pool (zero-copy path)
-                    let temp_buffer_result = swap_pool.allocate_temporary_buffer(*buffer_size);
-                    
-                    let temp_buffer = match temp_buffer_result {
-                        Ok(buffer) => buffer,
-                        Err(e) => return Err(format!("Failed to allocate temporary buffer: {}", e)),
-                    };
-
-                    // 3. Read data directly from the buffer address (zero-copy)
-                    // In a real implementation, we would use unsafe to read from the raw pointer
-                    // For this example, we'll simulate the data transfer
-                    let temp_vec = temp_buffer.as_mut();
-                    temp_vec.resize(*buffer_size, 0);
-                    
-                    // 4. Process the data using the swap pool for efficient memory management
-                    // This is where you would add your actual entity processing logic
-                    // For now, we'll just copy the input to output as a placeholder
-                    
-                    // 5. Return the result using the temporary buffer (zero-copy)
-                    let result = ZeroCopyResult::Success {
-                        output_buffer: temp_vec.as_ptr() as *mut u8,
-                        output_size: temp_vec.len(),
-                    };
-                    Ok(result)
-                },
-                _ => Err("Unsupported zero-copy operation type".to_string()),
-            };
-            let _ = response_tx.send(result);
-        }
-    }
-
-    /// Submit an operation to the batch processor
-    pub fn submit_operation(&self, operation: JniOperation) -> Result<(), String> {
-        let queue_depth = self.metrics.queue_depth.load(Ordering::SeqCst);
-        
-        if queue_depth >= self.config.max_queue_size {
-            return Err("Queue is full".to_string());
-        }
-
-    let mut queue = self.request_queue.lock().expect("JNI batch queue mutex poisoned");
-        queue.push_back(operation);
-        self.metrics.queue_depth.fetch_add(1, Ordering::SeqCst);
-        self.metrics.total_operations.fetch_add(1, Ordering::SeqCst);
-
+    
+    pub fn clear(&self) -> Result<(), String> {
+        let mut ops = self.operations.lock()
+            .map_err(|e| format!("Failed to lock operations queue: {}", e))?;
+        ops.clear();
         Ok(())
     }
+}
 
-    /// Get current metrics
-    pub fn get_metrics(&self) -> JniBatchMetricsSnapshot {
-        let total_ops = self.metrics.total_operations.load(Ordering::SeqCst);
-        let batched_ops = self.metrics.batched_operations.load(Ordering::SeqCst);
-        let total_time = self.metrics.total_batch_time_ns.load(Ordering::SeqCst);
-        let queue_depth = self.metrics.queue_depth.load(Ordering::SeqCst);
-        let failed_ops = self.metrics.failed_operations.load(Ordering::SeqCst);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let avg_batch_time = if batched_ops > 0 {
-            total_time as f64 / batched_ops as f64 / 1_000_000.0 // Convert to milliseconds
-        } else {
-            0.0
-        };
-
-        JniBatchMetricsSnapshot {
-            total_operations: total_ops,
-            batched_operations: batched_ops,
-            average_batch_time_ms: avg_batch_time,
-            queue_depth,
-            failed_operations: failed_ops,
-            batching_efficiency: if total_ops > 0 {
-                batched_ops as f64 / total_ops as f64
-            } else {
-                0.0
-            },
-        }
+    #[test]
+    fn test_batch_operation_serialization() {
+        let operation = BatchOperation::new(
+            BatchOperationType::Echo,
+            b"test payload".to_vec()
+        );
+        
+        let bytes = operation.to_bytes();
+        let deserialized = BatchOperation::from_bytes(&bytes).unwrap();
+        
+        assert_eq!(operation.operation_id, deserialized.operation_id);
+        assert_eq!(operation.operation_type, deserialized.operation_type);
+        assert_eq!(operation.payload, deserialized.payload);
     }
-}
-
-#[derive(Debug)]
-pub struct JniBatchMetricsSnapshot {
-    pub total_operations: u64,
-    pub batched_operations: u64,
-    pub average_batch_time_ms: f64,
-    pub queue_depth: usize,
-    pub failed_operations: u64,
-    pub batching_efficiency: f64,
-}
-
-// Global batch processor instance
-lazy_static::lazy_static! {
-    static ref JNI_BATCH_PROCESSOR: Arc<RwLock<Option<Arc<JniBatchProcessor>>>> = Arc::new(RwLock::new(None));
-}
-
-/// Initialize the global JNI batch processor
-pub fn init_jni_batch_processor(config: JniBatchConfig) -> Result<(), String> {
-    let mut processor_guard = JNI_BATCH_PROCESSOR.write().expect("JNI_BATCH_PROCESSOR RwLock poisoned");
     
-    if processor_guard.is_some() {
-        return Err("JNI batch processor already initialized".to_string());
+    #[test]
+    fn test_batch_result_serialization() {
+        let result = BatchResult::success(
+            12345,
+            b"result payload".to_vec(),
+            150
+        );
+        
+        let bytes = result.to_bytes();
+        assert!(bytes.len() > 0);
+        assert_eq!(bytes[8], BatchResultStatus::Success as u8);
     }
-
-    let processor = Arc::new(JniBatchProcessor::new(config));
-    *processor_guard = Some(processor);
     
-    info!("JNI batch processor initialized with config: {:?}", config);
-    Ok(())
-}
-
-/// Get the global JNI batch processor
-pub fn get_jni_batch_processor() -> Option<Arc<JniBatchProcessor>> {
-    JNI_BATCH_PROCESSOR.read().expect("JNI_BATCH_PROCESSOR RwLock poisoned").clone()
-}
-
-/// Convenience function to submit an entity processing operation
-pub fn submit_entity_operation(input_json: String) -> Result<Receiver<Result<String, String>>, String> {
-    let (tx, rx) = bounded(1);
-    let operation = JniOperation::ProcessEntities {
-        input_json,
-        response_tx: tx,
-    };
-
-    if let Some(processor) = get_jni_batch_processor() {
-        processor.submit_operation(operation)?;
-        Ok(rx)
-    } else {
-        Err("JNI batch processor not initialized".to_string())
-    }
-}
-
-/// Convenience function to submit an item processing operation
-pub fn submit_item_operation(input_json: String) -> Result<Receiver<Result<String, String>>, String> {
-    let (tx, rx) = bounded(1);
-    let operation = JniOperation::ProcessItems {
-        input_json,
-        response_tx: tx,
-    };
-
-    if let Some(processor) = get_jni_batch_processor() {
-        processor.submit_operation(operation)?;
-        Ok(rx)
-    } else {
-        Err("JNI batch processor not initialized".to_string())
-    }
-}
-
-/// Convenience function to submit a zero-copy processing operation
-pub fn submit_zero_copy_operation(
-    operation_type: u8,
-    buffer_address: *const u8,
-    buffer_size: usize,
-) -> Result<Receiver<Result<ZeroCopyResult, String>>, String> {
-    let (tx, rx) = bounded(1);
-    let operation = JniOperation::ProcessZeroCopy {
-        operation_type,
-        buffer_address,
-        buffer_size,
-        response_tx: tx,
-    };
-
-    if let Some(processor) = get_jni_batch_processor() {
-        processor.submit_operation(operation)?;
-        Ok(rx)
-    } else {
-        Err("JNI batch processor not initialized".to_string())
-    }
-}
-
-/// JNI function to get batch processor metrics
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getBatchProcessorMetrics(
-    env: JNIEnv,
-    _class: JClass,
-) -> jstring {
-    if let Some(processor) = get_jni_batch_processor() {
-        let metrics = processor.get_metrics();
-        let metrics_json = serde_json::json!({
-            "totalOperations": metrics.total_operations,
-            "batchedOperations": metrics.batched_operations,
-            "averageBatchTimeMs": metrics.average_batch_time_ms,
-            "queueDepth": metrics.queue_depth,
-            "failedOperations": metrics.failed_operations,
-            "batchingEfficiency": metrics.batching_efficiency,
-        });
-
-        match env.new_string(&serde_json::to_string(&metrics_json).unwrap_or_default()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => std::ptr::null_mut(),
+    #[test]
+    fn test_batch_operation_queue() {
+        let queue = BatchOperationQueue::new(10);
+        
+        for i in 0..5 {
+            let operation = BatchOperation::new(
+                BatchOperationType::Echo,
+                format!("operation {}", i).into_bytes()
+            );
+            assert!(queue.push(operation).unwrap());
         }
-    } else {
-        match env.new_string("{\"error\":\"Batch processor not initialized\"}") {
-            Ok(s) => s.into_raw(),
-            Err(_) => std::ptr::null_mut(),
-        }
+        
+        assert_eq!(queue.len().unwrap(), 5);
+        
+        let batch = queue.pop_batch(3).unwrap();
+        assert_eq!(batch.len(), 3);
+        assert_eq!(queue.len().unwrap(), 2);
     }
-}
-
-/// JNI function to initialize batch processor
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_initBatchProcessor(
-    _env: JNIEnv,
-    _class: JClass,
-    max_batch_size: jint,
-    batch_timeout_ms: jlong,
-    max_queue_size: jint,
-    worker_threads: jint,
-) -> jint {
-    let config = JniBatchConfig {
-        max_batch_size: max_batch_size as usize,
-        batch_timeout_ms: batch_timeout_ms as u64,
-        max_queue_size: max_queue_size as usize,
-        worker_threads: worker_threads as usize,
-    };
-
-    match init_jni_batch_processor(config) {
-        Ok(_) => 0, // Success
-        Err(_) => 1, // Error
+    
+    #[test]
+    fn test_batch_utils_optimal_size() {
+        let optimal_size = BatchUtils::calculate_optimal_batch_size(
+            1000,
+            1024 * 1024, // 1MB available
+            1024, // 1KB average operation size
+        );
+        
+        assert!(optimal_size <= 1000);
+        assert!(optimal_size % 25 == 0);
     }
-}
-
-/// JNI function to submit zero-copy operation
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_submitZeroCopyOperation(
-    _env: JNIEnv,
-    _class: JClass,
-    worker_handle: jlong,
-    buffer_address: jlong,
-    buffer_size: jint,
-    operation_type: jint,
-) -> jlong {
-    let buffer_address = buffer_address as *const u8;
-    let buffer_size = buffer_size as usize;
-    let operation_type = operation_type as u8;
-
-    match submit_zero_copy_operation(operation_type, buffer_address, buffer_size) {
-        Ok(_) => 1, // Success
-        Err(_) => 0, // Error
-    }
-}
-
-/// JNI function to poll zero-copy operation results
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_pollZeroCopyResult(
-    env: JNIEnv,
-    _class: JClass,
-    operation_id: jlong,
-) -> jobject {
-    // In a real implementation, you would use the operation_id to get the result
-    // For now, return null
-    std::ptr::null_mut()
-}
-
-/// JNI function to cleanup zero-copy operation resources
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_cleanupZeroCopyOperation(
-    _env: JNIEnv,
-    _class: JClass,
-    operation_id: jlong,
-) -> jint {
-    // In a real implementation, you would use the operation_id to cleanup resources
-    0 // Success
-}
-
-/// JNI function to poll zero-copy operation results
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_pollZeroCopyResult(
-    env: JNIEnv,
-    _class: JClass,
-    operation_id: jlong,
-) -> jobject {
-    // In a real implementation, you would use the operation_id to get the result
-    // For now, return null
-    std::ptr::null_mut()
-}
-
-/// JNI function to cleanup zero-copy operation resources
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_cleanupZeroCopyOperation(
-    _env: JNIEnv,
-    _class: JClass,
-    operation_id: jlong,
-) -> jint {
-    // In a real implementation, you would use the operation_id to cleanup resources
-    0 // Success
 }

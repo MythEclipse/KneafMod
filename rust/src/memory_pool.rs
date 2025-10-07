@@ -654,7 +654,38 @@ impl std::fmt::Display for SizeClass {
     }
 }
 
-/// Hierarchical memory pool with size-based buckets and best-fit allocation
+/// Fast object pool for frequent allocations
+#[derive(Debug)]
+pub struct FastObjectPool<T>
+where
+    T: Default + Clone,
+{
+    pool: Vec<T>,
+    index: AtomicUsize,
+}
+
+impl<T: Default + Clone> FastObjectPool<T> {
+    /// Create new fast object pool for frequent allocations
+    pub fn new(size: usize) -> Self {
+        Self {
+            pool: vec![T::default(); size],
+            index: AtomicUsize::new(0),
+        }
+    }
+
+    /// Get object from pool using lock-free round-robin
+    pub fn get(&self) -> T {
+        let index = self.index.fetch_add(1, Ordering::Relaxed) % self.pool.len();
+        self.pool[index].clone()
+    }
+
+    /// Return object to pool (overwrites oldest entry)
+    pub fn return_object(&mut self, obj: T) {
+        let index = self.index.fetch_add(1, Ordering::Relaxed) % self.pool.len();
+        self.pool[index] = obj;
+    }
+}
+
 #[derive(Debug)]
 pub struct HierarchicalMemoryPool {
     pools: HashMap<SizeClass, ObjectPool<Vec<u8>>>,
@@ -664,10 +695,32 @@ pub struct HierarchicalMemoryPool {
 }
 
 #[derive(Debug, Clone)]
+pub struct AdaptivePoolConfig {
+    pub growth_factor: f64,
+    pub shrink_factor: f64,
+    pub high_usage_threshold: f64,
+    pub low_usage_threshold: f64,
+    pub min_pool_size: usize,
+}
+
+impl Default for AdaptivePoolConfig {
+    fn default() -> Self {
+        Self {
+            growth_factor: 1.5,
+            shrink_factor: 0.7,
+            high_usage_threshold: 0.85,
+            low_usage_threshold: 0.3,
+            min_pool_size: 50,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct HierarchicalPoolConfig {
     pub max_size_per_class: HashMap<SizeClass, usize>,
     pub high_water_mark_ratio: f64,
     pub cleanup_threshold: f64,
+    pub adaptive_config: Option<AdaptivePoolConfig>,
 }
 
 impl Default for HierarchicalPoolConfig {
@@ -691,9 +744,11 @@ impl Default for HierarchicalPoolConfig {
             max_size_per_class: max_sizes,
             high_water_mark_ratio: 0.8,
             cleanup_threshold: 0.9,
+            adaptive_config: Some(AdaptivePoolConfig::default()),
         }
     }
 }
+
 
 impl HierarchicalMemoryPool {
     pub fn new(config: Option<HierarchicalPoolConfig>) -> Self {
@@ -757,19 +812,132 @@ impl HierarchicalMemoryPool {
         if let Some(size_class) = SizeClass::from_exact_size(size) {
             return size_class;
         }
+    
+        // 2. Binary search for smallest fit (O(log n) vs O(n) linear search)
+        let index = self.size_class_order.binary_search_by(|&sc| {
+            if sc.max_size() < size {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        }).unwrap_or_else(|i| i);
 
-        // 2. Fallback to smallest fit that can accommodate the allocation (minimal fragmentation)
-        for &size_class in &self.size_class_order {
-            if size <= size_class.max_size() {
-                return size_class;
+        if index < self.size_class_order.len() {
+            self.size_class_order[index]
+        } else {
+            SizeClass::Huge1MBPlus
+        }
+    }
+
+    /// Get memory pressure level
+    pub fn get_memory_pressure(&self) -> MemoryPressureLevel {
+        // Calculate overall memory pressure based on pool usage
+        let mut total_usage = 0;
+        let mut total_capacity = 0;
+        
+        for (_, pool) in &self.pools {
+            let stats = pool.get_monitoring_stats();
+            total_usage += stats.available_objects;
+            total_capacity += stats.max_size;
+        }
+        
+        let usage_ratio = if total_capacity > 0 {
+            total_usage as f64 / total_capacity as f64
+        } else {
+            0.0
+        };
+        
+        MemoryPressureLevel::from_usage_ratio(usage_ratio)
+    }
+
+    /// Perform memory defragmentation during low-pressure periods
+    pub fn defragment(&mut self) -> bool {
+        let trace_id = generate_trace_id();
+        let mut defragmented = false;
+
+        // Only defragment during low memory pressure
+        let pressure = self.get_memory_pressure();
+        if pressure != MemoryPressureLevel::Normal {
+            self.logger.log_info("defragment", &trace_id, "Skipping defragmentation - not in low pressure mode");
+            return false;
+        }
+    
+        self.logger.log_info("defragment", &trace_id, "Starting memory defragmentation");
+
+        for (size_class, pool) in &self.pools {
+            let stats = pool.get_monitoring_stats();
+            let usage_ratio = stats.current_usage_ratio;
+
+            // Only defragment pools with moderate usage to avoid unnecessary work
+            if usage_ratio > 0.2 && usage_ratio < 0.7 {
+                let result = self.defragment_pool(pool);
+                if result {
+                    defragmented = true;
+                    self.logger.log_info("defragment", &trace_id, &format!("Defragmented {} pool", size_class));
+                }
             }
         }
 
-        // Should never reach here with valid size classes
-        SizeClass::Huge1MBPlus
+        if defragmented {
+            self.logger.log_info("defragment", &trace_id, "Memory defragmentation completed successfully");
+        } else {
+            self.logger.log_info("defragment", &trace_id, "No defragmentation needed");
+        }
+
+        defragmented
     }
 
-    /// Allocate memory with SIMD alignment requirements (for AVX-512 compatible buffers)
+    /// Defragment a specific pool by removing fragmented objects
+    fn defragment_pool(&self, pool: &ObjectPool<Vec<u8>>) -> bool {
+        let trace_id = generate_trace_id();
+        let mut changed = false;
+
+        let mut pool_guard = pool.pool.lock().unwrap();
+        let mut access_order_guard = pool.access_order.lock().unwrap();
+        let current_size = pool_guard.len();
+
+        if current_size <= 10 {
+            return false; // Skip very small pools
+        }
+    
+        // Calculate fragmentation by checking for unused space patterns
+        let mut fragmented_objects = Vec::new();
+        let mut total_fragmentation = 0;
+
+        for (&id, (obj, _)) in pool_guard.iter() {
+            let usage_ratio = obj.len() as f64 / obj.capacity() as f64;
+            if usage_ratio < 0.5 {
+                // Object is significantly underutilized - mark for defragmentation
+                fragmented_objects.push(id);
+                total_fragmentation += obj.capacity() - obj.len();
+            }
+        }
+
+        if fragmented_objects.is_empty() {
+            return false;
+        }
+
+        // Remove fragmented objects
+        for id in &fragmented_objects {
+            pool_guard.remove(&id);
+            if let Some((&time, &obj_id)) = access_order_guard.iter().find(|&(_, obj_id)| *obj_id == *id) {
+                access_order_guard.remove(&time);
+            }
+        }
+
+        if !fragmented_objects.is_empty() {
+            self.logger.log_info("defragment_pool", &trace_id, &format!(
+                "Removed {} fragmented objects ({:.1}KB total fragmentation)",
+                fragmented_objects.len(),
+                total_fragmentation as f64 / 1024.0
+            ));
+            changed = true;
+        }
+
+        changed
+    }
+
+   /// Allocate memory with SIMD alignment requirements (for AVX-512 compatible buffers)
     pub fn allocate_simd_aligned(&self, size: usize, alignment: usize) -> Result<PooledVec<u8>, String> {
         let trace_id = generate_trace_id();
         

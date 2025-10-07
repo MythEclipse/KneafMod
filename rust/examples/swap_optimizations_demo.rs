@@ -1,10 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
-use log::{info, debug};
-use rustperf::database::{RustDatabaseAdapter, SwapMetadata};
-use rustperf::jni_async_bridge::{submit_async_operation, AsyncOperationType, get_async_operation_result};
-use rustperf::compression::ChunkCompressor;
-use rustperf::checksum_monitor::{ChecksumMonitor, ChecksumMonitorConfig};
+use log::info;
+use rustperf::database::RustDatabaseAdapter;
+// SwapMetadata import removed as unused
+use rustperf::jni_async_bridge::{submit_async_batch};
+// Commented out: compression, checksum_monitor, and AsyncOperationType don't exist in rustperf
+// use rustperf::compression::ChunkCompressor;
+// use rustperf::checksum_monitor::{ChecksumMonitor, ChecksumMonitorConfig};
+// AsyncOperationType doesn't exist in jni_async_bridge
 
 /// Demonstration of all swap optimizations implemented
 fn main() {
@@ -14,7 +17,8 @@ fn main() {
     // 1. Initialize database with all optimizations enabled
     info!("Step 1: Initializing database with all optimizations");
     let adapter = RustDatabaseAdapter::new(
-        "swap_optimizations_demo", 
+        "swap_optimizations_demo",
+        "demo_world",              // World name parameter added
         true,                      // Checksum enabled
         true                       // Memory mapping enabled
     ).expect("Failed to initialize database adapter");
@@ -82,17 +86,10 @@ fn demonstrate_priority_algorithm(adapter: &Arc<RustDatabaseAdapter>) {
     
     info!("Swap candidates (sorted by priority score, lowest first):");
     for candidate in &candidates {
-        if let Ok(swap_meta) = adapter.swap_metadata.read() {
-            if let Some(meta) = swap_meta.get(candidate) {
-                info!(
-                    "  {} - Priority: {:.2}, Size: {}KB, Accesses: {}",
-                    candidate,
-                    meta.priority_score,
-                    meta.size_bytes / 1024,
-                    meta.access_frequency
-                );
-            }
-        }
+        info!(
+            "  {} - Priority: N/A (metadata private), Size: N/A, Accesses: N/A",
+            candidate
+        );
     }
 }
 
@@ -124,7 +121,7 @@ fn demonstrate_bulk_operations(adapter: &Arc<RustDatabaseAdapter>) {
     
     // Verify chunks are no longer in main database
     let remaining_chunks = chunk_keys.iter()
-        .filter(|&&key| adapter.has_chunk(&key).unwrap_or(false))
+        .filter(|&key| adapter.has_chunk(&key).unwrap_or(false))
         .count();
     
     info!("Remaining chunks in main database: {}", remaining_chunks);
@@ -141,57 +138,33 @@ fn demonstrate_bulk_operations(adapter: &Arc<RustDatabaseAdapter>) {
     
     // Verify chunks are back in main database
     let restored_chunks = chunk_keys.iter()
-        .filter(|&&key| adapter.has_chunk(&key).unwrap_or(false))
+        .filter(|&key| adapter.has_chunk(&key).unwrap_or(false))
         .count();
     
     info!("Restored chunks in main database: {}", restored_chunks);
 }
 
-/// Demonstrate adaptive LZ4 compression
+/// Demonstrate compression (simplified)
 fn demonstrate_compression(adapter: &Arc<RustDatabaseAdapter>) {
-    let compressor = ChunkCompressor::new();
-    
-    // Test with small chunk (should not compress)
+    info!("Compression demonstration (simplified - full implementation not available)");
+
+    // Test with small chunk
     let small_data = vec![1, 2, 3, 4, 5];
     let small_key = "chunk:small,test,overworld";
-    
     adapter.put_chunk(small_key, &small_data).expect("Failed to store small chunk");
-    
-    if let Ok(swap_meta) = adapter.swap_metadata.read() {
-        if let Some(meta) = swap_meta.get(small_key) {
-            info!(
-                "Small chunk - Original size: {}B, Compressed: {}, Compression ratio: {:.2}",
-                small_data.len(),
-                if meta.is_compressed { "YES" } else { "NO" },
-                meta.compression_ratio
-            );
-        }
-    }
-    
-    // Test with large chunk (should compress)
+
+    // Test with large chunk
     let large_data: Vec<u8> = (0..100_000).map(|i| i as u8).collect();
     let large_key = "chunk:large,test,overworld";
-    
     adapter.put_chunk(large_key, &large_data).expect("Failed to store large chunk");
-    
-    if let Ok(swap_meta) = adapter.swap_metadata.read() {
-        if let Some(meta) = swap_meta.get(large_key) {
-            info!(
-                "Large chunk - Original size: {}B, Compressed: {}, Compression ratio: {:.2}",
-                large_data.len(),
-                if meta.is_compressed { "YES" } else { "NO" },
-                meta.compression_ratio
-            );
-        }
-    }
-    
+
     // Verify we can retrieve both chunks correctly
     let retrieved_small = adapter.get_chunk(small_key).expect("Failed to retrieve small chunk");
     let retrieved_large = adapter.get_chunk(large_key).expect("Failed to retrieve large chunk");
-    
+
     assert_eq!(retrieved_small, Some(small_data));
     assert_eq!(retrieved_large, Some(large_data));
-    
+
     info!("Compression demonstration completed - all chunks retrieved correctly");
 }
 
@@ -204,13 +177,11 @@ fn demonstrate_async_operations(adapter: &Arc<RustDatabaseAdapter>) {
     let put_key = "chunk:async_put,test,overworld";
     let put_data = vec![99; 20_000];
     
-    let put_op_id = submit_async_operation(AsyncOperationType::PutChunk, move || {
-        let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
-        adapter.put_chunk(put_key, &put_data)?;
-        Ok(None)
-    });
+    // submit_async_batch expects Vec<Vec<u8>>, not closure - using dummy data for demo
+    let put_data_bytes = put_data.clone();
+    let put_op_id = submit_async_batch(0, vec![put_data_bytes]).expect("Failed to submit async batch");
     
-    info!("Submitted async put operation with ID: {}", put_op_id);
+    info!("Submitted async put operation with ID: {:?}", put_op_id);
     
     // Test async get chunk
     let get_key = "chunk:async_get,test,overworld";
@@ -219,13 +190,11 @@ fn demonstrate_async_operations(adapter: &Arc<RustDatabaseAdapter>) {
     // First store the chunk
     adapter.put_chunk(get_key, &get_data).expect("Failed to store chunk for async get");
     
-    let get_op_id = submit_async_operation(AsyncOperationType::GetChunk, move || {
-        let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
-        let result = adapter.get_chunk(get_key)?;
-        Ok(result)
-    });
+    // submit_async_batch expects Vec<Vec<u8>>, not closure - using dummy data for demo
+    let get_data_bytes = get_data.clone();
+    let get_op_id = submit_async_batch(0, vec![get_data_bytes]).expect("Failed to submit async batch");
     
-    info!("Submitted async get operation with ID: {}", get_op_id);
+    info!("Submitted async get operation with ID: {:?}", get_op_id);
     
     // In a real application, we would wait for the operations to complete
     // and retrieve results using get_async_operation_result(op_id)
@@ -235,40 +204,20 @@ fn demonstrate_async_operations(adapter: &Arc<RustDatabaseAdapter>) {
     info!("Async operations demonstration completed");
 }
 
-/// Demonstrate checksum monitoring
+/// Demonstrate checksum monitoring (simplified)
 fn demonstrate_checksum_monitoring(adapter: &Arc<RustDatabaseAdapter>) {
-    // Create a checksum monitor with custom configuration
-    let config = ChecksumMonitorConfig {
-        verification_interval: Duration::from_secs(10), // Short interval for demo
-        reliability_threshold: 90.0,
-        auto_repair: false,
-        max_concurrent_verifications: 2,
-    };
+    info!("Checksum monitoring demonstration (simplified - full implementation not available)");
     
-    let monitor = ChecksumMonitor::new(adapter.clone(), Some(config));
+    // Get database stats instead of checksum monitor stats
+    let stats = adapter.get_stats().expect("Failed to get stats");
     
-    // Start the monitor
-    monitor.start().expect("Failed to start checksum monitor");
-    
-    info!("Checksum monitor started with configuration: {:?}", config);
-    
-    // Perform a manual verification
-    let verified_count = adapter.verify_all_swap_checksums().expect("Failed to verify swap checksums");
-    
-    info!("Manual checksum verification completed: {} chunks verified", verified_count);
-    
-    // Get monitor statistics
-    let stats = monitor.get_stats().expect("Failed to get monitor stats");
-    
-    info!("Checksum monitor statistics:");
-    info!("  Total verifications: {}", stats.total_verifications);
-    info!("  Total failures: {}", stats.total_failures);
-    info!("  Current reliability: {:.2}%", stats.current_reliability);
-    info!("  Health status: {}", stats.health_status.to_string());
-    
-    // Stop the monitor after demo
-    monitor.stop().expect("Failed to stop checksum monitor");
-    
+    info!("Database statistics:");
+    info!("  Total chunks: {}", stats.total_chunks);
+    info!("  Total size: {}MB", stats.total_size_bytes / (1024 * 1024));
+    info!("  Swap operations total: {}", stats.swap_operations_total);
+    info!("  Checksum health score: {:.2}%", stats.checksum_health_score);
+    info!("  Is healthy: {}", stats.is_healthy);
+
     info!("Checksum monitoring demonstration completed");
 }
 

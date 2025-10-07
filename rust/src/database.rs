@@ -1,28 +1,71 @@
 
+// Feature flags for optimizations
+#[cfg(feature = "async-io")]
+use tokio::sync::{oneshot, mpsc};
+#[cfg(feature = "async-io")]
+use tokio::fs;
+#[cfg(feature = "async-io")]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(feature = "async-io")]
+use tokio::time::timeout;
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::path::Path;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
+use std::fs;
 use memmap2::{MmapOptions, Mmap};
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteArray, JObject};
-use jni::sys::{jboolean, jlong, jint, jbyteArray};
+use jni::sys::{jboolean, jlong, jint, jbyteArray, jthrowable};
 use sled::Db;
 use fastnbt::Value;
 use lz4_flex::block;
 
-use log::{debug, info, error};
+use log::{debug, info, error, warn};
 use serde_json;
-use std::fs;
+use futures::future::join_all;
+use std::path::PathBuf;
+#[cfg(feature = "structured-errors")]
+use thiserror::Error;
 
-/// Recursively copy a directory's contents to a destination directory.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+/// Recursively copy a directory's contents to a destination directory (async version)
+#[cfg(feature = "async-io")]
+async fn copy_dir_recursive_async(src: &Path, dst: &Path) -> Result<(), String> {
     if !src.is_dir() {
         return Err(format!("Source is not a directory: {:?}", src));
     }
 
-    for entry in fs::read_dir(src).map_err(|e| format!("Failed to read dir {:?}: {}", src, e))? {
+    let entries = tokio::fs::read_dir(src).await.map_err(|e| format!("Failed to read dir {:?}: {}", src, e))?;
+    
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read dir entry: {}", e))?;
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+
+        if path.is_dir() {
+            tokio::fs::create_dir_all(&dest).await.map_err(|e| format!("Failed to create dir {:?}: {}", dest, e))?;
+            copy_dir_recursive_async(&path, &dest).await?;
+        } else {
+            tokio::fs::copy(&path, &dest).await
+                .map_err(|e| format!("Failed to copy file {:?} to {:?}: {}", path, dest, e))?;
+        }
+    }
+    Ok(())
+}
+
+/// Recursively copy a directory's contents to a destination directory (sync version - for backward compatibility)
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    if !src.is_dir() {
+        return Err(format!("Source is not a directory: {:?}", src,));
+    }
+
+    let entries = fs::read_dir(src).map_err(|e| format!("Failed to read dir {:?}: {}", src, e))?;
+    
+    for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read dir entry: {}", e))?;
         let path = entry.path();
         let dest = dst.join(entry.file_name());
@@ -219,9 +262,198 @@ pub struct RustDatabaseAdapter {
     memory_mapping_enabled: bool,
     db_path: String,
     swap_path: String,
+    // Async I/O components - conditional on feature flag
+    #[cfg(feature = "async-io")]
+    io_runtime: Option<tokio::runtime::Runtime>,
+    #[cfg(feature = "async-io")]
+    io_task_sender: Option<mpsc::Sender<IoTask>>,
+    compression_batch_size: usize,
+    priority_score_cache: Arc<RwLock<HashMap<String, (f64, SystemTime)>>>,
+    cache_ttl: Duration,
+    // JNI Error Handling - conditional on feature flag
+    #[cfg(feature = "circuit-breaker")]
+    circuit_breaker: Arc<CircuitBreaker>,
+    #[cfg(feature = "circuit-breaker")]
+    jni_error_count: AtomicUsize,
+    #[cfg(feature = "circuit-breaker")]
+    jni_timeout_threshold: Duration,
+}
+
+#[cfg(feature = "structured-errors")]
+#[derive(Debug, Error)]
+pub enum DatabaseError {
+    #[error("IO error: {0}")]
+    IoError(String),
+    
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+    
+    #[error("Chunk not found: {0}")]
+    ChunkNotFound(String),
+    
+    #[error("Compression error: {0}")]
+    CompressionError(String),
+    
+    #[error("Checksum error: {0}")]
+    ChecksumError(String),
+    
+    #[error("JNI error: {0}")]
+    JniError(String),
+    
+    #[error("Timeout error: {0}")]
+    TimeoutError(String),
+    
+    #[error("Operation failed: {0}")]
+    OperationFailed(String),
+}
+
+#[cfg(not(feature = "structured-errors"))]
+#[derive(Debug)]
+pub enum DatabaseError {
+    IoError(String),
+    DatabaseError(String),
+    ChunkNotFound(String),
+    CompressionError(String),
+    ChecksumError(String),
+    JniError(String),
+    TimeoutError(String),
+    OperationFailed(String),
+}
+
+#[cfg(not(feature = "structured-errors"))]
+impl std::fmt::Display for DatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DatabaseError::IoError(msg) => write!(f, "IO error: {}", msg),
+            DatabaseError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+            DatabaseError::ChunkNotFound(msg) => write!(f, "Chunk not found: {}", msg),
+            DatabaseError::CompressionError(msg) => write!(f, "Compression error: {}", msg),
+            DatabaseError::ChecksumError(msg) => write!(f, "Checksum error: {}", msg),
+            DatabaseError::JniError(msg) => write!(f, "JNI error: {}", msg),
+            DatabaseError::TimeoutError(msg) => write!(f, "Timeout error: {}", msg),
+            DatabaseError::OperationFailed(msg) => write!(f, "Operation failed: {}", msg),
+        }
+    }
+}
+
+#[cfg(feature = "structured-errors")]
+impl std::fmt::Display for DatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DatabaseError::IoError(msg) => write!(f, "IO error: {}", msg),
+            DatabaseError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+            DatabaseError::ChunkNotFound(msg) => write!(f, "Chunk not found: {}", msg),
+            DatabaseError::CompressionError(msg) => write!(f, "Compression error: {}", msg),
+            DatabaseError::ChecksumError(msg) => write!(f, "Checksum error: {}", msg),
+            DatabaseError::JniError(msg) => write!(f, "JNI error: {}", msg),
+            DatabaseError::TimeoutError(msg) => write!(f, "Timeout error: {}", msg),
+            DatabaseError::OperationFailed(msg) => write!(f, "Operation failed: {}", msg),
+        }
+    }
+}
+
+#[cfg(feature = "async-io")]
+#[derive(Debug)]
+enum IoTask {
+    Read { path: String, result_sender: oneshot::Sender<Result<Vec<u8>, DatabaseError>> },
+    Write { path: String, data: Vec<u8>, result_sender: oneshot::Sender<Result<usize, DatabaseError>> },
+    Delete { path: String, result_sender: oneshot::Sender<Result<(), DatabaseError>> },
+    AtomicWrite { temp_path: String, final_path: String, result_sender: oneshot::Sender<Result<(), DatabaseError>> },
+}
+
+#[cfg(feature = "circuit-breaker")]
+#[derive(Debug)]
+pub struct CircuitBreaker {
+    failure_count: AtomicUsize,
+    failure_threshold: usize,
+    reset_timeout: Duration,
+    last_failure_time: AtomicUsize,
+    state: AtomicUsize, // 0 = closed, 1 = open, 2 = half-open
+}
+
+#[cfg(not(feature = "circuit-breaker"))]
+#[derive(Debug)]
+pub struct CircuitBreaker {
+    _dummy: (),
+}
+
+#[cfg(feature = "circuit-breaker")]
+impl CircuitBreaker {
+    pub fn new(failure_threshold: usize, reset_timeout: Duration) -> Self {
+        Self {
+            failure_count: AtomicUsize::new(0),
+            failure_threshold,
+            reset_timeout,
+            last_failure_time: AtomicUsize::new(0),
+            state: AtomicUsize::new(0), // Start in closed state
+        }
+    }
+
+    pub fn allow_operation(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as usize)
+            .unwrap_or(0);
+
+        let state = self.state.load(Ordering::Relaxed);
+        let failure_count = self.failure_count.load(Ordering::Relaxed);
+        let last_failure_time = self.last_failure_time.load(Ordering::Relaxed);
+
+        match state {
+            0 => { // Closed state - allow operations
+                failure_count < self.failure_threshold
+            },
+            1 => { // Open state - check if timeout expired
+                if now > last_failure_time + self.reset_timeout.as_secs() as usize {
+                    // Transition to half-open state
+                    self.state.store(2, Ordering::Relaxed);
+                    true
+                } else {
+                    false
+                }
+            },
+            2 => { // Half-open state - allow limited operations
+                true
+            },
+            _ => false,
+        }
+    }
+
+    pub fn record_success(&self) {
+        let state = self.state.load(Ordering::Relaxed);
+        match state {
+            1 => { // Just came from open state
+                self.failure_count.store(0, Ordering::Relaxed);
+                self.state.store(0, Ordering::Relaxed);
+            },
+            2 => { // Half-open state - success resets to closed
+                self.failure_count.store(0, Ordering::Relaxed);
+                self.state.store(0, Ordering::Relaxed);
+            },
+            _ => { // Closed state - reset failure count
+                self.failure_count.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn record_failure(&self) {
+        let mut failure_count = self.failure_count.load(Ordering::Relaxed);
+        failure_count += 1;
+        self.failure_count.store(failure_count, Ordering::Relaxed);
+
+        if failure_count >= self.failure_threshold {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as usize)
+                .unwrap_or(0);
+            self.last_failure_time.store(now, Ordering::Relaxed);
+            self.state.store(1, Ordering::Relaxed); // Transition to open state
+        }
+    }
 }
 
 impl RustDatabaseAdapter {
+    /// Create a new database adapter with default path
     pub fn new(database_type: &str, world_name: &str, checksum_enabled: bool, memory_mapping_enabled: bool) -> Result<Self, String> {
         // Use standard saves directory structure (where level.dat resides): ./saves/{world_name}/
         let current_dir = std::env::current_dir()
@@ -286,17 +518,30 @@ impl RustDatabaseAdapter {
         stats.total_size_bytes = total_size_bytes;
         
         Ok(Self {
-            db: Arc::new(db),
-            stats: Arc::new(RwLock::new(stats)),
-            swap_metadata: Arc::new(RwLock::new(swap_metadata)),
-            memory_mapped_files: Arc::new(RwLock::new(HashMap::new())),
-            database_type: database_type.to_string(),
-            world_name: world_name.to_string(),
-            checksum_enabled,
-            memory_mapping_enabled,
-            db_path: db_path.to_string(),
-            swap_path,
-        })
+           db: Arc::new(db),
+           stats: Arc::new(RwLock::new(stats)),
+           swap_metadata: Arc::new(RwLock::new(swap_metadata)),
+           memory_mapped_files: Arc::new(RwLock::new(HashMap::new())),
+           database_type: database_type.to_string(),
+           world_name: world_name.to_string(),
+           checksum_enabled,
+           memory_mapping_enabled,
+           db_path: db_path.to_string(),
+           swap_path: swap_path.to_string_lossy().to_string(),
+           #[cfg(feature = "async-io")]
+           io_runtime: None,
+           #[cfg(feature = "async-io")]
+           io_task_sender: None,
+           compression_batch_size: 1024 * 1024, // 1MB default
+           priority_score_cache: Arc::new(RwLock::new(HashMap::new())),
+           cache_ttl: Duration::from_secs(300),
+           #[cfg(feature = "circuit-breaker")]
+           circuit_breaker: Arc::new(CircuitBreaker::new(3, Duration::from_secs(300))),
+           #[cfg(feature = "circuit-breaker")]
+           jni_error_count: AtomicUsize::new(0),
+           #[cfg(feature = "circuit-breaker")]
+           jni_timeout_threshold: Duration::from_secs(10),
+       })
     }
     
     /// Helper to decompress data if needed
@@ -703,45 +948,45 @@ impl RustDatabaseAdapter {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let swap_file_path = swap_path.join(format!("{}_{}_{}.swap", self.world_name, safe_key, timestamp));
+            let swap_file_path = Path::new(&self.swap_path).join(format!("{}_{}_{}.swap", self.world_name, safe_key, timestamp));
+            let swap_file_path_str = swap_file_path.to_str().ok_or_else(|| "Failed to convert swap path to string".to_string())?;
             
             // Write data to swap file with atomic operation (temp file + rename) for safety
-            let temp_path = swap_path.join(format!("{}.tmp", swap_file_path.file_name().unwrap_or_else(|| "swap_temp")));
+            let temp_path = Path::new(&self.swap_path).join(format!("{}.tmp", swap_file_path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("swap_temp")).to_string_lossy()));
             std::fs::write(&temp_path, &data)
                 .map_err(|e| format!("Failed to write temp swap file for world {}: {}", self.world_name, e))?;
             std::fs::rename(&temp_path, &swap_file_path)
                 .map_err(|e| format!("Failed to rename temp file for world {}: {}", self.world_name, e))?;
             
             info!("Created swap file for chunk {} at: {}", key, swap_file_path.display());
-            Ok(swap_file_path)
+            
+            // Remove from main database
+            self.db.remove(key_bytes)
+                .map_err(|e| format!("Failed to remove chunk from database for world {}: {}", self.world_name, e))?;
+            
+            // Update swap metadata
+            if let Ok(mut swap_meta) = self.swap_metadata.write() {
+                if let Some(metadata) = swap_meta.get_mut(key) {
+                    metadata.update_swap();
+                }
+            }
+            
+            // Update statistics
+            if let Ok(mut stats) = self.stats.write() {
+                stats.swap_operations_total += 1;
+                stats.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
+                stats.total_swap_size_bytes += data_size;
+                stats.total_chunks = stats.total_chunks.saturating_sub(1);
+                stats.total_size_bytes = stats.total_size_bytes.saturating_sub(data_size);
+            }
+            
+            info!("Swapped out chunk {} ({:.2}KB) from world {} to {}",
+                  key, data_size as f64 / 1024.0, self.world_name, swap_file_path.display());
+            
+            Ok(())
         } else {
             return Err(format!("Failed to extract coordinates from chunk key: {}", key));
         }
-        
-        // Remove from main database
-        self.db.remove(key_bytes)
-            .map_err(|e| format!("Failed to remove chunk from database for world {}: {}", self.world_name, e))?;
-        
-        // Update swap metadata
-        if let Ok(mut swap_meta) = self.swap_metadata.write() {
-            if let Some(metadata) = swap_meta.get_mut(key) {
-                metadata.update_swap();
-            }
-        }
-        
-        // Update statistics
-        if let Ok(mut stats) = self.stats.write() {
-            stats.swap_operations_total += 1;
-            stats.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
-            stats.total_swap_size_bytes += data_size;
-            stats.total_chunks = stats.total_chunks.saturating_sub(1);
-            stats.total_size_bytes = stats.total_size_bytes.saturating_sub(data_size);
-        }
-        
-        info!("Swapped out chunk {} ({:.2}KB) from world {} to {}",
-              key, data_size as f64 / 1024.0, self.world_name, swap_file_path);
-        
-        Ok(())
     }
     
     /// Swap in a chunk from disk storage
@@ -1156,6 +1401,33 @@ impl RustDatabaseAdapter {
 
         Ok((chunk_count, total_size))
     }
+
+    /// Record JNI operation result for circuit breaker
+    #[cfg(feature = "circuit-breaker")]
+    pub fn record_jni_operation_result(&self, operation_name: &str, success: bool) {
+        if success {
+            self.circuit_breaker.record_success();
+            self.jni_error_count.store(0, Ordering::Relaxed);
+        } else {
+            self.circuit_breaker.record_failure();
+            let error_count = self.jni_error_count.fetch_add(1, Ordering::Relaxed) + 1;
+            
+            if error_count >= 5 { // Additional alert threshold
+                warn!("High error rate for {} operations: {} consecutive failures", operation_name, error_count);
+            }
+        }
+    }
+
+    /// Check if JNI operation is allowed
+    #[cfg(feature = "circuit-breaker")]
+    pub fn check_jni_operation_allowed(&self, operation_name: &str) -> Result<(), DatabaseError> {
+        if !self.circuit_breaker.allow_operation() {
+            return Err(DatabaseError::OperationFailed(format!(
+                "{} operation failed: circuit breaker is open", operation_name
+            )));
+        }
+        Ok(())
+    }
 }
 
 // JNI bindings for Java integration
@@ -1167,45 +1439,98 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
     world_name: JString<'a>,
     checksum_enabled: jboolean,
 ) -> jlong {
-    let database_type_str = env.get_string(&database_type)
-        .expect("Failed to get database type string")
-        .to_str()
-        .expect("Failed to convert to str")
-        .to_string();
-
-    let world_name_str = env.get_string(&world_name)
-        .expect("Failed to get world name string")
-        .to_str()
-        .expect("Failed to convert world name to str")
-        .to_string();
-     
-    let checksum = checksum_enabled != 0;
-     
-    match RustDatabaseAdapter::new(&database_type_str, &world_name_str, checksum, false) {
-        Ok(adapter) => Box::into_raw(Box::new(adapter)) as jlong,
+    // Check if circuit breaker allows initialization
+    let result = match RustDatabaseAdapter::new(
+        &env.get_string(&database_type).map_err(|e| DatabaseError::JniError(format!("Failed to get database type: {}", e))).unwrap().to_str().unwrap().to_string(),
+        &env.get_string(&world_name).map_err(|e| DatabaseError::JniError(format!("Failed to get world name: {}", e))).unwrap().to_str().unwrap().to_string(),
+        checksum_enabled != 0,
+        false
+    ) {
+        Ok(adapter) => {
+            let adapter_ptr = Box::into_raw(Box::new(adapter)) as jlong;
+            // Record successful initialization
+            let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+            #[cfg(feature = "circuit-breaker")]
+            adapter.record_jni_operation_result("nativeInit", true);
+            Ok(adapter_ptr)
+        }
         Err(e) => {
-            error!("Failed to initialize database adapter at CWD: {}. Attempting temp-dir fallback", e);
-
-            // Try to initialize using a temp directory as a fallback to increase robustness
+            error!("Failed to initialize database adapter: {}", e);
+            
+            // Try fallback initialization with proper error handling
             match std::env::temp_dir().to_str() {
                 Some(tmp) => {
-                    let fallback_path = format!("{}/kneaf_db_{}_fallback", tmp, database_type_str);
-                    match RustDatabaseAdapter::with_path(&fallback_path, &database_type_str, &world_name_str, checksum, false) {
+                    let fallback_path = format!("{}/kneaf_db_{}_fallback", tmp, env.get_string(&database_type).map_err(|_| "Failed to get database type").unwrap().to_str().unwrap());
+                    match RustDatabaseAdapter::with_path(
+                        &fallback_path,
+                        &env.get_string(&database_type).map_err(|_| "Failed to get database type").unwrap().to_str().unwrap().to_string(),
+                        &env.get_string(&world_name).map_err(|_| "Failed to get world name").unwrap().to_str().unwrap().to_string(),
+                        checksum_enabled != 0,
+                        false
+                    ) {
                         Ok(fallback_adapter) => {
-                            info!("Initialized fallback RustDatabaseAdapter for world {} at: {}", world_name_str, fallback_path);
-                            Box::into_raw(Box::new(fallback_adapter)) as jlong
+                            info!("Initialized fallback RustDatabaseAdapter at: {}", fallback_path);
+                            let adapter_ptr = Box::into_raw(Box::new(fallback_adapter)) as jlong;
+                            let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+                            #[cfg(feature = "circuit-breaker")]
+                            adapter.record_jni_operation_result("nativeInit", true);
+                            Ok(adapter_ptr)
                         }
                         Err(e2) => {
-                            error!("Failed to initialize fallback adapter for world {}: {}", world_name_str, e2);
-                            0
+                            error!("Failed to initialize fallback adapter: {}", e2);
+                            Err(DatabaseError::OperationFailed(format!("Fallback init failed: {}", e2)))
                         }
                     }
                 }
                 None => {
-                    error!("Failed to determine temp dir for fallback initialization");
-                    0
+                    error!("Failed to determine temp dir for fallback");
+                    Err(DatabaseError::OperationFailed("Failed to determine temp directory".to_string()))
                 }
             }
+        }
+    };
+
+    match result {
+        Ok(adapter_ptr) => adapter_ptr,
+        Err(e) => {
+            // Record failed initialization
+            if let Ok(adapter) = env.get_string(&database_type).map(|s| s.to_str().unwrap().to_string()) {
+                let dummy_adapter = RustDatabaseAdapter::new(&adapter, &env.get_string(&world_name).map(|s| s.to_str().unwrap().to_string()).unwrap_or_default(), false, false).unwrap_or_else(|_| {
+                    let dummy = RustDatabaseAdapter {
+                        db: Arc::new(sled::Config::new().temporary(true).open().unwrap()),
+                        stats: Arc::new(RwLock::new(DatabaseStats::new())),
+                        swap_metadata: Arc::new(RwLock::new(HashMap::new())),
+                        memory_mapped_files: Arc::new(RwLock::new(HashMap::new())),
+                        database_type: "dummy".to_string(),
+                        world_name: "dummy".to_string(),
+                        checksum_enabled: false,
+                        memory_mapping_enabled: false,
+                        db_path: "dummy".to_string(),
+                        swap_path: "dummy".to_string(),
+                        #[cfg(feature = "async-io")]
+                        io_runtime: None,
+                        #[cfg(feature = "async-io")]
+                        io_task_sender: None,
+                        compression_batch_size: 10,
+                        priority_score_cache: Arc::new(RwLock::new(HashMap::new())),
+                        cache_ttl: Duration::from_secs(30),
+                        #[cfg(feature = "circuit-breaker")]
+                        circuit_breaker: Arc::new(CircuitBreaker::new(3, Duration::from_secs(300))),
+                        #[cfg(feature = "circuit-breaker")]
+                        jni_error_count: AtomicUsize::new(0),
+                        #[cfg(feature = "circuit-breaker")]
+                        jni_timeout_threshold: Duration::from_secs(10),
+                    };
+                    dummy
+                });
+                #[cfg(feature = "circuit-breaker")]
+                dummy_adapter.record_jni_operation_result("nativeInit", false);
+            }
+            
+            let exception_class = env.find_class("java/lang/Exception").unwrap();
+            env.throw_new(exception_class, &e.to_string())
+                .unwrap();
+            0
         }
     }
 }
@@ -1218,26 +1543,66 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
     key: JString<'a>,
     data: JByteArray<'a>,
 ) -> jboolean {
+    // Validate adapter pointer
     if adapter_ptr == 0 {
         error!("Database adapter pointer is null");
         return 0;
     }
-    
+
     let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
-    
-    let key_str = env.get_string(&key)
-        .expect("Failed to get key string")
-        .to_str()
-        .expect("Failed to convert key to str")
-        .to_string();
-    
-    let data_vec = env.convert_byte_array(&data)
-        .expect("Failed to convert byte array");
-    
-    match adapter.put_chunk(&key_str, &data_vec) {
-        Ok(_) => 1,
+
+    // Check circuit breaker before proceeding
+    #[cfg(feature = "circuit-breaker")]
+    if !adapter.circuit_breaker.allow_operation() {
+        let _ = env.throw_new(
+            "java/lang/Exception",
+            "Circuit breaker is open - too many recent failures"
+        );
+        return 0;
+    }
+
+    // Convert JNI parameters with proper error handling
+    let key_str = match env.get_string(&key) {
+        Ok(str) => match str.to_str() {
+            Ok(s) => s.to_string(),
+            Err(e) => {
+                error!("Failed to convert key to string: {}", e);
+                return 0;
+            }
+        },
         Err(e) => {
-            error!("Failed to put chunk: {}", e);
+            error!("Failed to get key string: {}", e);
+            return 0;
+        }
+    };
+
+    let data_vec = match env.convert_byte_array(&data) {
+        Ok(vec) => vec,
+        Err(e) => {
+            error!("Failed to convert byte array: {}", e);
+            return 0;
+        }
+    };
+
+    // Execute operation with timeout
+    let result = adapter.put_chunk(&key_str, &data_vec);
+
+    // Handle result
+    match result {
+        Ok(_) => {
+            #[cfg(feature = "circuit-breaker")]
+            adapter.circuit_breaker.record_success();
+            1
+        }
+        Err(e) => {
+            error!("Put chunk failed: {}", e);
+            #[cfg(feature = "circuit-breaker")]
+            adapter.circuit_breaker.record_failure();
+            
+            // Convert to appropriate Java exception
+            let exception_msg = e.to_string();
+            let _ = env.throw_new("java/lang/Exception", &exception_msg);
+            
             0
         }
     }
@@ -1706,6 +2071,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
             return JObject::null();
         }
     }
+}
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nativeStoreChunkRawNbt<'a>(
     mut env: JNIEnv<'a>,
@@ -1889,5 +2255,5 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
             JObject::null()
         }
     }
-}
+
 }

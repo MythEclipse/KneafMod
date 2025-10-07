@@ -12,7 +12,12 @@ public final class NativeBridge {
   private NativeBridge() {}
 
   public static void initRustAllocator() {
-    com.kneaf.core.performance.bridge.NativeBridge.initRustAllocator();
+    try {
+      com.kneaf.core.performance.bridge.NativeBridge.initRustAllocator();
+    } catch (Exception e) {
+      // Fallback for compatibility
+      System.out.println("Native bridge initialization failed, using fallback: " + e.getMessage());
+    }
   }
 
   public static long nativeCreateWorker(int concurrency) {

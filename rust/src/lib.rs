@@ -29,6 +29,8 @@ pub mod types;
 pub mod database;
 pub mod jni_batch_processor;
 pub mod allocator;
+pub mod jni_async_bridge;
+pub mod jni_batch;
 
 // Re-export commonly used performance helpers at crate root so tests and Java JNI
 // bindings can import them as `rustperf::calculate_distances_simd` etc.
@@ -1007,7 +1009,7 @@ lazy_static::lazy_static! {
 pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeInitSpatialRTree(
     _env: jni::JNIEnv,
     _class: jni::objects::JClass,
-) {
+) -> jni::sys::jbyteArray {
     let mut rtree = SPATIAL_RTREE.lock().unwrap();
 
     // Pre-compute spatial partitions for common entity positions
@@ -1024,6 +1026,8 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeIni
 
         rtree.insert(i as u32, bounds);
     }
+    
+    return std::ptr::null_mut();
 }
 
 // Optimized spatial query using R-tree (O(log n) instead of O(n))
@@ -1093,11 +1097,215 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeSpa
         result_bytes.extend_from_slice(&id.to_le_bytes());
     }
 
-    match env.byte_array_from_slice(&result_bytes) {
+    return match env.byte_array_from_slice(&result_bytes) {
         Ok(array) => array.into_raw(),
         Err(e) => {
             eprintln!("Failed to create optimized spatial query result byte array: {:?}", e);
             std::ptr::null_mut()
+        }
+    };
+    
+// Async batch processing JNI functions
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_submitAsyncBatchedOperations(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    worker_handle: jni::sys::jlong,
+    operations: jni::sys::jobjectArray,
+    batch_size: jni::sys::jint,
+) -> jni::sys::jlong {
+    use crate::jni_async_bridge::submit_async_batch;
+    
+    if operations.is_null() || batch_size <= 0 {
+        return 0;
+    }
+    
+    let mut batch_operations = Vec::with_capacity(batch_size as usize);
+    
+    for i in 0..batch_size {
+        if let Ok(operation_obj) = env.get_object_array_element(&unsafe { jni::objects::JObjectArray::from_raw(operations) }, i) {
+            let byte_array = unsafe { jni::objects::JByteArray::from_raw(operation_obj.into_raw()) };
+            if let Ok(bytes) = env.convert_byte_array(byte_array) {
+                batch_operations.push(bytes);
+            }
+        }
+    }
+    
+    match submit_async_batch(worker_handle as u64, batch_operations) {
+        Ok(handle) => handle.0 as jni::sys::jlong,
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_pollAsyncBatchResults(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    operation_id: jni::sys::jlong,
+    max_results: jni::sys::jint,
+) -> jni::sys::jobjectArray {
+    use crate::jni_async_bridge::poll_async_batch_results;
+    
+    if operation_id == 0 || max_results <= 0 {
+        return std::ptr::null_mut();
+    }
+    
+    match poll_async_batch_results(operation_id as u64, max_results as usize) {
+        Ok(results) => {
+            let array_class = match env.find_class("[B") {
+                Ok(cls) => cls,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            
+            match env.new_object_array(results.len() as i32, &array_class, jni::objects::JObject::null()) {
+                Ok(result_array) => {
+                    for (i, result) in results.iter().enumerate() {
+                        if let Ok(byte_array) = env.byte_array_from_slice(result) {
+                            let _ = env.set_object_array_element(&result_array, i as i32, &byte_array);
+                        }
+                    }
+                    result_array.into_raw()
+                }
+                Err(_) => std::ptr::null_mut(),
+            }
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_cleanupAsyncBatchOperation(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    operation_id: jni::sys::jlong,
+) {
+    use crate::jni_async_bridge::cleanup_async_batch_operation;
+    
+    if operation_id != 0 {
+        let _ = cleanup_async_batch_operation(operation_id as u64);
+    }
+}
+
+// Zero-copy batch processing JNI functions
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_submitZeroCopyBatchedOperations(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    worker_handle: jni::sys::jlong,
+    buffer_addresses: jni::sys::jlongArray,
+    buffer_sizes: jni::sys::jintArray,
+    batch_size: jni::sys::jint,
+    operation_type: jni::sys::jint,
+) -> jni::sys::jlong {
+    use crate::jni_async_bridge::submit_zero_copy_batch;
+    
+    if buffer_addresses.is_null() || buffer_sizes.is_null() || batch_size <= 0 {
+        return 0;
+    }
+    
+    // Convert Java arrays to Rust vectors
+    let addresses_array = unsafe { jni::objects::JLongArray::from_raw(buffer_addresses) };
+    let sizes_array = unsafe { jni::objects::JIntArray::from_raw(buffer_sizes) };
+    
+    let addresses = match unsafe { env.get_array_elements(&addresses_array, jni::objects::ReleaseMode::CopyBack) } {
+        Ok(addrs) => addrs,
+        Err(_) => return 0,
+    };
+    
+    let sizes = match unsafe { env.get_array_elements(&sizes_array, jni::objects::ReleaseMode::CopyBack) } {
+        Ok(szs) => szs,
+        Err(_) => return 0,
+    };
+    
+    if addresses.len() != batch_size as usize || sizes.len() != batch_size as usize {
+        return 0;
+    }
+    
+    let mut zero_copy_buffers = Vec::with_capacity(batch_size as usize);
+    for i in 0..batch_size as usize {
+        zero_copy_buffers.push((addresses[i] as u64, sizes[i] as usize));
+    }
+    
+    match submit_zero_copy_batch(worker_handle as u64, zero_copy_buffers, operation_type as u32) {
+        Ok(handle) => handle.0 as jni::sys::jlong,
+        Err(_) => 0,
+    }
+}
+    
+    // Unified memory arena JNI functions
+    #[no_mangle]
+    pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeInitUnifiedMemoryArena(
+        env: jni::JNIEnv,
+        _class: jni::objects::JClass,
+        small_pool_size: jni::sys::jint,
+        medium_pool_size: jni::sys::jint,
+        large_pool_size: jni::sys::jint,
+        enable_slab_allocation: jni::sys::jboolean,
+        enable_zero_copy_buffers: jni::sys::jboolean,
+        cleanup_threshold: jni::sys::jdouble,
+    ) -> jni::sys::jint {
+        use crate::allocator::{init_unified_memory_arena, MemoryArenaConfig};
+        
+        let config = MemoryArenaConfig {
+            small_object_pool_size: small_pool_size as usize,
+            medium_object_pool_size: medium_pool_size as usize,
+            large_object_pool_size: large_pool_size as usize,
+            enable_slab_allocation: enable_slab_allocation != 0,
+            enable_zero_copy_buffers: enable_zero_copy_buffers != 0,
+            cleanup_threshold: cleanup_threshold,
+        };
+        
+        match init_unified_memory_arena(config) {
+            Ok(_) => 0, // Success
+            Err(_) => 1, // Error
+        }
+    }
+    
+    #[no_mangle]
+    pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeGetMemoryArenaStats(
+        env: jni::JNIEnv,
+        _class: jni::objects::JClass,
+    ) -> jni::sys::jstring {
+        use crate::allocator::get_memory_arena_stats;
+        
+        if let Some(stats) = get_memory_arena_stats() {
+            let stats_json = serde_json::json!({
+                "smallPoolAvailable": stats.small_pool_stats.available_slabs,
+                "mediumPoolAvailable": stats.medium_pool_stats.available_slabs,
+                "largePoolAvailable": stats.large_pool_stats.available_slabs,
+                "totalAllocated": stats.total_allocated,
+                "totalDeallocated": stats.total_deallocated,
+                "currentUsage": stats.current_usage,
+                "zeroCopyBuffers": stats.zero_copy_buffers,
+            });
+            
+            match env.new_string(&serde_json::to_string(&stats_json).unwrap_or_default()) {
+                Ok(s) => s.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
+        } else {
+            match env.new_string("{\"error\":\"Unified memory arena not initialized\"}") {
+                Ok(s) => s.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
+        }
+    }
+    
+    // Connection pooling JNI functions
+    #[no_mangle]
+    pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeGetBufferAddress(
+        env: jni::JNIEnv,
+        _class: jni::objects::JClass,
+        buffer: jni::sys::jobject,
+    ) -> jni::sys::jlong {
+        if buffer.is_null() {
+            return 0;
+        }
+        
+        let byte_buffer = unsafe { jni::objects::JByteBuffer::from_raw(buffer) };
+        match env.get_direct_buffer_address(&byte_buffer) {
+            Ok(address) => address as jni::sys::jlong,
+            Err(_) => 0,
         }
     }
 }

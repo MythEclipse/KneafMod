@@ -5,6 +5,10 @@ edition = "2021"
 
 [features]
 jni = []
+async-io = []
+circuit-breaker = []
+structured-errors = []
+jemalloc = ["jemalloc-sys", "jemallocator"]
 
 [lib]
 name = "rustperf"
@@ -38,7 +42,9 @@ fastrand = "2.0"
 rand = "0.8"
 byteorder = "1.4"
 fastnbt = "2.6"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs", "io-util", "sync"] }
+futures = "0.3"
+tokio-util = { version = "0.7", features = ["full"] }
 crossbeam-utils = "0.8"
 libc = "0.2"
 flate2 = "1.0"
@@ -46,10 +52,19 @@ lz4_flex = "0.11"
 parking_lot = "0.12"
 crossbeam-epoch = "0.9"
 crossbeam-queue = "0.3"
+jemalloc-sys = { version = "0.5", optional = true }
+jemallocator = { version = "0.5", optional = true }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 mimalloc = "0.1"
+jemalloc-sys = { version = "0.5", optional = true }
+jemallocator = { version = "0.5", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
 rand = "0.8"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
