@@ -254,6 +254,8 @@ fn test_swap_io_configuration() {
         prefetch_buffer_size: 64 * 1024 * 1024,
         async_prefetch_limit: 8,
         mmap_cache_size: 128 * 1024 * 1024,
+        read_heavy_mode: Some(true),
+        aggressive_mmap_threshold: Some(0.9),
     };
     
     // Apply configuration

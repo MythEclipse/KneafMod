@@ -447,6 +447,412 @@ impl StringPool {
 
 pub type PooledString = PooledObject<String>;
 
+/// Size class definitions for hierarchical memory pooling with better fragmentation reduction
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub enum SizeClass {
+    Tiny64B,      // 64 bytes
+    Small256B,    // 256 bytes
+    Medium1KB,    // 1KB
+    Medium2KB,    // 2KB (new)
+    Medium4KB,    // 4KB
+    Medium8KB,    // 8KB (new)
+    Large16KB,    // 16KB
+    Large32KB,    // 32KB (new)
+    Large64KB,    // 64KB (new)
+    Huge128KB,    // 128KB (new)
+    Huge256KB,    // 256KB (new)
+    Huge512KB,    // 512KB (new)
+    Huge1MBPlus,  // 1MB+ (dynamic)
+}
+
+impl SizeClass {
+    /// Get the maximum size for this size class
+    pub fn max_size(&self) -> usize {
+        match self {
+            SizeClass::Tiny64B => 64,
+            SizeClass::Small256B => 256,
+            SizeClass::Medium1KB => 1024,
+            SizeClass::Medium2KB => 2048,
+            SizeClass::Medium4KB => 4096,
+            SizeClass::Medium8KB => 8192,
+            SizeClass::Large16KB => 16384,
+            SizeClass::Large32KB => 32768,
+            SizeClass::Large64KB => 65536,
+            SizeClass::Huge128KB => 131072,
+            SizeClass::Huge256KB => 262144,
+            SizeClass::Huge512KB => 524288,
+            SizeClass::Huge1MBPlus => usize::MAX, // Unlimited for this class
+        }
+    }
+
+    /// Get the typical allocation size for this class (for preallocation)
+    pub fn typical_size(&self) -> usize {
+        match self {
+            SizeClass::Tiny64B => 64,
+            SizeClass::Small256B => 256,
+            SizeClass::Medium1KB => 1024,
+            SizeClass::Medium2KB => 2048,
+            SizeClass::Medium4KB => 4096,
+            SizeClass::Medium8KB => 8192,
+            SizeClass::Large16KB => 16384,
+            SizeClass::Large32KB => 32768,
+            SizeClass::Large64KB => 65536,
+            SizeClass::Huge128KB => 131072,
+            SizeClass::Huge256KB => 262144,
+            SizeClass::Huge512KB => 524288,
+            SizeClass::Huge1MBPlus => 1048576, // 1MB typical size
+        }
+    }
+
+    /// Get the exact size for this size class (for best-fit allocation)
+    pub fn exact_size(&self) -> usize {
+        match self {
+            SizeClass::Tiny64B => 64,
+            SizeClass::Small256B => 256,
+            SizeClass::Medium1KB => 1024,
+            SizeClass::Medium2KB => 2048,
+            SizeClass::Medium4KB => 4096,
+            SizeClass::Medium8KB => 8192,
+            SizeClass::Large16KB => 16384,
+            SizeClass::Large32KB => 32768,
+            SizeClass::Large64KB => 65536,
+            SizeClass::Huge128KB => 131072,
+            SizeClass::Huge256KB => 262144,
+            SizeClass::Huge512KB => 524288,
+            SizeClass::Huge1MBPlus => 1048576, // Base size for dynamic allocations
+        }
+    }
+
+    /// Get size class from allocation size (exact match only)
+    pub fn from_exact_size(size: usize) -> Option<SizeClass> {
+        match size {
+            64 => Some(SizeClass::Tiny64B),
+            256 => Some(SizeClass::Small256B),
+            1024 => Some(SizeClass::Medium1KB),
+            2048 => Some(SizeClass::Medium2KB),
+            4096 => Some(SizeClass::Medium4KB),
+            8192 => Some(SizeClass::Medium8KB),
+            16384 => Some(SizeClass::Large16KB),
+            32768 => Some(SizeClass::Large32KB),
+            65536 => Some(SizeClass::Large64KB),
+            131072 => Some(SizeClass::Huge128KB),
+            262144 => Some(SizeClass::Huge256KB),
+            524288 => Some(SizeClass::Huge512KB),
+            _ if size >= 1048576 => Some(SizeClass::Huge1MBPlus),
+            _ => None,
+        }
+    }
+
+    /// Determine which size class a given allocation should use (best-fit)
+    pub fn from_allocation_size(size: usize) -> Self {
+        // Use exact size matching first for best-fit allocation
+        match size {
+            64 => SizeClass::Tiny64B,
+            256 => SizeClass::Small256B,
+            1024 => SizeClass::Medium1KB,
+            2048 => SizeClass::Medium2KB,
+            4096 => SizeClass::Medium4KB,
+            8192 => SizeClass::Medium8KB,
+            16384 => SizeClass::Large16KB,
+            32768 => SizeClass::Large32KB,
+            65536 => SizeClass::Large64KB,
+            131072 => SizeClass::Huge128KB,
+            262144 => SizeClass::Huge256KB,
+            524288 => SizeClass::Huge512KB,
+            _ if size <= 1048576 => SizeClass::Huge1MBPlus,
+            _ => SizeClass::Huge1MBPlus,
+        }
+    }
+
+    /// Find the smallest size class that can accommodate the given allocation
+    pub fn find_smallest_fit(size: usize) -> Self {
+        if size <= SizeClass::Tiny64B.max_size() {
+            SizeClass::Tiny64B
+        } else if size <= SizeClass::Small256B.max_size() {
+            SizeClass::Small256B
+        } else if size <= SizeClass::Medium1KB.max_size() {
+            SizeClass::Medium1KB
+        } else if size <= SizeClass::Medium2KB.max_size() {
+            SizeClass::Medium2KB
+        } else if size <= SizeClass::Medium4KB.max_size() {
+            SizeClass::Medium4KB
+        } else if size <= SizeClass::Medium8KB.max_size() {
+            SizeClass::Medium8KB
+        } else if size <= SizeClass::Large16KB.max_size() {
+            SizeClass::Large16KB
+        } else if size <= SizeClass::Large32KB.max_size() {
+            SizeClass::Large32KB
+        } else if size <= SizeClass::Large64KB.max_size() {
+            SizeClass::Large64KB
+        } else if size <= SizeClass::Huge128KB.max_size() {
+            SizeClass::Huge128KB
+        } else if size <= SizeClass::Huge256KB.max_size() {
+            SizeClass::Huge256KB
+        } else if size <= SizeClass::Huge512KB.max_size() {
+            SizeClass::Huge512KB
+        } else {
+            SizeClass::Huge1MBPlus
+        }
+    }
+
+    /// Get the next larger size class
+    pub fn next_larger(&self) -> Option<SizeClass> {
+        match self {
+            SizeClass::Tiny64B => Some(SizeClass::Small256B),
+            SizeClass::Small256B => Some(SizeClass::Medium1KB),
+            SizeClass::Medium1KB => Some(SizeClass::Medium2KB),
+            SizeClass::Medium2KB => Some(SizeClass::Medium4KB),
+            SizeClass::Medium4KB => Some(SizeClass::Medium8KB),
+            SizeClass::Medium8KB => Some(SizeClass::Large16KB),
+            SizeClass::Large16KB => Some(SizeClass::Large32KB),
+            SizeClass::Large32KB => Some(SizeClass::Large64KB),
+            SizeClass::Large64KB => Some(SizeClass::Huge128KB),
+            SizeClass::Huge128KB => Some(SizeClass::Huge256KB),
+            SizeClass::Huge256KB => Some(SizeClass::Huge512KB),
+            SizeClass::Huge512KB => Some(SizeClass::Huge1MBPlus),
+            SizeClass::Huge1MBPlus => None,
+        }
+    }
+
+    /// Get the previous smaller size class
+    pub fn next_smaller(&self) -> Option<SizeClass> {
+        match self {
+            SizeClass::Tiny64B => None,
+            SizeClass::Small256B => Some(SizeClass::Tiny64B),
+            SizeClass::Medium1KB => Some(SizeClass::Small256B),
+            SizeClass::Medium2KB => Some(SizeClass::Medium1KB),
+            SizeClass::Medium4KB => Some(SizeClass::Medium2KB),
+            SizeClass::Medium8KB => Some(SizeClass::Medium4KB),
+            SizeClass::Large16KB => Some(SizeClass::Medium8KB),
+            SizeClass::Large32KB => Some(SizeClass::Large16KB),
+            SizeClass::Large64KB => Some(SizeClass::Large32KB),
+            SizeClass::Huge128KB => Some(SizeClass::Large64KB),
+            SizeClass::Huge256KB => Some(SizeClass::Huge128KB),
+            SizeClass::Huge512KB => Some(SizeClass::Huge256KB),
+            SizeClass::Huge1MBPlus => Some(SizeClass::Huge512KB),
+        }
+    }
+}
+
+impl std::fmt::Display for SizeClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SizeClass::Tiny64B => write!(f, "Tiny64B"),
+            SizeClass::Small256B => write!(f, "Small256B"),
+            SizeClass::Medium1KB => write!(f, "Medium1KB"),
+            SizeClass::Medium2KB => write!(f, "Medium2KB"),
+            SizeClass::Medium4KB => write!(f, "Medium4KB"),
+            SizeClass::Medium8KB => write!(f, "Medium8KB"),
+            SizeClass::Large16KB => write!(f, "Large16KB"),
+            SizeClass::Large32KB => write!(f, "Large32KB"),
+            SizeClass::Large64KB => write!(f, "Large64KB"),
+            SizeClass::Huge128KB => write!(f, "Huge128KB"),
+            SizeClass::Huge256KB => write!(f, "Huge256KB"),
+            SizeClass::Huge512KB => write!(f, "Huge512KB"),
+            SizeClass::Huge1MBPlus => write!(f, "Huge1MBPlus"),
+        }
+    }
+}
+
+/// Hierarchical memory pool with size-based buckets and best-fit allocation
+#[derive(Debug)]
+pub struct HierarchicalMemoryPool {
+    pools: HashMap<SizeClass, ObjectPool<Vec<u8>>>,
+    logger: PerformanceLogger,
+    config: HierarchicalPoolConfig,
+    size_class_order: Vec<SizeClass>, // Ordered by size for efficient best-fit lookup
+}
+
+#[derive(Debug, Clone)]
+pub struct HierarchicalPoolConfig {
+    pub max_size_per_class: HashMap<SizeClass, usize>,
+    pub high_water_mark_ratio: f64,
+    pub cleanup_threshold: f64,
+}
+
+impl Default for HierarchicalPoolConfig {
+    fn default() -> Self {
+        let mut max_sizes = HashMap::new();
+        max_sizes.insert(SizeClass::Tiny64B, 10000);    // 10k tiny objects
+        max_sizes.insert(SizeClass::Small256B, 5000);   // 5k small objects
+        max_sizes.insert(SizeClass::Medium1KB, 2000);   // 2k medium objects
+        max_sizes.insert(SizeClass::Medium2KB, 1500);   // 1.5k medium objects
+        max_sizes.insert(SizeClass::Medium4KB, 1000);   // 1k medium objects
+        max_sizes.insert(SizeClass::Medium8KB, 750);    // 750 medium objects
+        max_sizes.insert(SizeClass::Large16KB, 500);    // 500 large objects
+        max_sizes.insert(SizeClass::Large32KB, 300);    // 300 large objects
+        max_sizes.insert(SizeClass::Large64KB, 200);    // 200 large objects
+        max_sizes.insert(SizeClass::Huge128KB, 100);    // 100 huge objects
+        max_sizes.insert(SizeClass::Huge256KB, 50);     // 50 huge objects
+        max_sizes.insert(SizeClass::Huge512KB, 25);     // 25 huge objects
+        max_sizes.insert(SizeClass::Huge1MBPlus, 10);    // 10 huge+ objects
+
+        Self {
+            max_size_per_class: max_sizes,
+            high_water_mark_ratio: 0.8,
+            cleanup_threshold: 0.9,
+        }
+    }
+}
+
+impl HierarchicalMemoryPool {
+    pub fn new(config: Option<HierarchicalPoolConfig>) -> Self {
+        let config = config.unwrap_or_default();
+        let mut pools = HashMap::new();
+
+        // Create ordered list of size classes by increasing size for efficient best-fit lookup
+        let mut size_class_order = Vec::new();
+        size_class_order.push(SizeClass::Tiny64B);
+        size_class_order.push(SizeClass::Small256B);
+        size_class_order.push(SizeClass::Medium1KB);
+        size_class_order.push(SizeClass::Medium2KB);
+        size_class_order.push(SizeClass::Medium4KB);
+        size_class_order.push(SizeClass::Medium8KB);
+        size_class_order.push(SizeClass::Large16KB);
+        size_class_order.push(SizeClass::Large32KB);
+        size_class_order.push(SizeClass::Large64KB);
+        size_class_order.push(SizeClass::Huge128KB);
+        size_class_order.push(SizeClass::Huge256KB);
+        size_class_order.push(SizeClass::Huge512KB);
+        size_class_order.push(SizeClass::Huge1MBPlus);
+
+        for size_class in &size_class_order {
+            let max_size = config.max_size_per_class.get(size_class)
+                .copied()
+                .unwrap_or(1000); // Default to 1000 if not specified
+
+            pools.insert(*size_class, ObjectPool::new(max_size));
+        }
+
+        Self {
+            pools,
+            logger: PerformanceLogger::new("hierarchical_memory_pool"),
+            config,
+            size_class_order,
+        }
+    }
+
+    /// Allocate memory with size-based bucket selection and best-fit strategy
+    pub fn allocate(&self, size: usize) -> PooledVec<u8> {
+        let trace_id = generate_trace_id();
+        
+        // Find the best-fit size class using our ordered list
+        let size_class = self.find_best_fit_size_class(size);
+        let pool = self.pools.get(&size_class)
+            .expect("Failed to find pool for size class");
+
+        self.logger.log_info("allocate", &trace_id, &format!("Allocating {} bytes from {} pool (best-fit)", size, size_class));
+
+        let mut pooled = pool.get();
+        let vec = pooled.as_mut();
+        vec.clear();
+        vec.resize(size, 0u8);
+
+        pooled
+    }
+
+    /// Find the best-fit size class for a given allocation size
+    fn find_best_fit_size_class(&self, size: usize) -> SizeClass {
+        // 1. First try exact size match (0% fragmentation)
+        if let Some(size_class) = SizeClass::from_exact_size(size) {
+            return size_class;
+        }
+
+        // 2. Fallback to smallest fit that can accommodate the allocation (minimal fragmentation)
+        for &size_class in &self.size_class_order {
+            if size <= size_class.max_size() {
+                return size_class;
+            }
+        }
+
+        // Should never reach here with valid size classes
+        SizeClass::Huge1MBPlus
+    }
+
+    /// Allocate memory with SIMD alignment requirements (for AVX-512 compatible buffers)
+    pub fn allocate_simd_aligned(&self, size: usize, alignment: usize) -> Result<PooledVec<u8>, String> {
+        let trace_id = generate_trace_id();
+        
+        // Ensure alignment is power of 2 (required for SIMD operations)
+        if alignment == 0 || (alignment & (alignment - 1)) != 0 {
+            return Err(format!("Invalid alignment: {} (must be power of 2)", alignment));
+        }
+
+        let size_class = self.find_best_fit_size_class(size);
+        let pool = self.pools.get(&size_class)
+            .ok_or_else(|| format!("Failed to find pool for size class: {:?}", size_class))?;
+
+        self.logger.log_info("allocate_simd_aligned", &trace_id, &format!("Allocating {} bytes (aligned to {}) from {} pool (best-fit)", size, alignment, size_class));
+
+        let mut pooled = pool.get();
+        let vec = pooled.as_mut();
+        
+        // Clear and resize vector
+        vec.clear();
+        vec.resize(size + alignment, 0u8); // Add extra space for alignment
+        
+        // Calculate aligned pointer
+        let raw_ptr = vec.as_mut_ptr() as usize;
+        let aligned_ptr = (raw_ptr + alignment - 1) & !(alignment - 1);
+        let offset = aligned_ptr - raw_ptr;
+        
+        // Ensure we have enough space for alignment
+        if offset + size > vec.capacity() {
+            return Err(format!("Not enough space for alignment: requested {}, available {}", offset + size, vec.capacity()));
+        }
+
+        // Create a new vector with aligned memory
+        let aligned_vec = unsafe { Vec::from_raw_parts(aligned_ptr as *mut u8, size, size + alignment - offset) };
+        *vec = aligned_vec;
+
+        Ok(pooled)
+    }
+
+
+    /// Get statistics for all size classes
+    pub fn get_size_class_stats(&self) -> HashMap<SizeClass, ObjectPoolMonitoringStats> {
+        let trace_id = generate_trace_id();
+        self.logger.log_operation("get_size_class_stats", &trace_id, || {
+            let mut stats = HashMap::new();
+            for (size_class, pool) in &self.pools {
+                stats.insert(*size_class, pool.get_monitoring_stats());
+            }
+            stats
+        })
+    }
+
+    /// Perform cleanup across all size classes
+    pub fn cleanup_all(&self) -> bool {
+        let trace_id = generate_trace_id();
+        let mut cleaned_up = false;
+
+        for (size_class, pool) in &self.pools {
+            if pool.lazy_cleanup(self.config.cleanup_threshold) {
+                cleaned_up = true;
+                self.logger.log_info("cleanup", &trace_id, &format!("Cleaned up {} pool", size_class));
+            }
+        }
+
+        cleaned_up
+    }
+}
+
+impl Clone for HierarchicalMemoryPool {
+    fn clone(&self) -> Self {
+        let mut pools = HashMap::new();
+        for (size_class, pool) in &self.pools {
+            pools.insert(*size_class, pool.clone_shallow());
+        }
+
+        Self {
+            pools,
+            logger: self.logger.clone(),
+            config: self.config.clone(),
+            size_class_order: self.size_class_order.clone(),
+        }
+    }
+}
+
 /// Global memory pool manager
 #[derive(Clone)]
 pub struct MemoryPoolManager {
@@ -455,6 +861,7 @@ pub struct MemoryPoolManager {
     vec_f32_pool: VecPool<f32>,
     string_pool: StringPool,
     logger: PerformanceLogger,
+    hierarchical_pool: HierarchicalMemoryPool, // Add hierarchical pool
 }
 
 impl MemoryPoolManager {
@@ -465,6 +872,7 @@ impl MemoryPoolManager {
             vec_f32_pool: VecPool::new(1000),
             string_pool: StringPool::new(500),
             logger: PerformanceLogger::new("memory_pool_manager"),
+            hierarchical_pool: HierarchicalMemoryPool::new(None),
         }
     }
 
@@ -701,7 +1109,7 @@ enum SwapIoTask {
 }
 
 /// Swap I/O configuration structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SwapIoConfig {
     pub async_prefetching: bool,
     pub compression_enabled: bool,

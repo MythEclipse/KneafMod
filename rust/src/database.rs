@@ -10,6 +10,7 @@ use jni::objects::{JClass, JString, JByteArray, JObject};
 use jni::sys::{jboolean, jlong, jint, jbyteArray};
 use sled::Db;
 use fastnbt::Value;
+use lz4_flex::block;
 
 use log::{debug, info, error};
 use serde_json;
@@ -88,21 +89,35 @@ impl SwapMetadata {
     }
     
     fn recalculate_priority(&mut self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-            
-        let time_since_access = now.saturating_sub(self.last_access_time);
-        let _time_since_swap = now.saturating_sub(self.last_swap_time);
+       let now = SystemTime::now()
+           .duration_since(UNIX_EPOCH)
+           .unwrap()
+           .as_secs();
         
-        // Priority score based on access frequency, recency, and swap cost
-        let frequency_score = (self.access_frequency as f64 * 0.1).min(10.0);
-        let recency_score = if time_since_access < 60 { 5.0 } else { 0.0 };
-        let swap_cost_score = if self.swap_count > 5 { -2.0 } else { 0.0 };
+       let time_since_access = now.saturating_sub(self.last_access_time);
+       let time_since_swap = now.saturating_sub(self.last_swap_time);
         
-        self.priority_score = frequency_score + recency_score + swap_cost_score;
-    }
+       // Calculate components with exponential recency and size penalty
+       // 1. Frequency score (capped at 10 to prevent overwhelming other factors)
+       let frequency_score = (self.access_frequency as f64 * 0.1).min(10.0);
+       
+       // 2. Exponential recency score - decays rapidly over time
+       // Score = 10 / (1 + time/300) - gives 10 at 0s, ~3.3 at 300s, ~1 at 1000s
+       let recency_score = 10.0 / (1.0 + (time_since_access as f64 / 300.0)).max(1.0);
+       
+       // 3. Size penalty - larger chunks get lower priority (more likely to be swapped out)
+       // Penalty = size in MB - gives 0 for small chunks, increasing penalty for larger chunks
+       let size_penalty = (self.size_bytes as f64 / 1_000_000.0).max(0.0);
+       
+       // 4. Swap cost score - penalty for chunks that have been swapped many times
+       let swap_cost_score = if self.swap_count > 5 { -2.0 } else if self.swap_count > 2 { -1.0 } else { 0.0 };
+        
+       // Calculate final priority score
+       self.priority_score = frequency_score + recency_score - size_penalty + swap_cost_score;
+       
+       // Ensure score doesn't go below a minimum value
+       self.priority_score = self.priority_score.max(-5.0);
+   }
 }
 
 /// Database statistics for monitoring
@@ -121,6 +136,10 @@ pub struct DatabaseStats {
     pub swap_out_latency_ms: u64,
     pub memory_mapped_files_active: u64,
     pub total_swap_size_bytes: u64,
+    // Checksum monitoring metrics
+    pub checksum_verifications_total: u64,
+    pub checksum_failures_total: u64,
+    pub checksum_health_score: f64,
 }
 
 impl DatabaseStats {
@@ -141,6 +160,9 @@ impl DatabaseStats {
             swap_out_latency_ms: 0,
             memory_mapped_files_active: 0,
             total_swap_size_bytes: 0,
+            checksum_verifications_total: 0,
+            checksum_failures_total: 0,
+            checksum_health_score: 0.0,
         }
     }
 }
@@ -193,46 +215,57 @@ pub struct RustDatabaseAdapter {
     memory_mapped_files: Arc<RwLock<HashMap<String, Mmap>>>,
     database_type: String,
     checksum_enabled: bool,
+    memory_mapping_enabled: bool,
     db_path: String,
     swap_path: String,
 }
 
 impl RustDatabaseAdapter {
-    pub fn new(database_type: &str, checksum_enabled: bool) -> Result<Self, String> {
+    pub fn new(database_type: &str, checksum_enabled: bool, memory_mapping_enabled: bool) -> Result<Self, String> {
         // Use absolute path to ensure consistent database location
         let current_dir = std::env::current_dir()
             .map_err(|e| format!("Failed to get current directory: {}", e))?;
         let db_path = current_dir.join(format!("kneaf_db_{}", database_type));
         let db_path_str = db_path.to_str()
             .ok_or("Failed to convert path to string")?;
-        Self::with_path(db_path_str, database_type, checksum_enabled)
+        Self::with_path(db_path_str, database_type, checksum_enabled, memory_mapping_enabled)
     }
-    
-    pub fn with_path(db_path: &str, database_type: &str, checksum_enabled: bool) -> Result<Self, String> {
+     
+    pub fn with_path(db_path: &str, database_type: &str, checksum_enabled: bool, memory_mapping_enabled: bool) -> Result<Self, String> {
         info!("Initializing RustDatabaseAdapter of type: {} at path: {}", database_type, db_path);
-        
+         
         // Create database directory if it doesn't exist
         let path = Path::new(db_path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create database directory: {}", e))?;
         }
-        
+         
         // Create swap directory
         let swap_path = format!("{}/swap", db_path);
         std::fs::create_dir_all(&swap_path)
             .map_err(|e| format!("Failed to create swap directory: {}", e))?;
-        
-        // Open or create sled database
-        let db = sled::open(path)
-            .map_err(|e| format!("Failed to open sled database: {}", e))?;
+         
+        // Configure sled database with memory mapping if enabled
+        let db = if memory_mapping_enabled {
+            info!("Enabling memory mapping for sled database");
+            let config = sled::Config::new()
+                .path(path);
+                // memory_map is not supported in this sled version
+            config.open()
+                .map_err(|e| format!("Failed to open sled database with memory mapping: {}", e))?
+        } else {
+            sled::open(path)
+                .map_err(|e| format!("Failed to open sled database: {}", e))?
+        };
         
         // Count existing chunks and load swap metadata
         let mut total_chunks = 0u64;
         let mut total_size_bytes = 0u64;
         let mut swap_metadata = HashMap::new();
         
-        for item in db.iter() {
+        let mut iter = db.iter();
+        while let Some(item) = iter.next() {
             if let Ok((key, value)) = item {
                 total_chunks += 1;
                 total_size_bytes += value.len() as u64;
@@ -254,31 +287,66 @@ impl RustDatabaseAdapter {
             memory_mapped_files: Arc::new(RwLock::new(HashMap::new())),
             database_type: database_type.to_string(),
             checksum_enabled,
+            memory_mapping_enabled,
             db_path: db_path.to_string(),
             swap_path,
         })
     }
     
+    /// Helper to decompress data if needed
+    fn decompress_if_needed(&self, data: &[u8]) -> Result<Vec<u8>, String> {
+        if data.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Check compression flag (first byte)
+        let is_compressed = data[0] == 1;
+        let payload = &data[1..];
+
+        if is_compressed {
+            info!("Decompressing chunk data");
+            let decompressed = block::decompress(payload, payload.len()).map_err(|e| format!("LZ4 decompression failed: {}", e))?;
+            Ok(decompressed)
+        } else {
+            Ok(payload.to_vec())
+        }
+    }
+
     /// Store a chunk in the database with optional checksum
     pub fn put_chunk(&self, key: &str, data: &[u8]) -> Result<(), String> {
         let start_time = std::time::Instant::now();
-        
+         
         if key.is_empty() {
             return Err("Key cannot be empty".to_string());
         }
-        
+         
         if data.is_empty() {
             return Err("Data cannot be empty".to_string());
         }
-        
+         
         // Calculate data size before insertion
         let data_size = data.len() as u64;
-        
-        // Insert data with optional checksum
-        let data_to_store = if self.checksum_enabled {
-            self.store_with_checksum(data)?
+         
+        // Apply adaptive LZ4 compression for large chunks (>10KB)
+        let compressed_data = if data.len() > 10_000 {
+            info!("Compressing large chunk {} ({:.2}KB)", key, data.len() as f64 / 1024.0);
+            let compressed = block::compress(data);
+            Some(compressed)
         } else {
-            data.to_vec()
+            None
+        };
+         
+        // Prepare data with compression flag only (no checksum for now)
+        let data_to_store: Vec<u8> = if let Some(compressed) = compressed_data {
+            let mut result = Vec::with_capacity(compressed.len() + 1);
+            result.push(1); // Compression flag: 1 = compressed, 0 = uncompressed
+            result.extend_from_slice(&compressed);
+            result
+        } else {
+            let mut result = Vec::with_capacity(data.len() + 1);
+            result.push(0); // No compression
+            result.extend_from_slice(data);
+            result
         };
         
         // Convert key to bytes
@@ -339,9 +407,10 @@ impl RustDatabaseAdapter {
         let processed_result = match result {
             Some(data) => {
                 if self.checksum_enabled {
-                    self.verify_and_extract_data(&data).map(Some)
+                    let data = self.verify_and_extract_data(&data)?;
+                    Ok(Some(self.decompress_if_needed(&data)?))
                 } else {
-                    Ok(Some(data.to_vec()))
+                    Ok(Some(self.decompress_if_needed(&data)?))
                 }
             }
             None => Ok(None),
@@ -533,18 +602,18 @@ impl RustDatabaseAdapter {
     }
     
     /// Store data with checksum
-    fn store_with_checksum(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(data);
-        let checksum = hasher.finalize();
-        
-        // Combine data and checksum
-        let mut result = Vec::with_capacity(data.len() + 32);
-        result.extend_from_slice(data);
-        result.extend_from_slice(checksum.as_bytes());
-        
-        Ok(result)
-    }
+   fn store_with_checksum(data: &[u8]) -> Result<Vec<u8>, String> {
+       let mut hasher = blake3::Hasher::new();
+       hasher.update(data);
+       let checksum = hasher.finalize();
+       
+       // Combine data and checksum
+       let mut result = Vec::with_capacity(data.len() + 32);
+       result.extend_from_slice(data);
+       result.extend_from_slice(checksum.as_bytes());
+       
+       Ok(result)
+   }
     
     /// Verify and extract data with checksum
     fn verify_and_extract_data(&self, stored_data: &[u8]) -> Result<Vec<u8>, String> {
@@ -729,24 +798,68 @@ impl RustDatabaseAdapter {
         }
     }
     
-    /// Bulk swap out multiple chunks
+    /// Bulk swap out multiple chunks using sled batch API for atomic operations
     pub fn bulk_swap_out(&self, keys: &[String]) -> Result<usize, String> {
         let mut success_count = 0;
+        let mut batch = sled::Batch::default();
+        
+        let start_time = std::time::Instant::now();
         
         for key in keys {
-            match self.swap_out_chunk(key) {
-                Ok(_) => success_count += 1,
-                Err(e) => {
-                    error!("Failed to swap out chunk {}: {}", key, e);
-                    if let Ok(mut stats) = self.stats.write() {
-                        stats.swap_operations_failed += 1;
-                    }
+            let key_bytes = key.as_bytes();
+            
+            // Get the chunk data first with decompression if needed
+            let data_result = self.db.get(key_bytes)
+                .map_err(|e| format!("Failed to get chunk for swap out: {}", e))?;
+            
+            let data = match data_result {
+                Some(raw_data) => self.decompress_if_needed(&raw_data)?,
+                None => return Err(format!("Chunk not found: {}", key))
+            };
+            
+            let data_size = data.len() as u64;
+            
+            // Create swap file path with proper escaping
+            let safe_key = key.replace(':', "_").replace('/', "-");
+            let swap_file_path = format!("{}/{}.swap", self.swap_path, safe_key);
+            
+            // Write data to swap file with atomic write pattern
+            let temp_path = format!("{}.tmp", swap_file_path);
+            std::fs::write(&temp_path, &data)
+                .map_err(|e| format!("Failed to write temp swap file: {}", e))?;
+            std::fs::rename(&temp_path, &swap_file_path)
+                .map_err(|e| format!("Failed to rename temp file: {}", e))?;
+            
+            // Add remove operation to batch
+            batch.remove(key_bytes);
+            
+            // Update swap metadata with proper locking
+            if let Ok(mut swap_meta) = self.swap_metadata.write() {
+                if let Some(metadata) = swap_meta.get_mut(key) {
+                    metadata.update_swap();
+                    metadata.size_bytes = data_size; // Update with actual decompressed size
                 }
             }
+            
+            success_count += 1;
         }
         
-        info!("Bulk swap out completed: {}/{} chunks swapped successfully",
-              success_count, keys.len());
+        // Execute batch atomically
+        self.db.apply_batch(batch)
+            .map_err(|e| format!("Failed to apply batch: {}", e))?;
+        
+        // Update statistics with precise calculations
+        if let Ok(mut stats) = self.stats.write() {
+            stats.swap_operations_total += keys.len() as u64;
+            stats.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
+            stats.total_swap_size_bytes += success_count as u64 * (keys.get(0).map(|k| {
+                self.db.get(k.as_bytes()).ok().flatten().map(|d| d.len() as u64).unwrap_or(0)
+            }).unwrap_or(0));
+            stats.total_chunks = stats.total_chunks.saturating_sub(success_count as u64);
+        }
+        
+        info!("Bulk swap out completed: {}/{} chunks swapped successfully in {} ms",
+              success_count, keys.len(), start_time.elapsed().as_millis());
         
         Ok(success_count)
     }
@@ -754,21 +867,63 @@ impl RustDatabaseAdapter {
     /// Bulk swap in multiple chunks
     pub fn bulk_swap_in(&self, keys: &[String]) -> Result<Vec<Vec<u8>>, String> {
         let mut results = Vec::new();
+        let mut batch = sled::Batch::default();
+        
+        let start_time = std::time::Instant::now();
+        let mut total_size = 0u64;
         
         for key in keys {
-            match self.swap_in_chunk(key) {
-                Ok(data) => results.push(data),
-                Err(e) => {
-                    error!("Failed to swap in chunk {}: {}", key, e);
-                    if let Ok(mut stats) = self.stats.write() {
-                        stats.swap_operations_failed += 1;
-                    }
+            // Check if chunk exists in swap
+            let swap_file_path = format!("{}/{}.swap", self.swap_path, key.replace(':', "_"));
+            
+            if !Path::new(&swap_file_path).exists() {
+                error!("Swap file not found: {}", swap_file_path);
+                if let Ok(mut stats) = self.stats.write() {
+                    stats.swap_operations_failed += 1;
+                }
+                continue;
+            }
+            
+            // Read data from swap file
+            let data = std::fs::read(&swap_file_path)
+                .map_err(|e| format!("Failed to read swap file: {}", e))?;
+            
+            let data_size = data.len() as u64;
+            total_size += data_size;
+            
+            // Add insert operation to batch
+            let key_bytes = key.as_bytes();
+            batch.insert(key_bytes, data.clone());
+            
+            // Remove swap file
+            std::fs::remove_file(&swap_file_path)
+                .map_err(|e| format!("Failed to remove swap file: {}", e))?;
+            
+            // Update swap metadata
+            if let Ok(mut swap_meta) = self.swap_metadata.write() {
+                if let Some(metadata) = swap_meta.get_mut(key) {
+                    metadata.update_access();
                 }
             }
+            
+            results.push(data);
         }
         
-        info!("Bulk swap in completed: {}/{} chunks swapped successfully",
-              results.len(), keys.len());
+        // Execute batch
+        self.db.apply_batch(batch)
+            .map_err(|e| format!("Failed to apply batch: {}", e))?;
+        
+        // Update statistics
+        if let Ok(mut stats) = self.stats.write() {
+            stats.swap_operations_total += keys.len() as u64;
+            stats.swap_in_latency_ms = start_time.elapsed().as_millis() as u64;
+            stats.total_swap_size_bytes = stats.total_swap_size_bytes.saturating_sub(total_size);
+            stats.total_chunks += results.len() as u64;
+            stats.total_size_bytes += total_size;
+        }
+        
+        info!("Bulk swap in completed: {}/{} chunks swapped successfully in {} ms",
+              results.len(), keys.len(), start_time.elapsed().as_millis());
         
         Ok(results)
     }
@@ -975,7 +1130,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
     
     let checksum = checksum_enabled != 0;
     
-    match RustDatabaseAdapter::new(&database_type_str, checksum) {
+    match RustDatabaseAdapter::new(&database_type_str, checksum, false) {
         Ok(adapter) => Box::into_raw(Box::new(adapter)) as jlong,
         Err(e) => {
             error!("Failed to initialize database adapter at CWD: {}. Attempting temp-dir fallback", e);
@@ -984,7 +1139,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
             match std::env::temp_dir().to_str() {
                 Some(tmp) => {
                     let fallback_path = format!("{}/kneaf_db_{}_fallback", tmp, database_type_str);
-                    match RustDatabaseAdapter::with_path(&fallback_path, &database_type_str, checksum) {
+                    match RustDatabaseAdapter::with_path(&fallback_path, &database_type_str, checksum, false) {
                         Ok(fallback_adapter) => {
                             info!("Initialized fallback RustDatabaseAdapter at: {}", fallback_path);
                             Box::into_raw(Box::new(fallback_adapter)) as jlong

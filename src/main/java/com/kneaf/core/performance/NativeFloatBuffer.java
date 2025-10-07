@@ -36,14 +36,27 @@ public final class NativeFloatBuffer implements AutoCloseable {
     }
   }
 
-  // Optimized buffer pooling configuration
-  private static final int BUCKET_SIZE_POWER = 12; // 4096 byte buckets
+  // Optimized buffer pooling configuration with enhanced size granularity
+  private static final int[] BUCKET_SIZES = {
+      4096,    // 4KB - Tiny
+      8192,    // 8KB - Small
+      16384,   // 16KB - Medium
+      32768,   // 32KB - Large
+      65536,   // 64KB - XLarge
+      131072,  // 128KB - Huge
+      262144,  // 256KB - Giant
+      524288,  // 512KB - Massive
+      1048576  // 1MB+ - Oversized
+  };
+  private static final int NUM_BUCKETS = BUCKET_SIZES.length;
 
-  // Pool management
+  // Pool management with enhanced size-based bucketing
   private static final ConcurrentHashMap<Integer, ConcurrentLinkedQueue<PooledBuffer>>
       BUFFER_POOLS = new ConcurrentHashMap<>();
   private static final ConcurrentHashMap<Integer, AtomicInteger> POOL_SIZES =
       new ConcurrentHashMap<>();
+  private static final ConcurrentHashMap<Integer, Long> BUCKET_USAGE = new ConcurrentHashMap<>();
+  private static final AtomicLong TOTAL_FRAGMENTATION = new AtomicLong(0);
   private static final AtomicLong LAST_CLEANUP_TIME = new AtomicLong(System.currentTimeMillis());
   private static final AtomicLong TOTAL_ALLOCATIONS = new AtomicLong(0);
   private static final AtomicLong TOTAL_REUSES = new AtomicLong(0);
@@ -192,70 +205,163 @@ public final class NativeFloatBuffer implements AutoCloseable {
     this(buf, rows, cols, isPooled, bucketIndex, -1); // -1 indicates non-zero-copy
   }
 
-  /** Calculate bucket index for given byte capacity */
+  /** Calculate bucket index for given byte capacity (backward compatibility) */
   private static int getBucketIndex(int byteCapacity) {
-    int bucket = 0;
-    int size = 1 << BUCKET_SIZE_POWER; // Start with minimum bucket size (4096)
+    return getOptimalBucketIndex(byteCapacity);
+  }
 
-    // Get TPS value, fallback to 20.0 (optimal performance) if not available (e.g., in tests)
+  /** Calculate optimal bucket index for given byte capacity with best-fit selection */
+  private static int getOptimalBucketIndex(int requiredBytes) {
+    // Get TPS value, fallback to 20.0 (optimal TPS) if not available (e.g., in tests)
     double tps = getSafeTPS();
 
-    int maxBucket =
-        com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(tps);
-    while (size < byteCapacity && bucket < maxBucket) {
-      size <<= 1;
-      bucket++;
+    int maxBucket = Math.min(
+        com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(tps),
+        NUM_BUCKETS - 1
+    );
+
+    // First try exact match for perfect fit (minimizes fragmentation)
+    for (int i = 0; i <= maxBucket; i++) {
+      if (BUCKET_SIZES[i] == requiredBytes) {
+        return i;
+      }
     }
-    return bucket;
+
+    // If no exact match, find smallest bucket that can accommodate the request
+    for (int i = 0; i <= maxBucket; i++) {
+      if (BUCKET_SIZES[i] >= requiredBytes) {
+        return i;
+      }
+    }
+
+    // If no suitable bucket found, use largest available
+    return Math.min(maxBucket, NUM_BUCKETS - 1);
   }
 
-  /** Get buffer from pool or return null if not available */
-  private static PooledBuffer getFromPool(int byteCapacity) {
-    int bucketIndex = getBucketIndex(byteCapacity);
+  /** Calculate bucket index with size-based fragmentation optimization */
+  private static int getSizeBasedBucketIndex(int requiredBytes) {
+    // Get TPS value, fallback to 20.0 (optimal TPS) if not available (e.g., in tests)
+    double tps = getSafeTPS();
 
-    // Try to get from the exact bucket first
-    ConcurrentLinkedQueue<PooledBuffer> pool = BUFFER_POOLS.get(bucketIndex);
-    if (pool != null) {
-      PooledBuffer pooled = pool.poll();
-      while (pooled != null) {
-        // Ensure the pooled buffer is large enough for the requested capacity
-        if (pooled.buffer != null && pooled.buffer.capacity() >= byteCapacity) {
-          POOL_SIZES.get(bucketIndex).decrementAndGet();
-          TOTAL_REUSES.incrementAndGet();
-          return pooled;
-        }
-        // Discard buffers that are too small and try next
-        pooled = pool.poll();
-        if (pooled != null) {
-          POOL_SIZES.get(bucketIndex).decrementAndGet();
+    int maxBucket = Math.min(
+        com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(tps),
+        NUM_BUCKETS - 1
+    );
+
+    // Priority 1: Exact size match (perfect fit, 0% fragmentation)
+    for (int i = 0; i <= maxBucket; i++) {
+      if (BUCKET_SIZES[i] == requiredBytes) {
+        return i;
+      }
+    }
+
+    // Priority 2: Smallest bucket that can accommodate the request (minimizes internal fragmentation)
+    int bestFitIndex = -1;
+    int minFragmentation = Integer.MAX_VALUE;
+
+    for (int i = 0; i <= maxBucket; i++) {
+      if (BUCKET_SIZES[i] >= requiredBytes) {
+        int fragmentation = BUCKET_SIZES[i] - requiredBytes;
+        if (fragmentation < minFragmentation) {
+          minFragmentation = fragmentation;
+          bestFitIndex = i;
         }
       }
     }
 
-    // Try larger buckets if exact match not available
-    int maxBucket =
-        com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(getSafeTPS());
-    for (int i = bucketIndex + 1; i <= maxBucket; i++) {
-      pool = BUFFER_POOLS.get(i);
-      if (pool != null) {
-        PooledBuffer pooled = pool.poll();
-        while (pooled != null) {
-          if (pooled.buffer != null && pooled.buffer.capacity() >= byteCapacity) {
-            POOL_SIZES.get(i).decrementAndGet();
-            TOTAL_REUSES.incrementAndGet();
-            return pooled;
-          }
-          // discard too-small buffer
-          pooled = pool.poll();
-          if (pooled != null) {
-            POOL_SIZES.get(i).decrementAndGet();
-          }
-        }
-      }
-    }
-
-    return null;
+    // If no suitable bucket found, use largest available
+    return bestFitIndex != -1 ? bestFitIndex : Math.min(maxBucket, NUM_BUCKETS - 1);
   }
+
+  /** Get buffer from pool with best-fit selection to minimize fragmentation */
+ private static PooledBuffer getFromPool(int requiredBytes) {
+   // Get TPS value, fallback to 20.0 (optimal TPS) if not available (e.g., in tests)
+   double tps = getSafeTPS();
+
+   int maxBucket = Math.min(
+       com.kneaf.core.performance.core.PerformanceConstants.getAdaptiveMaxBucketSize(tps),
+       NUM_BUCKETS - 1
+   );
+
+   // First try exact size match
+   int targetBucket = getOptimalBucketIndex(requiredBytes);
+   
+   // Check target bucket first
+   ConcurrentLinkedQueue<PooledBuffer> pool = BUFFER_POOLS.get(targetBucket);
+   if (pool != null) {
+     PooledBuffer pooled = pool.poll();
+     while (pooled != null) {
+       if (pooled.buffer != null && pooled.buffer.capacity() == BUCKET_SIZES[targetBucket]) {
+         // Exact match - perfect for minimizing fragmentation
+         POOL_SIZES.get(targetBucket).decrementAndGet();
+         updateFragmentationStats(requiredBytes, BUCKET_SIZES[targetBucket]);
+         TOTAL_REUSES.incrementAndGet();
+         return pooled;
+       }
+       // Discard mismatched buffers
+       pooled = pool.poll();
+       if (pooled != null) {
+         POOL_SIZES.get(targetBucket).decrementAndGet();
+       }
+     }
+   }
+
+   // Try next larger buckets if exact match not available
+   for (int i = targetBucket + 1; i <= maxBucket; i++) {
+     pool = BUFFER_POOLS.get(i);
+     if (pool != null) {
+       PooledBuffer pooled = pool.poll();
+       while (pooled != null) {
+         if (pooled.buffer != null && pooled.buffer.capacity() >= requiredBytes) {
+           POOL_SIZES.get(i).decrementAndGet();
+           updateFragmentationStats(requiredBytes, BUCKET_SIZES[i]);
+           TOTAL_REUSES.incrementAndGet();
+           return pooled;
+         }
+         // Discard too-small buffers
+         pooled = pool.poll();
+         if (pooled != null) {
+           POOL_SIZES.get(i).decrementAndGet();
+         }
+       }
+     }
+   }
+
+   // Try smaller buckets as last resort (with warning)
+   for (int i = targetBucket - 1; i >= 0; i--) {
+     pool = BUFFER_POOLS.get(i);
+     if (pool != null) {
+       PooledBuffer pooled = pool.poll();
+       while (pooled != null) {
+         if (pooled.buffer != null && pooled.buffer.capacity() >= requiredBytes) {
+           POOL_SIZES.get(i).decrementAndGet();
+           updateFragmentationStats(requiredBytes, BUCKET_SIZES[i]);
+           TOTAL_REUSES.incrementAndGet();
+           return pooled;
+         }
+         // Discard too-small buffers
+         pooled = pool.poll();
+         if (pooled != null) {
+           POOL_SIZES.get(i).decrementAndGet();
+         }
+       }
+     }
+   }
+
+   return null;
+ }
+
+ /** Update fragmentation statistics */
+ private static void updateFragmentationStats(int requestedSize, int allocatedSize) {
+   if (allocatedSize > requestedSize) {
+     long fragmentation = allocatedSize - requestedSize;
+     TOTAL_FRAGMENTATION.addAndGet(fragmentation);
+     
+     // Update bucket usage statistics
+     int bucketIndex = getOptimalBucketIndex(allocatedSize);
+     BUCKET_USAGE.compute(bucketIndex, (k, v) -> v == null ? fragmentation : v + fragmentation);
+   }
+ }
 
   /** Clean up excess buffers from pools */
   private static void performCleanup() {
@@ -666,7 +772,7 @@ public final class NativeFloatBuffer implements AutoCloseable {
     for (Integer bucketIndex : BUFFER_POOLS.keySet()) {
       AtomicInteger size = POOL_SIZES.get(bucketIndex);
       int bucketSize = size != null ? size.get() : 0;
-      int bucketByteSize = (1 << (BUCKET_SIZE_POWER + bucketIndex));
+      int bucketByteSize = BUCKET_SIZES[bucketIndex];
       Stats.append("  Bucket ")
           .append(bucketIndex)
           .append(" (")

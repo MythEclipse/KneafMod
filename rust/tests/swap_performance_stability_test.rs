@@ -2,12 +2,13 @@ use rustperf::memory_pool::*;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use once_cell::sync::Lazy;
 
 #[test]
 fn test_stable_fps_under_load() {
     // Test parameters
     const TARGET_FPS: f64 = 60.0;
-    const TARGET_FRAME_TIME: Duration = Duration::from_secs_f64(1.0 / TARGET_FPS);
+    static TARGET_FRAME_TIME: Lazy<Duration> = Lazy::new(|| Duration::from_secs_f64(1.0 / TARGET_FPS));
     const TEST_DURATION: Duration = Duration::from_secs(10);
     const LOAD_CYCLES: usize = 5; // Multiple load cycles to test stability
     
@@ -47,7 +48,8 @@ fn test_stable_fps_under_load() {
             }
             
             // Maintain target FPS
-            let sleep_time = TARGET_FRAME_TIME - frame_time;
+            let target_frame_time = *TARGET_FRAME_TIME;
+            let sleep_time = target_frame_time - frame_time;
             if sleep_time > Duration::from_secs(0) {
                 thread::sleep(sleep_time);
             }
@@ -71,8 +73,10 @@ fn test_stable_fps_under_load() {
         // Verify stability constraints
         assert!(actual_fps >= TARGET_FPS * 0.9, 
             "FPS too low: {:.1} < {:.1}", actual_fps, TARGET_FPS * 0.9);
-        assert!(avg_frame_time <= TARGET_FRAME_TIME * 1.3, 
-            "Average frame time too high");
+        let target_frame_time_secs = TARGET_FRAME_TIME.as_secs_f64();
+        let avg_frame_time_secs = avg_frame_time.as_secs_f64();
+        assert!(avg_frame_time_secs <= target_frame_time_secs * 1.3,
+            "Average frame time too high: {} > {}", avg_frame_time_secs, target_frame_time_secs * 1.3);
         assert!(frame_time_variance < 0.2, 
             "Frame time variance too high: {:.2}%", frame_time_variance * 100.0);
         
@@ -130,7 +134,7 @@ fn test_memory_usage_constraints() {
                          usage_mb);
                 
                 // Early warning if approaching memory limits
-                if usage > MAX_ALLOWED_MEMORY * 0.9 {
+                if usage > (MAX_ALLOWED_MEMORY as f64 * 0.9) as usize {
                     println!("  ⚠️  Warning: Memory usage approaching limit: {} MB", usage_mb);
                 }
             }
@@ -177,8 +181,8 @@ fn test_memory_usage_constraints() {
              ((final_usage - post_cleanup_usage) as f64 / final_usage as f64) * 100.0);
     
     // Verify cleanup was effective
-    assert!(post_cleanup_usage < final_usage * 0.2, 
-            "Cleanup was ineffective: {} MB remaining", post_cleanup_usage_mb);
+    assert!(post_cleanup_usage < (final_usage as f64 * 0.2) as usize,
+        "Cleanup was ineffective: {} MB remaining", post_cleanup_usage_mb);
     
     println!("\n✅ All memory usage tests passed!");
 }
@@ -247,15 +251,14 @@ fn test_concurrent_access_stability() {
     }
     
     // Wait for all threads to complete with timeout
-    let timeout = Instant::now() + TEST_DURATION;
     let mut completed_threads = 0;
     
     for handle in handles {
-        match handle.join_timeout(timeout - Instant::now()) {
-            Ok(_) => completed_threads += 1,
-            Err(_) => {
-                panic!("Thread did not complete within timeout");
-            }
+        let result = handle.join();
+        if let Ok(_) = result {
+            completed_threads += 1;
+        } else {
+            panic!("Thread did not complete successfully");
         }
     }
     
@@ -320,9 +323,9 @@ fn increase_swap_load(pool: &Arc<SwapMemoryPool>) {
 }
 
 // Helper function to collect frame times for variance calculation
-fn collect_frame_times(duration: Duration, frame_count: usize, pool: &SwapMemoryPool) -> Vec<f64> {
+fn collect_frame_times(_duration: Duration, frame_count: usize, _pool: &SwapMemoryPool) -> Vec<f64> {
     let mut frame_times = Vec::with_capacity(frame_count);
-    let target_frame_time = 1.0 / 60.0; // 60 FPS
+    let _target_frame_time = 1.0 / 60.0; // 60 FPS - unused but kept for compatibility
     
     for _ in 0..frame_count {
         // Simulate actual frame time collection

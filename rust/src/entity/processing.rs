@@ -2,14 +2,120 @@ use super::types::*;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use serde_json;
-use crate::memory_pool::get_thread_local_pool;
+use crate::memory_pool::{get_thread_local_pool, MemoryPoolManager};
 use crate::parallelism::WorkStealingScheduler;
 use std::time::Instant;
 use crate::{log_error, logging::{PerformanceLogger, generate_trace_id}};
 use crate::arena::{get_global_arena_pool, ScopedArena, ArenaVec};
 use once_cell::sync::Lazy;
+use std::arch::x86_64::*;
+use glam::Vec3;
 
 static ENTITY_PROCESSOR_LOGGER: Lazy<PerformanceLogger> = Lazy::new(|| PerformanceLogger::new("entity_processor"));
+
+/// AVX-512 accelerated entity distance calculation
+#[cfg(target_feature = "avx512f")]
+pub fn calculate_entity_distances_avx512(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+    use std::arch::x86_64::*;
+    
+    let cx = _mm512_set1_ps(center.0);
+    let cy = _mm512_set1_ps(center.1);
+    let cz = _mm512_set1_ps(center.2);
+
+    positions.par_chunks(16).flat_map(|chunk| {
+        let mut distances = [0.0f32; 16];
+        
+        // Load position data in chunks of 16
+        let px = _mm512_loadu_ps(chunk.iter().map(|p| p.0).collect::<Vec<_>>().as_ptr());
+        let py = _mm512_loadu_ps(chunk.iter().map(|p| p.1).collect::<Vec<_>>().as_ptr());
+        let pz = _mm512_loadu_ps(chunk.iter().map(|p| p.2).collect::<Vec<_>>().as_ptr());
+
+        // Calculate differences from center
+        let dx = _mm512_sub_ps(px, cx);
+        let dy = _mm512_sub_ps(py, cy);
+        let dz = _mm512_sub_ps(pz, cz);
+
+        // Calculate squared distances
+        let dx2 = _mm512_mul_ps(dx, dx);
+        let dy2 = _mm512_mul_ps(dy, dy);
+        let dz2 = _mm512_mul_ps(dz, dz);
+
+        // Sum components and take square root
+        let sum = _mm512_add_ps(_mm512_add_ps(dx2, dy2), dz2);
+        let dist = _mm512_sqrt_ps(sum);
+
+        _mm512_storeu_ps(distances.as_mut_ptr(), dist);
+        
+        // Return only the distances for the actual chunk size
+        distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+    }).collect()
+}
+
+/// AVX-512 accelerated entity filtering by distance
+#[cfg(target_feature = "avx512f")]
+pub fn filter_entities_by_distance_avx512<T: Clone + Send + Sync>(
+    entities: &[(T, [f64; 3])],
+    center: [f64; 3],
+    max_distance: f64,
+) -> Vec<(T, [f64; 3])> {
+    use std::arch::x8264::*;
+    
+    let max_dist_sq = max_distance * max_distance;
+    let cx = center[0] as f32;
+    let cy = center[1] as f32;
+    let cz = center[2] as f32;
+
+    entities.par_chunks(16).flat_map(|chunk| {
+        let mut results = Vec::with_capacity(chunk.len());
+        
+        for (i, &(ref entity, pos)) in chunk.iter().enumerate() {
+            let dx = (pos[0] - center[0]) as f32;
+            let dy = (pos[1] - center[1]) as f32;
+            let dz = (pos[2] - center[2]) as f32;
+            
+            let dist_sq = dx * dx + dy * dy + dz * dz;
+            if dist_sq <= max_dist_sq as f32 {
+                results.push((entity.clone(), pos));
+            }
+        }
+        
+        results
+    }).collect()
+}
+
+/// AVX-512 accelerated chunk distance calculation
+#[cfg(target_feature = "avx512f")]
+pub fn calculate_chunk_distances_avx512(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
+    use std::arch::x86_64::*;
+    
+    let cx = _mm512_set1_epi32(center_chunk.0);
+    let cz = _mm512_set1_epi32(center_chunk.1);
+
+    chunk_coords.par_chunks(16).flat_map(|chunk| {
+        let mut distances = [0.0f32; 16];
+        
+        let x_coords = _mm512_loadu_epi32(chunk.iter().map(|p| p.0).collect::<Vec<_>>().as_ptr());
+        let z_coords = _mm512_loadu_epi32(chunk.iter().map(|p| p.1).collect::<Vec<_>>().as_ptr());
+
+        // Calculate differences
+        let dx = _mm512_sub_epi32(x_coords, cx);
+        let dz = _mm512_sub_epi32(z_coords, cz);
+
+        // Convert to float and calculate squared distance
+        let dx_f32 = _mm512_cvtepi32_ps(dx);
+        let dz_f32 = _mm512_cvtepi32_ps(dz);
+        
+        let dx2 = _mm512_mul_ps(dx_f32, dx_f32);
+        let dz2 = _mm512_mul_ps(dz_f32, dz_f32);
+        
+        let dist_sq = _mm512_add_ps(dx2, dz2);
+        let dist = _mm512_sqrt_ps(dist_sq);
+
+        _mm512_storeu_ps(distances.as_mut_ptr(), dist);
+        
+        distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+    }).collect()
+}
 
 pub fn process_entities(input: Input) -> ProcessResult {
     let trace_id = generate_trace_id();

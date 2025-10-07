@@ -10,6 +10,7 @@ use crate::arena::{get_global_arena_pool, ScopedArena, ArenaVec};
 use dashmap::DashMap;
 use crossbeam_epoch::Guard;
 use crossbeam_utils::CachePadded;
+use std::arch::x86_64::*;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -82,7 +83,76 @@ impl Aabb {
     }
 
     /// SIMD-accelerated AABB intersection test for multiple AABBs
-    pub fn intersects_simd_batch(&self, others: &[Aabb]) -> Vec<bool> {
+        pub fn intersects_simd_batch(&self, others: &[Aabb]) -> Vec<bool> {
+            #[cfg(target_feature = "avx512f")]
+            {
+                use std::arch::x86_64::*;
+    
+                let self_min = _mm512_set1_ps(self.min_x as f32);
+                let self_max = _mm512_set1_ps(self.max_x as f32);
+                let self_min_y = _mm512_set1_ps(self.min_y as f32);
+                let self_max_y = _mm512_set1_ps(self.max_y as f32);
+                let self_min_z = _mm512_set1_ps(self.min_z as f32);
+                let self_max_z = _mm512_set1_ps(self.max_z as f32);
+    
+                // Use fold to avoid intermediate allocations from collect()
+                others.par_chunks(16).fold(Vec::new, |mut acc, chunk| {
+                    let mut results = vec![false; chunk.len()];
+                    
+                    // Prepare arrays for SIMD operations
+                    let mut other_min_x = [0.0f32; 16];
+                    let mut other_max_x = [0.0f32; 16];
+                    let mut other_min_y = [0.0f32; 16];
+                    let mut other_max_y = [0.0f32; 16];
+                    let mut other_min_z = [0.0f32; 16];
+                    let mut other_max_z = [0.0f32; 16];
+                    
+                    // Load all AABB data into arrays first for better cache performance
+                    for (i, aabb) in chunk.iter().enumerate() {
+                        other_min_x[i] = aabb.min_x as f32;
+                        other_max_x[i] = aabb.max_x as f32;
+                        other_min_y[i] = aabb.min_y as f32;
+                        other_max_y[i] = aabb.max_y as f32;
+                        other_min_z[i] = aabb.min_z as f32;
+                        other_max_z[i] = aabb.max_z as f32;
+                    }
+                    
+                    // Load all data at once for better SIMD utilization
+                    let o_min_x = _mm512_loadu_ps(other_min_x.as_ptr());
+                    let o_max_x = _mm512_loadu_ps(other_max_x.as_ptr());
+                    let o_min_y = _mm512_loadu_ps(other_min_y.as_ptr());
+                    let o_max_y = _mm512_loadu_ps(other_max_y.as_ptr());
+                    let o_min_z = _mm512_loadu_ps(other_min_z.as_ptr());
+                    let o_max_z = _mm512_loadu_ps(other_max_z.as_ptr());
+                    
+                    // Test: self.min <= other.max && self.max >= other.min for each axis (vectorized)
+                    let x_intersect = _mm512_and_ps(
+                        _mm512_cmp_ps_mask(self_min, o_max_x, _MM_CMPINT_LE),
+                        _mm512_cmp_ps_mask(self_max, o_min_x, _MM_CMPINT_GE)
+                    );
+                    let y_intersect = _mm512_and_ps(
+                        _mm512_cmp_ps_mask(self_min_y, o_max_y, _MM_CMPINT_LE),
+                        _mm512_cmp_ps_mask(self_max_y, o_min_y, _MM_CMPINT_GE)
+                    );
+                    let z_intersect = _mm512_and_ps(
+                        _mm512_cmp_ps_mask(self_min_z, o_max_z, _MM_CMPINT_LE),
+                        _mm512_cmp_ps_mask(self_max_z, o_min_z, _MM_CMPINT_GE)
+                    );
+                    
+                    // All axes must intersect (vectorized)
+                    let full_intersect = _mm512_and_ps(_mm512_and_ps(x_intersect, y_intersect), z_intersect);
+                    
+                    // Extract results
+                    let mask = _mm512_movemask_ps(full_intersect);
+                    for i in 0..chunk.len() {
+                        results[i] = (mask & (1 << i)) != 0;
+                    }
+    
+                    // Extend results directly into accumulator to avoid intermediate Vec
+                    acc.extend_from_slice(&results);
+                    acc
+                }).flatten().collect()
+            }
         #[cfg(target_feature = "avx2")]
         {
             use std::arch::x86_64::*;
@@ -125,7 +195,7 @@ impl Aabb {
                 acc
             }).flatten().collect()
         }
-        #[cfg(not(target_feature = "avx2"))]
+        #[cfg(not(any(target_feature = "avx512f", target_feature = "avx2")))]
         {
             // Use fold for better memory efficiency even in non-SIMD path
             others.par_iter().fold(Vec::new, |mut acc, other| {
@@ -137,6 +207,62 @@ impl Aabb {
 
     /// SIMD-accelerated bounds check for multiple points
     pub fn contains_points_simd(&self, points: &[(f64, f64, f64)]) -> Vec<bool> {
+        #[cfg(target_feature = "avx512f")]
+        {
+            use std::arch::x86_64::*;
+            
+            let min_x = _mm512_set1_ps(self.min_x as f32);
+            let min_y = _mm512_set1_ps(self.min_y as f32);
+            let min_z = _mm512_set1_ps(self.min_z as f32);
+            let max_x = _mm512_set1_ps(self.max_x as f32);
+            let max_y = _mm512_set1_ps(self.max_y as f32);
+            let max_z = _mm512_set1_ps(self.max_z as f32);
+
+            // Use fold to avoid intermediate allocations from collect()
+            points.par_chunks(16).fold(Vec::new, |mut acc, chunk| {
+                let mut results = vec![false; chunk.len()];
+                
+                // Prepare point arrays
+                let mut px_arr = [0.0f32; 16];
+                let mut py_arr = [0.0f32; 16];
+                let mut pz_arr = [0.0f32; 16];
+                
+                for (i, &(x, y, z)) in chunk.iter().enumerate() {
+                    px_arr[i] = x as f32;
+                    py_arr[i] = y as f32;
+                    pz_arr[i] = z as f32;
+                }
+                
+                let px = _mm512_loadu_ps(px_arr.as_ptr());
+                let py = _mm512_loadu_ps(py_arr.as_ptr());
+                let pz = _mm512_loadu_ps(pz_arr.as_ptr());
+
+                // Check min <= point <= max for each axis using AVX-512
+                let x_inside = _mm512_and_ps(
+                    _mm512_cmp_ps_mask(min_x, px, _MM_CMPINT_LE),
+                    _mm512_cmp_ps_mask(px, max_x, _MM_CMPINT_LE)
+                );
+                let y_inside = _mm512_and_ps(
+                    _mm512_cmp_ps_mask(min_y, py, _MM_CMPINT_LE),
+                    _mm512_cmp_ps_mask(py, max_y, _MM_CMPINT_LE)
+                );
+                let z_inside = _mm512_and_ps(
+                    _mm512_cmp_ps_mask(min_z, pz, _MM_CMPINT_LE),
+                    _mm512_cmp_ps_mask(pz, max_z, _MM_CMPINT_LE)
+                );
+
+                let inside = _mm512_and_ps(_mm512_and_ps(x_inside, y_inside), z_inside);
+                let mask = _mm512_movemask_ps(inside);
+                
+                for i in 0..chunk.len() {
+                    results[i] = (mask & (1 << i)) != 0;
+                }
+
+                // Extend results directly into accumulator to avoid intermediate Vec
+                acc.extend_from_slice(&results);
+                acc
+            }).flatten().collect()
+        }
         #[cfg(target_feature = "avx2")]
         {
             use std::arch::x86_64::*;
@@ -207,7 +333,7 @@ impl Aabb {
                 acc
             }).flatten().collect()
         }
-        #[cfg(not(target_feature = "avx2"))]
+        #[cfg(not(any(target_feature = "avx512f", target_feature = "avx2")))]
         {
             // Use fold for better memory efficiency even in non-SIMD path
             points.par_iter().fold(Vec::new, |mut acc, &(x, y, z)| {
@@ -219,6 +345,33 @@ impl Aabb {
 }
 /// SIMD-accelerated ray-AABB intersection test
 pub fn ray_aabb_intersect_simd(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> Option<f32> {
+    #[cfg(target_feature = "avx512f")]
+    {
+        use std::arch::x86_64::*;
+
+        let origin = _mm512_set1_ps(ray_origin.x as f32);
+        let dir = _mm512_set1_ps(ray_dir.x as f32);
+        let aabb_min = _mm512_set1_ps(aabb.min_x as f32);
+        let aabb_max = _mm512_set1_ps(aabb.max_x as f32);
+
+        // Calculate t_min and t_max for each axis using AVX-512
+        let inv_dir = _mm512_div_ps(_mm512_set1_ps(1.0), dir);
+        let t1 = _mm512_mul_ps(_mm512_sub_ps(aabb_min, origin), inv_dir);
+        let t2 = _mm512_mul_ps(_mm512_sub_ps(aabb_max, origin), inv_dir);
+
+        let t_min = _mm512_min_ps(t1, t2);
+        let t_max = _mm512_max_ps(t1, t2);
+
+        // Find the maximum t_min and minimum t_max across all lanes
+        let t_min_max = _mm512_reduce_max_ps(t_min);
+        let t_max_min = _mm512_reduce_min_ps(t_max);
+
+        if t_min_max <= t_max_min && t_max_min >= 0.0 {
+            Some(t_min_max.max(0.0))
+        } else {
+            None
+        }
+    }
     #[cfg(target_feature = "avx2")]
     {
         use std::arch::x86_64::*;
@@ -276,10 +429,74 @@ pub fn ray_aabb_intersect_simd(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> 
     {
         ray_aabb_intersect_scalar(ray_origin, ray_dir, aabb)
     }
-}
-
-/// Scalar fallback for ray-AABB intersection
-pub fn ray_aabb_intersect_scalar(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> Option<f32> {
+    }
+    
+    /// AVX-512 accelerated vector normalization
+    #[cfg(target_feature = "avx512f")]
+    pub fn normalize_vector_avx512(vector: &[f32]) -> Vec<f32> {
+        use std::arch::x86_64::*;
+        
+        let mut result = Vec::with_capacity(vector.len());
+        let chunks = vector.chunks_exact(16);
+        let remainder = chunks.remainder();
+        
+        for chunk in chunks {
+            let v = _mm512_loadu_ps(chunk.as_ptr());
+            
+            // Calculate squared length: v.x² + v.y² + v.z² + v.w² (but we only use 3 components)
+            let v_sq = _mm512_mul_ps(v, v);
+            let sum = _mm512_reduce_add_ps(v_sq);
+            let len = _mm_sqrt_ss(&sum as *const f32 as *const __m128);
+            let len_vec = _mm512_set1_ps(len.extract_ps(0));
+            
+            // Normalize: v / len
+            let normalized = _mm512_div_ps(v, len_vec);
+            
+            let mut normalized_arr = [0.0f32; 16];
+            _mm512_storeu_ps(normalized_arr.as_mut_ptr(), normalized);
+            result.extend_from_slice(&normalized_arr);
+        }
+        
+        // Handle remainder with scalar normalization
+        for &v in remainder {
+            let len = (v * v).sqrt();
+            result.push(v / len);
+        }
+        
+        result
+    }
+    
+    /// AVX-512 accelerated dot product calculation
+    #[cfg(target_feature = "avx512f")]
+    pub fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
+        use std::arch::x86_64::*;
+        
+        debug_assert_eq!(a.len(), b.len(), "Vectors must have the same length for dot product");
+        
+        let mut sum = _mm512_setzero_ps();
+        let chunks = a.chunks_exact(16).zip(b.chunks_exact(16));
+        let remainder = a.len() % 16;
+        
+        for (chunk_a, chunk_b) in chunks {
+            let va = _mm512_loadu_ps(chunk_a.as_ptr());
+            let vb = _mm512_loadu_ps(chunk_b.as_ptr());
+            let product = _mm512_mul_ps(va, vb);
+            sum = _mm512_add_ps(sum, product);
+        }
+        
+        // Handle remainder with scalar calculation
+        let mut scalar_sum = 0.0;
+        for i in 0..remainder {
+            scalar_sum += a[a.len() - remainder + i] * b[b.len() - remainder + i];
+        }
+        
+        // Reduce sum and add scalar remainder
+        let vec_sum = _mm512_reduce_add_ps(sum);
+        vec_sum + scalar_sum
+    }
+    
+    /// Scalar fallback for ray-AABB intersection
+    pub fn ray_aabb_intersect_scalar(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> Option<f32> {
     let inv_dir_x = 1.0 / ray_dir.x as f64;
     let inv_dir_y = 1.0 / ray_dir.y as f64;
     let inv_dir_z = 1.0 / ray_dir.z as f64;
@@ -310,6 +527,67 @@ pub fn ray_aabb_intersect_scalar(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -
 
 /// SIMD-accelerated batch ray-AABB intersection for multiple rays
 pub fn batch_ray_aabb_intersect_simd(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<Option<f32>> {
+    #[cfg(target_feature = "avx512f")]
+    {
+        use std::arch::x86_64::*;
+
+        let aabb_min = _mm512_set1_ps(aabb.min_x as f32);
+        let aabb_max = _mm512_set1_ps(aabb.max_x as f32);
+        let aabb_min_y = _mm512_set1_ps(aabb.min_y as f32);
+        let aabb_max_y = _mm512_set1_ps(aabb.max_y as f32);
+        let aabb_min_z = _mm512_set1_ps(aabb.min_z as f32);
+        let aabb_max_z = _mm512_set1_ps(aabb.max_z as f32);
+
+        // Use fold to avoid intermediate allocations from collect()
+        rays.par_chunks(16).fold(Vec::with_capacity(rays.len()), |mut acc, chunk| {
+            let mut results = vec![None; chunk.len()];
+
+            for (i, (origin, dir)) in chunk.iter().enumerate() {
+                let origin_x = _mm512_set1_ps(origin.x as f32);
+                let origin_y = _mm512_set1_ps(origin.y as f32);
+                let origin_z = _mm512_set1_ps(origin.z as f32);
+                let dir_x = _mm512_set1_ps(dir.x as f32);
+                let dir_y = _mm512_set1_ps(dir.y as f32);
+                let dir_z = _mm512_set1_ps(dir.z as f32);
+
+                // Calculate intersection for X axis
+                let inv_dir_x = _mm512_div_ps(_mm512_set1_ps(1.0), dir_x);
+                let t1_x = _mm512_mul_ps(_mm512_sub_ps(aabb_min, origin_x), inv_dir_x);
+                let t2_x = _mm512_mul_ps(_mm512_sub_ps(aabb_max, origin_x), inv_dir_x);
+                let t_min_x = _mm512_min_ps(t1_x, t2_x);
+                let t_max_x = _mm512_max_ps(t1_x, t2_x);
+
+                // Y axis
+                let inv_dir_y = _mm512_div_ps(_mm512_set1_ps(1.0), dir_y);
+                let t1_y = _mm512_mul_ps(_mm512_sub_ps(aabb_min_y, origin_y), inv_dir_y);
+                let t2_y = _mm512_mul_ps(_mm512_sub_ps(aabb_max_y, origin_y), inv_dir_y);
+                let t_min_y = _mm512_min_ps(t1_y, t2_y);
+                let t_max_y = _mm512_max_ps(t1_y, t2_y);
+
+                // Z axis
+                let inv_dir_z = _mm512_div_ps(_mm512_set1_ps(1.0), dir_z);
+                let t1_z = _mm512_mul_ps(_mm512_sub_ps(aabb_min_z, origin_z), inv_dir_z);
+                let t2_z = _mm512_mul_ps(_mm512_sub_ps(aabb_max_z, origin_z), inv_dir_z);
+                let t_min_z = _mm512_min_ps(t1_z, t2_z);
+                let t_max_z = _mm512_max_ps(t1_z, t2_z);
+
+                // Combine results
+                let t_min = _mm512_max_ps(_mm512_max_ps(t_min_x, t_min_y), t_min_z);
+                let t_max = _mm512_min_ps(_mm512_min_ps(t_max_x, t_max_y), t_max_z);
+
+                let t_min_val = _mm512_reduce_max_ps(t_min);
+                let t_max_val = _mm512_reduce_min_ps(t_max);
+
+                if t_min_val <= t_max_val && t_max_val >= 0.0 {
+                    results[i] = Some(t_min_val.max(0.0));
+                }
+            }
+
+            // Extend results directly into accumulator to avoid intermediate Vec
+            acc.extend_from_slice(&results);
+            acc
+        }).flatten().collect()
+    }
     #[cfg(target_feature = "avx2")]
     {
         use std::arch::x86_64::*;
@@ -792,20 +1070,137 @@ pub struct ChunkData {
 
 /// SIMD-accelerated distance calculation using the SIMD manager
 pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
-    // Use fold to avoid intermediate Vec allocation
-    let positions_vec: Vec<_> = positions.iter().fold(Vec::with_capacity(positions.len()), |mut acc, &(x, y, z)| {
-        acc.push((x, y, z));
-        acc
-    });
-    
-    entity_processing::calculate_entity_distances(
-        &positions_vec,
-        center
-    )
+    #[cfg(target_feature = "avx512f")]
+    {
+        use std::arch::x86_64::*;
+        
+        let cx = _mm512_set1_ps(center.0);
+        let cy = _mm512_set1_ps(center.1);
+        let cz = _mm512_set1_ps(center.2);
+
+        // Pre-allocate result vector with exact capacity to avoid reallocations
+        let mut result = Vec::with_capacity(positions.len());
+        
+        // Process main chunks of 16 elements (full AVX-512 width)
+        let main_chunks = positions.len() / 16;
+        let remainder = positions.len() % 16;
+        
+        // Pre-allocate temporary storage for aligned loads
+        let mut pos_buffers = [[0.0f32; 16]; 3];
+        
+        for i in 0..main_chunks {
+            let chunk_start = i * 16;
+            
+            // Load all position components with better cache utilization
+            for j in 0..16 {
+                let pos_idx = chunk_start + j;
+                pos_buffers[0][j] = positions[pos_idx].0;
+                pos_buffers[1][j] = positions[pos_idx].1;
+                pos_buffers[2][j] = positions[pos_idx].2;
+            }
+            
+            let px = _mm512_loadu_ps(pos_buffers[0].as_ptr());
+            let py = _mm512_loadu_ps(pos_buffers[1].as_ptr());
+            let pz = _mm512_loadu_ps(pos_buffers[2].as_ptr());
+
+            // Vectorized distance calculation with fused multiply-add for better performance
+            let dx = _mm512_sub_ps(px, cx);
+            let dy = _mm512_sub_ps(py, cy);
+            let dz = _mm512_sub_ps(pz, cz);
+
+            // Use FMADD instructions to optimize calculation pipeline
+            let dx2 = _mm512_fmadd_ps(dx, dx, _mm512_setzero_ps());
+            let dy2 = _mm512_fmadd_ps(dy, dy, _mm512_setzero_ps());
+            let dz2 = _mm512_fmadd_ps(dz, dz, _mm512_setzero_ps());
+
+            // Sum components with FMADD for better instruction level parallelism
+            let sum = _mm512_fmadd_ps(dx2, _mm512_set1_ps(1.0),
+                           _mm512_fmadd_ps(dy2, _mm512_set1_ps(1.0), dz2));
+            let dist = _mm512_sqrt_ps(sum);
+
+            // Store results directly into pre-allocated vector
+            let mut dist_buffer = [0.0f32; 16];
+            _mm512_storeu_ps(dist_buffer.as_mut_ptr(), dist);
+            result.extend_from_slice(&dist_buffer);
+        }
+
+        // Handle remainder elements with optimized scalar path
+        if remainder > 0 {
+            let remainder_start = positions.len() - remainder;
+            let mut remainder_buffer = [0.0f32; 16];
+            
+            // Use aligned loads for remainder when possible
+            if remainder_start + remainder <= positions.len() {
+                for j in 0..remainder {
+                    let pos_idx = remainder_start + j;
+                    remainder_buffer[j] = ((positions[pos_idx].0 - center.0).powi(2) +
+                                         (positions[pos_idx].1 - center.1).powi(2) +
+                                         (positions[pos_idx].2 - center.2).powi(2)).sqrt();
+                }
+            }
+            
+            result.extend_from_slice(&remainder_buffer[..remainder]);
+        }
+
+        result
+    }
+    #[cfg(target_feature = "avx2")]
+    {
+        calculate_distances_simd_portable(positions, center)
+    }
+    #[cfg(not(any(target_feature = "avx512f", target_feature = "avx2")))]
+    {
+        entity_processing::calculate_entity_distances(positions, center)
+    }
 }
 
 /// SIMD-accelerated distance calculation using std::simd for better portability
 pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+    #[cfg(target_feature = "avx512f")]
+    {
+        use std::arch::x86_64::*;
+        
+        let cx = _mm512_set1_ps(center.0);
+        let cy = _mm512_set1_ps(center.1);
+        let cz = _mm512_set1_ps(center.2);
+
+        positions.par_chunks(16).flat_map(|chunk| {
+            let mut distances = [0.0f32; 16];
+            
+            // Load all position components in one go for better cache utilization
+            let mut px_arr = [0.0f32; 16];
+            let mut py_arr = [0.0f32; 16];
+            let mut pz_arr = [0.0f32; 16];
+            
+            for (i, &(x, y, z)) in chunk.iter().enumerate() {
+                px_arr[i] = x;
+                py_arr[i] = y;
+                pz_arr[i] = z;
+            }
+            
+            let px = _mm512_loadu_ps(px_arr.as_ptr());
+            let py = _mm512_loadu_ps(py_arr.as_ptr());
+            let pz = _mm512_loadu_ps(pz_arr.as_ptr());
+
+            let dx = _mm512_sub_ps(px, cx);
+            let dy = _mm512_sub_ps(py, cy);
+            let dz = _mm512_sub_ps(pz, cz);
+
+            let dx2 = _mm512_mul_ps(dx, dx);
+            let dy2 = _mm512_mul_ps(dy, dy);
+            let dz2 = _mm512_mul_ps(dz, dz);
+
+            let sum = _mm512_add_ps(_mm512_add_ps(dx2, dy2), dz2);
+            let dist = _mm512_sqrt_ps(sum);
+
+            _mm512_storeu_ps(distances.as_mut_ptr(), dist);
+            // Use fold to avoid intermediate allocations
+            distances.into_iter().take(chunk.len()).fold(Vec::new, |mut acc, d| {
+                acc.push(d);
+                acc
+            })
+        }).collect()
+    }
     #[cfg(target_feature = "avx2")]
     {
         use std::arch::x86_64::*;
@@ -817,29 +1212,29 @@ pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: 
         positions.par_chunks(8).flat_map(|chunk| {
             let mut distances = [0.0f32; 8];
             let px = _mm256_set_ps(chunk.get(7).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(6).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(5).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(4).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(3).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(2).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(1).map(|p| p.0).unwrap_or(0.0),
-                                     chunk.get(0).map(|p| p.0).unwrap_or(0.0));
+                                 chunk.get(6).map(|p| p.0).unwrap_or(0.0),
+                                 chunk.get(5).map(|p| p.0).unwrap_or(0.0),
+                                 chunk.get(4).map(|p| p.0).unwrap_or(0.0),
+                                 chunk.get(3).map(|p| p.0).unwrap_or(0.0),
+                                 chunk.get(2).map(|p| p.0).unwrap_or(0.0),
+                                 chunk.get(1).map(|p| p.0).unwrap_or(0.0),
+                                 chunk.get(0).map(|p| p.0).unwrap_or(0.0));
             let py = _mm256_set_ps(chunk.get(7).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(6).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(5).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(4).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(3).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(2).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(1).map(|p| p.1).unwrap_or(0.0),
-                                     chunk.get(0).map(|p| p.1).unwrap_or(0.0));
+                                 chunk.get(6).map(|p| p.1).unwrap_or(0.0),
+                                 chunk.get(5).map(|p| p.1).unwrap_or(0.0),
+                                 chunk.get(4).map(|p| p.1).unwrap_or(0.0),
+                                 chunk.get(3).map(|p| p.1).unwrap_or(0.0),
+                                 chunk.get(2).map(|p| p.1).unwrap_or(0.0),
+                                 chunk.get(1).map(|p| p.1).unwrap_or(0.0),
+                                 chunk.get(0).map(|p| p.1).unwrap_or(0.0));
             let pz = _mm256_set_ps(chunk.get(7).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(6).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(5).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(4).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(3).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(2).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(1).map(|p| p.2).unwrap_or(0.0),
-                                     chunk.get(0).map(|p| p.2).unwrap_or(0.0));
+                                 chunk.get(6).map(|p| p.2).unwrap_or(0.0),
+                                 chunk.get(5).map(|p| p.2).unwrap_or(0.0),
+                                 chunk.get(4).map(|p| p.2).unwrap_or(0.0),
+                                 chunk.get(3).map(|p| p.2).unwrap_or(0.0),
+                                 chunk.get(2).map(|p| p.2).unwrap_or(0.0),
+                                 chunk.get(1).map(|p| p.2).unwrap_or(0.0),
+                                 chunk.get(0).map(|p| p.2).unwrap_or(0.0));
 
             let dx = _mm256_sub_ps(px, cx);
             let dy = _mm256_sub_ps(py, cy);
@@ -860,7 +1255,7 @@ pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: 
             })
         }).collect()
     }
-    #[cfg(not(target_feature = "avx2"))]
+    #[cfg(not(any(target_feature = "avx512f", target_feature = "avx2")))]
     {
         calculate_distances_simd(positions, center)
     }
