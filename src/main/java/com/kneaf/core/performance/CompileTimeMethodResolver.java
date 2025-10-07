@@ -28,6 +28,11 @@ public final class CompileTimeMethodResolver {
   private final AtomicLong reflectionFallbacks = new AtomicLong(0);
   private final AtomicLong compilationErrors = new AtomicLong(0);
 
+  // Circuit breaker for method compilation
+  private final AtomicLong compilationFailures = new AtomicLong(0);
+  private static final int MAX_COMPILATION_RETRIES = 3;
+  private static final int CIRCUIT_BREAKER_THRESHOLD = 5;
+
   // Method signature constants
   private static final MethodType VOID_METHOD = MethodType.methodType(void.class);
   private static final MethodType BOOLEAN_METHOD = MethodType.methodType(boolean.class);
@@ -444,6 +449,12 @@ public final class CompileTimeMethodResolver {
   public <T> MethodCall<T, Object> createMethodCaller(String className, MethodSignature signature) {
     String cacheKey = className + "." + signature.getMethodName();
 
+    // Check circuit breaker
+    if (compilationFailures.get() >= CIRCUIT_BREAKER_THRESHOLD) {
+      System.err.println("Circuit breaker activated: Too many compilation failures (" + compilationFailures.get() + ")");
+      throw new RuntimeException("Circuit breaker activated: Method compilation disabled due to repeated failures");
+    }
+
     Function<Object, Object> lambda = lambdaCache.get(cacheKey);
     MethodHandle handle = methodHandleCache.get(cacheKey);
 
@@ -458,9 +469,55 @@ public final class CompileTimeMethodResolver {
         }
       };
     } else {
-      // Create and cache
-      compileMethod(className, signature);
-      return createMethodCaller(className, signature);
+      // Attempt compilation with retry and circuit breaker
+      int attempts = 0;
+      boolean compiled = false;
+
+      while (attempts < MAX_COMPILATION_RETRIES && !compiled) {
+        attempts++;
+        System.err.println("Attempting method compilation for " + cacheKey + " (attempt " + attempts + ")");
+
+        try {
+          compileMethod(className, signature);
+
+          // Check if compilation succeeded
+          if (lambdaCache.containsKey(cacheKey) || methodHandleCache.containsKey(cacheKey)) {
+            compiled = true;
+            System.err.println("Method compilation successful for " + cacheKey);
+          } else {
+            System.err.println("Method compilation failed for " + cacheKey + ": method not cached after compilation");
+          }
+
+        } catch (Exception e) {
+          compilationErrors.incrementAndGet();
+          compilationFailures.incrementAndGet();
+          System.err.println("Method compilation attempt " + attempts + " failed for " + cacheKey + ": " + e.getMessage());
+        }
+      }
+
+      if (!compiled) {
+        compilationFailures.incrementAndGet();
+        throw new RuntimeException("Failed to compile method after " + MAX_COMPILATION_RETRIES + " attempts: " + cacheKey);
+      }
+
+      // Return the compiled method caller using cached values
+      Function<Object, Object> finalLambda = lambdaCache.get(cacheKey);
+      MethodHandle finalHandle = methodHandleCache.get(cacheKey);
+
+      if (finalLambda != null) {
+        return target -> finalLambda.apply(target);
+      } else if (finalHandle != null) {
+        return target -> {
+          try {
+            return finalHandle.invoke(target);
+          } catch (Throwable e) {
+            throw new RuntimeException("Method invocation failed", e);
+          }
+        };
+      } else {
+        // This should not happen if compiled is true
+        throw new RuntimeException("Unexpected error: method compiled but not cached: " + cacheKey);
+      }
     }
   }
 
@@ -476,6 +533,7 @@ public final class CompileTimeMethodResolver {
             + "Hit Rate: %.2f%%\n"
             + "Reflection Fallbacks: %d\n"
             + "Compilation Errors: %d\n"
+            + "Compilation Failures: %d\n"
             + "Cached Methods: %d\n"
             + "Cached Lambdas: %d\n",
         cacheHits.get(),
@@ -483,6 +541,7 @@ public final class CompileTimeMethodResolver {
         hitRate,
         reflectionFallbacks.get(),
         compilationErrors.get(),
+        compilationFailures.get(),
         methodHandleCache.size(),
         lambdaCache.size());
   }
@@ -497,6 +556,7 @@ public final class CompileTimeMethodResolver {
     cacheMisses.set(0);
     reflectionFallbacks.set(0);
     compilationErrors.set(0);
+    compilationFailures.set(0);
   }
 
   /** Benchmark method invocation performance */
