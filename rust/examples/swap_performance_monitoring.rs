@@ -1,8 +1,5 @@
-use rustperf::performance_monitoring::*;
 use rustperf::{
-    record_swap_in, record_swap_out, record_swap_failure, record_swap_io_operation,
-    record_memory_pressure, record_swap_pool_usage, record_swap_cache_hit, record_swap_cache_miss,
-    update_swap_metrics, report_swap_operation, report_swap_cache_statistics,
+    report_swap_operation, report_memory_pressure, report_swap_cache_statistics,
     report_swap_io_performance, report_swap_pool_metrics, report_swap_component_health,
     get_swap_performance_summary, SwapHealthStatus
 };
@@ -13,9 +10,8 @@ use std::time::{Duration, Instant};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Swap Performance Monitoring Example ===");
     
-    // Initialize performance monitoring
-    init_performance_monitoring();
-    println!("✓ Performance monitoring initialized");
+    // Note: Performance monitoring is automatically initialized via lazy_static
+    println!("✓ Performance monitoring available (initialized via lazy_static)");
     
     // Simulate various swap operations
     simulate_swap_operations()?;
@@ -48,7 +44,7 @@ fn simulate_swap_operations() -> Result<(), Box<dyn std::error::Error>> {
         thread::sleep(Duration::from_millis(10 + i * 2)); // Simulate I/O delay
         let duration = start.elapsed();
         
-        record_swap_in!((64 * 1024) as u64, duration); // 64KB chunks
+        report_swap_operation("in", (64 * 1024) as u64, duration, true);
         println!("✓ Recorded swap-in operation {}: 64KB in {:?})", i + 1, duration);
     }
     
@@ -58,19 +54,19 @@ fn simulate_swap_operations() -> Result<(), Box<dyn std::error::Error>> {
         thread::sleep(Duration::from_millis(15 + i * 3)); // Simulate I/O delay
         let duration = start.elapsed();
         
-        record_swap_out!((128 * 1024) as u64, duration); // 128KB chunks
+        report_swap_operation("out", (128 * 1024) as u64, duration, true);
         println!("✓ Recorded swap-out operation {}: 128KB in {:?})", i + 1, duration);
     }
     
     // Simulate a swap failure
-    record_swap_failure!("io_error", "Disk read timeout");
+    report_swap_operation("in", 65536, std::time::Duration::from_millis(100), false);
     println!("⚠ Recorded swap failure: Disk read timeout");
     
     // Simulate I/O performance tracking
     let io_start = Instant::now();
     thread::sleep(Duration::from_millis(25));
     let io_duration = io_start.elapsed();
-    record_swap_io_operation!((256 * 1024) as u64, io_duration);
+    report_swap_io_performance((256 * 1024) as u64, io_duration);
     println!("✓ Recorded swap I/O operation: 256KB in {:?})", io_duration);
     
     Ok(())
@@ -80,23 +76,23 @@ fn simulate_memory_pressure() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Simulating Memory Pressure Scenarios ---");
     
     // Simulate normal pressure
-    record_memory_pressure!("Normal", false);
+    report_memory_pressure("Normal", false);
     println!("✓ Normal memory pressure recorded");
     
     // Simulate moderate pressure with cleanup
-    record_memory_pressure!("Moderate", true);
+    report_memory_pressure("Moderate", true);
     println!("✓ Moderate memory pressure with cleanup recorded");
     
     // Simulate high pressure
-    record_memory_pressure!("High", true);
+    report_memory_pressure("High", true);
     println!("⚠ High memory pressure recorded");
     
     // Simulate critical pressure
-    record_memory_pressure!("Critical", true);
+    report_memory_pressure("Critical", true);
     println!("🚨 Critical memory pressure recorded");
     
     // Update pool usage metrics
-    record_swap_pool_usage!((512 * 1024 * 1024) as u64, (1024 * 1024 * 1024) as u64); // 512MB used, 1GB capacity
+    report_swap_pool_metrics((512 * 1024 * 1024) as u64, (1024 * 1024 * 1024) as u64); // 512MB used, 1GB capacity
     println!("✓ Swap pool usage updated: 512MB / 1GB (50% efficiency)");
     
     Ok(())
@@ -105,17 +101,9 @@ fn simulate_memory_pressure() -> Result<(), Box<dyn std::error::Error>> {
 fn simulate_cache_performance() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Simulating Cache Performance ---");
     
-    // Simulate cache hits
-    for _ in 0..15 {
-        record_swap_cache_hit!();
-    }
-    println!("✓ Recorded 15 cache hits");
-    
-    // Simulate cache misses
-    for _ in 0..5 {
-        record_swap_cache_miss!();
-    }
-    println!("✓ Recorded 5 cache misses");
+    // Simulate cache hits and misses
+    report_swap_cache_statistics(15, 5);
+    println!("✓ Recorded 15 cache hits and 5 cache misses");
     
     Ok(())
 }
@@ -154,14 +142,14 @@ fn simulate_concurrent_swap_operations() -> Result<(), Box<dyn std::error::Error
                 
                 // Alternate between swap-in and swap-out
                 if op_id % 2 == 0 {
-                    record_swap_in!((32 * 1024) as u64, duration);
+                    report_swap_operation("in", (32 * 1024) as u64, duration, true);
                 } else {
-                    record_swap_out!((48 * 1024) as u64, duration);
+                    report_swap_operation("out", (48 * 1024) as u64, duration, true);
                 }
                 
                 // Simulate occasional cache hits
                 if op_id % 3 == 0 {
-                    record_swap_cache_hit!();
+                    report_swap_cache_statistics(1, 0);
                 }
             }
             
@@ -183,8 +171,7 @@ fn simulate_concurrent_swap_operations() -> Result<(), Box<dyn std::error::Error
 fn display_final_metrics() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Final Swap Performance Metrics ---");
     
-    // Update metrics before displaying
-    update_swap_metrics!();
+    // Note: Metrics are updated automatically via the monitoring system
     
     // Get comprehensive swap metrics
     let swap_metrics = get_swap_performance_summary();
@@ -219,14 +206,13 @@ fn display_final_metrics() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Pressure trigger events: {}", swap_metrics.pressure_trigger_events);
     println!("  Cleanup operations: {}", swap_metrics.swap_cleanup_operations);
     
-    println!("\nSwap Pool Usage:");
-    println!("  Pool usage: {} bytes ({:.1} MB)", swap_metrics.swap_pool_usage_bytes, swap_metrics.swap_pool_usage_bytes as f64 / (1024.0 * 1024.0));
-    println!("  Pool capacity: {} bytes ({:.1} MB)", swap_metrics.swap_pool_capacity_bytes, swap_metrics.swap_pool_capacity_bytes as f64 / (1024.0 * 1024.0));
-    println!("  Pool efficiency: {:.1}%", swap_metrics.swap_pool_efficiency);
+    // Note: The following fields are not available in the current SwapPerformanceSummary struct:
+    // - swap_pool_usage_bytes, swap_pool_capacity_bytes, swap_pool_efficiency
+    // - swap_health_status, swap_component_failures
+    // These would need to be added to the struct definition if required.
     
     println!("\nSystem Health:");
-    println!("  Health status: {}", swap_metrics.swap_health_status);
-    println!("  Component failures: {}", swap_metrics.swap_component_failures);
+    println!("  Health monitoring: Available via component health reporting");
     
     // Test integration helpers
     println!("\n--- Testing Integration Helpers ---");

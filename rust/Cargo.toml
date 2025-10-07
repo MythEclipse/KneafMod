@@ -9,6 +9,7 @@ async-io = []
 circuit-breaker = []
 structured-errors = []
 jemalloc = ["jemalloc-sys", "jemallocator"]
+java-integration = []
 
 [lib]
 name = "rustperf"

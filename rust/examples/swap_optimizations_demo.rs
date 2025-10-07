@@ -170,11 +170,11 @@ fn demonstrate_compression(adapter: &Arc<RustDatabaseAdapter>) {
 
 /// Demonstrate async bridge for JNI
 fn demonstrate_async_operations(adapter: &Arc<RustDatabaseAdapter>) {
-    // Convert to raw pointer for JNI-style access
-    let adapter_ptr = Arc::into_raw(adapter.clone()) as *const RustDatabaseAdapter as usize;
+    // Convert to raw pointer for JNI-style access (unused for now)
+    let _adapter_ptr = Arc::into_raw(adapter.clone()) as *const RustDatabaseAdapter as usize;
     
     // Test async put chunk
-    let put_key = "chunk:async_put,test,overworld";
+    let _put_key = "chunk:async_put,test,overworld";
     let put_data = vec![99; 20_000];
     
     // submit_async_batch expects Vec<Vec<u8>>, not closure - using dummy data for demo

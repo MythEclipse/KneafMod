@@ -187,6 +187,35 @@ public final class ManualSerializers {
     return buf;
   }
 
+  public static byte[] serializeMobResult(
+      com.kneaf.core.performance.core.MobProcessResult result) {
+    int baseSize = 8 + 4 + 4; // tick placeholder + disable count + simplify count
+    int totalSize = baseSize + result.getDisableList().size() * 8 + result.getSimplifyList().size() * 8;
+    ByteBuffer buf = ByteBuffer.allocateDirect(totalSize).order(ByteOrder.LITTLE_ENDIAN);
+    
+    // Write tick placeholder (will be filled by caller if needed)
+    buf.putLong(0);
+    
+    // Write disable list
+    buf.putInt(result.getDisableList().size());
+    for (Long id : result.getDisableList()) {
+      buf.putLong(id);
+    }
+    
+    // Write simplify list
+    buf.putInt(result.getSimplifyList().size());
+    for (Long id : result.getSimplifyList()) {
+      buf.putLong(id);
+    }
+    
+    buf.flip();
+    
+    // Convert to byte array
+    byte[] resultBytes = new byte[buf.remaining()];
+    buf.get(resultBytes);
+    return resultBytes;
+  }
+
   public static List<com.kneaf.core.data.entity.MobData> deserializeMobProcessResult(
       ByteBuffer buffer) {
     buffer.order(ByteOrder.LITTLE_ENDIAN);

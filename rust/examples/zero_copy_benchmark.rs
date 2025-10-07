@@ -1,5 +1,5 @@
 use std::time::Instant;
-use crate::jni_batch::{BatchOperation, BatchOperationType, ZeroCopyBufferPool, init_global_buffer_tracker};
+use rustperf::jni_batch::{BatchOperation, BatchOperationType, ZeroCopyBufferPool, init_global_buffer_tracker};
 
 fn main() {
     println!("Starting Zero-Copy JNI Performance Benchmark");
@@ -79,7 +79,7 @@ mod benchmark_tests {
         let operation = BatchOperation::new(BatchOperationType::Echo, small_payload);
         let result = operation.process_zero_copy().expect("Processing failed");
         
-        assert!(result.status == crate::jni_batch::BatchResultStatus::Success);
+        assert!(result.status == rustperf::jni_batch::BatchResultStatus::Success);
         assert!(result.payload.len() > 0);
         
         // Test buffer pool operations

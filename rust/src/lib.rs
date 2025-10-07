@@ -31,6 +31,10 @@ pub mod jni_batch_processor;
 pub mod allocator;
 pub mod jni_async_bridge;
 pub mod jni_batch;
+pub mod cache_eviction;
+
+// Re-export cache eviction module for JNI bindings
+pub use crate::cache_eviction::{GLOBAL_CACHE, initialize_cache, CacheFeatureFlags, EvictionPolicy};
 
 // Re-export commonly used performance helpers at crate root so tests and Java JNI
 // bindings can import them as `rustperf::calculate_distances_simd` etc.
