@@ -11,8 +11,9 @@ use tokio::time::timeout;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::thread;
 use std::path::Path;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -161,6 +162,79 @@ impl SwapMetadata {
        // Ensure score doesn't go below a minimum value
        self.priority_score = self.priority_score.max(-5.0);
    }
+}
+
+/// Lock ordering constants to prevent deadlocks
+/// Order: stats -> swap_metadata -> memory_mapped_files
+const LOCK_ORDER_STATS: u8 = 1;
+const LOCK_ORDER_SWAP_METADATA: u8 = 2;
+const LOCK_ORDER_MEMORY_MAPPED_FILES: u8 = 3;
+
+/// Lock acquisition timeout in milliseconds
+const LOCK_TIMEOUT_MS: u64 = 5000; // 5 seconds
+
+/// Helper function to acquire read lock with timeout
+fn try_read_lock_with_timeout<'a, T>(lock: &'a RwLock<T>, timeout_ms: u64, lock_name: &str) -> Result<RwLockReadGuard<'a, T>, DatabaseError> {
+    let start_time = std::time::Instant::now();
+    let timeout_duration = Duration::from_millis(timeout_ms);
+    
+    loop {
+        match lock.try_read() {
+            Ok(guard) => return Ok(guard),
+            Err(_) => {
+                if start_time.elapsed() >= timeout_duration {
+                    error!("Timeout acquiring read lock for {} after {} ms", lock_name, timeout_ms);
+                    return Err(DatabaseError::TimeoutError(format!(
+                        "Timeout acquiring read lock for {} after {} ms", lock_name, timeout_ms
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+}
+
+/// Helper function to acquire write lock with timeout
+fn try_write_lock_with_timeout<'a, T>(lock: &'a RwLock<T>, timeout_ms: u64, lock_name: &str) -> Result<RwLockWriteGuard<'a, T>, DatabaseError> {
+    let start_time = std::time::Instant::now();
+    let timeout_duration = Duration::from_millis(timeout_ms);
+    
+    loop {
+        match lock.try_write() {
+            Ok(guard) => return Ok(guard),
+            Err(_) => {
+                if start_time.elapsed() >= timeout_duration {
+                    error!("Timeout acquiring write lock for {} after {} ms", lock_name, timeout_ms);
+                    return Err(DatabaseError::TimeoutError(format!(
+                        "Timeout acquiring write lock for {} after {} ms", lock_name, timeout_ms
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+}
+
+/// Acquire multiple locks in consistent order to prevent deadlocks
+fn acquire_locks_in_order<'a>(
+    stats: &'a Arc<RwLock<DatabaseStats>>,
+    swap_metadata: &'a Arc<RwLock<HashMap<String, SwapMetadata>>>,
+    memory_mapped_files: Option<&'a Arc<RwLock<HashMap<String, Mmap>>>>,
+    timeout_ms: u64,
+) -> Result<(RwLockWriteGuard<'a, DatabaseStats>, RwLockWriteGuard<'a, HashMap<String, SwapMetadata>>), DatabaseError> {
+    
+    // Always acquire locks in consistent order: stats -> swap_metadata -> memory_mapped_files
+    let stats_guard = try_write_lock_with_timeout(stats, timeout_ms, "stats")?;
+    let swap_metadata_guard = try_write_lock_with_timeout(swap_metadata, timeout_ms, "swap_metadata")?;
+    
+    // Memory mapped files lock is optional
+    if let Some(mm_files) = memory_mapped_files {
+        let _mm_files_guard = try_write_lock_with_timeout(mm_files, timeout_ms, "memory_mapped_files")?;
+        // We don't return this guard as it's not commonly needed together with the others
+        drop(_mm_files_guard);
+    }
+    
+    Ok((stats_guard, swap_metadata_guard))
 }
 
 /// Database statistics for monitoring
@@ -611,29 +685,34 @@ impl RustDatabaseAdapter {
         self.db.insert(key_bytes, data_to_store)
             .map_err(|e| format!("Failed to insert data: {}", e))?;
         
-        // Update swap metadata
-        if let Ok(mut swap_meta) = self.swap_metadata.write() {
-            if let Some(metadata) = swap_meta.get_mut(key) {
-                metadata.update_access();
-                metadata.size_bytes = data_size;
-            } else {
-                swap_meta.insert(key.to_string(), SwapMetadata::new(data_size));
+        // Update metadata and statistics with consistent lock ordering
+        match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
+            Ok((mut stats, mut swap_meta)) => {
+                // Update swap metadata
+                if let Some(metadata) = swap_meta.get_mut(key) {
+                    metadata.update_access();
+                    metadata.size_bytes = data_size;
+                } else {
+                    swap_meta.insert(key.to_string(), SwapMetadata::new(data_size));
+                }
+                
+                // Update statistics
+                if exists {
+                    // Replacing existing data - we don't know the old size, so we approximate
+                    stats.total_size_bytes = stats.total_size_bytes.saturating_sub(data_size / 2) + data_size;
+                } else {
+                    // New entry
+                    stats.total_chunks += 1;
+                    stats.total_size_bytes += data_size;
+                }
+                
+                stats.write_latency_ms = start_time.elapsed().as_millis() as u64;
+                stats.is_healthy = true;
             }
-        }
-        
-        // Update statistics
-        if let Ok(mut stats) = self.stats.write() {
-            if exists {
-                // Replacing existing data - we don't know the old size, so we approximate
-                stats.total_size_bytes = stats.total_size_bytes.saturating_sub(data_size / 2) + data_size;
-            } else {
-                // New entry
-                stats.total_chunks += 1;
-                stats.total_size_bytes += data_size;
+            Err(e) => {
+                error!("Failed to acquire locks for put_chunk: {}", e);
+                return Err(format!("Failed to update metadata: {}", e));
             }
-            
-            stats.write_latency_ms = start_time.elapsed().as_millis() as u64;
-            stats.is_healthy = true;
         }
         
         debug!("Stored chunk {} ({} bytes) in {} ms",
@@ -667,18 +746,25 @@ impl RustDatabaseAdapter {
             None => Ok(None),
         };
         
-        // Update swap metadata if chunk was found
-            if let Ok(Some(_)) = processed_result {
-                if let Ok(mut swap_meta) = self.swap_metadata.write() {
+        // Update swap metadata and statistics if chunk was found with consistent lock ordering
+        if let Ok(Some(_)) = processed_result {
+            match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
+                Ok((mut stats, mut swap_meta)) => {
                     if let Some(metadata) = swap_meta.get_mut(key) {
                         metadata.update_access();
                     }
+                    stats.read_latency_ms = start_time.elapsed().as_millis() as u64;
+                }
+                Err(e) => {
+                    warn!("Failed to acquire locks for get_chunk metadata update: {}", e);
+                    // Continue execution as this is not critical for the main operation
                 }
             }
-        
-        // Update statistics
-        if let Ok(mut stats) = self.stats.write() {
-            stats.read_latency_ms = start_time.elapsed().as_millis() as u64;
+        } else {
+            // Only update statistics
+            if let Ok(mut stats) = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats") {
+                stats.read_latency_ms = start_time.elapsed().as_millis() as u64;
+            }
         }
         
         debug!("Retrieved chunk {} in {} ms",
@@ -739,7 +825,7 @@ impl RustDatabaseAdapter {
     
     /// Get database statistics
     pub fn get_stats(&self) -> Result<DatabaseStats, String> {
-        let stats = self.stats.read()
+        let stats = try_read_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats")
             .map_err(|e| format!("Failed to acquire stats lock: {}", e))?
             .clone();
         Ok(stats)
@@ -755,8 +841,8 @@ impl RustDatabaseAdapter {
         self.db.flush()
             .map_err(|e| format!("Failed to flush database: {}", e))?;
         
-        // Update maintenance timestamp
-        if let Ok(mut stats) = self.stats.write() {
+        // Update maintenance timestamp with timeout
+        if let Ok(mut stats) = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats") {
             stats.last_maintenance_time = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -964,20 +1050,23 @@ impl RustDatabaseAdapter {
             self.db.remove(key_bytes)
                 .map_err(|e| format!("Failed to remove chunk from database for world {}: {}", self.world_name, e))?;
             
-            // Update swap metadata
-            if let Ok(mut swap_meta) = self.swap_metadata.write() {
-                if let Some(metadata) = swap_meta.get_mut(key) {
-                    metadata.update_swap();
+            // Update swap metadata and statistics with consistent lock ordering
+            match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
+                Ok((mut stats, mut swap_meta)) => {
+                    if let Some(metadata) = swap_meta.get_mut(key) {
+                        metadata.update_swap();
+                    }
+                    
+                    stats.swap_operations_total += 1;
+                    stats.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
+                    stats.total_swap_size_bytes += data_size;
+                    stats.total_chunks = stats.total_chunks.saturating_sub(1);
+                    stats.total_size_bytes = stats.total_size_bytes.saturating_sub(data_size);
                 }
-            }
-            
-            // Update statistics
-            if let Ok(mut stats) = self.stats.write() {
-                stats.swap_operations_total += 1;
-                stats.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
-                stats.total_swap_size_bytes += data_size;
-                stats.total_chunks = stats.total_chunks.saturating_sub(1);
-                stats.total_size_bytes = stats.total_size_bytes.saturating_sub(data_size);
+                Err(e) => {
+                    error!("Failed to acquire locks for swap_out_chunk: {}", e);
+                    return Err(format!("Failed to update metadata: {}", e));
+                }
             }
             
             info!("Swapped out chunk {} ({:.2}KB) from world {} to {}",
@@ -1041,20 +1130,23 @@ impl RustDatabaseAdapter {
                 .map_err(|e| format!("Failed to remove swap file for world {}: {}", self.world_name, file_path.display()))?;
         }
         
-        // Update swap metadata
-        if let Ok(mut swap_meta) = self.swap_metadata.write() {
-            if let Some(metadata) = swap_meta.get_mut(key) {
-                metadata.update_access();
+        // Update swap metadata and statistics with consistent lock ordering
+        match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
+            Ok((mut stats, mut swap_meta)) => {
+                if let Some(metadata) = swap_meta.get_mut(key) {
+                    metadata.update_access();
+                }
+                
+                stats.swap_operations_total += 1;
+                stats.swap_in_latency_ms = start_time.elapsed().as_millis() as u64;
+                stats.total_swap_size_bytes = stats.total_swap_size_bytes.saturating_sub(data_size);
+                stats.total_chunks += 1;
+                stats.total_size_bytes += data_size;
             }
-        }
-        
-        // Update statistics
-        if let Ok(mut stats) = self.stats.write() {
-            stats.swap_operations_total += 1;
-            stats.swap_in_latency_ms = start_time.elapsed().as_millis() as u64;
-            stats.total_swap_size_bytes = stats.total_swap_size_bytes.saturating_sub(data_size);
-            stats.total_chunks += 1;
-            stats.total_size_bytes += data_size;
+            Err(e) => {
+                error!("Failed to acquire locks for swap_in_chunk: {}", e);
+                return Err(format!("Failed to update metadata: {}", e));
+            }
         }
         
         info!("Swapped in chunk {} ({:.2}KB) into world {} from {}",
@@ -1065,26 +1157,25 @@ impl RustDatabaseAdapter {
     
     /// Get swap candidates based on access patterns and priority scores
     pub fn get_swap_candidates(&self, limit: usize) -> Result<Vec<String>, String> {
-        if let Ok(swap_meta) = self.swap_metadata.read() {
-            let mut candidates: Vec<(String, f64)> = swap_meta
-                .iter()
-                .map(|(key, metadata)| (key.clone(), metadata.priority_score))
-                .collect();
-            
-            // Sort by priority score (lowest first - these are best swap candidates)
-            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            
-            // Return the keys with lowest priority scores
-            let result: Vec<String> = candidates
-                .into_iter()
-                .take(limit)
-                .map(|(key, _)| key)
-                .collect();
-            
-            Ok(result)
-        } else {
-            Err("Failed to acquire swap metadata lock".to_string())
-        }
+        let swap_meta = try_read_lock_with_timeout(&self.swap_metadata, LOCK_TIMEOUT_MS, "swap_metadata")
+            .map_err(|_| "Failed to acquire swap metadata lock".to_string())?;
+        
+        let mut candidates: Vec<(String, f64)> = swap_meta
+            .iter()
+            .map(|(key, metadata)| (key.clone(), metadata.priority_score))
+            .collect();
+        
+        // Sort by priority score (lowest first - these are best swap candidates)
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        // Return the keys with lowest priority scores
+        let result: Vec<String> = candidates
+            .into_iter()
+            .take(limit)
+            .map(|(key, _)| key)
+            .collect();
+        
+        Ok(result)
     }
     
     /// Bulk swap out multiple chunks using sled batch API for atomic operations
@@ -1122,12 +1213,13 @@ impl RustDatabaseAdapter {
             // Add remove operation to batch
             batch.remove(key_bytes);
             
-            // Update swap metadata with proper locking
-            if let Ok(mut swap_meta) = self.swap_metadata.write() {
+            // Update swap metadata with proper locking (will be done in batch later)
+            if let Ok(mut swap_meta) = try_write_lock_with_timeout(&self.swap_metadata, LOCK_TIMEOUT_MS, "swap_metadata") {
                 if let Some(metadata) = swap_meta.get_mut(key) {
                     metadata.update_swap();
                     metadata.size_bytes = data_size; // Update with actual decompressed size
                 }
+                // Drop the lock immediately to avoid holding it during batch operations
             }
             
             success_count += 1;
@@ -1137,14 +1229,28 @@ impl RustDatabaseAdapter {
         self.db.apply_batch(batch)
             .map_err(|e| format!("Failed to apply batch for world {}: {}", self.world_name, e))?;
         
-        // Update statistics with precise calculations
-        if let Ok(mut stats) = self.stats.write() {
-            stats.swap_operations_total += keys.len() as u64;
-            stats.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
-            stats.total_swap_size_bytes += success_count as u64 * (keys.get(0).map(|k| {
-                self.db.get(k.as_bytes()).ok().flatten().map(|d| d.len() as u64).unwrap_or(0)
-            }).unwrap_or(0));
-            stats.total_chunks = stats.total_chunks.saturating_sub(success_count as u64);
+        // Update statistics and swap metadata with consistent lock ordering
+        match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
+            Ok((mut stats, mut swap_meta)) => {
+                // Update swap metadata for all successfully processed keys
+                for key in keys.iter().take(success_count) {
+                    if let Some(metadata) = swap_meta.get_mut(key) {
+                        metadata.update_swap();
+                        // Size was already updated in the loop above
+                    }
+                }
+                
+                stats.swap_operations_total += keys.len() as u64;
+                stats.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
+                stats.total_swap_size_bytes += success_count as u64 * (keys.get(0).map(|k| {
+                    self.db.get(k.as_bytes()).ok().flatten().map(|d| d.len() as u64).unwrap_or(0)
+                }).unwrap_or(0));
+                stats.total_chunks = stats.total_chunks.saturating_sub(success_count as u64);
+            }
+            Err(e) => {
+                error!("Failed to acquire locks for bulk_swap_out: {}", e);
+                return Err(format!("Failed to update metadata: {}", e));
+            }
         }
         
         info!("Bulk swap out completed for world {}: {}/{} chunks swapped successfully in {} ms",
@@ -1167,7 +1273,7 @@ impl RustDatabaseAdapter {
             
             if !Path::new(&swap_file_path).exists() {
                 error!("Swap file not found: {}", swap_file_path);
-                if let Ok(mut stats) = self.stats.write() {
+                if let Ok(mut stats) = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats") {
                     stats.swap_operations_failed += 1;
                 }
                 continue;
@@ -1188,11 +1294,12 @@ impl RustDatabaseAdapter {
             std::fs::remove_file(&swap_file_path)
                 .map_err(|e| format!("Failed to remove swap file: {}", e))?;
             
-            // Update swap metadata
-            if let Ok(mut swap_meta) = self.swap_metadata.write() {
+            // Update swap metadata (will be done in batch later)
+            if let Ok(mut swap_meta) = try_write_lock_with_timeout(&self.swap_metadata, LOCK_TIMEOUT_MS, "swap_metadata") {
                 if let Some(metadata) = swap_meta.get_mut(key) {
                     metadata.update_access();
                 }
+                // Drop the lock immediately to avoid holding it during batch operations
             }
             
             results.push(data);
@@ -1202,13 +1309,26 @@ impl RustDatabaseAdapter {
         self.db.apply_batch(batch)
             .map_err(|e| format!("Failed to apply batch: {}", e))?;
         
-        // Update statistics
-        if let Ok(mut stats) = self.stats.write() {
-            stats.swap_operations_total += keys.len() as u64;
-            stats.swap_in_latency_ms = start_time.elapsed().as_millis() as u64;
-            stats.total_swap_size_bytes = stats.total_swap_size_bytes.saturating_sub(total_size);
-            stats.total_chunks += results.len() as u64;
-            stats.total_size_bytes += total_size;
+        // Update statistics and swap metadata with consistent lock ordering
+        match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
+            Ok((mut stats, mut swap_meta)) => {
+                // Update swap metadata for all successfully processed keys
+                for key in keys.iter().take(results.len()) {
+                    if let Some(metadata) = swap_meta.get_mut(key) {
+                        metadata.update_access();
+                    }
+                }
+                
+                stats.swap_operations_total += keys.len() as u64;
+                stats.swap_in_latency_ms = start_time.elapsed().as_millis() as u64;
+                stats.total_swap_size_bytes = stats.total_swap_size_bytes.saturating_sub(total_size);
+                stats.total_chunks += results.len() as u64;
+                stats.total_size_bytes += total_size;
+            }
+            Err(e) => {
+                error!("Failed to acquire locks for bulk_swap_in: {}", e);
+                return Err(format!("Failed to update metadata: {}", e));
+            }
         }
         
         info!("Bulk swap in completed: {}/{} chunks swapped successfully in {} ms",
@@ -1238,15 +1358,21 @@ impl RustDatabaseAdapter {
                 .map_err(|e| format!("Failed to create memory map: {}", e))?
         };
         
-        // Store in memory-mapped files cache - Mmap doesn't implement Clone, so we store the path instead
-        if let Ok(mut mm_files) = self.memory_mapped_files.write() {
-            // We'll recreate the mmap when needed since we can't clone it
-            // For now, just track that this key has memory-mapped access
-            mm_files.insert(key.to_string(), mmap);
+        // Store in memory-mapped files cache with timeout
+        match try_write_lock_with_timeout(&self.memory_mapped_files, LOCK_TIMEOUT_MS, "memory_mapped_files") {
+            Ok(mut mm_files) => {
+                // We'll recreate the mmap when needed since we can't clone it
+                // For now, just track that this key has memory-mapped access
+                mm_files.insert(key.to_string(), mmap);
+            }
+            Err(e) => {
+                error!("Failed to acquire memory mapped files lock: {}", e);
+                return Err(format!("Failed to update memory mapped files cache: {}", e));
+            }
         }
         
-        // Update statistics
-        if let Ok(mut stats) = self.stats.write() {
+        // Update statistics with timeout
+        if let Ok(mut stats) = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats") {
             stats.memory_mapped_files_active += 1;
         }
         
@@ -1265,8 +1391,8 @@ impl RustDatabaseAdapter {
     
     /// Get memory-mapped access for a chunk
     pub fn get_memory_mapped_chunk(&self, key: &str) -> Result<Option<Mmap>, String> {
-        // Check if already memory-mapped
-        if let Ok(mm_files) = self.memory_mapped_files.read() {
+        // Check if already memory-mapped with timeout
+        if let Ok(mm_files) = try_read_lock_with_timeout(&self.memory_mapped_files, LOCK_TIMEOUT_MS, "memory_mapped_files") {
             if mm_files.contains_key(key) {
                 // Recreate the mmap since we can't clone it
                 drop(mm_files);
@@ -1290,9 +1416,15 @@ impl RustDatabaseAdapter {
     pub fn remove_memory_mapped_chunk(&self, key: &str) -> Result<(), String> {
         let mmap_path = format!("{}/{}.mmap", self.swap_path, key.replace(':', "_"));
         
-        // Remove from cache
-        if let Ok(mut mm_files) = self.memory_mapped_files.write() {
-            mm_files.remove(key);
+        // Remove from cache with timeout
+        match try_write_lock_with_timeout(&self.memory_mapped_files, LOCK_TIMEOUT_MS, "memory_mapped_files") {
+            Ok(mut mm_files) => {
+                mm_files.remove(key);
+            }
+            Err(e) => {
+                error!("Failed to acquire memory mapped files lock: {}", e);
+                return Err(format!("Failed to update memory mapped files cache: {}", e));
+            }
         }
         
         // Remove file
@@ -1301,8 +1433,8 @@ impl RustDatabaseAdapter {
                 .map_err(|e| format!("Failed to remove mmap file: {}", e))?;
         }
         
-        // Update statistics
-        if let Ok(mut stats) = self.stats.write() {
+        // Update statistics with timeout
+        if let Ok(mut stats) = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats") {
             stats.memory_mapped_files_active = stats.memory_mapped_files_active.saturating_sub(1);
         }
         

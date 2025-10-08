@@ -40,10 +40,92 @@ import net.jpountz.lz4.LZ4FastDecompressor;
 public class SwapManager {
   private static final Logger LOGGER = LoggerFactory.getLogger(SwapManager.class);
 
-  // Memory pressure thresholds (as percentages of max heap)
-  private static final double CRITICAL_MEMORY_THRESHOLD = 0.95; // 95% of max heap
-  private static final double HIGH_MEMORY_THRESHOLD = 0.85; // 85% of max heap
-  private static final double ELEVATED_MEMORY_THRESHOLD = 0.75; // 75% of max heap
+  // Memory pressure thresholds loaded from centralized Rust configuration
+  private static volatile double CRITICAL_MEMORY_THRESHOLD;
+  private static volatile double HIGH_MEMORY_THRESHOLD;
+  private static volatile double ELEVATED_MEMORY_THRESHOLD;
+  private static volatile double NORMAL_MEMORY_THRESHOLD;
+   // Static initialization to load memory pressure configuration from Rust
+   static {
+     loadMemoryPressureConfiguration();
+   }
+
+   /**
+    * Load memory pressure configuration from centralized Rust configuration.
+    * Falls back to default values if JNI call fails.
+    */
+   private static void loadMemoryPressureConfiguration() {
+     try {
+       // Get configuration JSON from Rust via JNI
+       String configJson = nativeGetMemoryPressureConfig();
+       if (configJson != null && !configJson.trim().isEmpty()) {
+         // Parse JSON and set thresholds
+         // Simple JSON parsing for the expected format: {"normalThreshold":0.7,"moderateThreshold":0.85,"highThreshold":0.95,"criticalThreshold":0.98}
+         configJson = configJson.trim();
+
+         // Extract values using simple string parsing
+         double normalThreshold = extractDoubleValue(configJson, "normalThreshold");
+         double moderateThreshold = extractDoubleValue(configJson, "moderateThreshold");
+         double highThreshold = extractDoubleValue(configJson, "highThreshold");
+         double criticalThreshold = extractDoubleValue(configJson, "criticalThreshold");
+
+         // Validate thresholds are in correct order
+         if (normalThreshold < moderateThreshold && moderateThreshold < highThreshold && highThreshold < criticalThreshold) {
+           NORMAL_MEMORY_THRESHOLD = normalThreshold;
+           ELEVATED_MEMORY_THRESHOLD = moderateThreshold; // Map moderate to elevated
+           HIGH_MEMORY_THRESHOLD = highThreshold;
+           CRITICAL_MEMORY_THRESHOLD = criticalThreshold;
+
+           LOGGER.info("Loaded memory pressure configuration from Rust: normal={}, elevated={}, high={}, critical={}",
+               NORMAL_MEMORY_THRESHOLD, ELEVATED_MEMORY_THRESHOLD, HIGH_MEMORY_THRESHOLD, CRITICAL_MEMORY_THRESHOLD);
+           return;
+         } else {
+           LOGGER.warn("Invalid memory pressure thresholds from Rust configuration, using defaults");
+         }
+       }
+     } catch (Exception e) {
+       LOGGER.warn("Failed to load memory pressure configuration from Rust, using defaults: {}", e.getMessage());
+     }
+
+     // Fallback to default values
+     NORMAL_MEMORY_THRESHOLD = 0.70;
+     ELEVATED_MEMORY_THRESHOLD = 0.85;
+     HIGH_MEMORY_THRESHOLD = 0.95;
+     CRITICAL_MEMORY_THRESHOLD = 0.98;
+
+     LOGGER.info("Using default memory pressure configuration: normal={}, elevated={}, high={}, critical={}",
+         NORMAL_MEMORY_THRESHOLD, ELEVATED_MEMORY_THRESHOLD, HIGH_MEMORY_THRESHOLD, CRITICAL_MEMORY_THRESHOLD);
+   }
+
+   /**
+    * Extract double value from JSON string for a given key.
+    */
+   private static double extractDoubleValue(String json, String key) {
+     try {
+       String keyPattern = "\"" + key + "\":";
+       int keyIndex = json.indexOf(keyPattern);
+       if (keyIndex == -1) return 0.0;
+
+       int valueStart = json.indexOf(':', keyIndex) + 1;
+       int valueEnd = json.indexOf(',', valueStart);
+       if (valueEnd == -1) {
+         valueEnd = json.indexOf('}', valueStart);
+       }
+       if (valueEnd == -1) return 0.0;
+
+       String valueStr = json.substring(valueStart, valueEnd).trim();
+       return Double.parseDouble(valueStr);
+     } catch (Exception e) {
+       LOGGER.debug("Failed to extract {} from JSON: {}", key, e.getMessage());
+       return 0.0;
+     }
+   }
+
+   // Native method declarations for memory pressure configuration
+   static native String nativeGetMemoryPressureConfig();
+   static native int nativeUpdateMemoryPressureConfig(String configJson);
+   static native boolean nativeValidateMemoryPressureConfig(String configJson);
+   static native int nativeGetMemoryPressureLevel(double usageRatio);
 
   // Swap configuration
   private final SwapConfig config;
@@ -549,14 +631,15 @@ public class SwapManager {
       return CompletableFuture.completedFuture(false);
     }
 
-    // Check if swap is already in progress
-    if (activeSwaps.containsKey(chunkKey)) {
-  LOGGER.debug("Swap already in progress for chunk: {}", chunkKey);
-      return activeSwaps.get(chunkKey).getFuture();
-    }
-
+    // Atomic check-and-act to prevent race condition using ConcurrentHashMap.putIfAbsent
+    // This eliminates the check-then-act race condition by combining both operations atomically
     SwapOperation operation = new SwapOperation(chunkKey, SwapOperationType.SWAP_OUT);
-    activeSwaps.put(chunkKey, operation);
+    SwapOperation existingOperation = activeSwaps.putIfAbsent(chunkKey, operation);
+    
+    if (existingOperation != null) {
+      LOGGER.debug("Swap already in progress for chunk: {}", chunkKey);
+      return existingOperation.getFuture();
+    }
     totalSwapOperations.incrementAndGet();
 
     // Fast-path: if chunk is not present in cache and a database adapter exists,
@@ -567,6 +650,10 @@ public class SwapManager {
     // skip the fast-path so that tiny-timeout tests can exercise timeout behavior.
     try {
       final long FIXED_FAST_PATH_NANOS = 25_000_000L; // 25ms - larger deterministic target
+      // Validate that FIXED_FAST_PATH_NANOS is within reasonable bounds
+      if (FIXED_FAST_PATH_NANOS <= 0 || FIXED_FAST_PATH_NANOS > 60_000_000_000L) { // Max 60 seconds
+        throw new IllegalStateException("Invalid FIXED_FAST_PATH_NANOS value: " + FIXED_FAST_PATH_NANOS);
+      }
       boolean allowFastPath = true;
       if (config != null && config.getSwapTimeoutMs() > 0) {
         long timeoutMs = config.getSwapTimeoutMs();
@@ -626,13 +713,36 @@ public class SwapManager {
         // around swapOutChunk(...).get() see a deterministic value.
         try {
           // Busy-spin until the fixed target is reached for tighter timing
+          // with proper exit conditions to prevent infinite loops
           if (config == null || config.isEnableDeterministicTiming()) {
+            final long MAX_SPIN_WAIT_NANOS = Math.max(FIXED_FAST_PATH_NANOS * 2, 100_000_000L); // Safety timeout (min 100ms)
+            final long startWaitNano = System.nanoTime();
+            
             while (System.nanoTime() - startNano < FIXED_FAST_PATH_NANOS) {
+              // Check for thread interruption
+              if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Thread interrupted during spin-wait");
+              }
+              
+              // Check for timeout to prevent infinite loop
+              if (System.nanoTime() - startWaitNano > MAX_SPIN_WAIT_NANOS) {
+                LOGGER.warn("Spin-wait timeout exceeded for chunk: {}, falling back to async", chunkKey);
+                throw new RuntimeException("Spin-wait timeout exceeded");
+              }
+              
               Thread.onSpinWait();
             }
           }
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw e; // Re-throw to be handled by outer catch block
+        } catch (RuntimeException e) {
+          // Fall back to async execution for timeout or other runtime exceptions
+          throw e;
         } catch (Throwable t) {
           Thread.currentThread().interrupt();
+          LOGGER.warn("Unexpected exception during spin-wait for chunk: {}", chunkKey, t);
+          throw new RuntimeException("Unexpected spin-wait error", t);
         }
 
         // Record a fixed duration to make fast-path latencies deterministic
@@ -656,15 +766,20 @@ public class SwapManager {
       }
     } catch (Exception e) {
       // If fast-path fails for any reason, fall back to async path below
-    LOGGER.warn(
-      "Fast-path swap-out failed for {}: {}. Falling back to async execution.",
-      chunkKey,
-      e.getMessage());
+      LOGGER.warn(
+        "Fast-path swap-out failed for {}: {}. Falling back to async execution.",
+        chunkKey,
+        e.getMessage());
       // ensure we don't leave operation in activeSwaps if it failed here
       activeSwaps.remove(chunkKey);
-      // create a new operation to use for async path without reassigning 'operation'
+      // create a new operation to use for async path with atomic check-and-act
       SwapOperation fallbackOperation = new SwapOperation(chunkKey, SwapOperationType.SWAP_OUT);
-      activeSwaps.put(chunkKey, fallbackOperation);
+      SwapOperation existingFallback = activeSwaps.putIfAbsent(chunkKey, fallbackOperation);
+      if (existingFallback != null) {
+        // Another thread already started the operation, return its future
+        return existingFallback.getFuture();
+      }
+      // Use the fallback operation we just created
       // use fallbackOperation in the async flow below
       CompletableFuture<Boolean> swapFuture =
           CompletableFuture.supplyAsync(
@@ -843,14 +958,15 @@ public class SwapManager {
       return CompletableFuture.completedFuture(false);
     }
 
-    // Check if swap is already in progress
-    if (activeSwaps.containsKey(chunkKey)) {
-      LOGGER.debug("Swap already in progress for chunk: { }", chunkKey);
-      return activeSwaps.get(chunkKey).getFuture();
-    }
-
+    // Atomic check-and-act to prevent race condition using ConcurrentHashMap.putIfAbsent
+    // This eliminates the check-then-act race condition by combining both operations atomically
     SwapOperation operation = new SwapOperation(chunkKey, SwapOperationType.SWAP_IN);
-    activeSwaps.put(chunkKey, operation);
+    SwapOperation existingOperation = activeSwaps.putIfAbsent(chunkKey, operation);
+    
+    if (existingOperation != null) {
+      LOGGER.debug("Swap already in progress for chunk: {}", chunkKey);
+      return existingOperation.getFuture();
+    }
     totalSwapOperations.incrementAndGet();
 
     // Fast-path: if a database adapter exists and the chunk is not present in cache,
@@ -858,9 +974,13 @@ public class SwapManager {
     // deterministic busy-wait to normalize observed wall-clock latencies in tests.
     try {
       // Determine whether to allow fast-path based on configured timeout. If the configured
-      // swap timeout is shorter than the deterministic fast-path, prefer the async path so
+      //swap timeout is shorter than the deterministic fast-path, prefer the async path so
       // that timeouts are honored by the calling configuration (tests create tiny timeouts).
       final long FIXED_FAST_PATH_NANOS = 12_000_000L; // 12ms target for swap-in
+      // Validate that FIXED_FAST_PATH_NANOS is within reasonable bounds
+      if (FIXED_FAST_PATH_NANOS <= 0 || FIXED_FAST_PATH_NANOS > 60_000_000_000L) { // Max 60 seconds
+        throw new IllegalStateException("Invalid FIXED_FAST_PATH_NANOS value: " + FIXED_FAST_PATH_NANOS);
+      }
       boolean allowFastPath = true;
       if (config != null && config.getSwapTimeoutMs() > 0) {
         long timeoutMs = config.getSwapTimeoutMs();
@@ -915,14 +1035,37 @@ public class SwapManager {
         }
 
         // Busy-spin until the fixed target is reached for tighter timing
+        // with proper exit conditions to prevent infinite loops
         try {
           if (config == null || config.isEnableDeterministicTiming()) {
+            final long MAX_SPIN_WAIT_NANOS = Math.max(FIXED_FAST_PATH_NANOS * 2, 100_000_000L); // Safety timeout (min 100ms)
+            final long startWaitNano = System.nanoTime();
+            
             while (System.nanoTime() - startNano < FIXED_FAST_PATH_NANOS) {
+              // Check for thread interruption
+              if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Thread interrupted during spin-wait");
+              }
+              
+              // Check for timeout to prevent infinite loop
+              if (System.nanoTime() - startWaitNano > MAX_SPIN_WAIT_NANOS) {
+                LOGGER.warn("Spin-wait timeout exceeded for chunk: {}, falling back to async", chunkKey);
+                throw new RuntimeException("Spin-wait timeout exceeded");
+              }
+              
               Thread.onSpinWait();
             }
           }
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw e; // Re-throw to be handled by outer catch block
+        } catch (RuntimeException e) {
+          // Fall back to async execution for timeout or other runtime exceptions
+          throw e;
         } catch (Throwable t) {
           Thread.currentThread().interrupt();
+          LOGGER.warn("Unexpected exception during spin-wait for chunk: {}", chunkKey, t);
+          throw new RuntimeException("Unexpected spin-wait error", t);
         }
 
         long fixedMs = Math.max(1L, FIXED_FAST_PATH_NANOS / 1_000_000L);
@@ -945,12 +1088,17 @@ public class SwapManager {
       }
     } catch (Exception e) {
       LOGGER.warn(
-          "Fast-path swap-in failed for { }: { }. Falling back to async execution.",
+          "Fast-path swap-in failed for {}: {}. Falling back to async execution.",
           chunkKey,
           e.getMessage());
       activeSwaps.remove(chunkKey);
       SwapOperation fallbackOperation = new SwapOperation(chunkKey, SwapOperationType.SWAP_IN);
-      activeSwaps.put(chunkKey, fallbackOperation);
+      SwapOperation existingFallback = activeSwaps.putIfAbsent(chunkKey, fallbackOperation);
+      if (existingFallback != null) {
+        // Another thread already started the operation, return its future
+        return existingFallback.getFuture();
+      }
+      // Use the fallback operation we just created
 
       CompletableFuture<Boolean> swapFuture =
           CompletableFuture.supplyAsync(

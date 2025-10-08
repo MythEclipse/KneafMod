@@ -20,6 +20,7 @@ pub mod block;
 pub mod binary;
 pub mod logging;
 pub mod memory_pool;
+pub mod memory_pressure_config;
 pub mod performance_monitoring;
 pub mod simd;
 pub mod chunk;
@@ -67,28 +68,84 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_generateF
     let total_elements = rows * cols;
     let total_bytes = total_elements * 4; // 4 bytes per float
     
-    // Allocate memory for the buffer
-    let mut buffer = vec![0u8; total_bytes as usize];
-    let buffer_ptr = buffer.as_mut_ptr();
+    if total_bytes <= 0 || total_bytes > (i32::MAX as jlong) {
+        let trace_id = generate_trace_id();
+        log_error!("buffer_allocation", "validation", &trace_id, "Invalid buffer size", format!("total_bytes: {}", total_bytes));
+        return std::ptr::null_mut();
+    }
     
-    // Forget the vector so Rust doesn't free the memory
-    std::mem::forget(buffer);
+    // Use RAII wrapper with manual allocation for better memory safety
+    struct BufferGuard {
+        ptr: *mut u8,
+        layout: std::alloc::Layout,
+        forgotten: bool,
+    }
+
+    impl BufferGuard {
+        fn new(size: usize) -> Option<Self> {
+            if size == 0 {
+                return None;
+            }
+
+            let layout = std::alloc::Layout::from_size_align(size, 1).ok()?;
+            let ptr = unsafe { std::alloc::alloc(layout) };
+
+            if ptr.is_null() {
+                return None;
+            }
+
+            // Initialize memory to zero for safety
+            unsafe {
+                std::ptr::write_bytes(ptr, 0, size);
+            }
+
+            Some(Self { ptr, layout, forgotten: true })
+        }
+
+        fn ptr(&self) -> *mut u8 {
+            self.ptr
+        }
+
+        fn dismiss(&mut self) {
+            self.forgotten = false;
+        }
+    }
+
+    impl Drop for BufferGuard {
+        fn drop(&mut self) {
+            if self.forgotten && !self.ptr.is_null() {
+                unsafe {
+                    std::alloc::dealloc(self.ptr, self.layout);
+                }
+            }
+        }
+    }
+    
+    let mut guard = match BufferGuard::new(total_bytes as usize) {
+        Some(g) => g,
+        None => {
+            let trace_id = generate_trace_id();
+            log_error!("buffer_allocation", "allocation", &trace_id, "Failed to allocate buffer memory");
+            return std::ptr::null_mut();
+        }
+    };
     
     // Create direct ByteBuffer from the allocated memory
-    match unsafe { env.new_direct_byte_buffer(buffer_ptr, total_bytes as usize) } {
-        Ok(buffer) => buffer.into_raw(),
+    match unsafe { env.new_direct_byte_buffer(guard.ptr(), total_bytes as usize) } {
+        Ok(buffer) => {
+            guard.dismiss(); // Memory successfully transferred to Java
+            buffer.into_raw()
+        }
         Err(e) => {
             let trace_id = generate_trace_id();
             log_error!("buffer_allocation", "direct_buffer", &trace_id, "Failed to allocate direct ByteBuffer", e);
-            // Free the memory if we failed to create the ByteBuffer
-            unsafe { 
-                std::alloc::dealloc(buffer_ptr, std::alloc::Layout::from_size_align_unchecked(total_bytes as usize, 1));
-            }
+            // Guard will automatically free the memory on drop
             std::ptr::null_mut()
         }
     }
 }
 
+use jni::sys::jlong;
 // Free a float buffer allocated by generateFloatBufferNative
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_freeFloatBufferNative(
@@ -625,13 +682,13 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativePro
                 }
                 _ => {
                     eprintln!("Invalid SIMD buffer capacity");
-                    std::ptr::null_mut()
+                    return std::ptr::null_mut();
                 }
             }
         }
         Err(e) => {
             eprintln!("Failed to get SIMD direct buffer address: {:?}", e);
-            std::ptr::null_mut()
+            return std::ptr::null_mut();
         }
     }
 }
@@ -1032,7 +1089,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeIni
         rtree.insert(i as u32, bounds);
     }
     
-    return std::ptr::null_mut();
+    std::ptr::null_mut()
 }
 
 // Optimized spatial query using R-tree (O(log n) instead of O(n))
@@ -1102,14 +1159,15 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_nativeSpa
         result_bytes.extend_from_slice(&id.to_le_bytes());
     }
 
-    return match env.byte_array_from_slice(&result_bytes) {
+    match env.byte_array_from_slice(&result_bytes) {
         Ok(array) => array.into_raw(),
         Err(e) => {
             eprintln!("Failed to create optimized spatial query result byte array: {:?}", e);
             std::ptr::null_mut()
         }
-    };
-    
+    }
+}
+
 // Async batch processing JNI functions
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_submitAsyncBatchedOperations(
@@ -1237,80 +1295,293 @@ pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_submitZeroCopyBat
     }
 }
     
-    // Unified memory arena JNI functions
-    #[no_mangle]
-    pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeInitUnifiedMemoryArena(
-        env: jni::JNIEnv,
-        _class: jni::objects::JClass,
-        small_pool_size: jni::sys::jint,
-        medium_pool_size: jni::sys::jint,
-        large_pool_size: jni::sys::jint,
-        enable_slab_allocation: jni::sys::jboolean,
-        enable_zero_copy_buffers: jni::sys::jboolean,
-        cleanup_threshold: jni::sys::jdouble,
-    ) -> jni::sys::jint {
-        use crate::allocator::{init_unified_memory_arena, MemoryArenaConfig};
+// Unified memory arena JNI functions
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeInitUnifiedMemoryArena(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    small_pool_size: jni::sys::jint,
+    medium_pool_size: jni::sys::jint,
+    large_pool_size: jni::sys::jint,
+    enable_slab_allocation: jni::sys::jboolean,
+    enable_zero_copy_buffers: jni::sys::jboolean,
+    cleanup_threshold: jni::sys::jdouble,
+) -> jni::sys::jint {
+    use crate::allocator::{init_unified_memory_arena, MemoryArenaConfig};
+    
+    let config = MemoryArenaConfig {
+        small_object_pool_size: small_pool_size as usize,
+        medium_object_pool_size: medium_pool_size as usize,
+        large_object_pool_size: large_pool_size as usize,
+        enable_slab_allocation: enable_slab_allocation != 0,
+        enable_zero_copy_buffers: enable_zero_copy_buffers != 0,
+        cleanup_threshold: cleanup_threshold,
+    };
+    
+    match init_unified_memory_arena(config) {
+        Ok(_) => 0, // Success
+        Err(_) => 1, // Error
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeGetMemoryArenaStats(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+) -> jni::sys::jstring {
+    use crate::allocator::get_memory_arena_stats;
+    
+    if let Some(stats) = get_memory_arena_stats() {
+        let stats_json = serde_json::json!({
+            "smallPoolAvailable": stats.small_pool_stats.available_slabs,
+            "mediumPoolAvailable": stats.medium_pool_stats.available_slabs,
+            "largePoolAvailable": stats.large_pool_stats.available_slabs,
+            "totalAllocated": stats.total_allocated,
+            "totalDeallocated": stats.total_deallocated,
+            "currentUsage": stats.current_usage,
+            "zeroCopyBuffers": stats.zero_copy_buffers,
+        });
         
-        let config = MemoryArenaConfig {
-            small_object_pool_size: small_pool_size as usize,
-            medium_object_pool_size: medium_pool_size as usize,
-            large_object_pool_size: large_pool_size as usize,
-            enable_slab_allocation: enable_slab_allocation != 0,
-            enable_zero_copy_buffers: enable_zero_copy_buffers != 0,
-            cleanup_threshold: cleanup_threshold,
-        };
-        
-        match init_unified_memory_arena(config) {
-            Ok(_) => 0, // Success
-            Err(_) => 1, // Error
+        match env.new_string(&serde_json::to_string(&stats_json).unwrap_or_default()) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    } else {
+        match env.new_string("{\"error\":\"Unified memory arena not initialized\"}") {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
         }
     }
-    
-    #[no_mangle]
-    pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeGetMemoryArenaStats(
-        env: jni::JNIEnv,
-        _class: jni::objects::JClass,
-    ) -> jni::sys::jstring {
-        use crate::allocator::get_memory_arena_stats;
-        
-        if let Some(stats) = get_memory_arena_stats() {
-            let stats_json = serde_json::json!({
-                "smallPoolAvailable": stats.small_pool_stats.available_slabs,
-                "mediumPoolAvailable": stats.medium_pool_stats.available_slabs,
-                "largePoolAvailable": stats.large_pool_stats.available_slabs,
-                "totalAllocated": stats.total_allocated,
-                "totalDeallocated": stats.total_deallocated,
-                "currentUsage": stats.current_usage,
-                "zeroCopyBuffers": stats.zero_copy_buffers,
-            });
-            
-            match env.new_string(&serde_json::to_string(&stats_json).unwrap_or_default()) {
-                Ok(s) => s.into_raw(),
-                Err(_) => std::ptr::null_mut(),
-            }
-        } else {
-            match env.new_string("{\"error\":\"Unified memory arena not initialized\"}") {
-                Ok(s) => s.into_raw(),
-                Err(_) => std::ptr::null_mut(),
-            }
-        }
+}
+
+// Connection pooling JNI functions
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeGetBufferAddress(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    buffer: jni::sys::jobject,
+) -> jni::sys::jlong {
+    if buffer.is_null() {
+        return 0;
     }
     
-    // Connection pooling JNI functions
-    #[no_mangle]
-    pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeGetBufferAddress(
-        env: jni::JNIEnv,
-        _class: jni::objects::JClass,
-        buffer: jni::sys::jobject,
-    ) -> jni::sys::jlong {
-        if buffer.is_null() {
-            return 0;
+    let byte_buffer = unsafe { jni::objects::JByteBuffer::from_raw(buffer) };
+    match env.get_direct_buffer_address(&byte_buffer) {
+        Ok(address) => address as jni::sys::jlong,
+        Err(_) => 0,
+    }
+}
+
+// Memory pressure configuration JNI functions
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeGetMemoryPressureConfig(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+) -> jni::sys::jstring {
+    use crate::memory_pressure_config::GLOBAL_MEMORY_PRESSURE_CONFIG;
+
+    let config = GLOBAL_MEMORY_PRESSURE_CONFIG.read().unwrap();
+    let config_json = serde_json::json!({
+        "normalThreshold": config.normal_threshold,
+        "moderateThreshold": config.moderate_threshold,
+        "highThreshold": config.high_threshold,
+        "criticalThreshold": config.critical_threshold,
+    });
+
+    match env.new_string(&serde_json::to_string(&config_json).unwrap_or_default()) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeUpdateMemoryPressureConfig(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    config_json: jni::sys::jstring,
+) -> jni::sys::jint {
+    use crate::memory_pressure_config::{GLOBAL_MEMORY_PRESSURE_CONFIG, MemoryPressureConfig};
+
+    if config_json.is_null() {
+        return 1; // Error: null config
+    }
+
+    let jstring_obj = unsafe { jni::objects::JString::from_raw(config_json) };
+    let config_str = match env.get_string(&jstring_obj) {
+        Ok(s) => s,
+        Err(_) => return 2, // Error: failed to get string
+    };
+
+    let config_str = config_str.to_string_lossy();
+
+    match serde_json::from_str::<MemoryPressureConfig>(&config_str) {
+        Ok(new_config) => {
+            if let Err(_) = new_config.validate() {
+                return 3; // Error: invalid configuration
+            }
+
+            let mut global_config = GLOBAL_MEMORY_PRESSURE_CONFIG.write().unwrap();
+            *global_config = new_config;
+            0 // Success
         }
-        
-        let byte_buffer = unsafe { jni::objects::JByteBuffer::from_raw(buffer) };
-        match env.get_direct_buffer_address(&byte_buffer) {
-            Ok(address) => address as jni::sys::jlong,
-            Err(_) => 0,
+        Err(_) => 4, // Error: invalid JSON
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeValidateMemoryPressureConfig(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    config_json: jni::sys::jstring,
+) -> jni::sys::jboolean {
+    use crate::memory_pressure_config::MemoryPressureConfig;
+
+    if config_json.is_null() {
+        return 0; // Invalid
+    }
+
+    let jstring_obj = unsafe { jni::objects::JString::from_raw(config_json) };
+    let config_str = match env.get_string(&jstring_obj) {
+        Ok(s) => s,
+        Err(_) => return 0, // Invalid
+    };
+
+    let config_str = config_str.to_string_lossy();
+
+    match serde_json::from_str::<MemoryPressureConfig>(&config_str) {
+        Ok(config) => {
+            if config.validate().is_ok() {
+                1 // Valid
+            } else {
+                0 // Invalid
+            }
         }
+        Err(_) => 0, // Invalid
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_nativeGetMemoryPressureLevel(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    usage_ratio: jni::sys::jdouble,
+) -> jni::sys::jint {
+    use crate::memory_pressure_config::{GLOBAL_MEMORY_PRESSURE_CONFIG, MemoryPressureLevel};
+
+    let config = GLOBAL_MEMORY_PRESSURE_CONFIG.read().unwrap();
+    let level = MemoryPressureLevel::from_usage_ratio(usage_ratio as f64);
+
+    match level {
+        MemoryPressureLevel::Normal => 0,
+        MemoryPressureLevel::Moderate => 1,
+        MemoryPressureLevel::High => 2,
+        MemoryPressureLevel::Critical => 3,
+    }
+}
+
+// Memory pressure configuration JNI functions for SwapManager
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_chunkstorage_SwapManager_nativeGetMemoryPressureConfig(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+) -> jni::sys::jstring {
+    use crate::memory_pressure_config::GLOBAL_MEMORY_PRESSURE_CONFIG;
+
+    let config = GLOBAL_MEMORY_PRESSURE_CONFIG.read().unwrap();
+    let config_json = serde_json::json!({
+        "normalThreshold": config.normal_threshold,
+        "moderateThreshold": config.moderate_threshold,
+        "highThreshold": config.high_threshold,
+        "criticalThreshold": config.critical_threshold,
+    });
+
+    match env.new_string(&serde_json::to_string(&config_json).unwrap_or_default()) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_chunkstorage_SwapManager_nativeUpdateMemoryPressureConfig(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    config_json: jni::sys::jstring,
+) -> jni::sys::jint {
+    use crate::memory_pressure_config::{GLOBAL_MEMORY_PRESSURE_CONFIG, MemoryPressureConfig};
+
+    if config_json.is_null() {
+        return 1; // Error: null config
+    }
+
+    let jstring_obj = unsafe { jni::objects::JString::from_raw(config_json) };
+    let config_str = match env.get_string(&jstring_obj) {
+        Ok(s) => s,
+        Err(_) => return 2, // Error: failed to get string
+    };
+
+    let config_str = config_str.to_string_lossy();
+
+    match serde_json::from_str::<MemoryPressureConfig>(&config_str) {
+        Ok(new_config) => {
+            if let Err(_) = new_config.validate() {
+                return 3; // Error: invalid configuration
+            }
+
+            let mut global_config = GLOBAL_MEMORY_PRESSURE_CONFIG.write().unwrap();
+            *global_config = new_config;
+            0 // Success
+        }
+        Err(_) => 4, // Error: invalid JSON
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_chunkstorage_SwapManager_nativeValidateMemoryPressureConfig(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    config_json: jni::sys::jstring,
+) -> jni::sys::jboolean {
+    use crate::memory_pressure_config::MemoryPressureConfig;
+
+    if config_json.is_null() {
+        return 0; // Invalid
+    }
+
+    let jstring_obj = unsafe { jni::objects::JString::from_raw(config_json) };
+    let config_str = match env.get_string(&jstring_obj) {
+        Ok(s) => s,
+        Err(_) => return 0, // Invalid
+    };
+
+    let config_str = config_str.to_string_lossy();
+
+    match serde_json::from_str::<MemoryPressureConfig>(&config_str) {
+        Ok(config) => {
+            if config.validate().is_ok() {
+                1 // Valid
+            } else {
+                0 // Invalid
+            }
+        }
+        Err(_) => 0, // Invalid
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_chunkstorage_SwapManager_nativeGetMemoryPressureLevel(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    usage_ratio: jni::sys::jdouble,
+) -> jni::sys::jint {
+    use crate::memory_pressure_config::{GLOBAL_MEMORY_PRESSURE_CONFIG, MemoryPressureLevel};
+
+    let config = GLOBAL_MEMORY_PRESSURE_CONFIG.read().unwrap();
+    let level = MemoryPressureLevel::from_usage_ratio(usage_ratio as f64);
+
+    match level {
+        MemoryPressureLevel::Normal => 0,
+        MemoryPressureLevel::Moderate => 1,
+        MemoryPressureLevel::High => 2,
+        MemoryPressureLevel::Critical => 3,
     }
 }

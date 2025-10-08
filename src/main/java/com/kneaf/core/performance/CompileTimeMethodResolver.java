@@ -7,6 +7,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Compile-time method resolution system to eliminate reflection overhead Uses MethodHandles and
@@ -14,6 +16,7 @@ import java.util.function.Function;
  */
 public final class CompileTimeMethodResolver {
   private static final CompileTimeMethodResolver INSTANCE = new CompileTimeMethodResolver();
+  private static final Logger LOGGER = LoggerFactory.getLogger(CompileTimeMethodResolver.class);
 
   // Method handle cache for compiled method access
   private final ConcurrentHashMap<String, MethodHandle> methodHandleCache =
@@ -32,6 +35,7 @@ public final class CompileTimeMethodResolver {
   private final AtomicLong compilationFailures = new AtomicLong(0);
   private static final int MAX_COMPILATION_RETRIES = 3;
   private static final int CIRCUIT_BREAKER_THRESHOLD = 5;
+  private static final long COMPILATION_TIMEOUT_MS = 5000; // 5 second timeout
 
   // Method signature constants
   private static final MethodType VOID_METHOD = MethodType.methodType(void.class);
@@ -132,32 +136,39 @@ public final class CompileTimeMethodResolver {
   private void precompileCommonMethods() {
     try {
       // Pre-compile entity methods
-      compileMethod("com.kneaf.core.data.EntityData", MethodSignature.GET_ID);
-      compileMethod("com.kneaf.core.data.EntityData", MethodSignature.GET_POSITION);
-      compileMethod("com.kneaf.core.data.EntityData", MethodSignature.IS_ALIVE);
+      boolean entityIdSuccess = compileMethod("com.kneaf.core.data.EntityData", MethodSignature.GET_ID);
+      boolean entityPosSuccess = compileMethod("com.kneaf.core.data.EntityData", MethodSignature.GET_POSITION);
+      boolean entityAliveSuccess = compileMethod("com.kneaf.core.data.EntityData", MethodSignature.IS_ALIVE);
 
       // Pre-compile block methods
-      compileMethod("com.kneaf.core.data.BlockEntityData", MethodSignature.GET_BLOCK_ID);
-      compileMethod("com.kneaf.core.data.BlockEntityData", MethodSignature.GET_BLOCK_STATE);
-      compileMethod("com.kneaf.core.data.BlockEntityData", MethodSignature.IS_BLOCK_SOLID);
+      boolean blockIdSuccess = compileMethod("com.kneaf.core.data.BlockEntityData", MethodSignature.GET_BLOCK_ID);
+      boolean blockStateSuccess = compileMethod("com.kneaf.core.data.BlockEntityData", MethodSignature.GET_BLOCK_STATE);
+      boolean blockSolidSuccess = compileMethod("com.kneaf.core.data.BlockEntityData", MethodSignature.IS_BLOCK_SOLID);
 
       // Pre-compile player methods
-      compileMethod("com.kneaf.core.data.PlayerData", MethodSignature.GET_PLAYER_NAME);
-      compileMethod("com.kneaf.core.data.PlayerData", MethodSignature.GET_PLAYER_POSITION);
-      compileMethod("com.kneaf.core.data.PlayerData", MethodSignature.GET_PLAYER_HEALTH);
+      boolean playerNameSuccess = compileMethod("com.kneaf.core.data.PlayerData", MethodSignature.GET_PLAYER_NAME);
+      boolean playerPosSuccess = compileMethod("com.kneaf.core.data.PlayerData", MethodSignature.GET_PLAYER_POSITION);
+      boolean playerHealthSuccess = compileMethod("com.kneaf.core.data.PlayerData", MethodSignature.GET_PLAYER_HEALTH);
 
       // Pre-compile world methods
-      compileMethod("net.minecraft.world.level.Level", MethodSignature.GET_WORLD_TIME);
-      compileMethod("net.minecraft.world.level.Level", MethodSignature.GET_BLOCK_AT);
-      compileMethod("net.minecraft.world.level.Level", MethodSignature.SET_BLOCK_AT);
+      boolean worldTimeSuccess = compileMethod("net.minecraft.world.level.Level", MethodSignature.GET_WORLD_TIME);
+      boolean blockAtSuccess = compileMethod("net.minecraft.world.level.Level", MethodSignature.GET_BLOCK_AT);
+      boolean setBlockSuccess = compileMethod("net.minecraft.world.level.Level", MethodSignature.SET_BLOCK_AT);
+
+      // Log pre-compilation results
+      LOGGER.info("Pre-compilation results:");
+      LOGGER.info("Entity methods: ID={}, Position={}, Alive={}", entityIdSuccess, entityPosSuccess, entityAliveSuccess);
+      LOGGER.info("Block methods: ID={}, State={}, Solid={}", blockIdSuccess, blockStateSuccess, blockSolidSuccess);
+      LOGGER.info("Player methods: Name={}, Position={}, Health={}", playerNameSuccess, playerPosSuccess, playerHealthSuccess);
+      LOGGER.info("World methods: Time={}, GetBlock={}, SetBlock={}", worldTimeSuccess, blockAtSuccess, setBlockSuccess);
 
     } catch (Exception e) {
-      System.err.println("Error pre-compiling common methods: " + e.getMessage());
+      LOGGER.error("Error pre-compiling common methods: {}", e.getMessage(), e);
     }
   }
 
-  /** Compile method for zero-reflection access */
-  public void compileMethod(String className, MethodSignature signature) {
+  /** Compile method for zero-reflection access - returns true if successful */
+  public boolean compileMethod(String className, MethodSignature signature) {
     String cacheKey = className + "." + signature.getMethodName();
 
     try {
@@ -165,7 +176,8 @@ public final class CompileTimeMethodResolver {
       Method method = findMethod(clazz, signature);
 
       if (method == null) {
-        throw new NoSuchMethodException("Method not found: " + signature.getMethodName());
+        LOGGER.warn("Method not found: {} in class {}", signature.getMethodName(), className);
+        return false;
       }
 
       method.setAccessible(true);
@@ -181,9 +193,16 @@ public final class CompileTimeMethodResolver {
         createOptimizedLambda(cacheKey, handle, signature);
       }
 
+      return true;
+
     } catch (Exception e) {
       compilationErrors.incrementAndGet();
-      System.err.println("Error compiling method " + cacheKey + ": " + e.getMessage());
+      LOGGER.error("Error compiling method {}: {}", cacheKey, e.getMessage(), e);
+      return false;
+    } catch (Error e) {
+      compilationErrors.incrementAndGet();
+      LOGGER.error("Critical error compiling method {}: {}", cacheKey, e.getMessage(), e);
+      return false;
     }
   }
 
@@ -310,7 +329,7 @@ public final class CompileTimeMethodResolver {
 
     } catch (Throwable e) {
       compilationErrors.incrementAndGet();
-      System.err.println("Error creating optimized lambda for " + cacheKey + ": " + e.getMessage());
+      LOGGER.error("Error creating optimized lambda for {}: {}", cacheKey, e.getMessage(), e);
     }
   }
 
@@ -417,7 +436,7 @@ public final class CompileTimeMethodResolver {
           R result = (R) lambda.apply(target);
           results.put(target, result);
         } catch (Exception e) {
-          System.err.println("Batch invocation failed for target: " + e.getMessage());
+          LOGGER.warn("Batch invocation failed for target: {}", e.getMessage(), e);
         }
       }
     } else if (handle != null) {
@@ -427,7 +446,7 @@ public final class CompileTimeMethodResolver {
           R result = (R) handle.invoke(target);
           results.put(target, result);
         } catch (Throwable e) {
-          System.err.println("Batch invocation failed for target: " + e.getMessage());
+          LOGGER.warn("Batch invocation failed for target: {}", e.getMessage(), e);
         }
       }
     } else {
@@ -437,7 +456,7 @@ public final class CompileTimeMethodResolver {
           R result = invokeWithReflection(target, className, signature);
           results.put(target, result);
         } catch (Throwable e) {
-          System.err.println("Batch reflection invocation failed for target: " + e.getMessage());
+          LOGGER.warn("Batch reflection invocation failed for target: {}", e.getMessage(), e);
         }
       }
     }
@@ -469,35 +488,65 @@ public final class CompileTimeMethodResolver {
         }
       };
     } else {
-      // Attempt compilation with retry and circuit breaker
+      // Attempt compilation with retry, timeout, and circuit breaker
       int attempts = 0;
       boolean compiled = false;
+      long startTime = System.currentTimeMillis();
 
       while (attempts < MAX_COMPILATION_RETRIES && !compiled) {
         attempts++;
-        System.err.println("Attempting method compilation for " + cacheKey + " (attempt " + attempts + ")");
+        
+        // Check timeout before attempting compilation
+        if (System.currentTimeMillis() - startTime > COMPILATION_TIMEOUT_MS) {
+          LOGGER.error("Method compilation timeout for {} after {} attempts", cacheKey, attempts);
+          break;
+        }
+
+        // Exponential backoff with jitter
+        if (attempts > 1) {
+          long backoffMs = (long) (Math.pow(2, attempts - 1) * 100 + Math.random() * 100);
+          try {
+            Thread.sleep(backoffMs);
+          } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            LOGGER.warn("Compilation retry interrupted for {}", cacheKey);
+            break;
+          }
+        }
 
         try {
-          compileMethod(className, signature);
+          boolean compilationSuccess = compileMethod(className, signature);
 
-          // Check if compilation succeeded
-          if (lambdaCache.containsKey(cacheKey) || methodHandleCache.containsKey(cacheKey)) {
+          // Check if compilation succeeded by verifying cache presence
+          if (compilationSuccess && (lambdaCache.containsKey(cacheKey) || methodHandleCache.containsKey(cacheKey))) {
             compiled = true;
-            System.err.println("Method compilation successful for " + cacheKey);
+            LOGGER.info("Method compilation successful for {} (attempt {})", cacheKey, attempts);
           } else {
-            System.err.println("Method compilation failed for " + cacheKey + ": method not cached after compilation");
+            compilationErrors.incrementAndGet();
+            LOGGER.warn("Method compilation failed for {}: compilation returned {}, cache contains: lambda={}, handle={} (attempt {})",
+                cacheKey, compilationSuccess, lambdaCache.containsKey(cacheKey), methodHandleCache.containsKey(cacheKey), attempts);
           }
 
         } catch (Exception e) {
           compilationErrors.incrementAndGet();
           compilationFailures.incrementAndGet();
-          System.err.println("Method compilation attempt " + attempts + " failed for " + cacheKey + ": " + e.getMessage());
+          LOGGER.error("Method compilation attempt {} failed for {}: {}", attempts, cacheKey, e.getMessage(), e);
+        } catch (Error e) {
+          compilationErrors.incrementAndGet();
+          compilationFailures.incrementAndGet();
+          LOGGER.error("Method compilation attempt {} failed with critical error for {}: {}", attempts, cacheKey, e.getMessage(), e);
+          
+          // Break early for certain unrecoverable errors
+          if (e instanceof NoClassDefFoundError || e instanceof LinkageError) {
+            LOGGER.error("Breaking retry loop due to unrecoverable error: {}", e.getClass().getSimpleName());
+            break;
+          }
         }
       }
 
       if (!compiled) {
         compilationFailures.incrementAndGet();
-        throw new RuntimeException("Failed to compile method after " + MAX_COMPILATION_RETRIES + " attempts: " + cacheKey);
+        throw new RuntimeException("Failed to compile method after " + attempts + " attempts: " + cacheKey);
       }
 
       // Return the compiled method caller using cached values
@@ -561,8 +610,8 @@ public final class CompileTimeMethodResolver {
 
   /** Benchmark method invocation performance */
   public <T> void benchmarkMethod(
-      T target, String className, MethodSignature signature, int iterations) {
-    System.out.println("Benchmarking method: " + className + "." + signature.getMethodName());
+      T target, String className, MethodSignature signature,  int iterations) {
+    LOGGER.info("Benchmarking method: {}.{}", className, signature.getMethodName());
 
     // Warm up
     for (int i = 0; i < 1000; i++) {
@@ -579,7 +628,7 @@ public final class CompileTimeMethodResolver {
       try {
         invokeMethod(target, className, signature);
       } catch (Throwable e) {
-        System.err.println("Benchmark invocation failed: " + e.getMessage());
+        LOGGER.warn("Benchmark invocation failed: {}", e.getMessage(), e);
       }
     }
     long compiledTime = System.nanoTime() - startTime;
@@ -590,15 +639,14 @@ public final class CompileTimeMethodResolver {
       try {
         invokeWithReflection(target, className, signature);
       } catch (Throwable e) {
-        System.err.println("Reflection benchmark failed: " + e.getMessage());
+        LOGGER.warn("Reflection benchmark failed: {}", e.getMessage(), e);
       }
     }
     long reflectionTime = System.nanoTime() - startTime;
 
-    System.out.println("Results for " + iterations + " invocations:");
-    System.out.println("Compiled method time: " + (compiledTime / 1_000_000) + " ms");
-    System.out.println("Reflection time: " + (reflectionTime / 1_000_000) + " ms");
-    System.out.println(
-        "Speedup: " + String.format("%.2fx", (double) reflectionTime / compiledTime));
+    LOGGER.info("Results for {} invocations:", iterations);
+    LOGGER.info("Compiled method time: {} ms", compiledTime / 1_000_000);
+    LOGGER.info("Reflection time: {} ms", reflectionTime / 1_000_000);
+    LOGGER.info("Speedup: {}x", String.format("%.2f", (double) reflectionTime / compiledTime));
   }
 }

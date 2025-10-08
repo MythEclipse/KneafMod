@@ -122,4 +122,21 @@ public final class NativeBridge {
   public static int getOptimalBatchSize(int requestedSize) {
     return com.kneaf.core.performance.bridge.NativeBridge.getOptimalBatchSize(requestedSize);
   }
+
+  // Memory pressure configuration JNI methods
+  public static String nativeGetMemoryPressureConfig() {
+    return com.kneaf.core.performance.bridge.NativeBridge.nativeGetMemoryPressureConfig();
+  }
+  
+  public static int nativeUpdateMemoryPressureConfig(String configJson) {
+    return com.kneaf.core.performance.bridge.NativeBridge.nativeUpdateMemoryPressureConfig(configJson);
+  }
+  
+  public static boolean nativeValidateMemoryPressureConfig(String configJson) {
+    return com.kneaf.core.performance.bridge.NativeBridge.nativeValidateMemoryPressureConfig(configJson);
+  }
+  
+  public static int nativeGetMemoryPressureLevel(double usageRatio) {
+    return com.kneaf.core.performance.bridge.NativeBridge.nativeGetMemoryPressureLevel(usageRatio);
+  }
 }

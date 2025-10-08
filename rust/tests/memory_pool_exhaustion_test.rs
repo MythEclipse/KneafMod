@@ -168,7 +168,7 @@ fn test_enhanced_memory_pool_manager_pressure_handling() {
     println!("  Total checks: {}", monitoring_stats.total_checks);
     
     // Stop monitoring
-    manager.stop_monitoring();
+    manager.stop_monitoring(None);
     
     // Should have handled pressure without panicking
     assert!(enhanced_stats.total_memory_usage_bytes > 0);

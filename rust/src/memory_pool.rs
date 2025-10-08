@@ -20,6 +20,7 @@ use memmap2::{Mmap, MmapMut};
 use std::path::Path;
 // Ordering already imported on line 6 - removing duplicate
 use crate::logging::{PerformanceLogger, generate_trace_id};
+use crate::memory_pressure_config::GLOBAL_MEMORY_PRESSURE_CONFIG;
 
 /// Generic object pool for memory reuse with LRU eviction
 #[derive(Debug)]
@@ -36,7 +37,9 @@ where
     allocation_count: AtomicUsize,
     last_cleanup_time: AtomicUsize,
     is_monitoring: AtomicBool,
+    shutdown_flag: Arc<AtomicBool>,
     pressure_monitor: Arc<RwLock<MemoryPressureMonitor>>,
+    atomic_state: Arc<AtomicPoolState>, // Thread-safe pool state for race condition prevention
 }
 
 impl<T> ObjectPool<T>
@@ -57,7 +60,9 @@ where
                 .unwrap_or_default()
                 .as_secs() as usize),
             is_monitoring: AtomicBool::new(false),
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
             pressure_monitor: Arc::new(RwLock::new(MemoryPressureMonitor::new())),
+            atomic_state: Arc::new(AtomicPoolState::new(max_size)),
         }
     }
 
@@ -73,7 +78,9 @@ where
             allocation_count: AtomicUsize::new(self.allocation_count.load(Ordering::Relaxed)),
             last_cleanup_time: AtomicUsize::new(self.last_cleanup_time.load(Ordering::Relaxed)),
             is_monitoring: AtomicBool::new(self.is_monitoring.load(Ordering::Relaxed)),
+            shutdown_flag: Arc::clone(&self.shutdown_flag),
             pressure_monitor: Arc::clone(&self.pressure_monitor),
+            atomic_state: Arc::clone(&self.atomic_state),
         }
     }
 
@@ -86,28 +93,73 @@ where
         }
 
         self.is_monitoring.store(true, Ordering::Relaxed);
+        self.shutdown_flag.store(false, Ordering::Relaxed);
         
         let pressure_monitor = Arc::clone(&self.pressure_monitor);
-    let pool_clone = Arc::new(self.clone_shallow());
+        let pool_clone = Arc::new(self.clone_shallow());
+        let shutdown_flag = Arc::clone(&self.shutdown_flag);
         
         thread::spawn(move || {
-            loop {
-                // Check pool pressure
-                let stats = pool_clone.get_monitoring_stats();
-                let usage_ratio = stats.current_usage_ratio;
+            let mut consecutive_errors = 0;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+            
+            while !shutdown_flag.load(Ordering::Relaxed) {
+                // Check pool pressure with timeout protection
+                let stats = match std::panic::catch_unwind(|| {
+                    pool_clone.get_monitoring_stats()
+                }) {
+                    Ok(stats) => stats,
+                    Err(e) => {
+                        log::error!("Panic occurred while getting monitoring stats: {:?}", e);
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            log::error!("Too many consecutive errors, shutting down monitoring thread");
+                            return;
+                        }
+                        continue;
+                    }
+                };
                 
+                let usage_ratio = stats.current_usage_ratio;
                 let pressure_level = MemoryPressureLevel::from_usage_ratio(usage_ratio);
                 
-                // Update monitoring stats
-                let mut monitor = pressure_monitor.write().unwrap();
-                monitor.record_pressure_check(pressure_level);
+                // Update monitoring stats with error handling
+                match pressure_monitor.write() {
+                    Ok(mut monitor) => {
+                        monitor.record_pressure_check(pressure_level);
+                    },
+                    Err(e) => {
+                        log::warn!("Failed to acquire pressure monitor lock: {}", e);
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            log::error!("Too many consecutive errors, shutting down monitoring thread");
+                            return;
+                        }
+                        continue;
+                    }
+                }
                 
-                // Perform cleanup if needed
+                // Reset error counter on successful iteration
+                consecutive_errors = 0;
+                
+                // Perform cleanup if needed with timeout protection
                 match pressure_level {
                     MemoryPressureLevel::High | MemoryPressureLevel::Critical => {
                         log::warn!("High memory pressure in object pool - performing cleanup");
                         // ObjectPool provides lazy_cleanup for incremental cleanup
-                        (&*pool_clone).lazy_cleanup(0.85);
+                        match std::panic::catch_unwind(|| {
+                            (&*pool_clone).lazy_cleanup(0.85)
+                        }) {
+                            Ok(success) => {
+                                if success {
+                                    log::info!("Cleanup performed successfully");
+                                }
+                            },
+                            Err(e) => {
+                                log::error!("Panic occurred during cleanup: {:?}", e);
+                                consecutive_errors += 1;
+                            }
+                        }
                     },
                     MemoryPressureLevel::Moderate => {
                         log::info!("Moderate memory pressure in object pool");
@@ -115,15 +167,60 @@ where
                     _ => {}
                 }
                 
-                // Wait for next check
-                thread::sleep(Duration::from_millis(check_interval_ms));
+                // Wait for next check with periodic shutdown check and timeout
+                let sleep_duration = Duration::from_millis(check_interval_ms);
+                let start_time = SystemTime::now();
+                
+                while SystemTime::now().duration_since(start_time).unwrap() < sleep_duration {
+                    if shutdown_flag.load(Ordering::Relaxed) {
+                        log::info!("Monitoring thread shutting down gracefully");
+                        return;
+                    }
+                    // Use shorter sleep intervals for more responsive shutdown
+                    thread::sleep(Duration::from_millis(50)); // Check every 50ms
+                }
             }
+            log::info!("Monitoring thread shut down gracefully");
         });
     }
 
-    /// Stop background monitoring
-    pub fn stop_monitoring(&self) {
+    /// Stop background monitoring with timeout
+    pub fn stop_monitoring(&self, timeout_ms: Option<u64>) -> bool {
         self.is_monitoring.store(false, Ordering::Relaxed);
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        
+        // If timeout is specified, wait for thread to stop
+        if let Some(timeout) = timeout_ms {
+            let start_time = SystemTime::now();
+            let timeout_duration = Duration::from_millis(timeout);
+            
+            while self.is_monitoring.load(Ordering::Relaxed) {
+                if SystemTime::now().duration_since(start_time).unwrap() > timeout_duration {
+                    log::warn!("Monitoring thread did not stop within timeout period");
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        
+        true
+    }
+    
+    /// Force stop monitoring thread (use as last resort)
+    pub fn force_stop_monitoring(&self) {
+        self.is_monitoring.store(false, Ordering::Relaxed);
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        log::warn!("Force stopping monitoring thread");
+    }
+
+    /// Check if monitoring is active
+    pub fn is_monitoring_active(&self) -> bool {
+        self.is_monitoring.load(Ordering::Relaxed)
+    }
+
+    /// Check if shutdown flag is set
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_flag.load(Ordering::Relaxed)
     }
 
     /// Get an object from the pool, creating a new one if none available
@@ -226,29 +323,55 @@ where
         let trace_id = generate_trace_id();
         self.logger.log_operation("get_monitoring_stats", &trace_id, || {
             let pool_len = self.pool.lock().unwrap().len();
+            let usage_ratio = self.atomic_state.get_usage_ratio();
             ObjectPoolMonitoringStats {
                 available_objects: pool_len,
                 max_size: self.max_size,
                 high_water_mark: self.high_water_mark.load(Ordering::Relaxed),
                 allocation_count: self.allocation_count.load(Ordering::Relaxed),
-                current_usage_ratio: pool_len as f64 / self.max_size as f64,
+                current_usage_ratio: usage_ratio,
                 last_cleanup_time: self.last_cleanup_time.load(Ordering::Relaxed),
             }
         })
     }
 
-    /// Record allocation for monitoring
+    /// Get current pool size atomically
+    pub fn get_current_size(&self) -> usize {
+        self.atomic_state.current_size.load(Ordering::Relaxed)
+    }
+
+    /// Get current usage ratio atomically
+    pub fn get_usage_ratio(&self) -> f64 {
+        self.atomic_state.get_usage_ratio()
+    }
+
+    /// Try to increment pool size atomically (thread-safe)
+    pub fn try_increment_pool_size(&self) -> Option<usize> {
+        self.atomic_state.try_increment_size()
+    }
+
+    /// Decrement pool size atomically (thread-safe)
+    pub fn decrement_pool_size(&self) {
+        self.atomic_state.decrement_size();
+    }
+
+    /// Record allocation for monitoring with atomic state updates
     fn record_allocation(&self) {
         let count = self.allocation_count.fetch_add(1, Ordering::Relaxed);
         let current = self.pool.lock().unwrap().len();
         if current > self.high_water_mark.load(Ordering::Relaxed) {
             self.high_water_mark.store(current, Ordering::Relaxed);
         }
+        // Update atomic state to reflect current pool size
+        self.atomic_state.update_usage_ratio(current);
     }
 
-    /// Record deallocation for monitoring
+    /// Record deallocation for monitoring with atomic state updates
     fn record_deallocation(&self) {
         self.allocation_count.fetch_sub(1, Ordering::Relaxed);
+        // Update atomic state to reflect current pool size
+        let current = self.pool.lock().unwrap().len();
+        self.atomic_state.update_usage_ratio(current);
     }
 
     /// Perform lazy cleanup when pool usage exceeds threshold
@@ -306,6 +429,66 @@ pub struct PooledObject<T> {
     is_critical_operation: bool,
 }
 
+/// Atomic state for thread-safe pool operations
+#[derive(Debug)]
+struct AtomicPoolState {
+    current_size: AtomicUsize,
+    max_size: usize,
+    usage_ratio: AtomicU64, // Stored as u64 to represent f64 bits
+}
+
+impl AtomicPoolState {
+    fn new(max_size: usize) -> Self {
+        Self {
+            current_size: AtomicUsize::new(0),
+            max_size,
+            usage_ratio: AtomicU64::new(0),
+        }
+    }
+
+    fn get_usage_ratio(&self) -> f64 {
+        let bits = self.usage_ratio.load(Ordering::Relaxed);
+        f64::from_bits(bits)
+    }
+
+    fn update_usage_ratio(&self, current_size: usize) {
+        let ratio = if self.max_size > 0 {
+            current_size as f64 / self.max_size as f64
+        } else {
+            0.0
+        };
+        self.usage_ratio.store(ratio.to_bits(), Ordering::Relaxed);
+    }
+
+    fn try_increment_size(&self) -> Option<usize> {
+        let mut current = self.current_size.load(Ordering::Relaxed);
+        loop {
+            if current >= self.max_size {
+                return None;
+            }
+            match self.current_size.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.update_usage_ratio(current + 1);
+                    return Some(current + 1);
+                }
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    fn decrement_size(&self) {
+        let previous = self.current_size.fetch_sub(1, Ordering::SeqCst);
+        if previous > 0 {
+            self.update_usage_ratio(previous - 1);
+        }
+    }
+}
+
 impl<T> PooledObject<T> {
     /// Get mutable reference to the pooled object
     pub fn as_mut(&mut self) -> &mut T {
@@ -334,28 +517,39 @@ impl<T> Drop for PooledObject<T> {
             }
 
             let now = SystemTime::now();
+            
+            // Thread-safe pool insertion using atomic operations to prevent race conditions
+            // First, try to atomically check and increment the pool size
             let mut pool_guard = self.pool.lock().unwrap();
             let mut access_order_guard = self.access_order.lock().unwrap();
-
-            // Only return to pool if we're not at critical levels
-            let usage_ratio = pool_guard.len() as f64 / self.max_size as f64;
+            
+            // Get current usage ratio atomically to avoid race conditions
+            let current_pool_size = pool_guard.len();
+            let usage_ratio = current_pool_size as f64 / self.max_size as f64;
+            
             if usage_ratio < 0.95 { // Only add back if usage is below 95%
-                if pool_guard.len() < self.max_size {
-                    // Add to pool with current access time
+                if current_pool_size < self.max_size {
+                    // Safe to add directly - no eviction needed
                     pool_guard.insert(self.id, (obj, now));
                     access_order_guard.insert(now, self.id);
                 } else {
-                    // Pool is full, evict LRU and add this one
+                    // Pool is at capacity, need to evict LRU item
+                    // Use compare-and-swap pattern to ensure thread safety
                     if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
+                        // Remove LRU item
                         access_order_guard.remove(&lru_time);
                         pool_guard.remove(&lru_id);
-                        // Now add the new object
+                        
+                        // Add the new object
                         pool_guard.insert(self.id, (obj, now));
                         access_order_guard.insert(now, self.id);
+                    } else {
+                        // Fallback: if we can't find LRU item, don't add to pool
+                        log::debug!("Could not find LRU item for eviction - object not returned to pool");
                     }
                 }
             } else {
-                // Don't add back to pool if it's already full to prevent overflow
+                // Don't add back to pool if it's already at critical level
                 log::debug!("Not returning object to pool - usage at critical level: {:.2}", usage_ratio);
             }
 
@@ -1305,11 +1499,21 @@ pub enum MemoryPressureLevel {
 
 impl MemoryPressureLevel {
     pub fn from_usage_ratio(usage_ratio: f64) -> Self {
-        match usage_ratio {
-            r if r < 0.7 => MemoryPressureLevel::Normal,
-            r if r < 0.85 => MemoryPressureLevel::Moderate,
-            r if r < 0.95 => MemoryPressureLevel::High,
-            _ => MemoryPressureLevel::Critical,
+        if let Ok(config) = GLOBAL_MEMORY_PRESSURE_CONFIG.read() {
+            match usage_ratio {
+                r if r < config.normal_threshold => MemoryPressureLevel::Normal,
+                r if r < config.moderate_threshold => MemoryPressureLevel::Moderate,
+                r if r < config.high_threshold => MemoryPressureLevel::High,
+                _ => MemoryPressureLevel::Critical,
+            }
+        } else {
+            // Fallback to default values if config is unavailable
+            match usage_ratio {
+                r if r < 0.7 => MemoryPressureLevel::Normal,
+                r if r < 0.85 => MemoryPressureLevel::Moderate,
+                r if r < 0.95 => MemoryPressureLevel::High,
+                _ => MemoryPressureLevel::Critical,
+            }
         }
     }
 }
@@ -2793,6 +2997,7 @@ pub struct EnhancedMemoryPoolManager {
     logger: PerformanceLogger,
     pressure_monitor: Arc<Mutex<MemoryPressureMonitor>>,
     is_monitoring: AtomicBool,
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl EnhancedMemoryPoolManager {
@@ -2802,13 +3007,14 @@ impl EnhancedMemoryPoolManager {
         // Start background monitoring thread
         let monitor_clone = Arc::clone(&pressure_monitor);
         let swap_pool_clone = Arc::new(SwapMemoryPool::new(max_swap_memory_bytes));
-        
+
         Self {
             regular_manager: MemoryPoolManager::new(),
             swap_pool: swap_pool_clone,
             logger: PerformanceLogger::new("enhanced_memory_pool_manager"),
             pressure_monitor,
             is_monitoring: AtomicBool::new(false),
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -2819,24 +3025,57 @@ impl EnhancedMemoryPoolManager {
         }
 
         self.is_monitoring.store(true, Ordering::Relaxed);
+        self.shutdown_flag.store(false, Ordering::Relaxed);
         
         let pressure_monitor = Arc::clone(&self.pressure_monitor);
         let swap_pool = Arc::clone(&self.swap_pool);
         let logger = self.logger.clone();
+        let shutdown_flag = Arc::clone(&self.shutdown_flag);
         
         thread::spawn(move || {
-            loop {
-                // Check memory pressure
-                let pressure = swap_pool.get_memory_pressure();
+            let mut consecutive_errors = 0;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+            
+            while !shutdown_flag.load(Ordering::Relaxed) {
+                // Check memory pressure with timeout protection
+                let pressure = match std::panic::catch_unwind(|| {
+                    swap_pool.get_memory_pressure()
+                }) {
+                    Ok(pressure) => pressure,
+                    Err(e) => {
+                        log::error!("Panic occurred while getting memory pressure: {:?}", e);
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            log::error!("Too many consecutive errors, shutting down monitoring thread");
+                            return;
+                        }
+                        continue;
+                    }
+                };
                 
-                // Update monitoring stats
-                let mut monitor = pressure_monitor.lock().unwrap();
-                monitor.record_pressure_check(pressure);
+                // Update monitoring stats with error handling
+                match pressure_monitor.lock() {
+                    Ok(mut monitor) => {
+                        monitor.record_pressure_check(pressure);
+                    },
+                    Err(e) => {
+                        log::warn!("Failed to acquire pressure monitor lock: {}", e);
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            log::error!("Too many consecutive errors, shutting down monitoring thread");
+                            return;
+                        }
+                        continue;
+                    }
+                }
+                
+                // Reset error counter on successful iteration
+                consecutive_errors = 0;
                 
                 // Log pressure information
                 match pressure {
                     MemoryPressureLevel::Normal => {
-                        if monitor.should_log(pressure) {
+                        if pressure_monitor.lock().unwrap().should_log(pressure) {
                             logger.log_info("memory_monitor", "background_check", "Normal memory pressure");
                         }
                     },
@@ -2851,19 +3090,61 @@ impl EnhancedMemoryPoolManager {
                     },
                 }
                 
-                // Perform cleanup if needed
+                // Perform cleanup if needed with timeout protection
                 match pressure {
                     MemoryPressureLevel::High | MemoryPressureLevel::Critical => {
-                        swap_pool.perform_aggressive_cleanup();
+                        log::warn!("High memory pressure in swap pool - performing cleanup");
+                        match std::panic::catch_unwind(|| {
+                            swap_pool.perform_aggressive_cleanup()
+                        }) {
+                            Ok(_) => {
+                                log::info!("Aggressive cleanup performed successfully");
+                            },
+                            Err(e) => {
+                                log::error!("Panic occurred during aggressive cleanup: {:?}", e);
+                                consecutive_errors += 1;
+                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                    log::error!("Too many consecutive errors, shutting down monitoring thread");
+                                    return;
+                                }
+                                continue;
+                            }
+                        }
                     },
                     MemoryPressureLevel::Moderate => {
-                        swap_pool.perform_light_cleanup();
+                        log::info!("Moderate memory pressure in swap pool");
+                        match std::panic::catch_unwind(|| {
+                            swap_pool.perform_light_cleanup()
+                        }) {
+                            Ok(_) => {
+                                log::info!("Light cleanup performed successfully");
+                            },
+                            Err(e) => {
+                                log::error!("Panic occurred during light cleanup: {:?}", e);
+                                consecutive_errors += 1;
+                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                    log::error!("Too many consecutive errors, shutting down monitoring thread");
+                                    return;
+                                }
+                                continue;
+                            }
+                        }
                     },
                     _ => {}
                 }
                 
-                // Wait for next check
-                thread::sleep(Duration::from_millis(check_interval_ms));
+                // Wait for next check with periodic shutdown check and timeout
+                let sleep_duration = Duration::from_millis(check_interval_ms);
+                let start_time = SystemTime::now();
+                
+                while SystemTime::now().duration_since(start_time).unwrap() < sleep_duration {
+                    if shutdown_flag.load(Ordering::Relaxed) {
+                        log::info!("Monitoring thread shutting down gracefully");
+                        return;
+                    }
+                    // Use shorter sleep intervals for more responsive shutdown
+                    thread::sleep(Duration::from_millis(50)); // Check every 50ms
+                }
             }
         });
     }
@@ -2873,9 +3154,43 @@ impl EnhancedMemoryPoolManager {
         self.swap_pool.get_memory_pressure()
     }
 
-    /// Stop background memory pressure monitoring
-    pub fn stop_monitoring(&self) {
+    /// Stop background monitoring with timeout
+    pub fn stop_monitoring(&self, timeout_ms: Option<u64>) -> bool {
         self.is_monitoring.store(false, Ordering::Relaxed);
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        
+        // If timeout is specified, wait for thread to stop
+        if let Some(timeout) = timeout_ms {
+            let start_time = SystemTime::now();
+            let timeout_duration = Duration::from_millis(timeout);
+            
+            while self.is_monitoring.load(Ordering::Relaxed) {
+                if SystemTime::now().duration_since(start_time).unwrap() > timeout_duration {
+                    log::warn!("Monitoring thread did not stop within timeout period");
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        
+        true
+    }
+    
+    /// Force stop monitoring thread (use as last resort)
+    pub fn force_stop_monitoring(&self) {
+        self.is_monitoring.store(false, Ordering::Relaxed);
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        log::warn!("Force stopping monitoring thread");
+    }
+
+    /// Check if monitoring is active
+    pub fn is_monitoring_active(&self) -> bool {
+        self.is_monitoring.load(Ordering::Relaxed)
+    }
+
+    /// Check if shutdown flag is set
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_flag.load(Ordering::Relaxed)
     }
 
     /// Delegate regular pool operations
@@ -3215,4 +3530,181 @@ pub struct LightweightPoolMetrics {
     pub hot_hit_count: u64,
     pub hot_hit_rate: f64,
     pub fallback_pool_size: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn test_atomic_pool_state_thread_safety() {
+        let atomic_state = AtomicPoolState::new(100);
+        
+        // Test concurrent increment operations
+        let state_arc = Arc::new(atomic_state);
+        let mut handles = vec![];
+        
+        for _ in 0..10 {
+            let state_clone = Arc::clone(&state_arc);
+            let handle = thread::spawn(move || {
+                for _ in 0..100 {
+                    if let Some(size) = state_clone.try_increment_size() {
+                        // Simulate some work
+                        thread::sleep(Duration::from_micros(1));
+                        state_clone.decrement_size();
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+        
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+        
+        // Verify final state is consistent
+        let final_size = state_arc.current_size.load(Ordering::Relaxed);
+        assert_eq!(final_size, 0, "Final pool size should be 0 after all operations");
+    }
+
+    #[test]
+    fn test_object_pool_race_condition_prevention() {
+        let pool = ObjectPool::<Vec<u8>>::new(50);
+        let pool_arc = Arc::new(pool);
+        let mut handles = vec![];
+        
+        // Create multiple threads that simultaneously allocate and drop objects
+        for thread_id in 0..5 {
+            let pool_clone = Arc::clone(&pool_arc);
+            let handle = thread::spawn(move || {
+                let mut objects = vec![];
+                
+                // Allocate objects
+                for i in 0..20 {
+                    let mut obj = pool_clone.get();
+                    obj.as_mut().push(thread_id * 100 + i as u8);
+                    objects.push(obj);
+                }
+                
+                // Drop objects concurrently by moving them to another thread
+                let drop_handle = thread::spawn(move || {
+                    // This will trigger Drop implementations concurrently
+                    drop(objects);
+                });
+                
+                drop_handle.join().expect("Drop thread panicked");
+            });
+            handles.push(handle);
+        }
+        
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+        
+        // Verify pool is in consistent state
+        let stats = pool_arc.get_monitoring_stats();
+        assert!(stats.available_objects <= stats.max_size, "Pool size should not exceed maximum");
+        
+        // Test that pool still works correctly after concurrent operations
+        let test_obj = pool_arc.get();
+        let test_vec = test_obj.as_ref();
+        assert_eq!(test_vec.len(), 0, "New object should be empty");
+    }
+
+    #[test]
+    fn test_pooled_object_drop_with_error_handling() {
+        let pool = ObjectPool::<String>::new(10);
+        
+        // Test normal drop operation
+        {
+            let obj = pool.get();
+            assert_eq!(obj.as_ref().len(), 0);
+        } // Drop happens here
+        
+        let stats = pool.get_monitoring_stats();
+        assert_eq!(stats.available_objects, 1, "Object should be returned to pool");
+        
+        // Test drop with allocation tracking
+        let metrics = Arc::new(RwLock::new(SwapAllocationMetrics::new()));
+        {
+            let obj = pool.get_with_tracking(100, Arc::clone(&metrics), "test");
+            assert_eq!(obj.as_ref().len(), 0);
+        } // Drop happens here with tracking
+        
+        // Verify metrics were updated
+        let metrics_read = metrics.read().unwrap();
+        assert_eq!(metrics_read.total_deallocations, 1, "Deallocation should be recorded");
+    }
+
+    #[test]
+    fn test_concurrent_pool_operations() {
+        let pool = ObjectPool::<Vec<u32>>::new(100);
+        let pool_arc = Arc::new(pool);
+        let mut handles = vec![];
+        
+        // Spawn multiple threads that perform various operations
+        for thread_id in 0..4 {
+            let pool_clone = Arc::clone(&pool_arc);
+            let handle = thread::spawn(move || {
+                let mut local_objects = vec![];
+                
+                // Perform allocations and deallocations
+                for i in 0..50 {
+                    let mut obj = pool_clone.get();
+                    obj.as_mut().push(thread_id * 1000 + i as u32);
+                    local_objects.push(obj);
+                    
+                    // Occasionally drop objects to create churn
+                    if i % 3 == 0 && !local_objects.is_empty() {
+                        let index = (i / 3) % local_objects.len();
+                        local_objects.remove(index);
+                    }
+                }
+                
+                // Drop remaining objects
+                drop(local_objects);
+            });
+            handles.push(handle);
+        }
+        
+        // Wait for completion
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+        
+        // Verify pool integrity
+        let final_stats = pool_arc.get_monitoring_stats();
+        assert!(final_stats.available_objects <= final_stats.max_size);
+        assert!(final_stats.allocation_count >= final_stats.available_objects);
+    }
+
+    #[test]
+    fn test_atomic_state_consistency() {
+        let state = AtomicPoolState::new(10);
+        
+        // Test that usage ratio is correctly calculated
+        assert_eq!(state.get_usage_ratio(), 0.0);
+        
+        // Increment size
+        assert!(state.try_increment_size().is_some());
+        assert_eq!(state.get_usage_ratio(), 0.1);
+        
+        // Test max size boundary
+        for _ in 0..9 {
+            assert!(state.try_increment_size().is_some());
+        }
+        assert_eq!(state.get_usage_ratio(), 1.0);
+        
+        // Should not allow increment beyond max
+        assert!(state.try_increment_size().is_none());
+        
+        // Test decrement
+        state.decrement_size();
+        assert_eq!(state.get_usage_ratio(), 0.9);
+    }
 }

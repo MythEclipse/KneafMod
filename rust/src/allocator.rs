@@ -12,11 +12,132 @@ use log::{info, debug, warn};
 use jni::sys::{jint, jboolean, jdouble, jstring};
 use parking_lot::RwLock;
 use lazy_static::lazy_static;
+use std::ops::{Deref, DerefMut};
 
 // Configuration for different allocation strategies
 const SMALL_OBJECT_THRESHOLD: usize = 4096; // 4KB
 const MEDIUM_OBJECT_THRESHOLD: usize = 65536; // 64KB
 const LARGE_OBJECT_THRESHOLD: usize = 1048576; // 1MB
+
+/// RAII wrapper for tracked memory allocations
+pub struct TrackedAllocation {
+    ptr: *mut u8,
+    size: usize,
+    allocation_id: u64,
+}
+
+impl TrackedAllocation {
+    pub fn new(ptr: *mut u8, size: usize, allocation_id: u64) -> Self {
+        Self { ptr, size, allocation_id }
+    }
+
+    pub fn as_ptr(&self) -> *mut u8 {
+        self.ptr
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    pub fn allocation_id(&self) -> u64 {
+        self.allocation_id
+    }
+}
+
+impl Drop for TrackedAllocation {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() {
+            log::warn!("TrackedAllocation dropped without explicit deallocation - potential memory leak detected for allocation {}", self.allocation_id);
+        }
+    }
+}
+
+/// Memory allocation tracker for leak detection
+#[derive(Debug)]
+pub struct AllocationTracker {
+    active_allocations: Arc<Mutex<HashMap<u64, (usize, std::time::Instant)>>>,
+    total_allocations: AtomicU64,
+    total_deallocations: AtomicU64,
+}
+
+impl AllocationTracker {
+    pub fn new() -> Self {
+        Self {
+            active_allocations: Arc::new(Mutex::new(HashMap::new())),
+            total_allocations: AtomicU64::new(0),
+            total_deallocations: AtomicU64::new(0),
+        }
+    }
+
+    pub fn track_allocation(&self, allocation_id: u64, size: usize) {
+        self.total_allocations.fetch_add(1, Ordering::Relaxed);
+        let mut allocations = self.active_allocations.lock().unwrap();
+        allocations.insert(allocation_id, (size, std::time::Instant::now()));
+    }
+
+    pub fn track_deallocation(&self, allocation_id: u64) -> Option<usize> {
+        self.total_deallocations.fetch_add(1, Ordering::Relaxed);
+        let mut allocations = self.active_allocations.lock().unwrap();
+        allocations.remove(&allocation_id).map(|(size, _)| size)
+    }
+
+    pub fn get_leak_report(&self) -> Vec<(u64, usize, std::time::Duration)> {
+        let allocations = self.active_allocations.lock().unwrap();
+        allocations.iter().map(|(&id, &(size, timestamp))| {
+            (id, size, timestamp.elapsed())
+        }).collect()
+    }
+
+    pub fn has_leaks(&self) -> bool {
+        let allocations = self.active_allocations.lock().unwrap();
+        !allocations.is_empty()
+    }
+}
+
+/// Scope guard for automatic cleanup
+pub struct ScopeGuard<F: FnOnce()> {
+    cleanup: Option<F>,
+}
+
+impl<F: FnOnce()> ScopeGuard<F> {
+    pub fn new(cleanup: F) -> Self {
+        Self { cleanup: Some(cleanup) }
+    }
+
+    pub fn dismiss(mut self) {
+        self.cleanup.take();
+    }
+}
+
+impl<F: FnOnce()> Drop for ScopeGuard<F> {
+    fn drop(&mut self) {
+        if let Some(cleanup) = self.cleanup.take() {
+            cleanup();
+        }
+    }
+}
+
+/// Result type for allocation operations
+#[derive(Debug)]
+pub enum AllocationError {
+    OutOfMemory,
+    InvalidSize,
+    AllocationFailed,
+    DeallocationFailed,
+}
+
+impl std::fmt::Display for AllocationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AllocationError::OutOfMemory => write!(f, "Out of memory"),
+            AllocationError::InvalidSize => write!(f, "Invalid allocation size"),
+            AllocationError::AllocationFailed => write!(f, "Allocation failed"),
+            AllocationError::DeallocationFailed => write!(f, "Deallocation failed"),
+        }
+    }
+}
+
+impl std::error::Error for AllocationError {}
 
 /// Memory arena configuration
 #[derive(Debug, Clone)]
@@ -118,6 +239,7 @@ pub struct UnifiedMemoryArena {
     config: MemoryArenaConfig,
     total_allocated: AtomicU64,
     total_deallocated: AtomicU64,
+    allocation_tracker: Arc<AllocationTracker>,
 }
 
 impl UnifiedMemoryArena {
@@ -133,9 +255,12 @@ impl UnifiedMemoryArena {
             config,
             total_allocated: AtomicU64::new(0),
             total_deallocated: AtomicU64::new(0),
+            allocation_tracker: Arc::new(AllocationTracker::new()),
         }
     }
 
+    /// Legacy allocate method for backward compatibility - deprecated, use allocate_tracked instead
+    #[deprecated(note = "Use allocate_tracked for proper memory leak prevention")]
     pub fn allocate(&self, size: usize) -> *mut u8 {
         self.total_allocated.fetch_add(size as u64, Ordering::Relaxed);
         
@@ -166,6 +291,120 @@ impl UnifiedMemoryArena {
         }
     }
 
+    /// Safe allocation method that returns a tracked allocation
+    pub fn allocate_tracked(&self, size: usize) -> Result<TrackedAllocation, AllocationError> {
+        if size == 0 {
+            return Err(AllocationError::InvalidSize);
+        }
+
+        let allocation_id = self.allocation_tracker.total_allocations.load(Ordering::Relaxed) + 1;
+        
+        // Create scope guard to ensure cleanup on failure
+        let _guard = ScopeGuard::new(|| {
+            warn!("Allocation failed for size {} with id {}, cleanup triggered", size, allocation_id);
+        });
+
+        self.total_allocated.fetch_add(size as u64, Ordering::Relaxed);
+        
+        let ptr = if size <= SMALL_OBJECT_THRESHOLD && self.config.enable_slab_allocation {
+            if let Some(buffer) = self.small_allocator.allocate() {
+                let ptr = buffer.as_ptr() as *mut u8;
+                std::mem::forget(buffer); // Prevent Rust from freeing it
+                ptr
+            } else {
+                return Err(AllocationError::AllocationFailed);
+            }
+        } else if size <= MEDIUM_OBJECT_THRESHOLD {
+            if let Some(buffer) = self.medium_allocator.allocate() {
+                let ptr = buffer.as_ptr() as *mut u8;
+                std::mem::forget(buffer);
+                ptr
+            } else {
+                return Err(AllocationError::AllocationFailed);
+            }
+        } else if size <= LARGE_OBJECT_THRESHOLD {
+            if let Some(buffer) = self.large_allocator.allocate() {
+                let ptr = buffer.as_ptr() as *mut u8;
+                std::mem::forget(buffer);
+                ptr
+            } else {
+                return Err(AllocationError::AllocationFailed);
+            }
+        } else {
+            // Fallback to system allocator for very large allocations
+            unsafe {
+                let layout = Layout::from_size_align_unchecked(size, 8);
+                System.alloc(layout)
+            }
+        };
+
+        if ptr.is_null() {
+            return Err(AllocationError::OutOfMemory);
+        }
+
+        // Track the successful allocation
+        self.allocation_tracker.track_allocation(allocation_id, size);
+        
+        // Dismiss the guard since allocation succeeded
+        let guard = ScopeGuard::new(|| {});
+        std::mem::forget(guard);
+
+        Ok(TrackedAllocation::new(ptr, size, allocation_id))
+    }
+
+    /// Safe deallocation method for tracked allocations
+    pub fn deallocate_tracked(&self, allocation: TrackedAllocation) -> Result<(), AllocationError> {
+        let ptr = allocation.as_ptr();
+        let size = allocation.size();
+        let allocation_id = allocation.allocation_id();
+        
+        // Prevent the allocation from being dropped (which would trigger the leak warning)
+        std::mem::forget(allocation);
+        
+        self.total_deallocated.fetch_add(size as u64, Ordering::Relaxed);
+        
+        if ptr.is_null() {
+            return Err(AllocationError::InvalidSize);
+        }
+
+        // Track the deallocation
+        if self.allocation_tracker.track_deallocation(allocation_id).is_none() {
+            warn!("Deallocation of untracked allocation id {}", allocation_id);
+        }
+
+        let result = if size <= SMALL_OBJECT_THRESHOLD && self.config.enable_slab_allocation {
+            unsafe {
+                let buffer = Vec::from_raw_parts(ptr, 0, SMALL_OBJECT_THRESHOLD);
+                self.small_allocator.deallocate(buffer);
+                Ok(())
+            }
+        } else if size <= MEDIUM_OBJECT_THRESHOLD {
+            unsafe {
+                let buffer = Vec::from_raw_parts(ptr, 0, MEDIUM_OBJECT_THRESHOLD);
+                self.medium_allocator.deallocate(buffer);
+                Ok(())
+            }
+        } else if size <= LARGE_OBJECT_THRESHOLD {
+            unsafe {
+                let buffer = Vec::from_raw_parts(ptr, 0, LARGE_OBJECT_THRESHOLD);
+                self.large_allocator.deallocate(buffer);
+                Ok(())
+            }
+        } else {
+            unsafe {
+                let layout = Layout::from_size_align_unchecked(size, 8);
+                System.dealloc(ptr, layout);
+                Ok(())
+            }
+        };
+
+        if result.is_err() {
+            return Err(AllocationError::DeallocationFailed);
+        }
+
+        result
+    }
+
     pub fn deallocate(&self, ptr: *mut u8, size: usize) {
         self.total_deallocated.fetch_add(size as u64, Ordering::Relaxed);
         
@@ -194,6 +433,23 @@ impl UnifiedMemoryArena {
                 System.dealloc(ptr, layout);
             }
         }
+    }
+
+    /// Get memory leak report
+    pub fn get_leak_report(&self) -> Vec<(u64, usize, std::time::Duration)> {
+        self.allocation_tracker.get_leak_report()
+    }
+
+    /// Check if there are memory leaks
+    pub fn has_memory_leaks(&self) -> bool {
+        self.allocation_tracker.has_leaks()
+    }
+
+    /// Get allocation statistics
+    pub fn get_allocation_stats(&self) -> (u64, u64) {
+        let allocated = self.allocation_tracker.total_allocations.load(Ordering::Relaxed);
+        let deallocated = self.allocation_tracker.total_deallocations.load(Ordering::Relaxed);
+        (allocated, deallocated)
     }
 
     pub fn allocate_zero_copy_buffer(&self, size: usize) -> Result<(u64, *mut u8), String> {

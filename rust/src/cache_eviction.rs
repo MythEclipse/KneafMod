@@ -24,17 +24,6 @@ pub struct CacheEntry<T> {
     pub insertion_time: Instant,
 }
 
-// Priority queue implementation for cache eviction
-#[derive(Debug)]
-pub struct PriorityCache<T> {
-    capacity: usize,
-    policy: EvictionPolicy,
-    entries: RwLock<HashMap<String, CacheEntry<T>>>,
-    access_queue: Mutex<BinaryHeap<CacheEntry<T>>>,
-    stats: Mutex<CacheStats>,
-    feature_enabled: bool,
-}
-
 // Cache statistics structure
 #[derive(Debug, Default, Clone)]
 pub struct CacheStats {
@@ -44,6 +33,17 @@ pub struct CacheStats {
     pub insertions: u64,
     pub current_size: usize,
     pub max_size: usize,
+}
+
+// Priority queue implementation for cache eviction with deadlock prevention
+#[derive(Debug)]
+pub struct PriorityCache<T> {
+    capacity: usize,
+    policy: EvictionPolicy,
+    entries: RwLock<HashMap<String, CacheEntry<T>>>,
+    access_queue: Mutex<BinaryHeap<CacheEntry<T>>>,
+    stats: Mutex<CacheStats>,
+    feature_enabled: bool,
 }
 
 impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
@@ -62,20 +62,20 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
         }
     }
 
-    // Get a value from the cache - FIXED for deadlocks
+    // Get a value from the cache with consistent lock ordering
     pub fn get(&self, key: &str) -> Option<T> {
         if !self.feature_enabled {
             return None;
         }
 
-        // Use consistent lock ordering: entries -> stats (no access_queue)
+        // Consistent lock ordering: entries -> stats
         let mut entries = self.entries.write().unwrap();
         let mut stats = self.stats.lock().unwrap();
 
         if let Some(entry) = entries.get_mut(key) {
             // Update access statistics based on policy
             stats.hits += 1;
-             
+            
             match self.policy {
                 EvictionPolicy::LRU => {
                     entry.last_access = Instant::now();
@@ -96,19 +96,18 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
         }
     }
 
-    // Insert a value into the cache - FIXED for deadlocks
+    // Insert a value into the cache with consistent lock ordering
     pub fn insert(&self, key: String, value: T, priority: u32) -> Option<T> {
         if !self.feature_enabled {
             return Some(value);
         }
 
-        // Use consistent lock ordering to prevent deadlocks: entries -> stats -> access_queue
+        // Consistent lock ordering: entries -> stats -> access_queue
         let mut entries = self.entries.write().unwrap();
         let mut stats = self.stats.lock().unwrap();
 
         // Check if we need to evict before inserting
         let evicted_value = if entries.len() >= self.capacity {
-            // Use simplified eviction that doesn't require access_queue lock
             self.evict_one_simple(&mut entries, &mut stats)
         } else {
             None
@@ -125,9 +124,8 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
         };
 
         entries.insert(key.clone(), entry.clone());
-         
+        
         stats.insertions += 1;
-        stats.misses += 1; // Insert is considered a cache miss initially
         stats.current_size = entries.len();
 
         // Only lock access_queue for the minimal time needed
@@ -138,7 +136,11 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
     }
 
     // Simple eviction that only uses entries map (no access_queue) to prevent deadlocks
-    fn evict_one_simple(&self, entries: &mut HashMap<String, CacheEntry<T>>, stats: &mut CacheStats) -> Option<T> {
+    fn evict_one_simple(
+        &self,
+        entries: &mut HashMap<String, CacheEntry<T>>,
+        stats: &mut CacheStats,
+    ) -> Option<T> {
         // Find eviction candidate using ONLY entries map
         let evict_key = match self.policy {
             EvictionPolicy::LRU => {
@@ -206,7 +208,7 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
         })
     }
 
-    // Remove a specific entry from the cache - FIXED for deadlocks
+    // Remove a specific entry from the cache with consistent lock ordering
     pub fn remove(&self, key: &str) -> Option<T> {
         if !self.feature_enabled {
             return None;
@@ -223,19 +225,20 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
         }
     }
 
-    // Clear all entries from the cache - FIXED for deadlocks and race conditions
+    // Clear all entries from the cache with consistent lock ordering
     pub fn clear(&self) {
         if !self.feature_enabled {
             return;
         }
 
-        // Use a single critical section to prevent race conditions
         let mut entries = self.entries.write().unwrap();
         let mut stats = self.stats.lock().unwrap();
-        let mut access_queue = self.access_queue.lock().unwrap();
 
         entries.clear();
         stats.current_size = 0;
+        
+        // Only lock access_queue for minimal time
+        let mut access_queue = self.access_queue.lock().unwrap();
         access_queue.clear();
     }
 
@@ -288,7 +291,7 @@ impl Default for CacheFeatureFlags {
 // Initialize cache with feature flags
 pub fn initialize_cache(flags: CacheFeatureFlags) {
     // For testing purposes, we'll just log the configuration
-    // In a real implementation, we would properly handle cache reconfiguration
+    // In a real implementation, we would properly handle cache1 reconfiguration
     eprintln!("Cache configuration received: enabled={}, policy={:?}, capacity={}, stats={}",
         flags.cache_enabled,
         flags.eviction_policy,
@@ -504,7 +507,7 @@ mod tests {
         assert_eq!(cache.get("key2"), Some(vec![4, 5, 6]));
         
         // Test eviction
-        let evicted = cache.insert("key3".to_string(), vec![7, 8, 9], 1);
+        let evicted = cache.insert("key3".to_string(), vec![7, 1, 9], 1);
         assert_eq!(evicted, Some(vec![1, 2, 3])); // LRU evicts key1
         
         // Test that evicted key is no longer accessible

@@ -246,8 +246,12 @@ public final class NativeBridge {
     final BlockingQueue<byte[]> results = new LinkedBlockingQueue<>();
     final AtomicLong totalProcessingNs = new AtomicLong(0);
     final AtomicLong tasksProcessed = new AtomicLong(0);
+    final AtomicLong consecutiveErrors = new AtomicLong(0);
+    final AtomicLong lastHealthCheckTime = new AtomicLong(System.currentTimeMillis());
     final Thread thread;
     volatile boolean running = true;
+    volatile boolean healthy = true;
+    volatile long lastSuccessfulProcessTime = System.currentTimeMillis();
 
     Worker(int concurrency) {
       // single thread worker per handle; concurrency hint ignored for fallback
@@ -257,7 +261,26 @@ public final class NativeBridge {
     }
 
     void runLoop() {
-      while (running) {
+      final long MAX_CONSECUTIVE_ERRORS = 10;
+      final long HEALTH_CHECK_INTERVAL_MS = 5000;
+      
+      while (running && healthy) {
+        // Health check: jika terlalu banyak error berturut-turut, trigger circuit breaker
+        if (consecutiveErrors.get() >= MAX_CONSECUTIVE_ERRORS) {
+          LOGGER.warning("Circuit breaker triggered for worker " + thread.getName() +
+                       " with " + consecutiveErrors.get() + " consecutive errors");
+          healthy = false;
+          break;
+        }
+
+        // Periodic health check: jika tidak ada task yang berhasil diproses dalam interval tertentu
+        long currentTime = System.currentTimeMillis();
+        if (currentTime - lastSuccessfulProcessTime > HEALTH_CHECK_INTERVAL_MS &&
+            tasksProcessed.get() > 0) {
+          LOGGER.warning("Worker " + thread.getName() + " health check failed - no successful processing in " +
+                       (currentTime - lastSuccessfulProcessTime) + "ms");
+          consecutiveErrors.incrementAndGet();
+        }
         try {
           byte[] t = tasks.poll(100, TimeUnit.MILLISECONDS);
           if (t == null) continue;
@@ -268,6 +291,11 @@ public final class NativeBridge {
             Thread.sleep(ThreadLocalRandom.current().nextInt(1, 3));
           } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
+            // Graceful shutdown: jika diinterrupt, keluar dari loop
+            if (!running) {
+              LOGGER.info("Worker " + thread.getName() + " interrupted for shutdown");
+              break;
+            }
           }
 
           try {
@@ -295,13 +323,15 @@ public final class NativeBridge {
               outErr.putInt(msgBytes.length);
               outErr.put(msgBytes);
               results.offer(outErr.array());
+              LOGGER.warning("Malformed task envelope received: too short");
+              consecutiveErrors.incrementAndGet();
             } else {
               taskId = in.getLong();
               taskType = in.get();
               int len = in.getInt();
               if (len < 0 || in.remaining() < len) {
                 String msg = "Task envelope payload length mismatch";
-                byte[] msgBytes = msg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                byte[] msgBytes = msg.getBytes(java  .nio.charset.StandardCharsets.UTF_8);
                 java.nio.ByteBuffer outErr =
                     java.nio.ByteBuffer.allocate(13 + msgBytes.length)
                         .order(java.nio.ByteOrder.LITTLE_ENDIAN);
@@ -310,6 +340,9 @@ public final class NativeBridge {
                 outErr.putInt(msgBytes.length);
                 outErr.put(msgBytes);
                 results.offer(outErr.array());
+                LOGGER.warning("Task envelope payload length mismatch: expected=" + len +
+                             ", remaining=" + in.remaining());
+                consecutiveErrors.incrementAndGet();
               } else {
                 if (len > 0) {
                   payload = new byte[len];
@@ -326,6 +359,8 @@ public final class NativeBridge {
                   out.putInt(payload.length);
                   if (payload.length > 0) out.put(payload);
                   results.offer(out.array());
+                  consecutiveErrors.set(0); // Reset error counter on success
+                  lastSuccessfulProcessTime = System.currentTimeMillis();
                 } else if (taskType == 0x02) { // TYPE_HEAVY - sum of squares
                   try {
                     String s = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
@@ -333,15 +368,17 @@ public final class NativeBridge {
                     long sum = 0L;
                     for (long i = 1; i <= n; i++) sum += i * i;
                     String json = String.format("{\"task\":\"heavy\",\"n\":%d,\"sum\":%d}", n, sum);
-                    byte[] jb = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    byte[] jb = json.getBytes(java.nio.charset.  StandardCharsets.UTF_8);
                     java.nio.ByteBuffer out =
                         java.nio.ByteBuffer.allocate(13 + jb.length)
-                            .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                            .order(java.nio.  ByteOrder.LITTLE_ENDIAN);
                     out.putLong(taskId);
                     out.put((byte) 0);
                     out.putInt(jb.length);
                     out.put(jb);
                     results.offer(out.array());
+                    consecutiveErrors.set(0); // Reset error counter on success
+                    lastSuccessfulProcessTime = System.currentTimeMillis();
                   } catch (NumberFormatException nfe) {
                     String msg = "Invalid number in payload";
                     byte[] msgBytes = msg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -353,6 +390,8 @@ public final class NativeBridge {
                     outErr.putInt(msgBytes.length);
                     outErr.put(msgBytes);
                     results.offer(outErr.array());
+                    LOGGER.warning("Invalid number in payload: " + nfe.getMessage());
+                    consecutiveErrors.incrementAndGet();
                   }
                 } else if ((taskType & 0xFF) == 0xFF) { // TYPE_PANIC_TEST
                   String msg = "panic: Intentional panic for testing";
@@ -365,17 +404,21 @@ public final class NativeBridge {
                   outErr.putInt(msgBytes.length);
                   outErr.put(msgBytes);
                   results.offer(outErr.array());
+                  LOGGER.info("Intentional panic test handled for task: " + taskId);
+                  consecutiveErrors.incrementAndGet();
                 } else {
                   String msg = "Unknown task type: " + taskType;
                   byte[] msgBytes = msg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                   java.nio.ByteBuffer outErr =
-                      java.nio.ByteBuffer.allocate(13 + msgBytes.length)
+                      java.nio.ByteBuffer.allocate(13  + msgBytes.length)
                           .order(java.nio.ByteOrder.LITTLE_ENDIAN);
                   outErr.putLong(taskId);
                   outErr.put((byte) 1);
                   outErr.putInt(msgBytes.length);
                   outErr.put(msgBytes);
                   results.offer(outErr.array());
+                  LOGGER.warning("Unknown task type: " + taskType);
+                  consecutiveErrors.incrementAndGet();
                 }
               }
             }
@@ -392,22 +435,93 @@ public final class NativeBridge {
               out.putInt(msgBytes.length);
               out.put(msgBytes);
               results.offer(out.array());
-            } catch (Throwable ignore) {
+              LOGGER.log(java.util.logging.Level.SEVERE, "Internal error processing task: " + ex.getMessage(), ex);
+              consecutiveErrors.incrementAndGet();
+            } catch (Throwable secondaryEx) {
+              LOGGER.log(java.util.logging.Level.SEVERE, "Secondary error during error handling: " + secondaryEx.getMessage(), secondaryEx);
+              consecutiveErrors.incrementAndGet();
             }
           }
 
           long dur = System.nanoTime() - start;
           totalProcessingNs.addAndGet(dur);
           tasksProcessed.incrementAndGet();
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          if (!running) {
+            LOGGER.info("Worker " + thread.getName() + " interrupted for shutdown");
+            break;
+          }
         } catch (Throwable ex) {
-          // swallow - fallback should never crash tests
+          // Proper error logging instead of swallowing
+          LOGGER.log(java.util.logging.Level.SEVERE, "Critical error in worker loop: " + ex.getMessage(), ex);
+          consecutiveErrors.incrementAndGet();
+          
+          // Circuit breaker: jika error critical, tunggu sebentar sebelum melanjutkan
+          try {
+            Thread.sleep(1000); // Backoff 1 second
+          } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            if (!running) break;
+          }
         }
+      }
+
+      // Graceful shutdown: proses remaining tasks sebelum keluar
+      if (!running) {
+        LOGGER.info("Worker " + thread.getName() + " performing graceful shutdown");
+        processRemainingTasks();
+      } else if (!healthy) {
+        LOGGER.warning("Worker "  + thread.getName() + " marked unhealthy, attempting recovery");
+        attemptRecovery();
       }
     }
 
     void stop() {
       running = false;
       thread.interrupt();
+    }
+
+    void processRemainingTasks() {
+      LOGGER.info("Processing remaining tasks in queue: " + tasks.size());
+      byte[] task;
+      while ((task = tasks.poll()) != null) {
+        try {
+          // Process task quickly without extensive error handling
+          java.nio.ByteBuffer in = java.nio.ByteBuffer.wrap(task).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+          if (task.length >= 13) {
+            long taskId = in.getLong();
+            byte taskType = in.get();
+            int len = in.getInt();
+            if (len > 0 && in.remaining() >= len) {
+              byte[] payload = new byte[len];
+              in.get(payload);
+              // Create simple error response for shutdown
+              String msg = "Task cancelled due to shutdown";
+              byte[] msgBytes = msg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+              java.nio.ByteBuffer outErr = java.nio.ByteBuffer.allocate(13 + msgBytes.length)
+                  .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+              outErr.putLong(taskId);
+              outErr.put((byte) 1);
+              outErr.putInt(msgBytes.length);
+              outErr.put(msgBytes);
+              results.offer(outErr.array());
+            }
+          }
+        } catch (Exception e) {
+          LOGGER.warning("Failed to process remaining task during shutdown: " + e.getMessage());
+        }
+      }
+    }
+
+    void attemptRecovery() {
+      LOGGER.info("Attempting recovery for worker " + thread.getName());
+      consecutiveErrors.set(0);
+      healthy = true;
+      lastSuccessfulProcessTime = System.currentTimeMillis();
+      // Clear any stale results
+      results.clear();
+      LOGGER.info("Worker " + thread.getName() + " recovery completed");
     }
   }
 
@@ -824,6 +938,15 @@ public final class NativeBridge {
       return Math.max(minBatchSize(), Math.min(maxBatchSize(), batchSize));
     }
   }
+
+  // Memory pressure configuration JNI methods
+  public static native String nativeGetMemoryPressureConfig();
+  
+  public static native int nativeUpdateMemoryPressureConfig(String configJson);
+  
+  public static native boolean nativeValidateMemoryPressureConfig(String configJson);
+  
+  public static native int nativeGetMemoryPressureLevel(double usageRatio);
 
   /** Buffer entity operation for batch processing - reduces JNI crossing overhead */
   public static void bufferEntityOperation(byte[] payload) {
