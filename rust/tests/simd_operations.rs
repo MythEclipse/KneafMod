@@ -1,4 +1,5 @@
-use rustperf::{calculate_distances_simd, calculate_chunk_distances_simd};
+use rustperf::simd::entity_processing::calculate_entity_distances;
+use rustperf::spatial::calculate_chunk_distances_simd;
 
 #[cfg(test)]
 mod tests {
@@ -13,7 +14,7 @@ mod tests {
         ];
         let center = (0.0, 0.0, 0.0);
 
-        let distances = calculate_distances_simd(&positions, center);
+        let distances = calculate_entity_distances(&positions, center);
 
         assert_eq!(distances.len(), 3);
         assert!((distances[0] - 0.0).abs() < 1e-6); // Distance from (0,0,0) to (0,0,0)
@@ -28,7 +29,7 @@ mod tests {
         ];
         let center = (1.0, 2.0, 3.0);
 
-        let distances = calculate_distances_simd(&positions, center);
+        let distances = calculate_entity_distances(&positions, center);
 
         assert_eq!(distances.len(), 2);
         assert!((distances[0] - 0.0).abs() < 1e-6); // Same point
@@ -41,7 +42,7 @@ mod tests {
         let positions: Vec<(f32, f32, f32)> = vec![];
         let center = (0.0, 0.0, 0.0);
 
-        let distances = calculate_distances_simd(&positions, center);
+        let distances = calculate_entity_distances(&positions, center);
 
         assert_eq!(distances.len(), 0);
     }
@@ -51,7 +52,7 @@ mod tests {
         let positions: Vec<(f32, f32, f32)> = (0..100).map(|i| (i as f32, 0.0, 0.0)).collect();
         let center = (0.0, 0.0, 0.0);
 
-        let distances = calculate_distances_simd(&positions, center);
+        let distances = calculate_entity_distances(&positions, center);
 
         assert_eq!(distances.len(), 100);
         for (i, &dist) in distances.iter().enumerate() {
@@ -68,7 +69,7 @@ mod tests {
         ];
         let center_chunk = (0, 0);
 
-        let distances = calculate_chunk_distances_simd(&chunk_coords, center_chunk);
+        let distances = rustperf::simd::vector_ops::calculate_chunk_distances(&chunk_coords, center_chunk);
 
         assert_eq!(distances.len(), 3);
         assert!((distances[0] - 0.0).abs() < 1e-6); // Distance from (0,0) to (0,0)
@@ -122,7 +123,7 @@ mod tests {
         let positions = vec![(1.0, 2.0, 3.0), (4.0, 5.0, 6.0)];
         let center = (0.0, 0.0, 0.0);
 
-        let distances = calculate_distances_simd(&positions, center);
+        let distances = calculate_entity_distances(&positions, center);
 
         assert_eq!(distances.len(), 2);
         // Verify distances are calculated correctly

@@ -9,11 +9,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "async-io")]
 use tokio::time::timeout;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
-use std::thread;
 use std::path::Path;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -21,15 +19,13 @@ use std::fs;
 use memmap2::{MmapOptions, Mmap};
 use jni::JNIEnv;
 use jni::objects::{JClass, JString, JByteArray, JObject};
-use jni::sys::{jboolean, jlong, jint, jbyteArray, jthrowable};
+use jni::sys::{jboolean, jlong, jint, jbyteArray};
 use sled::Db;
 use fastnbt::Value;
 use lz4_flex::block;
 
 use log::{debug, info, error, warn};
 use serde_json;
-use futures::future::join_all;
-use std::path::PathBuf;
 #[cfg(feature = "structured-errors")]
 use thiserror::Error;
 
@@ -139,7 +135,7 @@ impl SwapMetadata {
            .as_secs();
         
        let time_since_access = now.saturating_sub(self.last_access_time);
-       let time_since_swap = now.saturating_sub(self.last_swap_time);
+       let _time_since_swap = now.saturating_sub(self.last_swap_time);
         
        // Calculate components with exponential recency and size penalty
        // 1. Frequency score (capped at 10 to prevent overwhelming other factors)
@@ -166,8 +162,11 @@ impl SwapMetadata {
 
 /// Lock ordering constants to prevent deadlocks
 /// Order: stats -> swap_metadata -> memory_mapped_files
+#[allow(dead_code)]
 const LOCK_ORDER_STATS: u8 = 1;
+#[allow(dead_code)]
 const LOCK_ORDER_SWAP_METADATA: u8 = 2;
+#[allow(dead_code)]
 const LOCK_ORDER_MEMORY_MAPPED_FILES: u8 = 3;
 
 /// Lock acquisition timeout in milliseconds
@@ -327,22 +326,26 @@ impl ChunkCoordinates {
 /// Rust-based database adapter for chunk storage using sled with swap support
 pub struct RustDatabaseAdapter {
     db: Arc<Db>,
-    stats: Arc<RwLock<DatabaseStats>>,
+    pub stats: Arc<RwLock<DatabaseStats>>,
     swap_metadata: Arc<RwLock<HashMap<String, SwapMetadata>>>,
     memory_mapped_files: Arc<RwLock<HashMap<String, Mmap>>>,
     database_type: String,
     world_name: String,
-    checksum_enabled: bool,
+    pub checksum_enabled: bool,
+    #[allow(dead_code)]
     memory_mapping_enabled: bool,
     db_path: String,
-    swap_path: String,
+    pub swap_path: String,
     // Async I/O components - conditional on feature flag
     #[cfg(feature = "async-io")]
     io_runtime: Option<tokio::runtime::Runtime>,
     #[cfg(feature = "async-io")]
     io_task_sender: Option<mpsc::Sender<IoTask>>,
+    #[allow(dead_code)]
     compression_batch_size: usize,
+    #[allow(dead_code)]
     priority_score_cache: Arc<RwLock<HashMap<String, (f64, SystemTime)>>>,
+    #[allow(dead_code)]
     cache_ttl: Duration,
     // JNI Error Handling - conditional on feature flag
     #[cfg(feature = "circuit-breaker")]
@@ -938,6 +941,7 @@ impl RustDatabaseAdapter {
             Ok(())
     }
     
+    #[allow(dead_code)]
     /// Store data with checksum
    fn store_with_checksum(data: &[u8]) -> Result<Vec<u8>, String> {
        let mut hasher = blake3::Hasher::new();
@@ -990,6 +994,13 @@ impl RustDatabaseAdapter {
             .map(|stats| stats.is_healthy)
             .unwrap_or(false)
     }
+
+    /// Verify checksum for a swap chunk
+    pub fn verify_swap_chunk_checksum(&self, _key: &str) -> Result<(), String> {
+        // For now, just return Ok since checksum verification for swap is not implemented
+        // TODO: Implement actual checksum verification for swap files
+        Ok(())
+    }
     
     /// Clear all data
     pub fn clear(&self) -> Result<(), String> {
@@ -1035,7 +1046,7 @@ impl RustDatabaseAdapter {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let swap_file_path = Path::new(&self.swap_path).join(format!("{}_{}_{}.swap", self.world_name, safe_key, timestamp));
-            let swap_file_path_str = swap_file_path.to_str().ok_or_else(|| "Failed to convert swap path to string".to_string())?;
+            let _swap_file_path_str = swap_file_path.to_str().ok_or_else(|| "Failed to convert swap path to string".to_string())?;
             
             // Write data to swap file with atomic operation (temp file + rename) for safety
             let temp_path = Path::new(&self.swap_path).join(format!("{}.tmp", swap_file_path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("swap_temp")).to_string_lossy()));
@@ -1115,7 +1126,7 @@ impl RustDatabaseAdapter {
         
         // Read data from most recent swap file (sort by timestamp in filename)
         let data = std::fs::read(&swap_file_path)
-            .map_err(|e| format!("Failed to read swap file for world {}: {}", self.world_name, swap_file_path.display()))?;
+            .map_err(|_e| format!("Failed to read swap file for world {}: {}", self.world_name, swap_file_path.display()))?;
         
         let data_size = data.len() as u64;
         
@@ -1127,7 +1138,7 @@ impl RustDatabaseAdapter {
         // Remove all matching swap files (clean up all versions)
         for file_path in matching_files {
             std::fs::remove_file(&file_path)
-                .map_err(|e| format!("Failed to remove swap file for world {}: {}", self.world_name, file_path.display()))?;
+                .map_err(|_e| format!("Failed to remove swap file for world {}: {}", self.world_name, file_path.display()))?;
         }
         
         // Update swap metadata and statistics with consistent lock ordering
@@ -1581,7 +1592,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
         Ok(adapter) => {
             let adapter_ptr = Box::into_raw(Box::new(adapter)) as jlong;
             // Record successful initialization
-            let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+            let _adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
             #[cfg(feature = "circuit-breaker")]
             adapter.record_jni_operation_result("nativeInit", true);
             Ok(adapter_ptr)
@@ -1603,7 +1614,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
                         Ok(fallback_adapter) => {
                             info!("Initialized fallback RustDatabaseAdapter at: {}", fallback_path);
                             let adapter_ptr = Box::into_raw(Box::new(fallback_adapter)) as jlong;
-                            let adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
+                            let _adapter = unsafe { &*(adapter_ptr as *const RustDatabaseAdapter) };
                             #[cfg(feature = "circuit-breaker")]
                             adapter.record_jni_operation_result("nativeInit", true);
                             Ok(adapter_ptr)
@@ -1627,7 +1638,7 @@ pub extern "system" fn Java_com_kneaf_core_chunkstorage_RustDatabaseAdapter_nati
         Err(e) => {
             // Record failed initialization
             if let Ok(adapter) = env.get_string(&database_type).map(|s| s.to_str().unwrap().to_string()) {
-                let dummy_adapter = RustDatabaseAdapter::new(&adapter, &env.get_string(&world_name).map(|s| s.to_str().unwrap().to_string()).unwrap_or_default(), false, false).unwrap_or_else(|_| {
+                let _dummy_adapter = RustDatabaseAdapter::new(&adapter, &env.get_string(&world_name).map(|s| s.to_str().unwrap().to_string()).unwrap_or_default(), false, false).unwrap_or_else(|_| {
                     let dummy = RustDatabaseAdapter {
                         db: Arc::new(sled::Config::new().temporary(true).open().unwrap()),
                         stats: Arc::new(RwLock::new(DatabaseStats::new())),

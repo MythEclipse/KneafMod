@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::slice;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::thread;
-use log::log;
 
 /// Safe wrapper for memory chunk operations
 #[derive(Debug)]
@@ -91,12 +90,17 @@ pub struct BumpArena {
     /// Is the arena being monitored?
     is_monitoring: AtomicBool,
     /// Is a critical operation in progress?
+    #[allow(dead_code)]
     is_critical_operation: AtomicBool,
     /// Cleanup thresholds
+    #[allow(dead_code)]
     lazy_cleanup_threshold: f64,
+    #[allow(dead_code)]
     aggressive_cleanup_threshold: f64,
+    #[allow(dead_code)]
     critical_cleanup_threshold: f64,
     /// Minimum allocation guard to prevent thrashing
+    #[allow(dead_code)]
     min_allocation_guard: f64,
     /// Shutdown flag for monitoring thread
     shutdown_flag: Arc<AtomicBool>,
@@ -163,7 +167,7 @@ impl BumpArena {
         }
 
         let mut chunk = match self.current.try_lock() {
-            Ok(mut chunk) => chunk,
+            Ok(chunk) => chunk,
             Err(_) => return None, // Another thread is allocating, fall back to slow path
         };
 
@@ -219,6 +223,7 @@ impl BumpArena {
         }
     }
     
+        #[allow(dead_code)]
         fn allocate_new_chunk(&self, min_size: usize, align: usize) -> *mut u8 {
             let chunk_size = min_size.max(self.chunk_size);
                 let mut new_chunk = Self::allocate_safe_chunk(chunk_size, align);
@@ -260,7 +265,7 @@ impl BumpArena {
                 while !shutdown_flag.load(Ordering::Relaxed) {
                     // Perform a lightweight pressure check using the monitor only
                     match std::panic::catch_unwind(|| {
-                        if let Ok(mut monitor) = pressure_monitor.write() {
+                        if let Ok(monitor) = pressure_monitor.write() {
                             monitor.record_pressure_check(MemoryPressureLevel::Normal);
                         }
                     }) {
@@ -338,7 +343,7 @@ impl BumpArena {
             let current_used = self.total_used.load(Ordering::Relaxed);
             self.high_water_mark.fetch_max(current_used, Ordering::Relaxed);
 
-            if let Ok(mut monitor) = self.pressure_monitor.write() {
+            if let Ok(monitor) = self.pressure_monitor.write() {
                 monitor.record_allocation(size);
             }
         }
@@ -366,7 +371,7 @@ impl BumpArena {
                 
                 self.last_cleanup_time.store(current_time, Ordering::Relaxed);
                 
-                let mut monitor = self.pressure_monitor.write().unwrap();
+                let monitor = self.pressure_monitor.write().unwrap();
                 monitor.record_cleanup_event(ArenaCleanupType::Lazy);
                 
                 log::debug!("Freed {} bytes in lazy cleanup", SMALL_FREE_AMOUNT);
@@ -398,7 +403,7 @@ impl BumpArena {
     fn check_memory_pressure(&self) {
         // Only perform pressure checks 1/5 of the time to reduce overhead
         if rand::thread_rng().gen::<f64>() < 0.2 {
-            if let Ok(mut monitor) = self.pressure_monitor.write() {
+            if let Ok(monitor) = self.pressure_monitor.write() {
                 let stats = self.stats();
                 let usage_ratio = if stats.total_allocated > 0 {
                     stats.total_used as f64 / stats.total_allocated as f64
@@ -701,7 +706,7 @@ impl ArenaPool {
                     };
 
                     // Update monitoring stats
-                    let mut monitor = pressure_monitor.write().unwrap();
+                    let monitor = pressure_monitor.write().unwrap();
                     monitor.record_pressure_check(pressure_level, stats_snapshot);
                     
                     // Perform cleanup if needed (no direct calls into pool to avoid borrowing self)
@@ -847,6 +852,7 @@ impl ArenaPool {
         }
     }
 
+    #[allow(dead_code)]
     /// Perform pool-level cleanup
     fn perform_pool_cleanup(&self) {
         let mut arenas = self.arenas.lock().expect("ArenaPool arenas mutex poisoned");
@@ -877,13 +883,13 @@ impl ArenaPool {
             arena.perform_lazy_cleanup();
         }
         
-        let mut monitor = self.pressure_monitor.write().unwrap();
+        let monitor = self.pressure_monitor.write().unwrap();
         monitor.record_cleanup_event(ArenaPoolCleanupType::PoolLevel);
     }
 
     /// Record arena event
     fn record_arena_event(&self, event: ArenaPoolEvent) {
-        let mut monitor = self.pressure_monitor.write().unwrap();
+        let monitor = self.pressure_monitor.write().unwrap();
         monitor.record_arena_event(event);
     }
 

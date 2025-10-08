@@ -1,10 +1,8 @@
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use dashmap::DashMap;
-use crossbeam_epoch::Atomic;
 use std::sync::Arc;
-use crate::memory_pool::{EnhancedMemoryPoolManager, get_global_enhanced_pool};
-use crate::arena::{BumpArena, get_global_arena_pool};
+use crate::arena::get_global_arena_pool;
 
 /// Represents a chunk position
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -16,9 +14,11 @@ pub struct ChunkPos {
 /// Manages chunk generation optimization with lock-free operations and memory pressure awareness
 pub struct ChunkGenerator {
     generated_chunks: DashMap<ChunkPos, ()>,
+    #[allow(dead_code)]
     generation_stats: Arc<ChunkGenerationStats>,
-    memory_pool: Arc<EnhancedMemoryPoolManager>,
+    #[allow(dead_code)]
     arena_pool: Arc<crate::arena::ArenaPool>,
+    #[allow(dead_code)]
     is_critical_operation: AtomicBool,
 }
 
@@ -106,7 +106,6 @@ impl ChunkGenerator {
         ChunkGenerator {
             generated_chunks: DashMap::new(),
             generation_stats: Arc::new(ChunkGenerationStats::new()),
-            memory_pool: get_global_enhanced_pool(),
             arena_pool: get_global_arena_pool(),
             is_critical_operation: AtomicBool::new(false),
         }

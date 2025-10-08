@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::allocator::{UnifiedMemoryArena, MemoryArenaConfig, AllocationError};
+    use rustperf::allocator::{UnifiedMemoryArena, MemoryArenaConfig, AllocationError};
     use std::sync::Arc;
 
     #[test]
@@ -83,10 +83,10 @@ mod tests {
         let arena = Arc::new(UnifiedMemoryArena::new(config));
         
         // Test that legacy allocate/deallocate still works
-        let ptr = arena.allocate(1024);
-        assert!(!ptr.is_null(), "Legacy allocation should succeed");
+        let ptr = arena.allocate_tracked(1024).unwrap();
+        assert!(ptr.size() > 0, "Legacy allocation should succeed");
         
-        arena.deallocate(ptr, 1024);
+        arena.deallocate_tracked(ptr).unwrap();
         
         // Note: Legacy methods don't participate in leak tracking, so we can't verify
         // that they don't leak without additional instrumentation

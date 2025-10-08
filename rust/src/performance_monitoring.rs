@@ -2,11 +2,10 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, Ordering};
 use std::sync::Arc;
 use jni::{JNIEnv, objects::{JString, JClass}, sys::jlong};
-use crate::{log_error, logging::{PerformanceLogger, generate_trace_id}};
+use crate::logging::{PerformanceLogger, generate_trace_id};
 use once_cell::sync::Lazy;
 use std::time::SystemTime;
 use std::collections::HashMap;
-use std::time::Instant;
 
 #[derive(Debug, Default, Clone)]
 pub struct JniCallMetrics {
@@ -121,7 +120,7 @@ impl PerformanceMonitor {
         self.jni_call_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
 
         // Update max call duration with compare-and-swap
-        let mut current_max = self.jni_max_call_duration_ms.load(Ordering::Relaxed);
+        let current_max = self.jni_max_call_duration_ms.load(Ordering::Relaxed);
         if duration_ms > current_max {
             let _ = self.jni_max_call_duration_ms.compare_exchange_weak(
                 current_max, duration_ms, Ordering::Relaxed, Ordering::Relaxed
@@ -149,7 +148,7 @@ impl PerformanceMonitor {
         self.lock_wait_time_ms.fetch_add(duration_ms, Ordering::Relaxed);
 
         // Update max lock wait time with compare-and-swap
-        let mut current_max = self.lock_max_wait_time_ms.load(Ordering::Relaxed);
+        let current_max = self.lock_max_wait_time_ms.load(Ordering::Relaxed);
         if duration_ms > current_max {
             let _ = self.lock_max_wait_time_ms.compare_exchange_weak(
                 current_max, duration_ms, Ordering::Relaxed, Ordering::Relaxed
@@ -181,7 +180,7 @@ impl PerformanceMonitor {
         self.memory_free_heap.store(free_bytes, Ordering::Relaxed);
 
         // Calculate and update peak heap usage
-        let mut current_peak = self.memory_peak_heap.load(Ordering::Relaxed);
+        let current_peak = self.memory_peak_heap.load(Ordering::Relaxed);
         if used_bytes > current_peak {
             let _ = self.memory_peak_heap.compare_exchange_weak(
                 current_peak, used_bytes, Ordering::Relaxed, Ordering::Relaxed
@@ -225,7 +224,7 @@ impl PerformanceMonitor {
         }
     }
 
-    fn trigger_threshold_alert(&self, alert_type: &str, message: &str) {
+    fn trigger_threshold_alert(&self, _alert_type: &str, message: &str) {
         let now = SystemTime::now();
         let last_alert = self.last_alert_time.lock();
         let cooldown = self.alert_cooldown.load(Ordering::Relaxed);
@@ -403,7 +402,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordLockWait
 
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordMemoryUsageNative(
-    mut env: JNIEnv,
+    _env: JNIEnv,
     _class: JClass,
     total_bytes: jlong,
     used_bytes: jlong,
@@ -418,7 +417,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordMemoryUs
 
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordGcEventNative(
-    mut env: JNIEnv,
+    _env: JNIEnv,
     _class: JClass,
     duration_ms: jlong,
 ) -> jlong {

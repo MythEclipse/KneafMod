@@ -1,5 +1,4 @@
 use jni::{JNIEnv, objects::JClass, sys::{jlong, jint, jstring, jbyte, jbyteArray}};
-use jni::objects::ReleaseMode;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -10,17 +9,17 @@ use std::thread;
 use std::cmp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::runtime::Runtime;
-use tokio::task::JoinHandle;
-use crate::jni_batch::{BatchOperation, BatchOperationType, BatchResult, BatchResultStatus};
 
 /// Buffer pool for batch data to reduce allocations and GC pressure
 #[derive(Debug)]
+#[allow(dead_code)]
 struct BatchBufferPool {
     buffers: Mutex<Vec<Vec<u8>>>,
     max_buffers: usize,
     buffer_capacity: usize,
 }
 
+#[allow(dead_code)]
 impl BatchBufferPool {
     fn new(max_buffers: usize, buffer_capacity: usize) -> Self {
         let mut buffers = Vec::with_capacity(max_buffers);
@@ -266,14 +265,18 @@ impl ZeroCopyBufferPool {
 
 /// Enhanced batch processor with async processing and zero-copy buffers
 pub struct EnhancedBatchProcessor {
+    #[allow(dead_code)]
     config: EnhancedBatchConfig,
     queues: Arc<Vec<PriorityBatchQueue>>,
     metrics: Arc<EnhancedBatchMetrics>,
     worker_handles: Vec<thread::JoinHandle<()>>,
     shutdown_flag: Arc<AtomicBool>,
+    #[allow(dead_code)]
     async_runtime: Arc<Runtime>,
     async_task_sender: mpsc::Sender<AsyncBatchTask>,
+    #[allow(dead_code)]
     zero_copy_pool: Arc<ZeroCopyBufferPool>,
+    #[allow(dead_code)]
     connection_pool: Arc<Mutex<Vec<mpsc::Sender<AsyncBatchTask>>>>,
 }
 
@@ -921,10 +924,10 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_initEnhan
 }
 /// JNI function for zero-copy batch processing with direct buffer access
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitZeroCopyBatchedOperations(
+pub unsafe extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitZeroCopyBatchedOperations(
     env: JNIEnv,
     _class: JClass,
-    operation_type: jbyte,
+    _operation_type: jbyte,
     direct_buffer: jni::sys::jobject,
     buffer_size: jint,
 ) -> jstring {
@@ -992,11 +995,11 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitZer
 pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitAsyncBatchedOperations(
     env: JNIEnv,
     _class: JClass,
-    operation_type: jbyte,
+    _operation_type: jbyte,
     operations_data: jbyteArray,
     priorities: jbyteArray,
 ) -> jlong {
-    if let Some(processor) = get_enhanced_batch_processor() {
+    if let Some(_processor) = get_enhanced_batch_processor() {
         // Convert raw jbyteArray to JByteArray wrapper expected by the JNI helpers
         let operations_obj = unsafe { jni::objects::JObject::from_raw(operations_data as *mut _ ) };
         let priorities_obj = unsafe { jni::objects::JObject::from_raw(priorities as *mut _ ) };
@@ -1012,9 +1015,9 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitAsy
 
                         // Parse batched operations data
                         match parse_batched_operations(operations_slice, priorities_slice) {
-                            Ok(operations) => {
+                            Ok(_operations) => {
                                 // Create async task and return operation ID
-                                let rt = Runtime::new().expect("Failed to create async runtime");
+                                let _rt = Runtime::new().expect("Failed to create async runtime");
                                 let operation_id = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap()
@@ -1038,9 +1041,9 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitAsy
 /// JNI function to poll async batch operation results
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_pollAsyncBatchResult(
-    env: JNIEnv,
+    _env: JNIEnv,
     _class: JClass,
-    operation_id: jlong,
+    _operation_id: jlong,
 ) -> jbyteArray {
     // For now, return empty result - this needs proper async result storage
     std::ptr::null_mut()
@@ -1057,7 +1060,7 @@ fn parse_zero_copy_operations(data: &[u8]) -> Result<Vec<EnhancedBatchOperation>
     let mut operations = Vec::with_capacity(operation_count);
     let mut offset = 4;
 
-    for i in 0..operation_count {
+    for _i in 0..operation_count {
         if offset + 5 > data.len() {
             return Err("Invalid zero-copy operations data format".to_string());
         }
@@ -1088,7 +1091,7 @@ fn parse_zero_copy_operations(data: &[u8]) -> Result<Vec<EnhancedBatchOperation>
 pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitBatchedOperations(
     env: JNIEnv,
     _class: JClass,
-    operation_type: jbyte,
+    _operation_type: jbyte,
     operations_data: jbyteArray,
     priorities: jbyteArray,
 ) -> jstring {
@@ -1190,6 +1193,7 @@ fn parse_batched_operations(operations_data: &[u8], priorities: &[u8]) -> Result
         offset += data_len;
     }
 
+#[allow(dead_code)]
 /// Submit async batch operation
 pub fn submit_async_batch(worker_handle: u64, operations: Vec<Vec<u8>>) -> Result<u64, String> {
     // Submit to async JNI bridge
@@ -1205,6 +1209,7 @@ pub fn submit_async_batch(worker_handle: u64, operations: Vec<Vec<u8>>) -> Resul
     }
 }
 
+#[allow(dead_code)]
 /// Poll async batch results
 pub fn poll_async_batch_results(operation_id: u64, max_results: usize) -> Result<Vec<Vec<u8>>, String> {
     match crate::jni_async_bridge::poll_async_batch_results(operation_id, max_results) {
@@ -1219,12 +1224,14 @@ pub fn poll_async_batch_results(operation_id: u64, max_results: usize) -> Result
     }
 }
 
+#[allow(dead_code)]
 /// Cleanup async batch operation
 pub fn cleanup_async_batch_operation(operation_id: u64) {
     crate::jni_async_bridge::cleanup_async_batch_operation(operation_id);
     debug!("Cleaned up async batch operation: {}", operation_id);
 }
 
+#[allow(dead_code)]
 /// Submit zero-copy batch operation
 pub fn submit_zero_copy_batch(
     worker_handle: u64,

@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Simple Swap Memory Pool Example ===");
     
     // Create a swap memory pool with 16MB capacity
-    let swap_pool = SwapMemoryPool::new(16 * 1024 * 1024);
+    let swap_pool = SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 16 * 1024 * 1024, ..Default::default() }))?;
     println!("✓ Created swap memory pool with 16MB capacity");
     
     // Test 1: Basic allocations
@@ -36,50 +36,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn test_basic_allocations(pool: &SwapMemoryPool) -> Result<(), Box<dyn std::error::Error>> {
-    // Allocate chunk metadata
-    let _metadata = pool.allocate_chunk_metadata(1024)?;
+    // TODO: These methods don't exist - using basic allocation instead
+    
+    // Allocate chunk metadata simulation
+    let _metadata = pool.allocate(1024)?;
     println!("✓ Allocated 1KB for chunk metadata");
     
-    // Allocate compressed data
-    let _compressed = pool.allocate_compressed_data(4096)?;
+    // Allocate compressed data simulation
+    let _compressed = pool.allocate(4096)?;
     println!("✓ Allocated 4KB for compressed data");
     
-    // Allocate temporary buffer
-    let _temp_buffer = pool.allocate_temporary_buffer(2048)?;
+    // Allocate temporary buffer simulation
+    let _temp_buffer = pool.allocate(2048)?;
     println!("✓ Allocated 2KB for temporary buffer");
     
-    // Check metrics
-    let metrics = pool.get_metrics();
-    println!("  - Total allocations: {}", metrics.total_allocations);
-    println!("  - Current usage: {} bytes", metrics.current_usage_bytes);
+    // Check pressure
+    let pressure = pool.get_memory_pressure();
+    println!("  - Memory pressure: {:?}", pressure);
     
     Ok(())
 }
 
 fn test_memory_tracking(pool: &SwapMemoryPool) -> Result<(), Box<dyn std::error::Error>> {
-    println!("  - Initial metrics:");
-    let initial_metrics = pool.get_metrics();
-    println!("    Current usage: {} bytes", initial_metrics.current_usage_bytes);
-    
+    println!("  - Initial pressure:");
+    let initial_pressure = pool.get_memory_pressure();
+    println!("    Memory pressure: {:?}", initial_pressure);
+
     // Allocate some memory
     {
-        let _buffer = pool.allocate_chunk_metadata(8192)?;
+        let _buffer = pool.allocate(8192)?; // 8KB buffer
         println!("✓ Allocated 8KB buffer");
-        
-        let during_metrics = pool.get_metrics();
+
+        let during_pressure = pool.get_memory_pressure();
         println!("  - During allocation:");
-        println!("    Current usage: {} bytes", during_metrics.current_usage_bytes);
-        println!("    Peak usage: {} bytes", during_metrics.peak_usage_bytes);
-        
+        println!("    Memory pressure: {:?}", during_pressure);
+
         // Buffer will be automatically returned to pool when dropped
     }
-    
-    // Check metrics after deallocation
-    let final_metrics = pool.get_metrics();
+
+    // Check pressure after deallocation
+    let final_pressure = pool.get_memory_pressure();
     println!("  - After deallocation:");
-    println!("    Current usage: {} bytes", final_metrics.current_usage_bytes);
-    println!("    Total deallocations: {}", final_metrics.total_deallocations);
-    
+    println!("    Memory pressure: {:?}", final_pressure);
+
     Ok(())
 }
 
@@ -89,16 +88,16 @@ fn test_memory_pressure(pool: &SwapMemoryPool) -> Result<(), Box<dyn std::error:
     println!("  - Initial memory pressure: {:?}", initial_pressure);
     
     // Allocate some memory to increase pressure
-    let _buffer1 = pool.allocate_chunk_metadata(4 * 1024 * 1024)?; // 4MB
+    let _buffer1 = pool.allocate(4 * 1024 * 1024)?; // 4MB
     let pressure1 = pool.get_memory_pressure();
     println!("  - After 4MB allocation: {:?}", pressure1);
     
-    let _buffer2 = pool.allocate_chunk_metadata(4 * 1024 * 1024)?; // 4MB more
+    let _buffer2 = pool.allocate(4 * 1024 * 1024)?; // 4MB more
     let pressure2 = pool.get_memory_pressure();
     println!("  - After 8MB allocation: {:?}", pressure2);
     
     // Try to allocate more (should fail due to memory pressure)
-    match pool.allocate_chunk_metadata(8 * 1024 * 1024) {
+    match pool.allocate(8 * 1024 * 1024) {
         Ok(_) => println!("  - Large allocation succeeded (unexpected)"),
         Err(e) => println!("  - Large allocation failed as expected: {}", e),
     }
@@ -107,27 +106,17 @@ fn test_memory_pressure(pool: &SwapMemoryPool) -> Result<(), Box<dyn std::error:
 }
 
 fn test_performance_metrics(pool: &SwapMemoryPool) -> Result<(), Box<dyn std::error::Error>> {
-    // Record some swap operations
-    pool.record_swap_operation(true);
-    pool.record_swap_operation(true);
-    pool.record_swap_operation(false);
-    pool.record_swap_operation(true);
-    
-    let metrics = pool.get_metrics();
-    println!("  - Swap operation metrics:");
-    println!("    Total operations: {}", metrics.swap_operations_total);
-    println!("    Failed operations: {}", metrics.swap_operations_failed);
-    println!("    Success rate: {:.1}%", 
-        ((metrics.swap_operations_total - metrics.swap_operations_failed) as f64 / 
-         metrics.swap_operations_total as f64) * 100.0);
-    
+    // Get compression stats
+    println!("  - Compression stats:");
+    let compression_stats = pool.get_compression_stats();
+    println!("    Total compressed: {} bytes", compression_stats.total_compressed);
+    println!("    Total uncompressed: {} bytes", compression_stats.total_uncompressed);
+    println!("    Compression ratio: {:.2}", compression_stats.compression_ratio);
+
     // Test cleanup
     println!("  - Testing memory cleanup...");
-    pool.perform_light_cleanup();
-    println!("✓ Light cleanup completed");
-    
-    pool.perform_aggressive_cleanup();
-    println!("✓ Aggressive cleanup completed");
-    
+    pool.cleanup()?;
+    println!("✓ Cleanup completed");
+
     Ok(())
 }

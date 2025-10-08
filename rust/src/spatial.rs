@@ -1,16 +1,12 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use glam::Vec3;
 use bevy_ecs::prelude::Entity;
 use rayon::prelude::*;
 use crate::simd::{vector_ops, entity_processing};
-use crate::memory_pool::{get_global_enhanced_pool, PooledVec};
+use crate::memory_pool::get_global_enhanced_pool;
 use crate::arena::{get_global_arena_pool, ScopedArena, ArenaVec};
 use dashmap::DashMap;
-use crossbeam_epoch::Guard;
-use crossbeam_utils::CachePadded;
-use std::arch::x86_64::*;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -791,11 +787,11 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
         if self.children.is_some() {
             let quadrant = self.get_quadrant(pos);
             if let Some(ref mut children) = self.children {
-                let mut children = Arc::make_mut(children);
+                let children = Arc::make_mut(children);
                 children[quadrant].insert(entity, pos, depth + 1);
             }
         } else {
-            let mut entities = Arc::make_mut(&mut self.entities);
+            let entities = Arc::make_mut(&mut self.entities);
             entities.push((entity, pos));
             if self.entities.len() > self.max_entities && depth < self.max_depth {
                 self.subdivide(depth);
@@ -943,7 +939,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
         for (entity, pos) in &*entities {
             let quadrant = self.get_quadrant(*pos);
             // Create a new array with the updated child
-            let mut children_array = Arc::try_unwrap(new_children).unwrap_or_else(|arc| {
+            let mut children_array = Arc::try_unwrap(new_children).unwrap_or_else(|_arc| {
                 panic!("Multiple references to new_children array, cannot modify");
             });
             
@@ -992,7 +988,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
 
     pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) {
         // Use memory pool for position storage to reduce allocations
-        let mem_pool = get_global_enhanced_pool();
+        let _mem_pool = get_global_enhanced_pool();
         
         if let Some(_old_pos) = self.entity_positions.insert(entity.clone(), pos) {
             // For simplicity, we'll rebuild the quadtree periodically instead of removing individual entries
@@ -1015,7 +1011,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
         let mut new_quadtree = QuadTree::new(world_bounds, max_entities, max_depth);
 
         // Use fold to avoid intermediate Vec allocation during rebuild
-        let mem_pool = get_global_enhanced_pool();
+        let _mem_pool = get_global_enhanced_pool();
         
         // Use iterator adaptors to minimize intermediate allocations
         let entities_to_insert: Vec<_> = self.entity_positions.iter().map(|entry| (entry.key().clone(), *entry.value())).collect();

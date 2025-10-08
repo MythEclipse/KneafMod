@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Instant, Duration};
 use log::{info, error, debug};
 
-use crate::database::{RustDatabaseAdapter, DatabaseStats};
+use crate::database::RustDatabaseAdapter;
 
 /// Checksum monitoring configuration
 #[derive(Debug, Clone)]
@@ -62,6 +62,12 @@ pub enum ChecksumHealthStatus {
     Unknown,
 }
 
+impl Default for ChecksumHealthStatus {
+    fn default() -> Self {
+        ChecksumHealthStatus::Unknown
+    }
+}
+
 impl ChecksumMonitor {
     /// Create a new checksum monitor
     pub fn new(adapter: Arc<RustDatabaseAdapter>, config: Option<ChecksumMonitorConfig>) -> Self {
@@ -92,44 +98,44 @@ impl ChecksumMonitor {
         
         std::thread::spawn(move || {
             info!("Checksum monitor started with interval: {:?}", config.verification_interval);
-            
+
             while *is_running.read().unwrap() {
                 let start_time = Instant::now();
-                
-                match self.perform_full_verification() {
+
+                match Self::perform_full_verification_static(&adapter, &config, &stats) {
                     Ok(verified_count) => {
                         let elapsed = start_time.elapsed();
-                        
+
                         // Update statistics
                         let mut stats_write = stats.write().unwrap();
                         stats_write.total_verifications += verified_count;
                         stats_write.last_verification_time = start_time.elapsed().as_secs();
-                        
+
                         // Calculate current reliability
                         let total = stats_write.total_verifications + stats_write.total_failures;
                         if total > 0 {
                             let reliability = 100.0 - (stats_write.total_failures as f64 / total as f64) * 100.0;
                             stats_write.current_reliability = reliability;
-                            
+
                             // Update health status
                             stats_write.health_status = Self::calculate_health_status(reliability, &config);
                         }
-                        
+
                         debug!("Checksum verification completed in {} ms", elapsed.as_millis());
                     }
                     Err(e) => {
                         error!("Checksum verification failed: {}", e);
-                        
+
                         let mut stats_write = stats.write().unwrap();
                         stats_write.total_failures += 1;
                         stats_write.health_status = ChecksumHealthStatus::Critical;
                     }
                 }
-                
+
                 // Wait for next interval
                 std::thread::sleep(config.verification_interval);
             }
-            
+
             info!("Checksum monitor stopped");
         });
         
@@ -144,76 +150,92 @@ impl ChecksumMonitor {
 
     /// Perform a full verification of all swapped chunks
     pub fn perform_full_verification(&self) -> Result<u64, String> {
+        Self::perform_full_verification_static(&self.adapter, &self.config, &self.stats)
+    }
+
+    /// Static version of perform_full_verification for use in threads
+    fn perform_full_verification_static(
+        adapter: &Arc<RustDatabaseAdapter>,
+        config: &ChecksumMonitorConfig,
+        _stats: &Arc<RwLock<ChecksumMonitorStats>>,
+    ) -> Result<u64, String> {
         let start_time = Instant::now();
         let mut verified_count = 0;
         let mut failed_count = 0;
-        
+
         info!("Starting full checksum verification");
-        
+
         // Scan swap directory for all .swap files
-        let swap_dir = Path::new(&self.adapter.swap_path);
+        let swap_dir = Path::new(&adapter.swap_path);
         if !swap_dir.exists() {
             info!("No swap directory found, skipping verification");
             return Ok(0);
         }
-        
-        let mut verification_tasks = Vec::with_capacity(self.config.max_concurrent_verifications);
-        
+
+        let mut verification_tasks = Vec::with_capacity(config.max_concurrent_verifications);
+
         for entry in fs::read_dir(swap_dir).map_err(|e| format!("Failed to read swap directory: {}", e))? {
             let entry = entry.map_err(|e| format!("Failed to read swap directory entry: {}", e))?;
             let path = entry.path();
-            
+
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("swap") {
                 let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("unknown");
                 let key = file_name.replace("_", ":"); // Convert back from swap file naming
-                let adapter_clone = self.adapter.clone();
-                
+                let adapter_clone = adapter.clone();
+
                 // Spawn verification task
                 let handle = std::thread::spawn(move || {
                     adapter_clone.verify_swap_chunk_checksum(&key)
                 });
-                
+
                 verification_tasks.push(handle);
-                
+
                 // Respect concurrency limit
-                if verification_tasks.len() >= self.config.max_concurrent_verifications {
-                    self.process_verification_results(&mut verification_tasks, &mut verified_count, &mut failed_count);
+                if verification_tasks.len() >= config.max_concurrent_verifications {
+                    Self::process_verification_results_static(&mut verification_tasks, &mut verified_count, &mut failed_count);
                 }
             }
         }
-        
+
         // Process any remaining tasks
-        self.process_verification_results(&mut verification_tasks, &mut verified_count, &mut failed_count);
-        
+        Self::process_verification_results_static(&mut verification_tasks, &mut verified_count, &mut failed_count);
+
         // Update database statistics
-        let mut db_stats = self.adapter.stats.write().unwrap();
+        let mut db_stats = adapter.stats.write().unwrap();
         db_stats.checksum_verifications_total += verified_count;
-        db_stats.checksum_verifications_failed += failed_count;
-        
+        db_stats.checksum_failures_total += failed_count;
+
         // Calculate and update health score
         let total = verified_count + failed_count;
         if total > 0 {
             let reliability = 100.0 - (failed_count as f64 / total as f64) * 100.0;
             db_stats.checksum_health_score = reliability;
-            
+
             // Update overall system health if checksum reliability is too low
-            if reliability < self.config.reliability_threshold {
+            if reliability < config.reliability_threshold {
                 db_stats.is_healthy = false;
                 error!("Checksum reliability below threshold: {:.2}%", reliability);
             } else {
                 db_stats.is_healthy = true;
             }
         }
-        
+
         info!("Full checksum verification completed: {} verified, {} failed in {} ms",
               verified_count, failed_count, start_time.elapsed().as_millis());
-        
+
         Ok(verified_count)
     }
 
     /// Process verification results from completed tasks
-    fn process_verification_results(&self, tasks: &mut Vec<std::thread::JoinHandle<Result<(), String>>>, 
+    #[allow(dead_code)]
+    fn process_verification_results(&self, tasks: &mut Vec<std::thread::JoinHandle<Result<(), String>>>,
                                    verified_count: &mut u64, failed_count: &mut u64) {
+        Self::process_verification_results_static(tasks, verified_count, failed_count);
+    }
+
+    /// Static version of process_verification_results for use in threads
+    fn process_verification_results_static(tasks: &mut Vec<std::thread::JoinHandle<Result<(), String>>>,
+                                          verified_count: &mut u64, failed_count: &mut u64) {
         for task in tasks.drain(..) {
             match task.join() {
                 Ok(Ok(_)) => *verified_count += 1,
@@ -223,7 +245,7 @@ impl ChecksumMonitor {
                 }
                 Err(e) => {
                     *failed_count += 1;
-                    error!("Verification task panicked: {}", e);
+                    error!("Verification task panicked: {:?}", e);
                 }
             }
         }
@@ -273,8 +295,8 @@ impl ChecksumHealthStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::RustDatabaseAdapter;
-    use std::sync::Arc;
+    
+    
 
     #[test]
     fn test_checksum_health_status() {

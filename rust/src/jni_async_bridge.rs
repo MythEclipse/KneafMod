@@ -4,22 +4,20 @@
 //! improved performance and reduced JNI call latency.
 
 use std::sync::{Arc, Mutex};
-use std::collections::{HashMap, VecDeque, BTreeMap};
+use std::collections::{HashMap, BTreeMap};
 use std::sync::atomic::{AtomicU64, Ordering, AtomicUsize};
-use tokio::sync::{mpsc, oneshot};
 use tokio::runtime::Runtime;
 use once_cell::sync::OnceCell;
-use log::{info, debug, warn, error, trace};
+use log::{info, debug, warn, error};
 
 // JNI zero-copy imports
-use jni::objects::{JByteBuffer, JClass};
-use jni::sys::{jbyte, jlong, jsize};
-use jni::JNIEnv;
+use jni::objects::JByteBuffer;
 use std::marker::PhantomData;
 
 // Re-export from jni_batch for consistency
 use crate::jni_batch::{BatchOperationType, ZeroCopyBufferRef, ZeroCopyBuffer, ZeroCopyBufferPool, get_global_buffer_tracker};
 
+#[allow(dead_code)]
 static ASYNC_RUNTIME: OnceCell<Runtime> = OnceCell::new();
 static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -71,7 +69,7 @@ impl<'a> AsyncJniBridge<'a> {
     }
     
     /// Submit a batch of regular operations for async processing
-    pub fn submit_batch(&self, worker_handle: u64, operations: Vec<Vec<u8>>) -> Result<AsyncOperationHandle, String> {
+    pub fn submit_batch(&self, _worker_handle: u64, operations: Vec<Vec<u8>>) -> Result<AsyncOperationHandle, String> {
         let operation_id = AsyncOperationHandle(NEXT_OPERATION_ID.fetch_add(1, Ordering::SeqCst));
         
         // Store operations for later processing
@@ -87,9 +85,9 @@ impl<'a> AsyncJniBridge<'a> {
     /// Submit a batch of zero-copy operations for async processing
     pub fn submit_zero_copy_batch(
         &self,
-        worker_handle: u64,
+        _worker_handle: u64,
         buffer_refs: Vec<ZeroCopyBufferRef<'a>>,
-        operation_type: BatchOperationType
+        _operation_type: BatchOperationType
     ) -> Result<AsyncOperationHandle, String> {
         let operation_id = AsyncOperationHandle(NEXT_OPERATION_ID.fetch_add(1, Ordering::SeqCst));
         
@@ -130,6 +128,7 @@ impl<'a> AsyncJniBridge<'a> {
     }
     
     /// Unregister a buffer when no longer needed
+    #[allow(dead_code)]
     fn unregister_buffer(&self, buffer_id: u64) -> Result<(), String> {
         let mut buffers = self.active_buffers.lock().unwrap();
         

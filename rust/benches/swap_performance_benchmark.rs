@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rustperf::memory_pool::*;
 use std::time::Duration;
@@ -9,14 +10,14 @@ fn benchmark_swap_operations(c: &mut Criterion) {
     // Test with different pool sizes
     for &pool_size in &[1024 * 1024, 1024 * 1024 * 10, 1024 * 1024 * 100] {
         group.bench_function(format!("allocate_chunk_metadata_{}", pool_size / (1024 * 1024)), |b| {
-            let pool = SwapMemoryPool::new(pool_size);
+            let pool = SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: pool_size, ..Default::default() })).unwrap();
             b.iter(|| {
                 let _metadata = pool.allocate_chunk_metadata(4096).unwrap();
             })
         });
         
         group.bench_function(format!("allocate_compressed_data_{}", pool_size / (1024 * 1024)), |b| {
-            let pool = SwapMemoryPool::new(pool_size);
+            let pool = SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: pool_size, ..Default::default() })).unwrap();
             b.iter(|| {
                 let _compressed = pool.allocate_compressed_data(16384).unwrap();
             })
@@ -33,7 +34,7 @@ fn benchmark_async_operations(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     
     group.bench_function("async_write", |b| {
-        let pool = SwapMemoryPool::new(1024 * 1024);
+        let pool = SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024, ..Default::default() })).unwrap();
         let test_data = vec![0x42; 1024 * 1024];
         
         b.iter(|| {
@@ -43,7 +44,7 @@ fn benchmark_async_operations(c: &mut Criterion) {
     });
     
     group.bench_function("async_read", |b| {
-        let pool = SwapMemoryPool::new(1024 * 1024);
+        let pool = SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024, ..Default::default() })).unwrap();
         
         b.iter(|| {
             let result = rt.block_on(pool.read_data_async(0, 1024 * 1024));
@@ -57,13 +58,13 @@ fn benchmark_async_operations(c: &mut Criterion) {
 fn benchmark_compression(c: &mut Criterion) {
     let mut group = c.benchmark_group("compression");
     
-    let pool = SwapMemoryPool::new(1024 * 1024);
+    let pool = SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024 * 10, ..Default::default() })).unwrap();
     
     // Test with different data sizes and patterns
     let test_cases = [
         (vec![0x00; 1024], "all_zeroes"),
         (vec![0x42; 1024], "constant"),
-        (vec![0x01, 0x02, 0x03, 0x04; 256], "repeating"),
+        (vec![0x01; 1024], "repeating"),
         (vec![0; 1024 * 1024], "large_zeroes"),
     ];
     
@@ -90,7 +91,7 @@ fn benchmark_concurrent_access(c: &mut Criterion) {
     
     group.bench_function("concurrent_allocations_10_threads", |b| {
         b.iter(|| {
-            let pool = Arc::new(SwapMemoryPool::new(1024 * 1024 * 10));
+            let pool = Arc::new(SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024 * 10, ..Default::default() })).unwrap());
             let mut handles = vec![];
             
             for _ in 0..10 {
@@ -111,7 +112,7 @@ fn benchmark_concurrent_access(c: &mut Criterion) {
     
     group.bench_function("concurrent_allocations_20_threads", |b| {
         b.iter(|| {
-            let pool = Arc::new(SwapMemoryPool::new(1024 * 1024 * 20));
+            let pool = Arc::new(SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024 * 10, ..Default::default() })).unwrap());
             let mut handles = vec![];
             
             for _ in 0..20 {
@@ -136,9 +137,9 @@ fn benchmark_concurrent_access(c: &mut Criterion) {
 fn test_fps_stability() {
     // Simulate a game loop with fixed timestep
     const TARGET_FPS: f64 = 60.0;
-    const TARGET_FRAME_TIME: Duration = Duration::from_secs_f64(1.0 / TARGET_FPS);
+    let target_frame_time = Duration::from_secs_f64(1.0 / TARGET_FPS);
     
-    let pool = SwapMemoryPool::new(1024 * 1024 * 50); // 50MB pool
+    let pool = SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024 * 50, ..Default::default() })).unwrap(); // 50MB pool
     
     // Run for a short duration to test stability
     const TEST_DURATION: Duration = Duration::from_secs(5);
@@ -167,7 +168,7 @@ fn test_fps_stability() {
         }
         
         // Maintain target FPS by sleeping if needed
-        let sleep_time = TARGET_FRAME_TIME - frame_time;
+        let sleep_time = target_frame_time - frame_time;
         if sleep_time > Duration::from_secs(0) {
             std::thread::sleep(sleep_time);
         }
@@ -186,7 +187,7 @@ fn test_fps_stability() {
     
     // Verify that FPS is stable within acceptable range
     assert!((actual_fps / TARGET_FPS).abs() < 0.1, "FPS instability detected");
-    assert!(avg_frame_time <= TARGET_FRAME_TIME * 1.2, "Frame time too high");
+    assert!(avg_frame_time <= Duration::from_secs_f64(target_frame_time.as_secs_f64() * 1.2), "Frame time too high");
 }
 
 fn test_memory_usage_constraints() {
@@ -195,7 +196,7 @@ fn test_memory_usage_constraints() {
     const ALLOCATION_SIZE: usize = 4096;
     const NUM_ALLOCATIONS: usize = 25000; // Should use ~100MB
     
-    let pool = SwapMemoryPool::new(MAX_ALLOWED_MEMORY_USAGE * 2); // 200MB pool
+    let pool = SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024 * 200, ..Default::default() })).unwrap(); // 200MB pool
     
     println!("Memory Usage Constraints Test:");
     println!("  Max Allowed Memory: {} MB", MAX_ALLOWED_MEMORY_USAGE / (1024 * 1024));
@@ -245,9 +246,9 @@ fn test_memory_usage_constraints() {
     println!("  Memory Usage After Cleanup: {} MB", cleanup_usage / (1024 * 1024));
     
     // Verify that most memory was reclaimed
-    assert!(cleanup_usage < final_usage * 0.1, 
-            "Memory cleanup was ineffective: {} > {}% of original", 
-            cleanup_usage, final_usage * 0.1);
+    assert!(cleanup_usage < (final_usage as f64 * 0.1) as usize,
+            "Memory cleanup was ineffective: {} > {}% of original",
+            cleanup_usage, (final_usage as f64 * 0.1) as usize);
 }
 
 criterion_group!(

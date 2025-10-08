@@ -4,7 +4,6 @@
 //! Features include slab allocation, memory pooling, and zero-copy buffer management.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
@@ -12,7 +11,6 @@ use log::{info, debug, warn};
 use jni::sys::{jint, jboolean, jdouble, jstring};
 use parking_lot::RwLock;
 use lazy_static::lazy_static;
-use std::ops::{Deref, DerefMut};
 
 // Configuration for different allocation strategies
 const SMALL_OBJECT_THRESHOLD: usize = 4096; // 4KB
@@ -51,6 +49,9 @@ impl Drop for TrackedAllocation {
         }
     }
 }
+
+// TrackedAllocation needs to be Send for use in shared structures
+unsafe impl Send for TrackedAllocation {}
 
 /// Memory allocation tracker for leak detection
 #[derive(Debug)]
@@ -234,7 +235,7 @@ pub struct UnifiedMemoryArena {
     small_allocator: SlabAllocator,
     medium_allocator: SlabAllocator,
     large_allocator: SlabAllocator,
-    zero_copy_buffers: Arc<Mutex<HashMap<u64, Vec<u8>>>>,
+    zero_copy_buffers: Arc<Mutex<HashMap<u64, TrackedAllocation>>>,
     next_buffer_id: AtomicU64,
     config: MemoryArenaConfig,
     total_allocated: AtomicU64,
@@ -333,7 +334,7 @@ impl UnifiedMemoryArena {
         } else {
             // Fallback to system allocator for very large allocations
             unsafe {
-                let layout = Layout::from_size_align_unchecked(size, 8);
+                let layout = Layout::from_size_align(size, 8).map_err(|_| AllocationError::InvalidSize)?;
                 System.alloc(layout)
             }
         };
@@ -458,27 +459,28 @@ impl UnifiedMemoryArena {
         }
 
         let buffer_id = self.next_buffer_id.fetch_add(1, Ordering::Relaxed);
-        let ptr = self.allocate(size);
-        
-        if ptr.is_null() {
-            return Err("Failed to allocate zero-copy buffer".to_string());
-        }
+        let allocation = match self.allocate_tracked(size) {
+            Ok(alloc) => alloc,
+            Err(e) => return Err(format!("Failed to allocate zero-copy buffer: {:?}", e)),
+        };
+
+        let ptr = allocation.as_ptr();
 
         let mut buffers = self.zero_copy_buffers.lock().unwrap();
-        buffers.insert(buffer_id, Vec::with_capacity(size));
+        buffers.insert(buffer_id, allocation);
 
         Ok((buffer_id, ptr))
     }
 
-    pub fn get_zero_copy_buffer(&self, buffer_id: u64) -> Option<Vec<u8>> {
+    pub fn get_zero_copy_buffer(&self, buffer_id: u64) -> Option<*mut u8> {
         let buffers = self.zero_copy_buffers.lock().unwrap();
-        buffers.get(&buffer_id).cloned()
+        buffers.get(&buffer_id).map(|alloc| alloc.as_ptr())
     }
 
     pub fn release_zero_copy_buffer(&self, buffer_id: u64) -> Result<(), String> {
         let mut buffers = self.zero_copy_buffers.lock().unwrap();
-        if buffers.remove(&buffer_id).is_some() {
-            Ok(())
+        if let Some(allocation) = buffers.remove(&buffer_id) {
+            self.deallocate_tracked(allocation).map_err(|e| format!("Failed to deallocate buffer: {:?}", e))
         } else {
             Err("Buffer ID not found".to_string())
         }

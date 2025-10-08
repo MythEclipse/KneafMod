@@ -5,15 +5,12 @@ use super::pathfinding::*;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicUsize, AtomicU64, AtomicBool, Ordering};
 use once_cell::sync::Lazy;
-use crate::villager::pathfinding;
 use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
 use crossbeam_queue::SegQueue;
-use std::sync::{Arc, RwLock, Mutex};
-use std::cell::UnsafeCell;
-use crate::memory_pool::{EnhancedMemoryPoolManager, get_global_enhanced_pool, PooledVec};
-use crate::arena::{BumpArena, get_global_arena_pool};
-use std::ptr;
+use std::sync::{Arc, Mutex};
+use crate::memory_pool::{EnhancedMemoryPoolManager, with_thread_local_pool};
+use crate::arena::get_global_arena_pool;
 
 // Lock-free pathfinding optimizer with Copy-on-Write support
 static PATHFINDING_OPTIMIZER: Lazy<Mutex<PathfindingOptimizer>> =
@@ -26,9 +23,11 @@ static ADVANCED_PATHFINDING_OPTIMIZER: Lazy<Mutex<AdvancedPathfindingOptimizer>>
 static VILLAGER_GROUP_CACHE: Lazy<DashMap<u32, Arc<VillagerGroup>>> = Lazy::new(DashMap::new);
 
 // Global memory pool access for villager processing
+#[allow(dead_code)]
 static MEMORY_POOL: Lazy<Arc<EnhancedMemoryPoolManager>> =
-    Lazy::new(|| Arc::clone(&get_global_enhanced_pool()));
+    Lazy::new(|| Arc::new(EnhancedMemoryPoolManager::new(None).expect("Failed to initialize villager memory pool")));
 
+#[allow(dead_code)]
 static ARENA_POOL: Lazy<Arc<crate::arena::ArenaPool>> =
     Lazy::new(|| get_global_arena_pool());
 
@@ -47,7 +46,7 @@ pub fn process_villager_ai(mut input: VillagerInput) -> VillagerProcessResult {
     let config = get_villager_config();
      
     // Check memory pressure before starting processing
-    let memory_pressure = MEMORY_POOL.get_memory_pressure();
+    let memory_pressure = with_thread_local_pool(|pool| pool.get_memory_pressure());
      
     // If memory pressure is critical, abort some non-critical processing to prevent lag
     if memory_pressure == crate::memory_pool::MemoryPressureLevel::Critical {
@@ -89,15 +88,14 @@ pub fn process_villager_ai(mut input: VillagerInput) -> VillagerProcessResult {
     });
 
     // Step 4: Optimize pathfinding for all villagers with CoW pattern
-    let pathfinding_optimization = {
-        // Use CoW pattern for pathfinding optimizers to avoid locking
-        let mut optimizer = PATHFINDING_OPTIMIZER.lock().unwrap();
-        
-        // Use memory pool for villager data to reduce cloning
-        let mem_pool = get_global_enhanced_pool();
-        let mut villagers_copy = mem_pool.get_vec_u64(input.villagers.len());
+    // Use CoW pattern for pathfinding optimizers to avoid locking
+    let mut optimizer = PATHFINDING_OPTIMIZER.lock().unwrap();
+    
+    // Use memory pool for villager data to reduce cloning
+    let _pathfinding_optimization = with_thread_local_pool(|_mem_pool| {
+        let _villagers_copy: Vec<u8> = Vec::with_capacity(input.villagers.len());
         // Note: In real implementation, we would convert VillagerData to u64 representation
-        
+
         let result = optimizer.optimize_villager_pathfinding(&mut input.villagers, &config);
 
         // Also apply advanced group-based pathfinding optimization
@@ -105,11 +103,11 @@ pub fn process_villager_ai(mut input: VillagerInput) -> VillagerProcessResult {
         let advanced_result = advanced_optimizer.optimize_large_villager_groups(&mut villager_groups.clone(), &config);
 
         // Combine results using memory pool
-        let mut combined_result = mem_pool.get_vec_u64(result.len() + advanced_result.len());
+        let mut combined_result = Vec::with_capacity(result.len() + advanced_result.len());
         combined_result.extend_from_slice(&result);
         combined_result.extend_from_slice(&advanced_result);
-        combined_result.to_vec()
-    };
+        combined_result
+    });
 
     // Step 5: Combine all results using lock-free operations
     let mut villagers_to_disable_ai: Vec<u64> = Vec::new();
@@ -149,13 +147,12 @@ fn process_villager_ai_during_critical_pressure(input: VillagerInput, config: &V
     // 3. Skip complex pathfinding
      
     // Use memory pool for spatial groups to reduce allocation pressure
-    let mem_pool = get_global_enhanced_pool();
     let spatial_groups = group_villagers_by_proximity(&input.villagers, &input.players);
     let villager_groups = optimize_villager_groups(spatial_groups, &config);
-     
-    let mut villagers_to_disable_ai = mem_pool.get_vec_u64(input.villagers.len());
-    let mut villagers_to_simplify_ai = mem_pool.get_vec_u64(input.villagers.len());
-    let mut villagers_to_reduce_pathfinding = mem_pool.get_vec_u64(input.villagers.len());
+
+    let mut villagers_to_disable_ai = Vec::with_capacity(input.villagers.len());
+    let mut villagers_to_simplify_ai = Vec::with_capacity(input.villagers.len());
+    let mut villagers_to_reduce_pathfinding = Vec::with_capacity(input.villagers.len());
      
     // During critical pressure, disable AI for all but essential villagers
     villager_groups.iter().for_each(|group| {
@@ -183,10 +180,9 @@ fn process_villager_ai_during_critical_pressure(input: VillagerInput, config: &V
 
 fn process_villager_group(group: &VillagerGroup, input: &VillagerInput, config: &VillagerConfig) -> VillagerGroupResult {
     // Use memory pool for result storage to reduce allocation pressure
-    let mem_pool = get_global_enhanced_pool();
-    let mut villagers_to_disable_ai = mem_pool.get_vec_u64(group.villager_ids.len());
-    let mut villagers_to_simplify_ai = mem_pool.get_vec_u64(group.villager_ids.len());
-    let mut villagers_to_reduce_pathfinding = mem_pool.get_vec_u64(group.villager_ids.len());
+    let mut villagers_to_disable_ai = Vec::with_capacity(group.villager_ids.len());
+    let mut villagers_to_simplify_ai = Vec::with_capacity(group.villager_ids.len());
+    let mut villagers_to_reduce_pathfinding = Vec::with_capacity(group.villager_ids.len());
 
     // Determine processing strategy based on group characteristics
     match group.group_type.as_str() {

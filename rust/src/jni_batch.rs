@@ -3,22 +3,18 @@
 //! This module provides shared types and utilities for batch processing operations
 //! across different JNI interfaces.
 
-use std::ptr::NonNull;
-use std::time::{SystemTime, UNIX_EPOCH, Instant};
+use std::time::{SystemTime, Instant};
 use once_cell::sync::OnceCell;
 use serde::{Serialize, Deserialize};
 
 // JNI zero-copy imports
-use jni::objects::{JByteBuffer, JClass, JObject, JString};
-use jni::sys::{jbyte, jlong, jsize, jobject, jboolean, jstring};
+use jni::objects::JByteBuffer;
 use jni::JNIEnv;
 
 // For result conversion
-use crate::jni_batch::BatchResult as OriginalBatchResult;
 // Commented out: use crate::jni_batch_processor::BatchProcessor;
 
 // For memory safety tracking
-use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 
 // Thread safety imports
@@ -533,7 +529,8 @@ impl<'a> BatchOperation<'a> {
     }
 
     /// Try to convert regular payload to zero-copy buffer (for hot paths)
-    fn try_zero_copy_conversion(operation_type: BatchOperationType, payload: &[u8]) -> Result<ZeroCopyBufferRef, String> {
+    #[allow(dead_code)]
+    fn try_zero_copy_conversion(_operation_type: BatchOperationType, _payload: &[u8]) -> Result<ZeroCopyBufferRef<'_>, String> {
         // Skip actual zero-copy conversion for now to avoid JNI environment issues
         // This is a temporary workaround to make the build succeed
         return Err("Zero-copy conversion disabled for build testing".to_string());
@@ -568,7 +565,7 @@ impl<'a> BatchOperation<'a> {
             Ok(unsafe { jni::objects::JByteBuffer::from_raw(zero_copy_ref.java_buffer.as_raw()) })
         } else {
             // For regular operations, use direct buffer for better performance
-            let byte_array = env.byte_array_from_slice(&self.payload).map_err(|e| {
+            let _byte_array = env.byte_array_from_slice(&self.payload).map_err(|e| {
                 format!("Failed to create byte array: {}", e)
             })?;
             
@@ -843,7 +840,7 @@ impl<'a> BatchOperationQueue<'a> {
         Ok(true)
     }
     
-    pub fn pop_batch(&self, batch_size: usize) -> Result<Vec<BatchOperation>, String> {
+    pub fn pop_batch(&self, batch_size: usize) -> Result<Vec<BatchOperation<'_>>, String> {
         let mut ops = self.operations.lock()
             .map_err(|e| format!("Failed to lock operations queue: {}", e))?;
         

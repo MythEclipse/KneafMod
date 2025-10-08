@@ -18,7 +18,7 @@ fn test_stable_fps_under_load() {
     println!("Load Cycles: {}", LOAD_CYCLES);
     
     // Create memory pool with reasonable size
-    let pool = Arc::new(SwapMemoryPool::new(1024 * 1024 * 100)); // 100MB pool
+    let pool = Arc::new(SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024 * 100, ..Default::default() })).unwrap()); // 100MB pool
     
     for cycle in 1..=LOAD_CYCLES {
         println!("\n--- Cycle {} ---", cycle);
@@ -104,7 +104,7 @@ fn test_memory_usage_constraints() {
     println!("\n=== Memory Usage Constraints Test ===");
     println!("Max Allowed Memory: {} MB", MAX_ALLOWED_MEMORY / (1024 * 1024));
     
-    let pool = SwapMemoryPool::new(MAX_ALLOWED_MEMORY * 2); // 240MB safety buffer
+    let pool = SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024 * 240, ..Default::default() })).unwrap(); // 240MB safety buffer
     
     let mut total_allocations = 0;
     let start_time = Instant::now();
@@ -166,7 +166,7 @@ fn test_memory_usage_constraints() {
     
     // Force memory cleanup through pressure
     for _ in 0..5 {
-        pool.perform_aggressive_cleanup();
+        let _ = pool.perform_aggressive_cleanup();
         thread::sleep(Duration::from_millis(10));
     }
     
@@ -199,7 +199,7 @@ fn test_concurrent_access_stability() {
     println!("Operations Per Thread: {}", OPERATIONS_PER_THREAD);
     println!("Total Operations: {}", THREAD_COUNT * OPERATIONS_PER_THREAD);
     
-    let pool = Arc::new(SwapMemoryPool::new(1024 * 1024 * 200)); // 200MB pool
+    let pool = Arc::new(SwapMemoryPool::new(Some(SwapPoolConfig { max_swap_size: 1024 * 1024 * 200, ..Default::default() })).unwrap()); // 200MB pool
     
     let start_time = Instant::now();
     let mut handles = vec![];

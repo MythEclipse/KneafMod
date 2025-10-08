@@ -271,7 +271,7 @@ impl LoggerRegistry {
         loggers.insert(name.to_string(), logger);
     }
 
-    pub fn get_logger(&self, name: &str) -> Option<std::sync::MutexGuard<Box<dyn Log + Send + Sync>>> {
+    pub fn get_logger(&self, name: &str) -> Option<std::sync::MutexGuard<'_, Box<dyn Log + Send + Sync>>> {
         let loggers = self.loggers.lock().unwrap();
         if loggers.contains_key(name) {
             // This is a simplified implementation - in practice, you'd need to handle the lifetime properly

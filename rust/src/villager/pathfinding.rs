@@ -502,7 +502,7 @@ fn is_line_clear_simd(start: (f32, f32, f32), end: (f32, f32, f32), obstacles: &
 }
 /// JNI function for SIMD-accelerated heuristic distance calculation
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_calculateHeuristicDistancesSimd(
+pub unsafe extern "C" fn Java_com_kneaf_core_performance_RustPerformance_calculateHeuristicDistancesSimd(
     _env: JNIEnv,
     _class: JClass,
     start_x: f32,
@@ -524,7 +524,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_calculateHeuri
 
 /// JNI function for SIMD-accelerated Euclidean distance calculation
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_calculateEuclideanDistancesSimd(
+pub unsafe extern "C" fn Java_com_kneaf_core_performance_RustPerformance_calculateEuclideanDistancesSimd(
     _env: JNIEnv,
     _class: JClass,
     start_x: f32,
@@ -546,7 +546,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_calculateEucli
 
 /// JNI function for SIMD-accelerated path obstacle checking
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_checkPathObstaclesSimd(
+pub unsafe extern "C" fn Java_com_kneaf_core_performance_RustPerformance_checkPathObstaclesSimd(
     _env: JNIEnv,
     _class: JClass,
     positions_ptr: *const (f32, f32, f32),

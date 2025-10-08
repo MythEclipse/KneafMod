@@ -1,13 +1,11 @@
 use std::io::{Cursor, Read};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::ptr;
 use std::slice;
 
 use crate::mob::types::{MobInput, MobProcessResult};
-use crate::block::types::{BlockInput, BlockProcessResult};
 
 // Zero-copy deserialization - reads directly from memory without copying
-pub fn deserialize_mob_input_zero_copy(data_ptr: *const u8, data_len: usize) -> Result<MobInput, String> {
+pub unsafe fn deserialize_mob_input_zero_copy(data_ptr: *const u8, data_len: usize) -> Result<MobInput, String> {
     if data_ptr.is_null() || data_len == 0 {
         return Err("Null pointer or zero length data".to_string());
     }
@@ -39,7 +37,7 @@ pub fn deserialize_mob_input_zero_copy(data_ptr: *const u8, data_len: usize) -> 
 }
 
 // Zero-copy serialization - writes directly to provided memory buffer
-pub fn serialize_mob_result_zero_copy(
+pub unsafe fn serialize_mob_result_zero_copy(
     result: &MobProcessResult,
     buffer_ptr: *mut u8,
     buffer_capacity: usize
@@ -48,7 +46,7 @@ pub fn serialize_mob_result_zero_copy(
         return Err("Null pointer or zero capacity buffer".to_string());
     }
 
-    let mut buffer_slice = unsafe { slice::from_raw_parts_mut(buffer_ptr, buffer_capacity) };
+    let buffer_slice = unsafe { slice::from_raw_parts_mut(buffer_ptr, buffer_capacity) };
     let mut cur = Cursor::new(buffer_slice);
     
     // Write tick count placeholder
@@ -97,7 +95,7 @@ mod tests {
         assert_eq!(required_size, 8 + 4 + 3*8 + 4 + 3*8);
 
         let mut buffer = vec![0u8; required_size];
-        let bytes_written = serialize_mob_result_zero_copy(&test_result, buffer.as_mut_ptr(), buffer.len())
+        let bytes_written = unsafe { serialize_mob_result_zero_copy(&test_result, buffer.as_mut_ptr(), buffer.len()) }
             .expect("Serialization failed");
 
         assert_eq!(bytes_written, required_size);

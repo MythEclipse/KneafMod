@@ -1,12 +1,12 @@
+use serde::{Serialize, Deserialize};
 use glam::Vec3A;
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
-use serde::ser::SerializeStruct;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Aabb {
     pub min: Vec3A,
     pub max: Vec3A,
 }
+
 
 impl Aabb {
     pub fn new(min_x: f32, min_y: f32, min_z: f32, max_x: f32, max_y: f32, max_z: f32) -> Self {
@@ -29,26 +29,35 @@ impl Aabb {
     }
 }
 
-// Provide Serialize/Deserialize implementations that convert Vec3A to/from [f32;3]
-impl Serialize for Aabb {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
-        let min = [self.min.x, self.min.y, self.min.z];
-        let max = [self.max.x, self.max.y, self.max.z];
-        let mut state = serializer.serialize_struct("Aabb", 2)?;
-        state.serialize_field("min", &min)?;
-        state.serialize_field("max", &max)?;
-        state.end()
+
+/// Custom error type for Rust performance operations
+#[derive(Debug, Clone)]
+pub struct RustPerformanceError {
+    pub message: String,
+    pub code: Option<i32>,
+}
+
+impl RustPerformanceError {
+    pub fn new(message: String) -> Self {
+        Self { message, code: None }
+    }
+
+    pub fn with_code(message: String, code: i32) -> Self {
+        Self { message, code: Some(code) }
     }
 }
 
-impl<'de> Deserialize<'de> for Aabb {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: Deserializer<'de> {
-        #[derive(Deserialize)]
-        struct RawAabb { min: [f32;3], max: [f32;3] }
-
-        let raw = RawAabb::deserialize(deserializer)?;
-        Ok(Aabb { min: Vec3A::new(raw.min[0], raw.min[1], raw.min[2]), max: Vec3A::new(raw.max[0], raw.max[1], raw.max[2]) })
+impl std::fmt::Display for RustPerformanceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(code) = self.code {
+            write!(f, "[{}] {}", code, self.message)
+        } else {
+            write!(f, "{}", self.message)
+        }
     }
 }
+
+impl std::error::Error for RustPerformanceError {}
+
+/// Result type alias for Rust performance operations
+pub type Result<T> = std::result::Result<T, RustPerformanceError>;

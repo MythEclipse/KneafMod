@@ -2,8 +2,6 @@
 //! Supports AVX2, SSE, and AVX-512 instruction sets with runtime detection
 
 use std::arch::x86_64::*;
-use std::mem;
-use std::simd::prelude::*;
 use rayon::prelude::*;
 
 /// SIMD instruction set capabilities
@@ -109,7 +107,7 @@ impl EnhancedSimdProcessor {
         
         // Reduce sums
         let sum = _mm256_add_ps(sum0, sum1);
-        let mut result = hsum256_ps(sum);
+        let mut result = Self::hsum256_ps(sum);
         
         // Handle remaining elements
         while i < len {
@@ -155,7 +153,7 @@ impl EnhancedSimdProcessor {
         let sum01 = _mm_add_ps(sum0, sum1);
         let sum23 = _mm_add_ps(sum2, sum3);
         let sum = _mm_add_ps(sum01, sum23);
-        let mut result = hsum128_ps(sum);
+        let mut result = Self::hsum128_ps(sum);
         
         // Handle remaining elements
         while i < len {
@@ -399,7 +397,7 @@ impl EnhancedSimdProcessor {
         let hi = _mm256_extractf128_ps(v, 1);
         let lo = _mm256_castps256_ps128(v);
         let sum128 = _mm_add_ps(lo, hi);
-        hsum128_ps(sum128)
+        Self::hsum128_ps(sum128)
     }
     
     /// Helper function to horizontally sum SSE register
@@ -416,6 +414,7 @@ impl EnhancedSimdProcessor {
 /// Enhanced SIMD operations for batch processing
 pub struct BatchSimdProcessor {
     simd: EnhancedSimdProcessor,
+    #[allow(dead_code)]
     chunk_size: usize,
 }
 
@@ -429,15 +428,13 @@ impl BatchSimdProcessor {
     
     /// Process multiple vector operations in parallel
     pub fn process_vectors_parallel(&self, operations: &[VectorOperation]) -> Vec<f32> {
-        operations.par_chunks(self.chunk_size)
-            .flat_map(|chunk| {
-                chunk.iter().map(|op| match op {
-                    VectorOperation::DotProduct(a, b) => self.simd.dot_product(a, b),
-                    VectorOperation::Magnitude(v) => {
-                        let dot = self.simd.dot_product(v, v);
-                        dot.sqrt()
-                    }
-                })
+        operations.par_iter()
+            .map(|op| match op {
+                VectorOperation::DotProduct(a, b) => self.simd.dot_product(a, b),
+                VectorOperation::Magnitude(v) => {
+                    let dot = self.simd.dot_product(v, v);
+                    dot.sqrt()
+                }
             })
             .collect()
     }

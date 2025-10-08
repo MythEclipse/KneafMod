@@ -1,0 +1,125 @@
+//! Memory pool management module with thread-safe concurrent operations
+//!
+//! This module provides various memory pool implementations with different characteristics:
+//! - **ObjectPool**: Generic object pooling with atomic operations
+//! - **VecPool/StringPool**: Specialized pools for vectors and strings
+//! - **HierarchicalMemoryPool**: Multi-level memory allocation with size classes
+//! - **SwapMemoryPool**: Memory swapping with compression for low-memory scenarios
+//! - **EnhancedMemoryPoolManager**: Intelligent pool manager with automatic selection
+//! - **LightweightMemoryPool**: Single-threaded pool with minimal overhead
+//! - **SlabAllocator**: Fixed-size block allocation with size classes
+
+pub mod object_pool;
+pub mod specialized_pools;
+pub mod hierarchical;
+pub mod swap;
+pub mod enhanced_manager;
+pub mod lightweight;
+pub mod slab_allocator;
+pub mod atomic_state;
+
+// Re-export commonly used types for convenience
+pub use object_pool::{ObjectPool, PooledObject, MemoryPressureLevel};
+pub use specialized_pools::{VecPool, StringPool, PooledVec, PooledString};
+pub use hierarchical::{HierarchicalMemoryPool, HierarchicalPoolConfig, FastObjectPool, PooledVec as HierarchicalPooledVec};
+pub use swap::{SwapMemoryPool, SwapPoolConfig, SwapPooledVec};
+pub use enhanced_manager::{EnhancedMemoryPoolManager, EnhancedManagerConfig, SmartPooledVec, MaintenanceResult, AllocationStats};
+pub use lightweight::{LightweightMemoryPool, LightweightPooledObject, ThreadLocalLightweightPool, FastArena, ArenaHandle, ScopedArena, LightweightPoolStats, ArenaStats};
+pub use slab_allocator::{SlabAllocator, SlabAllocation, SlabAllocatorConfig, Slab, SizeClass, SlabStats, SlabAllocatorStats, SizeClassStats};
+pub use atomic_state::{AtomicPoolState, AtomicCounter};
+
+/// Global memory pool manager instance (thread-safe singleton)
+static GLOBAL_MEMORY_POOL: std::sync::OnceLock<std::sync::RwLock<EnhancedMemoryPoolManager>> = std::sync::OnceLock::new();
+
+/// Get the global enhanced memory pool manager
+pub fn get_global_enhanced_pool() -> std::sync::RwLockReadGuard<'static, EnhancedMemoryPoolManager> {
+    let pool = GLOBAL_MEMORY_POOL.get_or_init(|| {
+        std::sync::RwLock::new(EnhancedMemoryPoolManager::new(None).expect("Failed to initialize global memory pool"))
+    });
+    pool.read().unwrap()
+}
+
+/// Get the global enhanced memory pool manager (mutable)
+pub fn get_global_enhanced_pool_mut() -> std::sync::RwLockWriteGuard<'static, EnhancedMemoryPoolManager> {
+    let pool = GLOBAL_MEMORY_POOL.get_or_init(|| {
+        std::sync::RwLock::new(EnhancedMemoryPoolManager::new(None).expect("Failed to initialize global memory pool"))
+    });
+    pool.write().unwrap()
+}
+
+thread_local! {
+    static THREAD_LOCAL_POOL: std::cell::RefCell<EnhancedMemoryPoolManager> = std::cell::RefCell::new(
+        EnhancedMemoryPoolManager::new(None).expect("Failed to initialize thread-local memory pool")
+    );
+}
+
+/// Get the thread-local memory pool manager with a closure
+pub fn with_thread_local_pool<F, R>(f: F) -> R
+where
+    F: FnOnce(&EnhancedMemoryPoolManager) -> R,
+{
+    THREAD_LOCAL_POOL.with(|pool| f(&pool.borrow()))
+}
+
+/// Get the thread-local memory pool manager (mutable) with a closure
+pub fn with_thread_local_pool_mut<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut EnhancedMemoryPoolManager) -> R,
+{
+    THREAD_LOCAL_POOL.with(|pool| f(&mut pool.borrow_mut()))
+}
+
+/// Legacy MemoryPoolManager for backward compatibility
+#[derive(Debug)]
+pub struct MemoryPoolManager {
+    enhanced_manager: EnhancedMemoryPoolManager,
+}
+
+impl MemoryPoolManager {
+    pub fn new() -> Result<Self, String> {
+        Ok(Self {
+            enhanced_manager: EnhancedMemoryPoolManager::new(None)?,
+        })
+    }
+
+    pub fn allocate(&self, size: usize) -> Result<Vec<u8>, String> {
+        let pooled = self.enhanced_manager.allocate(size)?;
+        Ok(pooled.as_slice().to_vec())
+    }
+
+    pub fn get_memory_pressure(&self) -> MemoryPressureLevel {
+        self.enhanced_manager.get_memory_pressure()
+    }
+}
+
+impl Default for MemoryPoolManager {
+    fn default() -> Self {
+        Self::new().expect("Failed to create MemoryPoolManager")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_global_pool_access() {
+        let pool = get_global_enhanced_pool();
+        assert_eq!(pool.get_memory_pressure(), MemoryPressureLevel::Normal);
+    }
+
+    #[test]
+    fn test_thread_local_pool_access() {
+        with_thread_local_pool(|pool| {
+            assert_eq!(pool.get_memory_pressure(), MemoryPressureLevel::Normal);
+        });
+    }
+
+    #[test]
+    fn test_legacy_memory_pool_manager() {
+        let manager = MemoryPoolManager::new().unwrap();
+        let data = manager.allocate(100).unwrap();
+        assert_eq!(data.len(), 100);
+        assert_eq!(manager.get_memory_pressure(), MemoryPressureLevel::Normal);
+    }
+}

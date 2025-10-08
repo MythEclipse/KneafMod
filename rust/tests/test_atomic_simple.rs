@@ -64,12 +64,12 @@ fn test_concurrent_operations() {
     let mut handles = vec![];
     
     // Create multiple threads that perform increment/decrement operations
-    for thread_id in 0..5 {
+    for _thread_id in 0..5 {
         let state_clone = Arc::clone(&state);
         let handle = thread::spawn(move || {
             let mut local_count = 0;
             for i in 0..20 {
-                if let Some(size) = state_clone.try_increment() {
+                if let Some(_size) = state_clone.try_increment() {
                     local_count += 1;
                     // Simulate some work
                     thread::sleep(Duration::from_micros(10));

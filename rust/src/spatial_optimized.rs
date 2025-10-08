@@ -2,13 +2,10 @@
 //! Implements SIMD-accelerated spatial queries with hierarchical spatial hashing
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::simd::prelude::*;
+use std::sync::RwLock;
 use rayon::prelude::*;
-use crate::simd_enhanced::{EnhancedSimdProcessor, SimdCapability};
+use crate::simd_enhanced::EnhancedSimdProcessor;
 use std::time::{Instant, Duration};
-use std::cell::UnsafeCell;
-use crossbeam_epoch::Atomic;
 
 /// Hierarchical spatial grid with O(log M) query performance for villager grouping
 pub struct OptimizedSpatialGrid {
@@ -19,6 +16,7 @@ pub struct OptimizedSpatialGrid {
     entity_index: RwLock<HashMap<u64, EntityLocation>>,
     
     // SIMD processor for accelerated operations
+    #[allow(dead_code)]
     simd_processor: EnhancedSimdProcessor,
     
     // Grid configuration
@@ -77,6 +75,10 @@ struct SpatialGridLevel {
     level: usize,
     cell_size: f32,
     cells: RwLock<HashMap<CellKey, CellData>>,
+    #[allow(dead_code)]
+    entity_count: AtomicU64,
+    #[allow(dead_code)]
+    last_access: Instant,
 }
 
 /// Cell key for spatial hashing
@@ -123,11 +125,12 @@ impl CellKey {
 }
 
 /// Cell data containing entities
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct CellData {
     entities: Vec<EntityData>,
     bounds: (f32, f32, f32, f32, f32, f32), // (min_x, max_x, min_y, max_y, min_z, max_z)
     last_updated: std::time::Instant,
+    entity_count: u64,
 }
 
 /// Entity data for spatial indexing
@@ -140,6 +143,7 @@ struct EntityData {
 
 /// Entity location in hierarchical grid
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct EntityLocation {
     entity_id: u64,
     level: usize,
@@ -157,7 +161,7 @@ impl OptimizedSpatialGrid {
                 level,
                 cell_size: current_cell_size,
                 cells: RwLock::new(HashMap::new()),
-                entity_count: Atomic::new(0),
+                entity_count: AtomicU64::new(0),
                 last_access: Instant::now(),
             });
             current_cell_size *= 2.0;
@@ -167,7 +171,7 @@ impl OptimizedSpatialGrid {
             levels,
             entity_index: RwLock::new(HashMap::new()),
             simd_processor: EnhancedSimdProcessor::new(),
-            config,
+            config: config.clone(),
             metrics: GridMetrics::default(),
             lazy_update_queue: RwLock::new(HashSet::new()),
             entity_last_update: RwLock::new(HashMap::new()),
@@ -205,7 +209,7 @@ impl OptimizedSpatialGrid {
                     entities: Vec::new(),
                     bounds: self.calculate_cell_bounds(cell_key, self.levels[best_level].cell_size),
                     last_updated: Instant::now(),
-                    entity_count: 1,
+                    entity_count: 0,
                 });
                 
                 cell_data.entities.push(entity_data);
@@ -245,7 +249,7 @@ impl OptimizedSpatialGrid {
             };
     
             // Get last known position
-            let (last_time, last_x, last_y, last_z) = {
+            let (_last_time, last_x, last_y, last_z) = {
                 let last_update = self.entity_last_update.read().unwrap();
                 match last_update.get(&entity_id) {
                     Some(data) => *data,
@@ -352,12 +356,12 @@ impl OptimizedSpatialGrid {
             // Process updates in batches for better performance
             let batch_size = std::cmp::min(update_count, 32);
             let entities_to_update: Vec<u64> = queue.iter().take(batch_size).cloned().collect();
-    
-            for entity_id in entities_to_update {
+
+            for &entity_id in &entities_to_update {
                 if let Some(location) = self.entity_index.read().unwrap().get(&entity_id) {
                     if let Some((last_time, last_x, last_y, last_z)) = self.entity_last_update.read().unwrap().get(&entity_id) {
                         let age = now.duration_since(*last_time);
-                        
+
                         // Only update if entity hasn't moved significantly recently
                         // or if the update is too old (stale data)
                         if age > Duration::from_secs(1) {
@@ -367,9 +371,9 @@ impl OptimizedSpatialGrid {
                     }
                 }
             }
-    
+
             // Remove processed entities from queue
-            for entity_id in entities_to_update {
+            for &entity_id in &entities_to_update {
                 queue.remove(&entity_id);
             }
     
@@ -377,7 +381,7 @@ impl OptimizedSpatialGrid {
         }
     
         /// Select optimal level based on entity position (for movement)
-        fn select_optimal_level_for_position(&self, position: (f32, f32, f32)) -> usize {
+        fn select_optimal_level_for_position(&self, _position: (f32, f32, f32)) -> usize {
             // For movement, use the same level selection as insertion
             // but optimized for villager size
             let villager_size = 0.6; // Typical villager bounding box size
@@ -396,7 +400,8 @@ impl OptimizedSpatialGrid {
         fn get_entity_bounds(&self, entity_id: u64) -> Option<(f32, f32, f32, f32, f32, f32)> {
             // In a real implementation, this would retrieve the actual bounds from entity data
             // For villager optimization, we use a standard villager bounding box
-            let location = self.entity_index.read().unwrap().get(&entity_id)?;
+            let index_guard = self.entity_index.read().unwrap();
+            let location = index_guard.get(&entity_id)?;
             let cells = self.levels[location.level].cells.read().unwrap();
             let cell_data = cells.get(&location.cell_key)?;
             
@@ -542,24 +547,19 @@ impl OptimizedSpatialGrid {
                 }
                 None
             })
-            .collect()
+            .collect::<Vec<_>>()
     }
     
     /// Batch query multiple AABBs with SIMD acceleration
     pub fn batch_query_aabb(&self, queries: &[(f32, f32, f32, f32, f32, f32)]) -> Vec<Vec<u64>> {
         self.metrics.simd_operations.fetch_add(queries.len() as u64, Ordering::Relaxed);
-        
-        queries.par_chunks(self.config.simd_chunk_size)
-            .map(|chunk| {
-                chunk.iter()
-                    .flat_map(|query| {
-                        let min_bounds = (query.0, query.2, query.4);
-                        let max_bounds = (query.1, query.3, query.5);
-                        self.query_aabb(min_bounds, max_bounds)
-                    })
-                    .collect()
+
+        queries.par_iter()
+            .map(|query| {
+                let min_bounds = (query.0, query.2, query.4);
+                let max_bounds = (query.1, query.3, query.5);
+                self.query_aabb(min_bounds, max_bounds)
             })
-            .flatten()
             .collect()
     }
     
@@ -692,7 +692,7 @@ impl OptimizedSpatialGrid {
             return;
         }
         
-        let parent_key = cell_key.get_parent();
+        let _parent_key = cell_key.get_parent();
         // Update parent cell metadata if needed
         // This is where we could implement hierarchical statistics
     }

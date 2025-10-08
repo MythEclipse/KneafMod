@@ -54,7 +54,7 @@ fn mob_roundtrip_deserialize_process_serialize() {
     assert_eq!(input.mobs.len(), 1);
     assert_eq!(input.mobs[0].id, 555u64);
 
-    let result = rustperf::mob::process_mob_ai(input);
+    let result = rustperf::mob::processing::process_mob_ai(input);
     let bytes = rustperf::binary::conversions::serialize_mob_result(&result).expect("serialize_mob_result failed");
     assert!(!bytes.is_empty());
 }

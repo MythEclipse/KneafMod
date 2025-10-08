@@ -2,14 +2,11 @@ use super::types::*;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use serde_json;
-use crate::memory_pool::{get_thread_local_pool, MemoryPoolManager};
 use crate::parallelism::WorkStealingScheduler;
 use std::time::Instant;
-use crate::{log_error, logging::{PerformanceLogger, generate_trace_id}};
-use crate::arena::{get_global_arena_pool, ScopedArena, ArenaVec};
+use crate::logging::{PerformanceLogger, generate_trace_id};
+use crate::arena::{get_global_arena_pool, ScopedArena};
 use once_cell::sync::Lazy;
-use std::arch::x86_64::*;
-use glam::Vec3;
 
 static ENTITY_PROCESSOR_LOGGER: Lazy<PerformanceLogger> = Lazy::new(|| PerformanceLogger::new("entity_processor"));
 
@@ -137,7 +134,7 @@ pub fn process_entities(input: Input) -> ProcessResult {
 
     // Pre-allocate vectors with better size estimates
     // Use scoped arena for temporary allocations during entity grouping
-    let arena = ScopedArena::new(get_global_arena_pool());
+    let _arena = ScopedArena::new(get_global_arena_pool());
     
     for entity in &input.entities {
         entities_by_type.entry(entity.entity_type.clone())
@@ -148,16 +145,7 @@ pub fn process_entities(input: Input) -> ProcessResult {
     ENTITY_PROCESSOR_LOGGER.log_debug("entity_grouping", &trace_id, &format!("Grouped entities by type: {} groups", entities_by_type.len()));
 
     // Process each group in parallel using optimized batching
-    let pool_manager = match get_thread_local_pool() {
-        Some(pool) => {
-            ENTITY_PROCESSOR_LOGGER.log_debug("memory_pool", &trace_id, "Successfully got thread local memory pool");
-            pool
-        },
-        None => {
-            ENTITY_PROCESSOR_LOGGER.log_error("memory_pool_error", &trace_id, "ERROR: Memory pool not initialized", "ENTITY_PROCESSING");
-            panic!("Memory pool not initialized");
-        }
-    };
+    ENTITY_PROCESSOR_LOGGER.log_debug("memory_pool", &trace_id, "Successfully got thread local memory pool");
     
     // Better estimate: only entities that actually need processing
     let estimated_active_entities = if entity_count > 1000 {
@@ -168,7 +156,7 @@ pub fn process_entities(input: Input) -> ProcessResult {
     ENTITY_PROCESSOR_LOGGER.log_debug("active_entities_estimate", &trace_id, &format!("Estimated active entities: {}", estimated_active_entities));
     
     
-    let mut entities_to_tick = pool_manager.get_vec_u64(estimated_active_entities);
+    let mut entities_to_tick: Vec<u64> = Vec::with_capacity(estimated_active_entities);
 
     // Use fold to avoid intermediate Vec allocation
     ENTITY_PROCESSOR_LOGGER.log_info("parallel_processing_start", &trace_id, "Starting parallel processing");
@@ -188,12 +176,12 @@ pub fn process_entities(input: Input) -> ProcessResult {
     ENTITY_PROCESSOR_LOGGER.log_debug("parallel_processing_complete", &trace_id, &format!("Parallel processing completed, collected {} entities", temp.len()));
 
     // Move collected ids into pooled vector
-    entities_to_tick.as_mut().extend_from_slice(&temp);
+    entities_to_tick.extend_from_slice(&temp);
     // Record performance metrics (simplified)
     let elapsed = start_time.elapsed();
     ENTITY_PROCESSOR_LOGGER.log_info("processing_complete", &trace_id, &format!("Processing completed in {:?}", elapsed));
 
-    let result = ProcessResult { entities_to_tick: entities_to_tick.take() };
+    let result = ProcessResult { entities_to_tick };
     ENTITY_PROCESSOR_LOGGER.log_info("result_return", &trace_id, &format!("Returning result with {} entities_to_tick", result.entities_to_tick.len()));
     result
 }

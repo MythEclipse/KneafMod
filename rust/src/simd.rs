@@ -56,6 +56,7 @@ impl std::error::Error for SimdError {}
 
 /// Type alias for SIMD operation results
 pub type SimdResult<T> = Result<T, SimdError>;
+
 /// SIMD feature detection and optimization configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimdConfig {
@@ -234,6 +235,65 @@ pub fn get_simd_manager() -> &'static SimdManager {
 /// Initialize SIMD with custom configuration
 pub fn init_simd(config: SimdConfig) {
     SIMD_MANAGER.initialize(config);
+}
+
+/// SIMD operations trait
+pub trait SimdOperations {
+    fn dot_product(&self, a: &[f32], b: &[f32]) -> SimdResult<f32>;
+    fn vector_add(&self, a: &mut [f32], b: &[f32], scale: f32) -> SimdResult<()>;
+    fn calculate_chunk_distances(&self, chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32>;
+    fn batch_aabb_intersections(&self, aabbs: &[crate::spatial::Aabb], queries: &[crate::spatial::Aabb]) -> Vec<Vec<bool>>;
+}
+
+/// SIMD processor implementation
+pub struct SimdProcessor;
+
+impl SimdProcessor {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl SimdOperations for SimdProcessor {
+    fn dot_product(&self, a: &[f32], b: &[f32]) -> SimdResult<f32> {
+        if a.len() != b.len() {
+            return Err(SimdError::InvalidInputLength {
+                expected: a.len(),
+                actual: b.len(),
+                operation: "dot_product",
+            });
+        }
+        Ok(a.iter().zip(b.iter()).map(|(x, y)| x * y).sum())
+    }
+
+    fn vector_add(&self, a: &mut [f32], b: &[f32], scale: f32) -> SimdResult<()> {
+        if a.len() != b.len() {
+            return Err(SimdError::InvalidInputLength {
+                expected: a.len(),
+                actual: b.len(),
+                operation: "vector_add",
+            });
+        }
+        for (av, bv) in a.iter_mut().zip(b.iter()) {
+            *av += *bv * scale;
+        }
+        Ok(())
+    }
+
+    fn calculate_chunk_distances(&self, chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
+        chunk_coords
+            .iter()
+            .map(|(x, z)| {
+                let dx = *x as f32 - center_chunk.0 as f32;
+                let dz = *z as f32 - center_chunk.1 as f32;
+                (dx * dx + dz * dz).sqrt()
+            })
+            .collect()
+    }
+
+    fn batch_aabb_intersections(&self, aabbs: &[crate::spatial::Aabb], queries: &[crate::spatial::Aabb]) -> Vec<Vec<bool>> {
+        queries.iter().map(|q| aabbs.iter().map(|a| a.intersects(q)).collect()).collect()
+    }
 }
 
 /// SIMD-accelerated vector operations (scalar-first, safe implementations)

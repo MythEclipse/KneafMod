@@ -1,6 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use byteorder::{LittleEndian, WriteBytesExt};
+    use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+    use rustperf::item::{process_item_entities};
+    use rustperf::mob::processing::process_mob_ai;
+    use rustperf::block::processing::process_block_entities;
+    use rustperf::entity::processing::process_entities;
 
     #[test]
     fn item_roundtrip_deserialize_process_serialize() {
@@ -21,20 +25,20 @@ mod tests {
         out.write_i32::<LittleEndian>(10).unwrap(); // ageSeconds
 
         // Now call the crate deserializer
-    let input = crate::binary::conversions::deserialize_item_input(&out).expect("deserialize_item_input failed");
+    let input = rustperf::binary::conversions::deserialize_item_input(&out).expect("deserialize_item_input failed");
         assert_eq!(input.items.len(), 1);
         assert_eq!(input.items[0].id, 12345u64);
         assert_eq!(input.items[0].item_type, "minecraft:stone");
 
         // Process with the real processor
-        let result = crate::item::processing::process_item_entities(input);
+        let result = process_item_entities(input);
 
         // Serialize result
-    let bytes = crate::binary::conversions::serialize_item_result(&result).expect("serialize_item_result failed");
+    let bytes = rustperf::binary::conversions::serialize_item_result(&result).expect("serialize_item_result failed");
     // Validate serialized shape: placeholder tick (u64) + num (i32) ... confirm num == 1 and id matches
-    use byteorder::{LittleEndian, ReadBytesExt};
+    // ReadBytesExt already imported at top level
     let mut cur = std::io::Cursor::new(&bytes);
-    let tick = cur.read_u64::<LittleEndian>().unwrap();
+    let _tick = cur.read_u64::<LittleEndian>().unwrap();
     let num_items = cur.read_i32::<LittleEndian>().unwrap();
     assert_eq!(num_items, 1);
     let id = cur.read_u64::<LittleEndian>().unwrap();
@@ -54,14 +58,14 @@ mod tests {
         out.write_i32::<LittleEndian>(t.len() as i32).unwrap();
         out.extend_from_slice(t);
 
-    let input = crate::binary::conversions::deserialize_mob_input(&out).expect("deserialize_mob_input failed");
+    let input = rustperf::binary::conversions::deserialize_mob_input(&out).expect("deserialize_mob_input failed");
         assert_eq!(input.mobs.len(), 1);
         assert_eq!(input.mobs[0].id, 555u64);
 
-        let result = crate::mob::processing::process_mob_ai(input);
-    let bytes = crate::binary::conversions::serialize_mob_result(&result).expect("serialize_mob_result failed");
+        let result = process_mob_ai(input);
+    let bytes = rustperf::binary::conversions::serialize_mob_result(&result).expect("serialize_mob_result failed");
     // Validate mob result contains the placeholder tick + two lists counts
-    use byteorder::{LittleEndian, ReadBytesExt};
+    // ReadBytesExt already imported at top level
     let mut cur = std::io::Cursor::new(&bytes);
     let _tick = cur.read_u64::<LittleEndian>().unwrap();
     let disable_len = cur.read_i32::<LittleEndian>().unwrap();
@@ -71,7 +75,6 @@ mod tests {
 
     #[test]
     fn block_roundtrip_deserialize_process_serialize() {
-        use byteorder::{LittleEndian, WriteBytesExt};
         // Build manual block input buffer: [tickCount:u64][num:i32][blocks...]
         // Each block: [id:u64][distance:f32][blockTypeLen:i32][blockTypeBytes...][x:i32][y:i32][z:i32]
         let mut out: Vec<u8> = Vec::new();
@@ -87,14 +90,14 @@ mod tests {
         out.write_i32::<LittleEndian>(64).unwrap(); // y
         out.write_i32::<LittleEndian>(-5).unwrap(); // z
 
-    let input = crate::binary::conversions::deserialize_block_input(&out).expect("deserialize_block_input failed");
+    let input = rustperf::binary::conversions::deserialize_block_input(&out).expect("deserialize_block_input failed");
         assert_eq!(input.block_entities.len(), 1);
         assert_eq!(input.block_entities[0].id, 888u64);
 
-        let result = crate::block::processing::process_block_entities(input);
-    let bytes = crate::binary::conversions::serialize_block_result(&result).expect("serialize_block_result failed");
+        let result = process_block_entities(input);
+    let bytes = rustperf::binary::conversions::serialize_block_result(&result).expect("serialize_block_result failed");
         // Validate: tick:u64 + num:i32 + ids...; ensure num matches and id present when expected
-        use byteorder::{LittleEndian, ReadBytesExt};
+        // ReadBytesExt already imported at top level
         let mut cur = std::io::Cursor::new(&bytes);
         let _tick = cur.read_u64::<LittleEndian>().unwrap();
         let num = cur.read_i32::<LittleEndian>().unwrap();
@@ -107,7 +110,7 @@ mod tests {
 
     #[test]
     fn entity_roundtrip_deserialize_process_serialize() {
-        use byteorder::{LittleEndian, WriteBytesExt};
+        // WriteBytesExt already imported at top
         // Build manual entity input buffer:
         // [tickCount:u64][numEntities:i32][entities...][numPlayers:i32][players...][5 config floats]
         let mut out: Vec<u8> = Vec::new();
@@ -134,14 +137,13 @@ mod tests {
         out.write_f32::<LittleEndian>(0.5f32).unwrap();
         out.write_f32::<LittleEndian>(0.1f32).unwrap();
 
-    let input = crate::binary::conversions::deserialize_entity_input(&out).expect("deserialize_entity_input failed");
+    let input = rustperf::binary::conversions::deserialize_entity_input(&out).expect("deserialize_entity_input failed");
         assert_eq!(input.entities.len(), 1);
         assert_eq!(input.entities[0].id, 42u64);
 
-        let result = crate::entity::processing::process_entities(input);
-    let bytes = crate::binary::conversions::serialize_entity_result(&result).expect("serialize_entity_result failed");
+        let result = process_entities(input);
+    let bytes = rustperf::binary::conversions::serialize_entity_result(&result).expect("serialize_entity_result failed");
         // Validate: len:i32 + ids... ; ensure returned ids include our entity id when present
-        use byteorder::{LittleEndian, ReadBytesExt};
         let mut cur = std::io::Cursor::new(&bytes);
         let len = cur.read_i32::<LittleEndian>().unwrap();
         if len > 0 {

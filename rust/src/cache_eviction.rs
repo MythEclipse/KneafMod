@@ -301,7 +301,7 @@ pub fn initialize_cache(flags: CacheFeatureFlags) {
     // For now, we'll just update the feature flag through the global cache API
     // This is a simplification that works for our testing needs
     let mut cache = GLOBAL_CACHE.clone();
-    let mut cache = Arc::get_mut(&mut cache).expect("Failed to get mutable reference to cache");
+    let cache = Arc::get_mut(&mut cache).expect("Failed to get mutable reference to cache");
     cache.set_feature_enabled(flags.cache_enabled);
 }
 
