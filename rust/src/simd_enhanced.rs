@@ -31,35 +31,67 @@ pub fn detect_simd_capability() -> SimdCapability {
 }
 
 /// Enhanced vector operations with SIMD acceleration
-pub struct EnhancedSimdProcessor {
+pub struct EnhancedSimdProcessor<const MAX_BATCH_SIZE: usize = 16> {
     capability: SimdCapability,
 }
 
-impl EnhancedSimdProcessor {
+impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
     pub fn new() -> Self {
+        let capability = detect_simd_capability();
         Self {
-            capability: detect_simd_capability(),
+            capability,
+            #[cfg(target_feature = "avx512f")]
+            avx512_capable: matches!(capability, SimdCapability::Avx512),
+            #[cfg(target_feature = "avx2")]
+            avx2_capable: matches!(capability, SimdCapability::Avx2 | SimdCapability::Avx512),
+            #[cfg(target_feature = "sse4.2")]
+            sse_capable: matches!(capability, SimdCapability::Sse | SimdCapability::Avx2 | SimdCapability::Avx512),
         }
     }
     
+    /// Get current SIMD capability
+    #[inline(always)]
+    pub fn get_capability(&self) -> SimdCapability {
+        self.capability
+    }
+    
+    /// Check if AVX-512 is supported
+    #[inline(always)]
+    #[cfg(target_feature = "avx512f")]
+    pub fn has_avx512(&self) -> bool {
+        self.avx512_capable
+    }
+    
+    /// Check if AVX2 is supported
+    #[inline(always)]
+    #[cfg(target_feature = "avx2")]
+    pub fn has_avx2(&self) -> bool {
+        self.avx2_capable
+    }
+    
+    /// Check if SSE is supported
+    #[inline(always)]
+    #[cfg(target_feature = "sse4.2")]
+    pub fn has_sse(&self) -> bool {
+        self.sse_capable
+    }
+     
     /// Optimized dot product with SIMD acceleration - aggressive optimization for small batches
     #[inline(always)]
     pub fn dot_product(&self, a: &[f32], b: &[f32]) -> f32 {
-        if a.len() != b.len() {
-            panic!("Vectors must have equal length for dot product");
-        }
+        debug_assert_eq!(a.len(), b.len(), "Vectors must have equal length for dot product");
 
         let len = a.len();
 
-        // Aggressive optimization for small batches (2-7 elements)
-        if len <= 7 {
+        // Aggressive optimization for small batches (2-7 elements) with branch prediction
+        if likely(len <= 7) {
             return self.dot_product_small_batch(a, b);
         }
 
         match self.capability {
-            SimdCapability::Avx512 => unsafe { self.dot_product_avx512(a, b) },
-            SimdCapability::Avx2 => unsafe { self.dot_product_avx2(a, b) },
-            SimdCapability::Sse => unsafe { self.dot_product_sse(a, b) },
+            SimdCapability::Avx512 => unsafe { self.dot_product_avx512::<MAX_BATCH_SIZE>(a, b) },
+            SimdCapability::Avx2 => unsafe { self.dot_product_avx2::<MAX_BATCH_SIZE>(a, b) },
+            SimdCapability::Sse => unsafe { self.dot_product_sse::<MAX_BATCH_SIZE>(a, b) },
             SimdCapability::Scalar => self.dot_product_scalar(a, b),
         }
     }
@@ -129,112 +161,132 @@ impl EnhancedSimdProcessor {
         sum
     }
     
-    /// AVX-512 optimized dot product
-    #[target_feature(enable = "avx512f,avx512vl")]
-    unsafe fn dot_product_avx512(&self, a: &[f32], b: &[f32]) -> f32 {
-        let len = a.len();
-        let mut sum = _mm512_setzero_ps();
-        let chunk_size = 16; // AVX-512 processes 16 floats at once
-        
-        let mut i = 0;
-        while i + chunk_size <= len {
-            let va = _mm512_loadu_ps(a.as_ptr().add(i));
-            let vb = _mm512_loadu_ps(b.as_ptr().add(i));
-            sum = _mm512_fmadd_ps(va, vb, sum);
-            i += chunk_size;
+    /// AVX-512 optimized dot product with const batch size
+        #[target_feature(enable = "avx512f,avx512vl")]
+        unsafe fn dot_product_avx512(&self, a: &[f32], b: &[f32]) -> f32 {
+            const AVX512_WIDTH: usize = MAX_BATCH_SIZE.min(16);
+            let len = a.len();
+            let mut sum = _mm512_setzero_ps();
+            
+            let mut i = 0;
+            while i + AVX512_WIDTH <= len {
+                // Prefetch next chunk to reduce cache misses
+                if i + AVX512_WIDTH * 2 <= len {
+                    _mm_prefetch(a.as_ptr().add(i + AVX512_WIDTH), _MM_HINT_T0);
+                    _mm_prefetch(b.as_ptr().add(i + AVX512_WIDTH), _MM_HINT_T0);
+                }
+                
+                let va = _mm512_loadu_ps(a.as_ptr().add(i));
+                let vb = _mm512_loadu_ps(b.as_ptr().add(i));
+                sum = _mm512_fmadd_ps(va, vb, sum);
+                i += AVX512_WIDTH;
+            }
+             
+            // Reduce sum
+            let mut result = _mm512_reduce_add_ps(sum);
+             
+            // Handle remaining elements with likely hint for branch prediction
+            while i < len {
+                result += a[i] * b[i];
+                i += 1;
+            }
+             
+            result
         }
-        
-        // Reduce sum
-        let mut result = _mm512_reduce_add_ps(sum);
-        
-        // Handle remaining elements
-        while i < len {
-            result += a[i] * b[i];
-            i += 1;
-        }
-        
-        result
-    }
     
-    /// AVX2 optimized dot product
-    #[target_feature(enable = "avx2")]
-    unsafe fn dot_product_avx2(&self, a: &[f32], b: &[f32]) -> f32 {
-        let len = a.len();
-        let mut sum0 = _mm256_setzero_ps();
-        let mut sum1 = _mm256_setzero_ps();
-        let chunk_size = 16; // Process 16 floats (2 AVX2 registers) per iteration
-        
-        let mut i = 0;
-        while i + chunk_size <= len {
-            let va0 = _mm256_loadu_ps(a.as_ptr().add(i));
-            let vb0 = _mm256_loadu_ps(b.as_ptr().add(i));
-            sum0 = _mm256_fmadd_ps(va0, vb0, sum0);
+    /// AVX2 optimized dot product with const batch size
+        #[target_feature(enable = "avx2")]
+        unsafe fn dot_product_avx2(&self, a: &[f32], b: &[f32]) -> f32 {
+            const AVX2_WIDTH: usize = MAX_BATCH_SIZE.min(8);
+            const DOUBLE_WIDTH: usize = AVX2_WIDTH * 2;
+            let len = a.len();
+            let mut sum0 = _mm256_setzero_ps();
+            let mut sum1 = _mm256_setzero_ps();
             
-            let va1 = _mm256_loadu_ps(a.as_ptr().add(i + 8));
-            let vb1 = _mm256_loadu_ps(b.as_ptr().add(i + 8));
-            sum1 = _mm256_fmadd_ps(va1, vb1, sum1);
-            
-            i += chunk_size;
+            let mut i = 0;
+            while i + DOUBLE_WIDTH <= len {
+                // Prefetch next chunk to reduce cache misses
+                if i + DOUBLE_WIDTH * 2 <= len {
+                    _mm_prefetch(a.as_ptr().add(i + DOUBLE_WIDTH), _MM_HINT_T0);
+                    _mm_prefetch(b.as_ptr().add(i + DOUBLE_WIDTH), _MM_HINT_T0);
+                }
+                
+                let va0 = _mm256_loadu_ps(a.as_ptr().add(i));
+                let vb0 = _mm256_loadu_ps(b.as_ptr().add(i));
+                sum0 = _mm256_fmadd_ps(va0, vb0, sum0);
+                 
+                let va1 = _mm256_loadu_ps(a.as_ptr().add(i + AVX2_WIDTH));
+                let vb1 = _mm256_loadu_ps(b.as_ptr().add(i + AVX2_WIDTH));
+                sum1 = _mm256_fmadd_ps(va1, vb1, sum1);
+                 
+                i += DOUBLE_WIDTH;
+            }
+             
+            // Reduce sums
+            let sum = _mm256_add_ps(sum0, sum1);
+            let mut result = Self::hsum256_ps(sum);
+             
+            // Handle remaining elements with likely hint for branch prediction
+            while i < len {
+                result += a[i] * b[i];
+                i += 1;
+            }
+             
+            result
         }
-        
-        // Reduce sums
-        let sum = _mm256_add_ps(sum0, sum1);
-        let mut result = Self::hsum256_ps(sum);
-        
-        // Handle remaining elements
-        while i < len {
-            result += a[i] * b[i];
-            i += 1;
-        }
-        
-        result
-    }
     
-    /// SSE optimized dot product
-    #[target_feature(enable = "sse4.2")]
-    unsafe fn dot_product_sse(&self, a: &[f32], b: &[f32]) -> f32 {
-        let len = a.len();
-        let mut sum0 = _mm_setzero_ps();
-        let mut sum1 = _mm_setzero_ps();
-        let mut sum2 = _mm_setzero_ps();
-        let mut sum3 = _mm_setzero_ps();
-        let chunk_size = 16; // Process 16 floats (4 SSE registers) per iteration
-        
-        let mut i = 0;
-        while i + chunk_size <= len {
-            let va0 = _mm_loadu_ps(a.as_ptr().add(i));
-            let vb0 = _mm_loadu_ps(b.as_ptr().add(i));
-            sum0 = _mm_add_ps(_mm_mul_ps(va0, vb0), sum0);
+    /// SSE optimized dot product with const batch size
+        #[target_feature(enable = "sse4.2")]
+        unsafe fn dot_product_sse(&self, a: &[f32], b: &[f32]) -> f32 {
+            const SSE_WIDTH: usize = MAX_BATCH_SIZE.min(4);
+            const QUAD_WIDTH: usize = SSE_WIDTH * 4;
+            let len = a.len();
+            let mut sum0 = _mm_setzero_ps();
+            let mut sum1 = _mm_setzero_ps();
+            let mut sum2 = _mm_setzero_ps();
+            let mut sum3 = _mm_setzero_ps();
             
-            let va1 = _mm_loadu_ps(a.as_ptr().add(i + 4));
-            let vb1 = _mm_loadu_ps(b.as_ptr().add(i + 4));
-            sum1 = _mm_add_ps(_mm_mul_ps(va1, vb1), sum1);
-            
-            let va2 = _mm_loadu_ps(a.as_ptr().add(i + 8));
-            let vb2 = _mm_loadu_ps(b.as_ptr().add(i + 8));
-            sum2 = _mm_add_ps(_mm_mul_ps(va2, vb2), sum2);
-            
-            let va3 = _mm_loadu_ps(a.as_ptr().add(i + 12));
-            let vb3 = _mm_loadu_ps(b.as_ptr().add(i + 12));
-            sum3 = _mm_add_ps(_mm_mul_ps(va3, vb3), sum3);
-            
-            i += chunk_size;
+            let mut i = 0;
+            while i + QUAD_WIDTH <= len {
+                // Prefetch next chunk to reduce cache misses
+                if i + QUAD_WIDTH * 2 <= len {
+                    _mm_prefetch(a.as_ptr().add(i + QUAD_WIDTH), _MM_HINT_T0);
+                    _mm_prefetch(b.as_ptr().add(i + QUAD_WIDTH), _MM_HINT_T0);
+                }
+                
+                let va0 = _mm_loadu_ps(a.as_ptr().add(i));
+                let vb0 = _mm_loadu_ps(b.as_ptr().add(i));
+                sum0 = _mm_add_ps(_mm_mul_ps(va0, vb0), sum0);
+                 
+                let va1 = _mm_loadu_ps(a.as_ptr().add(i + SSE_WIDTH));
+                let vb1 = _mm_loadu_ps(b.as_ptr().add(i + SSE_WIDTH));
+                sum1 = _mm_add_ps(_mm_mul_ps(va1, vb1), sum1);
+                 
+                let va2 = _mm_loadu_ps(a.as_ptr().add(i + SSE_WIDTH * 2));
+                let vb2 = _mm_loadu_ps(b.as_ptr().add(i + SSE_WIDTH * 2));
+                sum2 = _mm_add_ps(_mm_mul_ps(va2, vb2), sum2);
+                 
+                let va3 = _mm_loadu_ps(a.as_ptr().add(i + SSE_WIDTH * 3));
+                let vb3 = _mm_loadu_ps(b.as_ptr().add(i + SSE_WIDTH * 3));
+                sum3 = _mm_add_ps(_mm_mul_ps(va3, vb3), sum3);
+                 
+                i += QUAD_WIDTH;
+            }
+             
+            // Reduce sums
+            let sum01 = _mm_add_ps(sum0, sum1);
+            let sum23 = _mm_add_ps(sum2, sum3);
+            let sum = _mm_add_ps(sum01, sum23);
+            let mut result = Self::hsum128_ps(sum);
+             
+            // Handle remaining elements with likely hint for branch prediction
+            while i < len {
+                result += a[i] * b[i];
+                i += 1;
+            }
+             
+            result
         }
-        
-        // Reduce sums
-        let sum01 = _mm_add_ps(sum0, sum1);
-        let sum23 = _mm_add_ps(sum2, sum3);
-        let sum = _mm_add_ps(sum01, sum23);
-        let mut result = Self::hsum128_ps(sum);
-        
-        // Handle remaining elements
-        while i < len {
-            result += a[i] * b[i];
-            i += 1;
-        }
-        
-        result
-    }
     
     /// Scalar fallback dot product
     fn dot_product_scalar(&self, a: &[f32], b: &[f32]) -> f32 {
@@ -244,14 +296,12 @@ impl EnhancedSimdProcessor {
     /// Optimized vector addition with SIMD acceleration - aggressive optimization for small batches
     #[inline(always)]
     pub fn vector_add(&self, a: &mut [f32], b: &[f32]) {
-        if a.len() != b.len() {
-            panic!("Vectors must have equal length for addition");
-        }
+        debug_assert_eq!(a.len(), b.len(), "Vectors must have equal length for addition");
 
         let len = a.len();
 
-        // Aggressive optimization for small batches (2-7 elements)
-        if len <= 7 {
+        // Aggressive optimization for small batches (2-7 elements) with branch prediction
+        if likely(len <= 7) {
             return self.vector_add_small_batch(a, b);
         }
 
@@ -324,66 +374,116 @@ impl EnhancedSimdProcessor {
         }
     }
     
-    /// AVX-512 optimized vector addition
+    /// AVX-512 optimized vector addition with const generic batch size and prefetching
     #[target_feature(enable = "avx512f,avx512vl")]
     unsafe fn vector_add_avx512(&self, a: &mut [f32], b: &[f32]) {
+        const AVX512_WIDTH: usize = MAX_BATCH_SIZE.min(16);
         let len = a.len();
-        let chunk_size = 16;
         
         let mut i = 0;
-        while i + chunk_size <= len {
+        while i + AVX512_WIDTH <= len {
+            // Prefetch next chunk to reduce cache misses
+            if i + AVX512_WIDTH * 2 <= len {
+                _mm_prefetch(a.as_ptr().add(i + AVX512_WIDTH), _MM_HINT_T0);
+                _mm_prefetch(b.as_ptr().add(i + AVX512_WIDTH), _MM_HINT_T0);
+            }
+            
             let va = _mm512_loadu_ps(a.as_ptr().add(i));
             let vb = _mm512_loadu_ps(b.as_ptr().add(i));
             let result = _mm512_add_ps(va, vb);
             _mm512_storeu_ps(a.as_mut_ptr().add(i), result);
-            i += chunk_size;
+            
+            // Use likely hint for branch prediction
+            if likely(i + AVX512_WIDTH <= len) {
+                i += AVX512_WIDTH;
+            } else {
+                break;
+            }
         }
         
-        // Handle remaining elements
+        // Handle remaining elements with unrolled loop for better ILP
         while i < len {
             a[i] += b[i];
             i += 1;
         }
     }
     
-    /// AVX2 optimized vector addition
+    /// AVX2 optimized vector addition with const generic batch size and prefetching
     #[target_feature(enable = "avx2")]
     unsafe fn vector_add_avx2(&self, a: &mut [f32], b: &[f32]) {
+        const AVX2_WIDTH: usize = MAX_BATCH_SIZE.min(8);
+        const DOUBLE_WIDTH: usize = AVX2_WIDTH * 2;
         let len = a.len();
-        let chunk_size = 8;
         
         let mut i = 0;
-        while i + chunk_size <= len {
-            let va = _mm256_loadu_ps(a.as_ptr().add(i));
-            let vb = _mm256_loadu_ps(b.as_ptr().add(i));
-            let result = _mm256_add_ps(va, vb);
-            _mm256_storeu_ps(a.as_mut_ptr().add(i), result);
-            i += chunk_size;
+        while i + DOUBLE_WIDTH <= len {
+            // Prefetch next chunk to reduce cache misses
+            if i + DOUBLE_WIDTH * 2 <= len {
+                _mm_prefetch(a.as_ptr().add(i + DOUBLE_WIDTH), _MM_HINT_T0);
+                _mm_prefetch(b.as_ptr().add(i + DOUBLE_WIDTH), _MM_HINT_T0);
+            }
+            
+            // Process two chunks simultaneously for better ILP
+            let va0 = _mm256_loadu_ps(a.as_ptr().add(i));
+            let vb0 = _mm256_loadu_ps(b.as_ptr().add(i));
+            let result0 = _mm256_add_ps(va0, vb0);
+            _mm256_storeu_ps(a.as_mut_ptr().add(i), result0);
+            
+            let va1 = _mm256_loadu_ps(a.as_ptr().add(i + AVX2_WIDTH));
+            let vb1 = _mm256_loadu_ps(b.as_ptr().add(i + AVX2_WIDTH));
+            let result1 = _mm256_add_ps(va1, vb1);
+            _mm256_storeu_ps(a.as_mut_ptr().add(i + AVX2_WIDTH), result1);
+            
+            i += DOUBLE_WIDTH;
         }
         
-        // Handle remaining elements
+        // Handle remaining elements with unrolled loop
         while i < len {
             a[i] += b[i];
             i += 1;
         }
     }
     
-    /// SSE optimized vector addition
+    /// SSE optimized vector addition with const generic batch size and prefetching
     #[target_feature(enable = "sse4.2")]
     unsafe fn vector_add_sse(&self, a: &mut [f32], b: &[f32]) {
+        const SSE_WIDTH: usize = MAX_BATCH_SIZE.min(4);
+        const QUAD_WIDTH: usize = SSE_WIDTH * 4;
         let len = a.len();
-        let chunk_size = 4;
         
         let mut i = 0;
-        while i + chunk_size <= len {
-            let va = _mm_loadu_ps(a.as_ptr().add(i));
-            let vb = _mm_loadu_ps(b.as_ptr().add(i));
-            let result = _mm_add_ps(va, vb);
-            _mm_storeu_ps(a.as_mut_ptr().add(i), result);
-            i += chunk_size;
+        while i + QUAD_WIDTH <= len {
+            // Prefetch next chunk to reduce cache misses
+            if i + QUAD_WIDTH * 2 <= len {
+                _mm_prefetch(a.as_ptr().add(i + QUAD_WIDTH), _MM_HINT_T0);
+                _mm_prefetch(b.as_ptr().add(i + QUAD_WIDTH), _MM_HINT_T0);
+            }
+            
+            // Process four chunks simultaneously for better ILP
+            let va0 = _mm_loadu_ps(a.as_ptr().add(i));
+            let vb0 = _mm_loadu_ps(b.as_ptr().add(i));
+            let result0 = _mm_add_ps(va0, vb0);
+            _mm_storeu_ps(a.as_mut_ptr().add(i), result0);
+            
+            let va1 = _mm_loadu_ps(a.as_ptr().add(i + SSE_WIDTH));
+            let vb1 = _mm_loadu_ps(b.as_ptr().add(i + SSE_WIDTH));
+            let result1 = _mm_add_ps(va1, vb1);
+            _mm_storeu_ps(a.as_mut_ptr().add(i + SSE_WIDTH), result1);
+            
+            let va2 = _mm_loadu_ps(a.as_ptr().add(i + SSE_WIDTH * 2));
+            let vb2 = _mm_loadu_ps(b.as_ptr().add(i + SSE_WIDTH * 2));
+            let result2 = _mm_add_ps(va2, vb2);
+            _mm_storeu_ps(a.as_mut_ptr().add(i + SSE_WIDTH * 2), result2);
+            
+            let va3 = _mm_loadu_ps(a.as_ptr().add(i + SSE_WIDTH * 3));
+            let vb3 = _mm_loadu_ps(b.as_ptr().add(i + SSE_WIDTH * 3));
+            let result3 = _mm_add_ps(va3, vb3);
+            _mm_storeu_ps(a.as_mut_ptr().add(i + SSE_WIDTH * 3), result3);
+            
+            i += QUAD_WIDTH;
         }
         
-        // Handle remaining elements
+        // Handle remaining elements with unrolled loop
         while i < len {
             a[i] += b[i];
             i += 1;

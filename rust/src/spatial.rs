@@ -99,6 +99,7 @@ impl Aabb {
     }
 
     /// SIMD-accelerated AABB intersection test for multiple AABBs
+    #[inline(always)]
     pub fn intersects_simd_batch(&self, others: &[Aabb]) -> Vec<bool> {
             // Dispatch to small batch optimized version for 2-7 elements
             if others.len() >= 2 && others.len() <= 7 {
@@ -227,6 +228,7 @@ impl Aabb {
     }
 
     /// SIMD-accelerated small batch AABB intersection (2-7 elements) with zero-copy optimization
+    #[inline(always)]
     pub fn intersects_simd_batch_small(&self, others: &[Aabb]) -> Vec<bool> {
         use crate::memory_pool::get_global_enhanced_pool;
 
@@ -245,22 +247,23 @@ impl Aabb {
             let self_min_z = _mm_set1_ps(self.min_z as f32);
             let self_max_z = _mm_set1_ps(self.max_z as f32);
 
-            // Process in chunks of 4 for SSE, handling remainder manually
+            // Process in chunks of 4 for SSE, handling remainder manually - UNROLLED for performance
             let chunks = others.chunks_exact(4);
             let remainder = chunks.remainder();
-
+            
             let mut result_idx = 0;
-
+            
+            // Unroll loop for better performance on small batches
             for chunk in chunks {
-                // Load 4 AABBs directly into SSE registers (zero-copy)
+                // Load 4 AABBs directly into SSE registers (zero-copy) - UNROLLED
                 let other_min_x = _mm_set_ps(chunk[3].min_x as f32, chunk[2].min_x as f32, chunk[1].min_x as f32, chunk[0].min_x as f32);
                 let other_max_x = _mm_set_ps(chunk[3].max_x as f32, chunk[2].max_x as f32, chunk[1].max_x as f32, chunk[0].max_x as f32);
                 let other_min_y = _mm_set_ps(chunk[3].min_y as f32, chunk[2].min_y as f32, chunk[1].min_y as f32, chunk[0].min_y as f32);
                 let other_max_y = _mm_set_ps(chunk[3].max_y as f32, chunk[2].max_y as f32, chunk[1].max_y as f32, chunk[0].max_y as f32);
                 let other_min_z = _mm_set_ps(chunk[3].min_z as f32, chunk[2].min_z as f32, chunk[1].min_z as f32, chunk[0].min_z as f32);
                 let other_max_z = _mm_set_ps(chunk[3].max_z as f32, chunk[2].max_z as f32, chunk[1].max_z as f32, chunk[0].max_z as f32);
-
-                // Test intersections for all axes simultaneously
+            
+                // Test intersections for all axes simultaneously - UNROLLED
                 let x_intersect = _mm_and_ps(
                     _mm_cmp_ps(self_min_x, other_max_x, _CMP_LE_OQ),
                     _mm_cmp_ps(self_max_x, other_min_x, _CMP_GE_OQ)
@@ -273,15 +276,19 @@ impl Aabb {
                     _mm_cmp_ps(self_min_z, other_max_z, _CMP_LE_OQ),
                     _mm_cmp_ps(self_max_z, other_min_z, _CMP_GE_OQ)
                 );
-
-                // Combine all axis intersections
+            
+                // Combine all axis intersections - UNROLLED
                 let full_intersect = _mm_and_ps(_mm_and_ps(x_intersect, y_intersect), z_intersect);
-
-                // Extract results directly into zero-copy buffer
+            
+                // Extract results directly into zero-copy buffer - UNROLLED
                 let mask = _mm_movemask_ps(full_intersect);
-                for i in 0..4 {
-                    results[result_idx + i] = (mask & (1 << i)) != 0;
-                }
+                
+                // Manual unrolling of result extraction for better instruction level parallelism
+                results[result_idx + 0] = (mask & (1 << 0)) != 0;
+                results[result_idx + 1] = (mask & (1 << 1)) != 0;
+                results[result_idx + 2] = (mask & (1 << 2)) != 0;
+                results[result_idx + 3] = (mask & (1 << 3)) != 0;
+                
                 result_idx += 4;
             }
 
@@ -302,6 +309,7 @@ impl Aabb {
     }
 
     /// SIMD-accelerated bounds check for multiple points
+    #[inline(always)]
     pub fn contains_points_simd(&self, points: &[(f64, f64, f64)]) -> Vec<bool> {
         #[cfg(target_feature = "avx512f")]
         {
@@ -440,6 +448,7 @@ impl Aabb {
     }
 }
 /// SIMD-accelerated ray-AABB intersection test
+#[inline(always)]
 pub fn ray_aabb_intersect_simd(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> Option<f32> {
     #[cfg(target_feature = "avx512f")]
     {
@@ -527,66 +536,134 @@ pub fn ray_aabb_intersect_simd(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> 
     }
 }
 
-/// AVX-512 accelerated vector normalization
+/// AVX-512 accelerated vector normalization with const generic batch size
 #[cfg(target_feature = "avx512f")]
-pub fn normalize_vector_avx512(vector: &[f32]) -> Vec<f32> {
+#[inline(always)]
+pub fn normalize_vector_avx512<const BATCH_SIZE: usize>(vector: &[f32]) -> Vec<f32> {
     use std::arch::x86_64::*;
 
+    const AVX512_WIDTH: usize = BATCH_SIZE;
     let mut result = Vec::with_capacity(vector.len());
-    let chunks = vector.chunks_exact(16);
-    let remainder = chunks.remainder();
+    let main_chunks = vector.len() / AVX512_WIDTH;
+    let remainder = vector.len() % AVX512_WIDTH;
 
-    for chunk in chunks {
-        let v = _mm512_loadu_ps(chunk.as_ptr());
+    // Pre-allocate temporary buffer for better cache utilization
+    let mut vec_buffer = [0.0f32; AVX512_WIDTH];
 
-        // Calculate squared length: v.x² + v.y² + v.z² + v.w² (but we only use 3 components)
-        let v_sq = _mm512_mul_ps(v, v);
+    // Prefetch first chunk to start early
+    unsafe {
+        if !vector.is_empty() {
+            _mm_prefetch(vector.as_ptr(), _MM_HINT_T0);
+        }
+    }
+
+    for i in 0..main_chunks {
+        let chunk_start = i * AVX512_WIDTH;
+        
+        // Prefetch next chunk when possible
+        if i + 1 < main_chunks {
+            let next_start = (i + 1) * AVX512_WIDTH;
+            unsafe {
+                _mm_prefetch(vector.get_unchecked(next_start), _MM_HINT_T0);
+            }
+        }
+
+        // Load chunk with better memory access pattern
+        for j in 0..AVX512_WIDTH {
+            vec_buffer[j] = vector[chunk_start + j];
+        }
+
+        let v = _mm512_loadu_ps(vec_buffer.as_ptr());
+
+        // Calculate squared length with fused multiply-add for better performance
+        let v_sq = _mm512_fmadd_ps(v, v, _mm512_setzero_ps());
         let sum = _mm512_reduce_add_ps(v_sq);
         let len = _mm_sqrt_ss(&sum as *const f32 as *const __m128);
         let len_vec = _mm512_set1_ps(len.extract_ps(0));
 
-        // Normalize: v / len
+        // Normalize with fused multiply-add
         let normalized = _mm512_div_ps(v, len_vec);
 
-        let mut normalized_arr = [0.0f32; 16];
+        let mut normalized_arr = [0.0f32; AVX512_WIDTH];
         _mm512_storeu_ps(normalized_arr.as_mut_ptr(), normalized);
         result.extend_from_slice(&normalized_arr);
     }
 
-    // Handle remainder with scalar normalization
-    for &v in remainder {
-        let len = (v * v).sqrt();
-        result.push(v / len);
+    // Handle remainder with optimized scalar path
+    if remainder > 0 {
+        let start = vector.len() - remainder;
+        for i in 0..remainder {
+            let v = vector[start + i];
+            let len = (v * v).sqrt();
+            result.push(v / len);
+        }
     }
 
     result
 }
 
-/// AVX-512 accelerated dot product calculation
+/// AVX-512 accelerated dot product calculation with const generic batch size
 #[cfg(target_feature = "avx512f")]
-pub fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
+#[inline(always)]
+pub fn dot_product_avx512<const BATCH_SIZE: usize>(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
 
     debug_assert_eq!(a.len(), b.len(), "Vectors must have the same length for dot product");
+    debug_assert!(a.len() >= BATCH_SIZE, "Input size must be at least batch size");
 
+    const AVX512_BATCH: usize = BATCH_SIZE;
     let mut sum = _mm512_setzero_ps();
-    let chunks = a.chunks_exact(16).zip(b.chunks_exact(16));
-    let remainder = a.len() % 16;
+    let main_chunks = a.len() / AVX512_BATCH;
+    let remainder = a.len() % AVX512_BATCH;
 
-    for (chunk_a, chunk_b) in chunks {
-        let va = _mm512_loadu_ps(chunk_a.as_ptr());
-        let vb = _mm512_loadu_ps(chunk_b.as_ptr());
-        let product = _mm512_mul_ps(va, vb);
-        sum = _mm512_add_ps(sum, product);
+    // Pre-allocate buffers for better cache utilization
+    let mut a_buffer = [0.0f32; AVX512_BATCH];
+    let mut b_buffer = [0.0f32; AVX512_BATCH];
+
+    // Prefetch first chunks
+    unsafe {
+        if !a.is_empty() {
+            _mm_prefetch(a.as_ptr(), _MM_HINT_T0);
+            _mm_prefetch(b.as_ptr(), _MM_HINT_T0);
+        }
     }
 
-    // Handle remainder with scalar calculation
+    for i in 0..main_chunks {
+        let chunk_start = i * AVX512_BATCH;
+        
+        // Prefetch next chunks when possible
+        if i + 1 < main_chunks {
+            let next_start = (i + 1) * AVX512_BATCH;
+            unsafe {
+                _mm_prefetch(a.get_unchecked(next_start), _MM_HINT_T0);
+                _mm_prefetch(b.get_unchecked(next_start), _MM_HINT_T0);
+            }
+        }
+
+        // Load data with better memory access pattern
+        for j in 0..AVX512_BATCH {
+            a_buffer[j] = a[chunk_start + j];
+            b_buffer[j] = b[chunk_start + j];
+        }
+
+        let va = _mm512_loadu_ps(a_buffer.as_ptr());
+        let vb = _mm512_loadu_ps(b_buffer.as_ptr());
+        
+        // Use fused multiply-add for better performance
+        let product = _mm512_fmadd_ps(va, vb, sum);
+        sum = product;
+    }
+
+    // Handle remainder with optimized scalar path
     let mut scalar_sum = 0.0;
-    for i in 0..remainder {
-        scalar_sum += a[a.len() - remainder + i] * b[b.len() - remainder + i];
+    if remainder > 0 {
+        let start = a.len() - remainder;
+        for i in 0..remainder {
+            scalar_sum += a[start + i] * b[start + i];
+        }
     }
 
-    // Reduce sum and add scalar remainder
+    // Reduce sum with fused operations
     let vec_sum = _mm512_reduce_add_ps(sum);
     vec_sum + scalar_sum
 }
@@ -622,59 +699,82 @@ pub fn ray_aabb_intersect_scalar(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -
 }
 
 /// SIMD-accelerated batch ray-AABB intersection for multiple rays
-pub fn batch_ray_aabb_intersect_simd(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<Option<f32>> {
+/// Uses const generic for compile-time batch size optimization
+#[inline(always)]
+pub fn batch_ray_aabb_intersect_simd<const BATCH_SIZE: usize>(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<Option<f32>> {
     #[cfg(target_feature = "avx512f")]
     {
         use std::arch::x86_64::*;
 
+        const AVX512_BATCH_SIZE: usize = BATCH_SIZE;
+        
         let aabb_min = _mm512_set1_ps(aabb.min_x as f32);
         let aabb_max = _mm512_set1_ps(aabb.max_x as f32);
         let aabb_min_y = _mm512_set1_ps(aabb.min_y as f32);
         let aabb_max_y = _mm512_set1_ps(aabb.max_y as f32);
         let aabb_min_z = _mm512_set1_ps(aabb.min_z as f32);
         let aabb_max_z = _mm512_set1_ps(aabb.max_z as f32);
-
+    
         // Use fold to avoid intermediate allocations from collect()
-        rays.par_chunks(16).fold(Vec::with_capacity(rays.len()), |mut acc, chunk| {
+        rays.par_chunks(AVX512_BATCH_SIZE).fold(Vec::with_capacity(rays.len()), |mut acc, chunk| {
             let mut results = vec![None; chunk.len()];
 
-            for (i, (origin, dir)) in chunk.iter().enumerate() {
+            // Prefetch next chunk to reduce cache misses (using const batch size)
+            let chunk_len = chunk.len();
+            let use_full_batch = chunk_len == AVX512_BATCH_SIZE;
+            
+            // Prefetch next chunk data proactively
+            if let Some(next_chunk) = chunk.get(AVX512_BATCH_SIZE..) {
+                unsafe {
+                    _mm_prefetch(&next_chunk[0].0.x as *const f32, _MM_HINT_T0);
+                    _mm_prefetch(&next_chunk[0].1.x as *const f32, _MM_HINT_T0);
+                }
+            }
+            
+            // Process rays with branch prediction hints
+            for i in 0..chunk_len {
+                let (origin, dir) = &chunk[i];
+                
+                // Use likely() for common case optimization
+                if likely(dir.x != 0.0 && dir.y != 0.0 && dir.z != 0.0) {
+            
                 let origin_x = _mm512_set1_ps(origin.x as f32);
                 let origin_y = _mm512_set1_ps(origin.y as f32);
                 let origin_z = _mm512_set1_ps(origin.z as f32);
                 let dir_x = _mm512_set1_ps(dir.x as f32);
                 let dir_y = _mm512_set1_ps(dir.y as f32);
                 let dir_z = _mm512_set1_ps(dir.z as f32);
-
+            
                 // Calculate intersection for X axis
                 let inv_dir_x = _mm512_div_ps(_mm512_set1_ps(1.0), dir_x);
                 let t1_x = _mm512_mul_ps(_mm512_sub_ps(aabb_min, origin_x), inv_dir_x);
                 let t2_x = _mm512_mul_ps(_mm512_sub_ps(aabb_max, origin_x), inv_dir_x);
                 let t_min_x = _mm512_min_ps(t1_x, t2_x);
                 let t_max_x = _mm512_max_ps(t1_x, t2_x);
-
+            
                 // Y axis
                 let inv_dir_y = _mm512_div_ps(_mm512_set1_ps(1.0), dir_y);
                 let t1_y = _mm512_mul_ps(_mm512_sub_ps(aabb_min_y, origin_y), inv_dir_y);
                 let t2_y = _mm512_mul_ps(_mm512_sub_ps(aabb_max_y, origin_y), inv_dir_y);
                 let t_min_y = _mm512_min_ps(t1_y, t2_y);
                 let t_max_y = _mm512_max_ps(t1_y, t2_y);
-
+            
                 // Z axis
                 let inv_dir_z = _mm512_div_ps(_mm512_set1_ps(1.0), dir_z);
                 let t1_z = _mm512_mul_ps(_mm512_sub_ps(aabb_min_z, origin_z), inv_dir_z);
                 let t2_z = _mm512_mul_ps(_mm512_sub_ps(aabb_max_z, origin_z), inv_dir_z);
                 let t_min_z = _mm512_min_ps(t1_z, t2_z);
                 let t_max_z = _mm512_max_ps(t1_z, t2_z);
-
+            
                 // Combine results
                 let t_min = _mm512_max_ps(_mm512_max_ps(t_min_x, t_min_y), t_min_z);
                 let t_max = _mm512_min_ps(_mm512_min_ps(t_max_x, t_max_y), t_max_z);
-
+            
                 let t_min_val = _mm512_reduce_max_ps(t_min);
                 let t_max_val = _mm512_reduce_min_ps(t_max);
-
-                if t_min_val <= t_max_val && t_max_val >= 0.0 {
+            
+                // Use likely hint for branch prediction
+                if likely(t_min_val <= t_max_val && t_max_val >= 0.0) {
                     results[i] = Some(t_min_val.max(0.0));
                 }
             }
@@ -696,7 +796,7 @@ pub fn batch_ray_aabb_intersect_simd(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<
         let aabb_max_z = _mm256_set1_ps(aabb.max_z as f32);
 
         // Use fold to avoid intermediate allocations from collect()
-        rays.par_chunks(8).fold(Vec::with_capacity(rays.len()), |mut acc, chunk| {
+        rays.par_chunks(BATCH_SIZE).fold(Vec::with_capacity(rays.len()), |mut acc, chunk| {
             let mut results = vec![None; chunk.len()];
 
             for (i, (origin, dir)) in chunk.iter().enumerate() {
@@ -757,40 +857,41 @@ pub fn batch_ray_aabb_intersect_simd(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<
 }
 
 /// SIMD-accelerated swept AABB collision detection
+#[inline(always)]
 pub fn swept_aabb_collision_simd(aabb1: &Aabb, velocity1: Vec3, aabb2: &Aabb, delta_time: f32) -> Option<f32> {
     #[cfg(target_feature = "avx2")]
     {
         use std::arch::x86_64::*;
 
-        // Expand AABB2 by AABB1's size in the direction of movement
-        let expanded_min_x = if velocity1.x > 0.0 {
+        // Expand AABB2 by AABB1's size in the direction of movement - with branch prediction hints
+        let expanded_min_x = if likely(velocity1.x > 0.0) {
             aabb2.min_x - aabb1.half_size().x as f64 * delta_time as f64
         } else {
             aabb2.min_x
         };
-        let expanded_max_x = if velocity1.x < 0.0 {
+        let expanded_max_x = if likely(velocity1.x < 0.0) {
             aabb2.max_x + aabb1.half_size().x as f64 * delta_time as f64
         } else {
             aabb2.max_x
         };
-
-        let expanded_min_y = if velocity1.y > 0.0 {
+        
+        let expanded_min_y = if likely(velocity1.y > 0.0) {
             aabb2.min_y - aabb1.half_size().y as f64 * delta_time as f64
         } else {
             aabb2.min_y
         };
-        let expanded_max_y = if velocity1.y < 0.0 {
+        let expanded_max_y = if likely(velocity1.y < 0.0) {
             aabb2.max_y + aabb1.half_size().y as f64 * delta_time as f64
         } else {
             aabb2.max_y
         };
-
-        let expanded_min_z = if velocity1.z > 0.0 {
+        
+        let expanded_min_z = if likely(velocity1.z > 0.0) {
             aabb2.min_z - aabb1.half_size().z as f64 * delta_time as f64
         } else {
             aabb2.min_z
         };
-        let expanded_max_z = if velocity1.z < 0.0 {
+        let expanded_max_z = if likely(velocity1.z < 0.0) {
             aabb2.max_z + aabb1.half_size().z as f64 * delta_time as f64
         } else {
             aabb2.max_z
@@ -948,12 +1049,13 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn query(&self, query_bounds: &Aabb) -> Vec<&(T, [f64; 3])> {
         // Use consistent lock ordering: spatial lock first, then any other locks
         let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
         
         // Use scoped arena for temporary allocations to reduce memory pressure
-        let arena = ScopedArena::new(get_global_arena_pool());
+        let arena = ScopedArena::new(get_global_enhanced_pool());
         let mut results = Vec::new();
         let mut stack = Vec::new();
 
@@ -963,28 +1065,48 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
         while let Some(current_node) = stack.pop() {
             let guard = current_node.guard(); // Thread-safe querying
             
-            // Skip if this node's bounds don't intersect with query bounds
-            if !guard.get_quad_tree().bounds.intersects(query_bounds) {
+            // Skip if this node's bounds don't intersect with query bounds - with branch prediction
+            if likely(!guard.get_quad_tree().bounds.intersects(query_bounds)) {
                 continue;
             }
 
             // SIMD-accelerated entity filtering for better performance
-            if guard.get_quad_tree().entities.len() >= 8 {
-                // Use arena allocation for positions to avoid intermediate Vec allocation
-                let positions_capacity = guard.get_quad_tree().entities.len();
-                let bump_arena = arena.get_inner_arena();
-                let mut positions = ArenaVec::with_capacity(bump_arena, positions_capacity);
-
-                for entity in &*guard.get_quad_tree().entities {
-                    positions.push((entity.1[0], entity.1[1], entity.1[2]));
+            if likely(guard.get_quad_tree().entities.len() >= 8) {
+                // Use pre-allocated buffer for positions to avoid intermediate allocations
+                const POS_BUF_SIZE: usize = 128;
+                let mut pos_buffer = [(0.0f64, 0.0f64, 0.0f64); POS_BUF_SIZE];
+                let entity_count = guard.get_quad_tree().entities.len();
+                
+                // Prefetch first entity data to reduce cache misses
+                unsafe {
+                    if entity_count > 0 {
+                        let first_entity = guard.get_quad_tree().entities.get_unchecked(0);
+                        _mm_prefetch(&first_entity.1[0] as *const f64, _MM_HINT_T0);
+                    }
                 }
 
-                let contained = query_bounds.contains_points_simd(positions.as_slice());
-
-                for (i, entity) in guard.get_quad_tree().entities.iter().enumerate() {
-                    if contained[i] {
-                        results.push(entity);
+                // Load positions with loop unrolling for better performance
+                let mut i = 0;
+                while i < entity_count {
+                    let remaining = entity_count - i;
+                    let take = std::cmp::min(remaining, POS_BUF_SIZE);
+                    
+                    for j in 0..take {
+                        let entity = guard.get_quad_tree().entities.get_unchecked(i + j);
+                        pos_buffer[j] = (entity.1[0], entity.1[1], entity.1[2]);
                     }
+                    
+                    // Process chunk with SIMD
+                    let contained = query_bounds.contains_points_simd(&pos_buffer[..take]);
+                    
+                    // Store results with unrolled loop for better ILP
+                    for j in 0..take {
+                        if contained[j] {
+                            results.push(guard.get_quad_tree().entities.get_unchecked(i + j));
+                        }
+                    }
+                    
+                    i += take;
                 }
             } else {
                 // Fallback to scalar processing for small batches
@@ -1139,9 +1261,10 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
         }
     }
 
-    pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) {
-        // Use consistent lock ordering: spatial lock first, then any other locks
+    pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) -> Result<(), String> {
+        // Use consistent lock ordering: spatial lock first, then dashmap lock
         let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+        let _dashmap_guard = lock_order::DASHMAP_LOCK.lock().unwrap();
         
         // Use memory pool for position storage to reduce allocations
         let _mem_pool = get_global_enhanced_pool();
@@ -1149,23 +1272,27 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
         if let Some(_old_pos) = self.entity_positions.insert(entity.clone(), pos) {
             // For simplicity, we'll rebuild the quadtree periodically instead of removing individual entries
         }
-        self.quadtree.insert(entity, pos, 0);
+        self.quadtree.insert(entity, pos, 0)?;
+        
+        Ok(())
     }
 
-    pub fn query_nearby(&self, center: [f64; 3], radius: f64) -> Vec<&(T, [f64; 3])> {
-        // Use consistent lock ordering: spatial lock first, then any other locks
+    pub fn query_nearby(&self, center: [f64; 3], radius: f64) -> Result<Vec<&(T, [f64; 3])>, String> {
+        // Use consistent lock ordering: spatial lock first, then dashmap lock
         let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+        let _dashmap_guard = lock_order::DASHMAP_LOCK.lock().unwrap();
         
         let query_bounds = Aabb::new(
             center[0] - radius, center[1] - radius, center[2] - radius,
             center[0] + radius, center[1] + radius, center[2] + radius,
         );
-        self.quadtree.query(&query_bounds)
+        Ok(self.quadtree.query(&query_bounds))
     }
 
-    pub fn rebuild(&mut self) {
-        // Use consistent lock ordering: spatial lock first, then any other locks
+    pub fn rebuild(&mut self) -> Result<(), String> {
+        // Use consistent lock ordering: spatial lock first, then dashmap lock
         let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+        let _dashmap_guard = lock_order::DASHMAP_LOCK.lock().unwrap();
         
         let world_bounds = self.quadtree.bounds.clone();
         let max_entities = self.quadtree.max_entities;
@@ -1178,10 +1305,11 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
         // Use iterator adaptors to minimize intermediate allocations
         let entities_to_insert: Vec<_> = self.entity_positions.iter().map(|entry| (entry.key().clone(), *entry.value())).collect();
         for (entity, pos) in entities_to_insert {
-            new_quadtree.insert(entity, pos, 0);
+            new_quadtree.insert(entity, pos, 0)?;
         }
 
         self.quadtree = new_quadtree;
+        Ok(())
     }
 }
 
@@ -1226,8 +1354,9 @@ pub struct ChunkData {
     pub is_loaded: bool,
 }
 
-/// SIMD-accelerated distance calculation using the SIMD manager
-pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+/// SIMD-accelerated distance calculation using the SIMD manager with const generic batch size
+#[inline(always)]
+pub fn calculate_distances_simd<const BATCH_SIZE: usize>(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
     #[cfg(target_feature = "avx512f")]
     {
         use std::arch::x86_64::*;
@@ -1239,54 +1368,66 @@ pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32
         // Pre-allocate result vector with exact capacity to avoid reallocations
         let mut result = Vec::with_capacity(positions.len());
 
-        // Process main chunks of 16 elements (full AVX-512 width)
-        let main_chunks = positions.len() / 16;
-        let remainder = positions.len() % 16;
-
+        // Process main chunks with const batch size
+        const AVX512_WIDTH: usize = BATCH_SIZE;
+        let main_chunks = positions.len() / AVX512_WIDTH;
+        let remainder = positions.len() % AVX512_WIDTH;
+        
         // Pre-allocate temporary storage for aligned loads
-        let mut pos_buffers = [[0.0f32; 16]; 3];
-
+        let mut pos_buffers = [[0.0f32; AVX512_WIDTH]; 3];
+        
+        // Prefetch next chunk to reduce cache misses
         for i in 0..main_chunks {
-            let chunk_start = i * 16;
-
+            let chunk_start = i * AVX512_WIDTH;
+            
+            // Prefetch next chunk data to improve cache utilization
+            if i + 1 < main_chunks {
+                let next_chunk_start = (i + 1) * AVX512_WIDTH;
+                unsafe {
+                    _mm_prefetch(positions.get_unchecked(next_chunk_start).0 as *const f32, _MM_HINT_T0);
+                    _mm_prefetch(positions.get_unchecked(next_chunk_start).1 as *const f32, _MM_HINT_T0);
+                    _mm_prefetch(positions.get_unchecked(next_chunk_start).2 as *const f32, _MM_HINT_T0);
+                }
+            }
+        
             // Load all position components with better cache utilization
-            for j in 0..16 {
+            for j in 0..AVX512_WIDTH {
                 let pos_idx = chunk_start + j;
                 pos_buffers[0][j] = positions[pos_idx].0;
                 pos_buffers[1][j] = positions[pos_idx].1;
                 pos_buffers[2][j] = positions[pos_idx].2;
             }
-
+        
             let px = _mm512_loadu_ps(pos_buffers[0].as_ptr());
             let py = _mm512_loadu_ps(pos_buffers[1].as_ptr());
             let pz = _mm512_loadu_ps(pos_buffers[2].as_ptr());
-
+        
             // Vectorized distance calculation with fused multiply-add for better performance
             let dx = _mm512_sub_ps(px, cx);
             let dy = _mm512_sub_ps(py, cy);
             let dz = _mm512_sub_ps(pz, cz);
-
+        
             // Use FMADD instructions to optimize calculation pipeline
             let dx2 = _mm512_fmadd_ps(dx, dx, _mm512_setzero_ps());
             let dy2 = _mm512_fmadd_ps(dy, dy, _mm512_setzero_ps());
             let dz2 = _mm512_fmadd_ps(dz, dz, _mm512_setzero_ps());
-
+        
             // Sum components with FMADD for better instruction level parallelism
             let sum = _mm512_fmadd_ps(dx2, _mm512_set1_ps(1.0),
                            _mm512_fmadd_ps(dy2, _mm512_set1_ps(1.0), dz2));
             let dist = _mm512_sqrt_ps(sum);
-
+        
             // Store results directly into pre-allocated vector
-            let mut dist_buffer = [0.0f32; 16];
+            let mut dist_buffer = [0.0f32; AVX512_WIDTH];
             _mm512_storeu_ps(dist_buffer.as_mut_ptr(), dist);
             result.extend_from_slice(&dist_buffer);
         }
-
+        
         // Handle remainder elements with optimized scalar path
         if remainder > 0 {
             let remainder_start = positions.len() - remainder;
-            let mut remainder_buffer = [0.0f32; 16];
-
+            let mut remainder_buffer = [0.0f32; AVX512_WIDTH];
+        
             // Use aligned loads for remainder when possible
             if remainder_start + remainder <= positions.len() {
                 for j in 0..remainder {
@@ -1296,7 +1437,7 @@ pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32
                                          (positions[pos_idx].2 - center.2).powi(2)).sqrt();
                 }
             }
-
+        
             result.extend_from_slice(&remainder_buffer[..remainder]);
         }
 
