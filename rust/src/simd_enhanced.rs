@@ -42,19 +42,91 @@ impl EnhancedSimdProcessor {
         }
     }
     
-    /// Optimized dot product with SIMD acceleration
+    /// Optimized dot product with SIMD acceleration - aggressive optimization for small batches
     #[inline(always)]
     pub fn dot_product(&self, a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() {
             panic!("Vectors must have equal length for dot product");
         }
-        
+
+        let len = a.len();
+
+        // Aggressive optimization for small batches (2-7 elements)
+        if len <= 7 {
+            return self.dot_product_small_batch(a, b);
+        }
+
         match self.capability {
             SimdCapability::Avx512 => unsafe { self.dot_product_avx512(a, b) },
             SimdCapability::Avx2 => unsafe { self.dot_product_avx2(a, b) },
             SimdCapability::Sse => unsafe { self.dot_product_sse(a, b) },
             SimdCapability::Scalar => self.dot_product_scalar(a, b),
         }
+    }
+
+    /// Specialized dot product for small batches (2-7 elements) - no overhead, direct SIMD
+    #[inline(always)]
+    fn dot_product_small_batch(&self, a: &[f32], b: &[f32]) -> f32 {
+        let len = a.len();
+
+        match len {
+            2 => {
+                // Direct scalar for 2 elements - minimal overhead
+                a[0] * b[0] + a[1] * b[1]
+            },
+            3 => {
+                // Direct scalar for 3 elements
+                a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+            },
+            4 => {
+                // SSE for exactly 4 elements - no padding needed
+                if matches!(self.capability, SimdCapability::Sse | SimdCapability::Avx2 | SimdCapability::Avx512) {
+                    unsafe { self.dot_product_sse_exact4(a, b) }
+                } else {
+                    self.dot_product_scalar(a, b)
+                }
+            },
+            5..=7 => {
+                // SSE for 5-7 elements with minimal padding
+                if matches!(self.capability, SimdCapability::Sse | SimdCapability::Avx2 | SimdCapability::Avx512) {
+                    unsafe { self.dot_product_sse_small(a, b) }
+                } else {
+                    self.dot_product_scalar(a, b)
+                }
+            },
+            _ => unreachable!("Should not reach here for small batches"),
+        }
+    }
+
+    /// SSE optimized dot product for exactly 4 elements (no padding)
+    #[target_feature(enable = "sse4.2")]
+    unsafe fn dot_product_sse_exact4(&self, a: &[f32], b: &[f32]) -> f32 {
+        let va = _mm_loadu_ps(a.as_ptr());
+        let vb = _mm_loadu_ps(b.as_ptr());
+        let prod = _mm_mul_ps(va, vb);
+        Self::hsum128_ps(prod)
+    }
+
+    /// SSE optimized dot product for 5-7 elements with minimal overhead
+    #[target_feature(enable = "sse4.2")]
+    unsafe fn dot_product_sse_small(&self, a: &[f32], b: &[f32]) -> f32 {
+        let len = a.len();
+        let mut sum = 0.0f32;
+
+        // Process first 4 elements with SSE
+        if len >= 4 {
+            let va = _mm_loadu_ps(a.as_ptr());
+            let vb = _mm_loadu_ps(b.as_ptr());
+            let prod = _mm_mul_ps(va, vb);
+            sum += Self::hsum128_ps(prod);
+        }
+
+        // Handle remaining elements scalar
+        for i in 4..len {
+            sum += a[i] * b[i];
+        }
+
+        sum
     }
     
     /// AVX-512 optimized dot product
@@ -169,18 +241,86 @@ impl EnhancedSimdProcessor {
         a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
     }
     
-    /// Optimized vector addition with SIMD acceleration
+    /// Optimized vector addition with SIMD acceleration - aggressive optimization for small batches
     #[inline(always)]
     pub fn vector_add(&self, a: &mut [f32], b: &[f32]) {
         if a.len() != b.len() {
             panic!("Vectors must have equal length for addition");
         }
-        
+
+        let len = a.len();
+
+        // Aggressive optimization for small batches (2-7 elements)
+        if len <= 7 {
+            return self.vector_add_small_batch(a, b);
+        }
+
         match self.capability {
             SimdCapability::Avx512 => unsafe { self.vector_add_avx512(a, b) },
             SimdCapability::Avx2 => unsafe { self.vector_add_avx2(a, b) },
             SimdCapability::Sse => unsafe { self.vector_add_sse(a, b) },
             SimdCapability::Scalar => self.vector_add_scalar(a, b),
+        }
+    }
+
+    /// Specialized vector addition for small batches (2-7 elements) - no overhead
+    #[inline(always)]
+    fn vector_add_small_batch(&self, a: &mut [f32], b: &[f32]) {
+        let len = a.len();
+
+        match len {
+            2 => {
+                a[0] += b[0];
+                a[1] += b[1];
+            },
+            3 => {
+                a[0] += b[0];
+                a[1] += b[1];
+                a[2] += b[2];
+            },
+            4 => {
+                if matches!(self.capability, SimdCapability::Sse | SimdCapability::Avx2 | SimdCapability::Avx512) {
+                    unsafe { self.vector_add_sse_exact4(a, b) }
+                } else {
+                    self.vector_add_scalar(a, b);
+                }
+            },
+            5..=7 => {
+                if matches!(self.capability, SimdCapability::Sse | SimdCapability::Avx2 | SimdCapability::Avx512) {
+                    unsafe { self.vector_add_sse_small(a, b) }
+                } else {
+                    self.vector_add_scalar(a, b);
+                }
+            },
+            _ => unreachable!("Should not reach here for small batches"),
+        }
+    }
+
+    /// SSE optimized vector addition for exactly 4 elements
+    #[target_feature(enable = "sse4.2")]
+    unsafe fn vector_add_sse_exact4(&self, a: &mut [f32], b: &[f32]) {
+        let va = _mm_loadu_ps(a.as_ptr());
+        let vb = _mm_loadu_ps(b.as_ptr());
+        let result = _mm_add_ps(va, vb);
+        _mm_storeu_ps(a.as_mut_ptr(), result);
+    }
+
+    /// SSE optimized vector addition for 5-7 elements
+    #[target_feature(enable = "sse4.2")]
+    unsafe fn vector_add_sse_small(&self, a: &mut [f32], b: &[f32]) {
+        let len = a.len();
+
+        // Process first 4 elements with SSE
+        if len >= 4 {
+            let va = _mm_loadu_ps(a.as_ptr());
+            let vb = _mm_loadu_ps(b.as_ptr());
+            let result = _mm_add_ps(va, vb);
+            _mm_storeu_ps(a.as_mut_ptr(), result);
+        }
+
+        // Handle remaining elements scalar
+        for i in 4..len {
+            a[i] += b[i];
         }
     }
     
@@ -509,5 +649,35 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!((results[0] - 11.0).abs() < 1e-6);
         assert!((results[1] - 5.0).abs() < 1e-6);
+    }
+    #[test]
+    fn test_small_batch_optimizations() {
+        let simd = EnhancedSimdProcessor::new();
+
+        // Test dot product for small batches
+        let test_cases = vec![
+            (vec![1.0, 2.0], vec![3.0, 4.0], 11.0), // 2 elements
+            (vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0], 32.0), // 3 elements
+            (vec![1.0, 2.0, 3.0, 4.0], vec![4.0, 3.0, 2.0, 1.0], 20.0), // 4 elements
+            (vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![5.0, 4.0, 3.0, 2.0, 1.0], 35.0), // 5 elements
+            (vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![6.0, 5.0, 4.0, 3.0, 2.0, 1.0], 56.0), // 6 elements
+            (vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], vec![7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0], 84.0), // 7 elements
+        ];
+
+        for (a, b, expected) in test_cases {
+            let result = simd.dot_product(&a, &b);
+            assert!((result - expected).abs() < 1e-6, "Failed for {} elements: expected {}, got {}", a.len(), expected, result);
+        }
+
+        // Test vector addition for small batches
+        let mut test_a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let test_b = vec![7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+        let expected = vec![8.0, 8.0, 8.0, 8.0, 8.0, 8.0, 8.0];
+
+        simd.vector_add(&mut test_a, &test_b);
+
+        for (i, (&result, &expect)) in test_a.iter().zip(expected.iter()).enumerate() {
+            assert!((result - expect).abs() < 1e-6, "Vector add failed at index {}: expected {}, got {}", i, expect, result);
+        }
     }
 }

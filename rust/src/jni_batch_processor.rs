@@ -10,11 +10,12 @@ use std::cmp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::runtime::Runtime;
 
-/// Buffer pool for batch data to reduce allocations and GC pressure
+/// Buffer pool for batch data to reduce allocations and GC pressure (sharded)
 #[derive(Debug)]
 #[allow(dead_code)]
 struct BatchBufferPool {
-    buffers: Mutex<Vec<Vec<u8>>>,
+    buffer_pools: Vec<Mutex<Vec<Vec<u8>>>>, // Sharded pools
+    shard_count: usize,
     max_buffers: usize,
     buffer_capacity: usize,
 }
@@ -22,20 +23,54 @@ struct BatchBufferPool {
 #[allow(dead_code)]
 impl BatchBufferPool {
     fn new(max_buffers: usize, buffer_capacity: usize) -> Self {
-        let mut buffers = Vec::with_capacity(max_buffers);
-        for _ in 0..max_buffers {
-            buffers.push(Vec::with_capacity(buffer_capacity));
+        let shard_count = 4; // 4 shards for reduced contention
+        let buffers_per_shard = max_buffers / shard_count;
+        let mut buffer_pools = Vec::with_capacity(shard_count);
+
+        for _ in 0..shard_count {
+            let mut buffers = Vec::with_capacity(buffers_per_shard);
+            for _ in 0..buffers_per_shard {
+                buffers.push(Vec::with_capacity(buffer_capacity));
+            }
+            buffer_pools.push(Mutex::new(buffers));
         }
 
         Self {
-            buffers: Mutex::new(buffers),
+            buffer_pools,
+            shard_count,
             max_buffers,
             buffer_capacity,
         }
     }
 
+    fn get_shard(&self, thread_id: usize) -> usize {
+        thread_id % self.shard_count
+    }
+
     fn acquire_buffer(&self) -> Option<Vec<u8>> {
-        let mut buffers = self.buffers.lock().unwrap();
+        // Use round-robin sharding
+        static ACQUIRE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
+
+        // Try current shard first
+        if let Some(buffer) = self.try_acquire_from_shard(shard_idx) {
+            return Some(buffer);
+        }
+
+        // Try other shards
+        for i in 0..self.shard_count {
+            if i != shard_idx {
+                if let Some(buffer) = self.try_acquire_from_shard(i) {
+                    return Some(buffer);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn try_acquire_from_shard(&self, shard_idx: usize) -> Option<Vec<u8>> {
+        let mut buffers = self.buffer_pools[shard_idx].lock().unwrap();
         buffers.pop()
     }
 
@@ -43,15 +78,20 @@ impl BatchBufferPool {
         buffer.clear();
         buffer.reserve(self.buffer_capacity.saturating_sub(buffer.capacity()));
 
-        let mut buffers = self.buffers.lock().unwrap();
-        if buffers.len() < self.max_buffers {
+        // Use round-robin sharding for release
+        static RELEASE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let shard_idx = RELEASE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
+
+        let mut buffers = self.buffer_pools[shard_idx].lock().unwrap();
+        let max_per_shard = self.max_buffers / self.shard_count;
+        if buffers.len() < max_per_shard {
             buffers.push(buffer);
         }
     }
 }
 
 lazy_static::lazy_static! {
-    static ref BATCH_BUFFER_POOL: BatchBufferPool = BatchBufferPool::new(32, 64 * 1024); // 32 buffers, 64KB each
+    static ref BATCH_BUFFER_POOL: BatchBufferPool = BatchBufferPool::new(64, 128 * 1024); // Increased: 64 buffers, 128KB each for more aggressive batching
 }
 
 /// Configuration for enhanced JNI batch processing
@@ -70,11 +110,11 @@ pub struct EnhancedBatchConfig {
 impl Default for EnhancedBatchConfig {
     fn default() -> Self {
         Self {
-            min_batch_size: 10,
-            max_batch_size: 200,
-            adaptive_batch_timeout_ms: 2,
-            max_pending_batches: 50,
-            worker_threads: 4,
+            min_batch_size: 50,  // Increased for more aggressive batching
+            max_batch_size: 500, // Increased to reduce JNI crossings
+            adaptive_batch_timeout_ms: 1, // Reduced for faster batching
+            max_pending_batches: 200, // Increased to handle more concurrent batches
+            worker_threads: 8, // Increased for better parallelism
             enable_adaptive_sizing: true,
         }
     }
@@ -156,43 +196,66 @@ impl EnhancedBatchMetrics {
     }
 }
 
-/// Priority queue for batch operations
+/// Priority queue for batch operations (sharded for reduced lock contention)
 #[derive(Debug)]
 pub struct PriorityBatchQueue {
-    queue: Arc<Mutex<VecDeque<EnhancedBatchOperation>>>,
+    queues: Arc<Vec<Mutex<VecDeque<EnhancedBatchOperation>>>>, // Sharded queues
+    shard_count: usize,
     metrics: Arc<EnhancedBatchMetrics>,
 }
 
 impl PriorityBatchQueue {
     pub fn new(metrics: Arc<EnhancedBatchMetrics>) -> Self {
+        let shard_count = 4; // 4 shards for reduced contention
+        let mut queues = Vec::with_capacity(shard_count);
+        for _ in 0..shard_count {
+            queues.push(Mutex::new(VecDeque::new()));
+        }
+
         Self {
-            queue: Arc::new(Mutex::new(VecDeque::new())),
+            queues: Arc::new(queues),
+            shard_count,
             metrics,
         }
     }
 
+    fn get_shard(&self, priority: u8) -> usize {
+        (priority as usize) % self.shard_count
+    }
+
     pub fn push(&self, operation: EnhancedBatchOperation) {
-        let mut queue = self.queue.lock().unwrap();
-        
+        let shard_idx = self.get_shard(operation.priority);
+        let mut queue = self.queues[shard_idx].lock().unwrap();
+
         // Insert based on priority (higher priority first)
         let insert_pos = queue.binary_search_by_key(&operation.priority, |op| op.priority)
             .unwrap_or_else(|pos| pos);
         queue.insert(insert_pos, operation);
-        
-        self.metrics.current_queue_depth.store(queue.len(), Ordering::Relaxed);
+
+        // Update total queue depth across all shards
+        let total_depth = self.get_total_depth();
+        self.metrics.current_queue_depth.store(total_depth, Ordering::Relaxed);
     }
 
     pub fn pop(&self) -> Option<EnhancedBatchOperation> {
-        let mut queue = self.queue.lock().unwrap();
-        let operation = queue.pop_front();
-        self.metrics.current_queue_depth.store(queue.len(), Ordering::Relaxed);
-        operation
+        // Try to pop from highest priority shards first
+        for priority_level in (0..=255).rev() {
+            let shard_idx = self.get_shard(priority_level);
+            let mut queue = self.queues[shard_idx].lock().unwrap();
+            if let Some(operation) = queue.pop_front() {
+                let total_depth = self.get_total_depth();
+                self.metrics.current_queue_depth.store(total_depth, Ordering::Relaxed);
+                return Some(operation);
+            }
+        }
+
+        None
     }
 
     pub fn drain_batch(&self, max_size: usize, timeout: Duration) -> Vec<EnhancedBatchOperation> {
         let start_time = Instant::now();
         let mut batch = Vec::with_capacity(max_size);
-        
+
         while batch.len() < max_size && start_time.elapsed() < timeout {
             if let Some(operation) = self.pop() {
                 batch.push(operation);
@@ -201,19 +264,32 @@ impl PriorityBatchQueue {
                 break;
             } else {
                 // No operations available, wait a bit
-                std::thread::sleep(Duration::from_micros(100));
+                std::thread::sleep(Duration::from_micros(50)); // Reduced sleep for more aggressive batching
             }
         }
-        
+
         batch
     }
 
     pub fn len(&self) -> usize {
-        self.queue.lock().unwrap().len()
+        self.get_total_depth()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.queue.lock().unwrap().is_empty()
+        for queue in self.queues.iter() {
+            if !queue.lock().unwrap().is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn get_total_depth(&self) -> usize {
+        let mut total = 0;
+        for queue in self.queues.iter() {
+            total += queue.lock().unwrap().len();
+        }
+        total
     }
 }
 
@@ -225,39 +301,79 @@ struct AsyncBatchTask {
     result_sender: oneshot::Sender<Result<EnhancedBatchResult, String>>,
 }
 
-/// Zero-copy buffer pool for direct memory access
+/// Zero-copy buffer pool for direct memory access (sharded)
 #[derive(Debug)]
 struct ZeroCopyBufferPool {
-    buffers: Arc<Mutex<Vec<Vec<u8>>>>,
+    buffer_pools: Arc<Vec<Mutex<Vec<Vec<u8>>>>>, // Sharded pools
+    shard_count: usize,
     max_buffers: usize,
     buffer_size: usize,
 }
 
 impl ZeroCopyBufferPool {
     fn new(max_buffers: usize, buffer_size: usize) -> Self {
-        let mut buffers = Vec::with_capacity(max_buffers);
-        for _ in 0..max_buffers {
-            buffers.push(Vec::with_capacity(buffer_size));
+        let shard_count = 4; // 4 shards for reduced contention
+        let buffers_per_shard = max_buffers / shard_count;
+        let mut buffer_pools = Vec::with_capacity(shard_count);
+
+        for _ in 0..shard_count {
+            let mut buffers = Vec::with_capacity(buffers_per_shard);
+            for _ in 0..buffers_per_shard {
+                buffers.push(Vec::with_capacity(buffer_size));
+            }
+            buffer_pools.push(Mutex::new(buffers));
         }
 
         Self {
-            buffers: Arc::new(Mutex::new(buffers)),
+            buffer_pools: Arc::new(buffer_pools),
+            shard_count,
             max_buffers,
             buffer_size,
         }
     }
 
+    fn get_shard(&self, thread_id: usize) -> usize {
+        thread_id % self.shard_count
+    }
+
     fn acquire_buffer(&self) -> Option<Vec<u8>> {
-        let mut buffers = self.buffers.lock().unwrap();
+        // Use round-robin sharding
+        static ACQUIRE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
+
+        // Try current shard first
+        if let Some(buffer) = self.try_acquire_from_shard(shard_idx) {
+            return Some(buffer);
+        }
+
+        // Try other shards
+        for i in 0..self.shard_count {
+            if i != shard_idx {
+                if let Some(buffer) = self.try_acquire_from_shard(i) {
+                    return Some(buffer);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn try_acquire_from_shard(&self, shard_idx: usize) -> Option<Vec<u8>> {
+        let mut buffers = self.buffer_pools[shard_idx].lock().unwrap();
         buffers.pop()
     }
 
     fn release_buffer(&self, mut buffer: Vec<u8>) {
         buffer.clear();
         buffer.reserve(self.buffer_size.saturating_sub(buffer.capacity()));
-        
-        let mut buffers = self.buffers.lock().unwrap();
-        if buffers.len() < self.max_buffers {
+
+        // Use round-robin sharding for release
+        static ZC_RELEASE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let shard_idx = ZC_RELEASE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
+
+        let mut buffers = self.buffer_pools[shard_idx].lock().unwrap();
+        let max_per_shard = self.max_buffers / self.shard_count;
+        if buffers.len() < max_per_shard {
             buffers.push(buffer);
         }
     }
@@ -303,8 +419,8 @@ impl EnhancedBatchProcessor {
         let (async_task_sender, async_task_receiver) = mpsc::channel::<AsyncBatchTask>(1000);
         let async_task_receiver = Arc::new(Mutex::new(async_task_receiver));
         
-        // Create zero-copy buffer pool
-        let zero_copy_pool = Arc::new(ZeroCopyBufferPool::new(32, 64 * 1024)); // 32 buffers, 64KB each
+        // Create zero-copy buffer pool (increased for more aggressive batching)
+        let zero_copy_pool = Arc::new(ZeroCopyBufferPool::new(64, 128 * 1024)); // 64 buffers, 128KB each
         
         // Create connection pool for async tasks
         let connection_pool = Arc::new(Mutex::new(Vec::new()));

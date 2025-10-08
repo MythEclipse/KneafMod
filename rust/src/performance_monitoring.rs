@@ -1,4 +1,3 @@
-use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, Ordering};
 use std::sync::Arc;
 use jni::{JNIEnv, objects::{JString, JClass}, sys::jlong};
@@ -42,70 +41,73 @@ pub struct PerformanceMetrics {
 }
 
 pub struct PerformanceMonitor {
-    pub metrics: Arc<Mutex<PerformanceMetrics>>,
     pub logger: Arc<PerformanceLogger>,
-    
-    // Thresholds
+
+    // Thresholds (lock-free)
     pub jni_call_threshold_ms: Arc<AtomicU64>,
     pub lock_wait_threshold_ms: Arc<AtomicU64>,
     pub memory_usage_threshold_pct: Arc<AtomicU32>,
     pub gc_duration_threshold_ms: Arc<AtomicU64>,
-    
-    // Counters
+
+    // Counters (lock-free)
     pub jni_calls_total: Arc<AtomicU64>,
     pub jni_call_duration_ms: Arc<AtomicU64>,
     pub jni_max_call_duration_ms: Arc<AtomicU64>,
-    
+
     pub lock_waits_total: Arc<AtomicU64>,
     pub lock_wait_time_ms: Arc<AtomicU64>,
     pub lock_max_wait_time_ms: Arc<AtomicU64>,
     pub current_lock_contention: Arc<AtomicU32>,
-    
+
     pub memory_total_heap: Arc<AtomicU64>,
     pub memory_used_heap: Arc<AtomicU64>,
     pub memory_free_heap: Arc<AtomicU64>,
     pub memory_peak_heap: Arc<AtomicU64>,
     pub memory_gc_count: Arc<AtomicU64>,
     pub memory_gc_time_ms: Arc<AtomicU64>,
-    
-    // State
+
+    // State (lock-free)
     pub is_monitoring: Arc<AtomicBool>,
-    pub last_alert_time: Arc<Mutex<SystemTime>>,
+    pub last_alert_time_ns: Arc<AtomicU64>, // Store as nanoseconds since epoch
     pub alert_cooldown: Arc<AtomicU64>,
 }
 
 impl PerformanceMonitor {
     pub fn new(logger: Arc<PerformanceLogger>) -> Self {
+        let now_ns = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
         Self {
-            metrics: Arc::new(Mutex::new(PerformanceMetrics::default())),
             logger,
-            
+
             // Thresholds
             jni_call_threshold_ms: Arc::new(AtomicU64::new(100)),
             lock_wait_threshold_ms: Arc::new(AtomicU64::new(50)),
             memory_usage_threshold_pct: Arc::new(AtomicU32::new(90)),
             gc_duration_threshold_ms: Arc::new(AtomicU64::new(100)),
-            
+
             // Counters - initialized to 0
             jni_calls_total: Arc::new(AtomicU64::new(0)),
             jni_call_duration_ms: Arc::new(AtomicU64::new(0)),
             jni_max_call_duration_ms: Arc::new(AtomicU64::new(0)),
-            
+
             lock_waits_total: Arc::new(AtomicU64::new(0)),
             lock_wait_time_ms: Arc::new(AtomicU64::new(0)),
             lock_max_wait_time_ms: Arc::new(AtomicU64::new(0)),
             current_lock_contention: Arc::new(AtomicU32::new(0)),
-            
+
             memory_total_heap: Arc::new(AtomicU64::new(0)),
             memory_used_heap: Arc::new(AtomicU64::new(0)),
             memory_free_heap: Arc::new(AtomicU64::new(0)),
             memory_peak_heap: Arc::new(AtomicU64::new(0)),
             memory_gc_count: Arc::new(AtomicU64::new(0)),
             memory_gc_time_ms: Arc::new(AtomicU64::new(0)),
-            
+
             // State
             is_monitoring: Arc::new(AtomicBool::new(true)),
-            last_alert_time: Arc::new(Mutex::new(SystemTime::now())),
+            last_alert_time_ns: Arc::new(AtomicU64::new(now_ns)),
             alert_cooldown: Arc::new(AtomicU64::new(3000)), // 3 seconds cooldown
         }
     }
@@ -225,35 +227,44 @@ impl PerformanceMonitor {
     }
 
     fn trigger_threshold_alert(&self, _alert_type: &str, message: &str) {
-        let now = SystemTime::now();
-        let last_alert = self.last_alert_time.lock();
-        let cooldown = self.alert_cooldown.load(Ordering::Relaxed);
-        
-        // Check cooldown to prevent alert spam
-        if last_alert.elapsed().map_or(false, |d| d.as_millis() < (cooldown as u128)) {
+        let now_ns = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
+        let last_alert_ns = self.last_alert_time_ns.load(Ordering::Relaxed);
+        let cooldown_ms = self.alert_cooldown.load(Ordering::Relaxed);
+
+        // Check cooldown to prevent alert spam (convert cooldown to nanoseconds)
+        let cooldown_ns = cooldown_ms * 1_000_000;
+        if now_ns < last_alert_ns + cooldown_ns {
             return;
         }
 
-        // Log the alert and update last alert time
+        // Log the alert and update last alert time atomically
         let trace_id = generate_trace_id();
         self.logger.log_error("threshold_alert", &trace_id, &format!("[ALERT] {}", message), "THRESHOLD_ALERT");
-        
-        *self.last_alert_time.lock() = now;
+
+        // Use compare_exchange to update atomically
+        let _ = self.last_alert_time_ns.compare_exchange(
+            last_alert_ns, now_ns, Ordering::Relaxed, Ordering::Relaxed
+        );
     }
 
     pub fn get_metrics_snapshot(&self) -> PerformanceMetrics {
-        let mut metrics = self.metrics.lock();
-        
+        // Create metrics directly from atomic counters (lock-free)
+        let mut metrics = PerformanceMetrics::default();
+
         // Update metrics with current counter values
         metrics.jni_calls.total_calls = self.jni_calls_total.load(Ordering::Relaxed);
         metrics.jni_calls.call_duration_ms = self.jni_call_duration_ms.load(Ordering::Relaxed);
         metrics.jni_calls.max_call_duration_ms = self.jni_max_call_duration_ms.load(Ordering::Relaxed);
-        
+
         metrics.lock_wait_metrics.total_lock_waits = self.lock_waits_total.load(Ordering::Relaxed);
         metrics.lock_wait_metrics.total_lock_wait_time_ms = self.lock_wait_time_ms.load(Ordering::Relaxed);
         metrics.lock_wait_metrics.max_lock_wait_time_ms = self.lock_max_wait_time_ms.load(Ordering::Relaxed);
         metrics.lock_wait_metrics.current_lock_contention = self.current_lock_contention.load(Ordering::Relaxed);
-        
+
         metrics.memory_metrics.total_heap_bytes = self.memory_total_heap.load(Ordering::Relaxed);
         metrics.memory_metrics.used_heap_bytes = self.memory_used_heap.load(Ordering::Relaxed);
         metrics.memory_metrics.free_heap_bytes = self.memory_free_heap.load(Ordering::Relaxed);
@@ -266,7 +277,7 @@ impl PerformanceMonitor {
             0.0
         };
 
-        metrics.clone()
+        metrics
     }
 }
 

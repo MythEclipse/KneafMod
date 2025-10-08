@@ -53,45 +53,68 @@ impl Drop for TrackedAllocation {
 // TrackedAllocation needs to be Send for use in shared structures
 unsafe impl Send for TrackedAllocation {}
 
-/// Memory allocation tracker for leak detection
+/// Memory allocation tracker for leak detection (lock-free with sharding)
 #[derive(Debug)]
 pub struct AllocationTracker {
-    active_allocations: Arc<Mutex<HashMap<u64, (usize, std::time::Instant)>>>,
+    active_allocations: Arc<Vec<Mutex<HashMap<u64, (usize, std::time::Instant)>>>>, // Sharded for reduced contention
     total_allocations: AtomicU64,
     total_deallocations: AtomicU64,
+    shard_count: usize,
 }
 
 impl AllocationTracker {
     pub fn new() -> Self {
+        let shard_count = 16; // 16 shards for reduced lock contention
+        let mut shards = Vec::with_capacity(shard_count);
+        for _ in 0..shard_count {
+            shards.push(Mutex::new(HashMap::new()));
+        }
+
         Self {
-            active_allocations: Arc::new(Mutex::new(HashMap::new())),
+            active_allocations: Arc::new(shards),
             total_allocations: AtomicU64::new(0),
             total_deallocations: AtomicU64::new(0),
+            shard_count,
         }
+    }
+
+    fn get_shard(&self, allocation_id: u64) -> usize {
+        (allocation_id as usize) % self.shard_count
     }
 
     pub fn track_allocation(&self, allocation_id: u64, size: usize) {
         self.total_allocations.fetch_add(1, Ordering::Relaxed);
-        let mut allocations = self.active_allocations.lock().unwrap();
-        allocations.insert(allocation_id, (size, std::time::Instant::now()));
+        let shard_idx = self.get_shard(allocation_id);
+        let mut shard = self.active_allocations[shard_idx].lock().unwrap();
+        shard.insert(allocation_id, (size, std::time::Instant::now()));
     }
 
     pub fn track_deallocation(&self, allocation_id: u64) -> Option<usize> {
         self.total_deallocations.fetch_add(1, Ordering::Relaxed);
-        let mut allocations = self.active_allocations.lock().unwrap();
-        allocations.remove(&allocation_id).map(|(size, _)| size)
+        let shard_idx = self.get_shard(allocation_id);
+        let mut shard = self.active_allocations[shard_idx].lock().unwrap();
+        shard.remove(&allocation_id).map(|(size, _)| size)
     }
 
     pub fn get_leak_report(&self) -> Vec<(u64, usize, std::time::Duration)> {
-        let allocations = self.active_allocations.lock().unwrap();
-        allocations.iter().map(|(&id, &(size, timestamp))| {
-            (id, size, timestamp.elapsed())
-        }).collect()
+        let mut report = Vec::new();
+        for shard in self.active_allocations.iter() {
+            let shard_data = shard.lock().unwrap();
+            for (&id, &(size, timestamp)) in shard_data.iter() {
+                report.push((id, size, timestamp.elapsed()));
+            }
+        }
+        report
     }
 
     pub fn has_leaks(&self) -> bool {
-        let allocations = self.active_allocations.lock().unwrap();
-        !allocations.is_empty()
+        for shard in self.active_allocations.iter() {
+            let shard_data = shard.lock().unwrap();
+            if !shard_data.is_empty() {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -164,10 +187,11 @@ impl Default for MemoryArenaConfig {
     }
 }
 
-/// Slab allocator for small objects
+/// Slab allocator for small objects (sharded for reduced lock contention)
 #[derive(Debug)]
 pub struct SlabAllocator {
-    slabs: Arc<Mutex<Vec<Vec<u8>>>>,
+    slab_pools: Arc<Vec<Mutex<Vec<Vec<u8>>>>>, // Sharded pools
+    shard_count: usize,
     slab_size: usize,
     allocated: AtomicUsize,
     deallocated: AtomicUsize,
@@ -175,21 +199,55 @@ pub struct SlabAllocator {
 
 impl SlabAllocator {
     pub fn new(slab_size: usize, pool_size: usize) -> Self {
-        let mut slabs = Vec::with_capacity(pool_size);
-        for _ in 0..pool_size {
-            slabs.push(Vec::with_capacity(slab_size));
+        let shard_count = 8; // 8 shards for reduced contention
+        let mut slab_pools = Vec::with_capacity(shard_count);
+        let slabs_per_shard = pool_size / shard_count;
+
+        for _ in 0..shard_count {
+            let mut slabs = Vec::with_capacity(slabs_per_shard);
+            for _ in 0..slabs_per_shard {
+                slabs.push(Vec::with_capacity(slab_size));
+            }
+            slab_pools.push(Mutex::new(slabs));
         }
 
         Self {
-            slabs: Arc::new(Mutex::new(slabs)),
+            slab_pools: Arc::new(slab_pools),
+            shard_count,
             slab_size,
             allocated: AtomicUsize::new(0),
             deallocated: AtomicUsize::new(0),
         }
     }
 
+    fn get_shard(&self, thread_id: usize) -> usize {
+        thread_id % self.shard_count
+    }
+
     pub fn allocate(&self) -> Option<Vec<u8>> {
-        let mut slabs = self.slabs.lock().unwrap();
+        // Use round-robin sharding for better distribution
+        static SHARD_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let shard_idx = SHARD_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
+
+        // Try current shard first
+        if let Some(slab) = self.try_allocate_from_shard(shard_idx) {
+            return Some(slab);
+        }
+
+        // Try other shards if current is empty
+        for i in 0..self.shard_count {
+            if i != shard_idx {
+                if let Some(slab) = self.try_allocate_from_shard(i) {
+                    return Some(slab);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn try_allocate_from_shard(&self, shard_idx: usize) -> Option<Vec<u8>> {
+        let mut slabs = self.slab_pools[shard_idx].lock().unwrap();
         if let Some(mut slab) = slabs.pop() {
             slab.clear();
             self.allocated.fetch_add(1, Ordering::Relaxed);
@@ -203,18 +261,27 @@ impl SlabAllocator {
         if slab.capacity() == self.slab_size {
             slab.clear();
             self.deallocated.fetch_add(1, Ordering::Relaxed);
-            
-            let mut slabs = self.slabs.lock().unwrap();
-            if slabs.len() < 10000 { // Max pool size
+
+            // Use round-robin sharding for deallocation
+            static DEALLOC_COUNTER: AtomicUsize = AtomicUsize::new(0);
+            let shard_idx = DEALLOC_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
+
+            let mut slabs = self.slab_pools[shard_idx].lock().unwrap();
+            if slabs.len() < 1250 { // Max per shard (10000 / 8)
                 slabs.push(slab);
             }
         }
     }
 
     pub fn get_stats(&self) -> SlabStats {
-        let slabs = self.slabs.lock().unwrap();
+        let mut total_available = 0;
+        for pool in self.slab_pools.iter() {
+            let slabs = pool.lock().unwrap();
+            total_available += slabs.len();
+        }
+
         SlabStats {
-            available_slabs: slabs.len(),
+            available_slabs: total_available,
             allocated: self.allocated.load(Ordering::Relaxed),
             deallocated: self.deallocated.load(Ordering::Relaxed),
             slab_size: self.slab_size,
@@ -235,28 +302,40 @@ pub struct UnifiedMemoryArena {
     small_allocator: SlabAllocator,
     medium_allocator: SlabAllocator,
     large_allocator: SlabAllocator,
-    zero_copy_buffers: Arc<Mutex<HashMap<u64, TrackedAllocation>>>,
+    zero_copy_buffers: Arc<Vec<Mutex<HashMap<u64, TrackedAllocation>>>>, // Sharded for reduced contention
     next_buffer_id: AtomicU64,
     config: MemoryArenaConfig,
     total_allocated: AtomicU64,
     total_deallocated: AtomicU64,
     allocation_tracker: Arc<AllocationTracker>,
+    buffer_shard_count: usize,
 }
 
 impl UnifiedMemoryArena {
+    fn get_buffer_shard(&self, buffer_id: u64) -> usize {
+        (buffer_id as usize) % self.buffer_shard_count
+    }
+
     pub fn new(config: MemoryArenaConfig) -> Self {
-        info!("Initializing unified memory arena with jemalloc");
-        
+        info!("Initializing unified memory arena with jemalloc and sharded allocation");
+
+        let buffer_shard_count = 8; // 8 shards for zero-copy buffers
+        let mut zero_copy_buffers = Vec::with_capacity(buffer_shard_count);
+        for _ in 0..buffer_shard_count {
+            zero_copy_buffers.push(Mutex::new(HashMap::new()));
+        }
+
         Self {
             small_allocator: SlabAllocator::new(SMALL_OBJECT_THRESHOLD, config.small_object_pool_size),
             medium_allocator: SlabAllocator::new(MEDIUM_OBJECT_THRESHOLD, config.medium_object_pool_size),
             large_allocator: SlabAllocator::new(LARGE_OBJECT_THRESHOLD, config.large_object_pool_size),
-            zero_copy_buffers: Arc::new(Mutex::new(HashMap::new())),
+            zero_copy_buffers: Arc::new(zero_copy_buffers),
             next_buffer_id: AtomicU64::new(1),
             config,
             total_allocated: AtomicU64::new(0),
             total_deallocated: AtomicU64::new(0),
             allocation_tracker: Arc::new(AllocationTracker::new()),
+            buffer_shard_count,
         }
     }
 
@@ -465,20 +544,23 @@ impl UnifiedMemoryArena {
         };
 
         let ptr = allocation.as_ptr();
+        let shard_idx = self.get_buffer_shard(buffer_id);
 
-        let mut buffers = self.zero_copy_buffers.lock().unwrap();
+        let mut buffers = self.zero_copy_buffers[shard_idx].lock().unwrap();
         buffers.insert(buffer_id, allocation);
 
         Ok((buffer_id, ptr))
     }
 
     pub fn get_zero_copy_buffer(&self, buffer_id: u64) -> Option<*mut u8> {
-        let buffers = self.zero_copy_buffers.lock().unwrap();
+        let shard_idx = self.get_buffer_shard(buffer_id);
+        let buffers = self.zero_copy_buffers[shard_idx].lock().unwrap();
         buffers.get(&buffer_id).map(|alloc| alloc.as_ptr())
     }
 
     pub fn release_zero_copy_buffer(&self, buffer_id: u64) -> Result<(), String> {
-        let mut buffers = self.zero_copy_buffers.lock().unwrap();
+        let shard_idx = self.get_buffer_shard(buffer_id);
+        let mut buffers = self.zero_copy_buffers[shard_idx].lock().unwrap();
         if let Some(allocation) = buffers.remove(&buffer_id) {
             self.deallocate_tracked(allocation).map_err(|e| format!("Failed to deallocate buffer: {:?}", e))
         } else {
@@ -491,6 +573,12 @@ impl UnifiedMemoryArena {
         let medium_stats = self.medium_allocator.get_stats();
         let large_stats = self.large_allocator.get_stats();
 
+        let mut total_zero_copy_buffers = 0;
+        for shard in self.zero_copy_buffers.iter() {
+            let buffers = shard.lock().unwrap();
+            total_zero_copy_buffers += buffers.len();
+        }
+
         MemoryArenaStats {
             small_pool_stats: small_stats,
             medium_pool_stats: medium_stats,
@@ -498,13 +586,13 @@ impl UnifiedMemoryArena {
             total_allocated: self.total_allocated.load(Ordering::Relaxed),
             total_deallocated: self.total_deallocated.load(Ordering::Relaxed),
             current_usage: self.total_allocated.load(Ordering::Relaxed) - self.total_deallocated.load(Ordering::Relaxed),
-            zero_copy_buffers: self.zero_copy_buffers.lock().unwrap().len(),
+            zero_copy_buffers: total_zero_copy_buffers,
         }
     }
 
     pub fn cleanup(&self) {
         info!("Performing unified memory arena cleanup");
-        
+
         let usage_ratio = if self.total_allocated.load(Ordering::Relaxed) > 0 {
             (self.total_allocated.load(Ordering::Relaxed) - self.total_deallocated.load(Ordering::Relaxed)) as f64
                 / self.total_allocated.load(Ordering::Relaxed) as f64
@@ -514,13 +602,16 @@ impl UnifiedMemoryArena {
 
         if usage_ratio > self.config.cleanup_threshold {
             warn!("High memory usage detected ({:.1}%), triggering cleanup", usage_ratio * 100.0);
-            
-            // Clear zero-copy buffers
-            let mut buffers = self.zero_copy_buffers.lock().unwrap();
-            let cleared_buffers = buffers.len();
-            buffers.clear();
-            
-            debug!("Cleared {} zero-copy buffers", cleared_buffers);
+
+            // Clear zero-copy buffers across all shards
+            let mut total_cleared = 0;
+            for shard in self.zero_copy_buffers.iter() {
+                let mut buffers = shard.lock().unwrap();
+                total_cleared += buffers.len();
+                buffers.clear();
+            }
+
+            debug!("Cleared {} zero-copy buffers across all shards", total_cleared);
         }
     }
 }

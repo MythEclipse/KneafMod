@@ -79,7 +79,12 @@ impl Aabb {
     }
 
     /// SIMD-accelerated AABB intersection test for multiple AABBs
-        pub fn intersects_simd_batch(&self, others: &[Aabb]) -> Vec<bool> {
+    pub fn intersects_simd_batch(&self, others: &[Aabb]) -> Vec<bool> {
+            // Dispatch to small batch optimized version for 2-7 elements
+            if others.len() >= 2 && others.len() <= 7 {
+                return self.intersects_simd_batch_small(others);
+            }
+
             #[cfg(target_feature = "avx512f")]
             {
                 use std::arch::x86_64::*;
@@ -147,7 +152,7 @@ impl Aabb {
                     // Extend results directly into accumulator to avoid intermediate Vec
                     acc.extend_from_slice(&results);
                     acc
-                }).flatten().collect()
+                }).collect::<Vec<Vec<bool>>>().into_iter().flatten().collect()
             }
         #[cfg(target_feature = "avx2")]
         {
@@ -189,7 +194,7 @@ impl Aabb {
                 // Extend results directly into accumulator to avoid intermediate Vec
                 acc.extend_from_slice(&results[..chunk.len()]);
                 acc
-            }).flatten().collect()
+            }).collect::<Vec<Vec<bool>>>().into_iter().flatten().collect()
         }
         #[cfg(not(any(target_feature = "avx512f", target_feature = "avx2")))]
         {
@@ -197,8 +202,83 @@ impl Aabb {
             others.par_iter().fold(Vec::new, |mut acc, other| {
                 acc.push(self.intersects(other));
                 acc
-            }).flatten().collect()
+            }).collect::<Vec<Vec<bool>>>().into_iter().flatten().collect()
         }
+    }
+
+    /// SIMD-accelerated small batch AABB intersection (2-7 elements) with zero-copy optimization
+    pub fn intersects_simd_batch_small(&self, others: &[Aabb]) -> Vec<bool> {
+        use crate::memory_pool::get_global_enhanced_pool;
+
+        let pool = get_global_enhanced_pool();
+        let mut results = pool.allocate_zero_copy_vec::<bool>(others.len());
+
+        #[cfg(target_feature = "avx2")]
+        {
+            use std::arch::x86_64::*;
+
+            // Prepare self bounds as SIMD registers
+            let self_min_x = _mm_set1_ps(self.min_x as f32);
+            let self_max_x = _mm_set1_ps(self.max_x as f32);
+            let self_min_y = _mm_set1_ps(self.min_y as f32);
+            let self_max_y = _mm_set1_ps(self.max_y as f32);
+            let self_min_z = _mm_set1_ps(self.min_z as f32);
+            let self_max_z = _mm_set1_ps(self.max_z as f32);
+
+            // Process in chunks of 4 for SSE, handling remainder manually
+            let chunks = others.chunks_exact(4);
+            let remainder = chunks.remainder();
+
+            let mut result_idx = 0;
+
+            for chunk in chunks {
+                // Load 4 AABBs directly into SSE registers (zero-copy)
+                let other_min_x = _mm_set_ps(chunk[3].min_x as f32, chunk[2].min_x as f32, chunk[1].min_x as f32, chunk[0].min_x as f32);
+                let other_max_x = _mm_set_ps(chunk[3].max_x as f32, chunk[2].max_x as f32, chunk[1].max_x as f32, chunk[0].max_x as f32);
+                let other_min_y = _mm_set_ps(chunk[3].min_y as f32, chunk[2].min_y as f32, chunk[1].min_y as f32, chunk[0].min_y as f32);
+                let other_max_y = _mm_set_ps(chunk[3].max_y as f32, chunk[2].max_y as f32, chunk[1].max_y as f32, chunk[0].max_y as f32);
+                let other_min_z = _mm_set_ps(chunk[3].min_z as f32, chunk[2].min_z as f32, chunk[1].min_z as f32, chunk[0].min_z as f32);
+                let other_max_z = _mm_set_ps(chunk[3].max_z as f32, chunk[2].max_z as f32, chunk[1].max_z as f32, chunk[0].max_z as f32);
+
+                // Test intersections for all axes simultaneously
+                let x_intersect = _mm_and_ps(
+                    _mm_cmp_ps(self_min_x, other_max_x, _CMP_LE_OQ),
+                    _mm_cmp_ps(self_max_x, other_min_x, _CMP_GE_OQ)
+                );
+                let y_intersect = _mm_and_ps(
+                    _mm_cmp_ps(self_min_y, other_max_y, _CMP_LE_OQ),
+                    _mm_cmp_ps(self_max_y, other_min_y, _CMP_GE_OQ)
+                );
+                let z_intersect = _mm_and_ps(
+                    _mm_cmp_ps(self_min_z, other_max_z, _CMP_LE_OQ),
+                    _mm_cmp_ps(self_max_z, other_min_z, _CMP_GE_OQ)
+                );
+
+                // Combine all axis intersections
+                let full_intersect = _mm_and_ps(_mm_and_ps(x_intersect, y_intersect), z_intersect);
+
+                // Extract results directly into zero-copy buffer
+                let mask = _mm_movemask_ps(full_intersect);
+                for i in 0..4 {
+                    results[result_idx + i] = (mask & (1 << i)) != 0;
+                }
+                result_idx += 4;
+            }
+
+            // Handle remainder with scalar operations
+            for (i, aabb) in remainder.iter().enumerate() {
+                results[result_idx + i] = self.intersects(aabb);
+            }
+        }
+        #[cfg(not(target_feature = "avx2"))]
+        {
+            // Scalar fallback for small batches
+            for (i, aabb) in others.iter().enumerate() {
+                results[i] = self.intersects(aabb);
+            }
+        }
+
+        results
     }
 
     /// SIMD-accelerated bounds check for multiple points
@@ -257,7 +337,7 @@ impl Aabb {
                 // Extend results directly into accumulator to avoid intermediate Vec
                 acc.extend_from_slice(&results);
                 acc
-            }).flatten().collect()
+            }).collect::<Vec<Vec<bool>>>().into_iter().flatten().collect()
         }
         #[cfg(target_feature = "avx2")]
         {
@@ -327,7 +407,7 @@ impl Aabb {
                 // Extend results directly into accumulator to avoid intermediate Vec
                 acc.extend_from_slice(&results[..chunk.len()]);
                 acc
-            }).flatten().collect()
+            }).collect::<Vec<Vec<bool>>>().into_iter().flatten().collect()
         }
         #[cfg(not(any(target_feature = "avx512f", target_feature = "avx2")))]
         {
@@ -335,7 +415,7 @@ impl Aabb {
             points.par_iter().fold(Vec::new, |mut acc, &(x, y, z)| {
                 acc.push(self.contains(x, y, z));
                 acc
-            }).flatten().collect()
+            }).collect::<Vec<Vec<bool>>>().into_iter().flatten().collect()
         }
     }
 }
@@ -425,74 +505,74 @@ pub fn ray_aabb_intersect_simd(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> 
     {
         ray_aabb_intersect_scalar(ray_origin, ray_dir, aabb)
     }
+}
+
+/// AVX-512 accelerated vector normalization
+#[cfg(target_feature = "avx512f")]
+pub fn normalize_vector_avx512(vector: &[f32]) -> Vec<f32> {
+    use std::arch::x86_64::*;
+
+    let mut result = Vec::with_capacity(vector.len());
+    let chunks = vector.chunks_exact(16);
+    let remainder = chunks.remainder();
+
+    for chunk in chunks {
+        let v = _mm512_loadu_ps(chunk.as_ptr());
+
+        // Calculate squared length: v.x² + v.y² + v.z² + v.w² (but we only use 3 components)
+        let v_sq = _mm512_mul_ps(v, v);
+        let sum = _mm512_reduce_add_ps(v_sq);
+        let len = _mm_sqrt_ss(&sum as *const f32 as *const __m128);
+        let len_vec = _mm512_set1_ps(len.extract_ps(0));
+
+        // Normalize: v / len
+        let normalized = _mm512_div_ps(v, len_vec);
+
+        let mut normalized_arr = [0.0f32; 16];
+        _mm512_storeu_ps(normalized_arr.as_mut_ptr(), normalized);
+        result.extend_from_slice(&normalized_arr);
     }
-    
-    /// AVX-512 accelerated vector normalization
-    #[cfg(target_feature = "avx512f")]
-    pub fn normalize_vector_avx512(vector: &[f32]) -> Vec<f32> {
-        use std::arch::x86_64::*;
-        
-        let mut result = Vec::with_capacity(vector.len());
-        let chunks = vector.chunks_exact(16);
-        let remainder = chunks.remainder();
-        
-        for chunk in chunks {
-            let v = _mm512_loadu_ps(chunk.as_ptr());
-            
-            // Calculate squared length: v.x² + v.y² + v.z² + v.w² (but we only use 3 components)
-            let v_sq = _mm512_mul_ps(v, v);
-            let sum = _mm512_reduce_add_ps(v_sq);
-            let len = _mm_sqrt_ss(&sum as *const f32 as *const __m128);
-            let len_vec = _mm512_set1_ps(len.extract_ps(0));
-            
-            // Normalize: v / len
-            let normalized = _mm512_div_ps(v, len_vec);
-            
-            let mut normalized_arr = [0.0f32; 16];
-            _mm512_storeu_ps(normalized_arr.as_mut_ptr(), normalized);
-            result.extend_from_slice(&normalized_arr);
-        }
-        
-        // Handle remainder with scalar normalization
-        for &v in remainder {
-            let len = (v * v).sqrt();
-            result.push(v / len);
-        }
-        
-        result
+
+    // Handle remainder with scalar normalization
+    for &v in remainder {
+        let len = (v * v).sqrt();
+        result.push(v / len);
     }
-    
-    /// AVX-512 accelerated dot product calculation
-    #[cfg(target_feature = "avx512f")]
-    pub fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
-        use std::arch::x86_64::*;
-        
-        debug_assert_eq!(a.len(), b.len(), "Vectors must have the same length for dot product");
-        
-        let mut sum = _mm512_setzero_ps();
-        let chunks = a.chunks_exact(16).zip(b.chunks_exact(16));
-        let remainder = a.len() % 16;
-        
-        for (chunk_a, chunk_b) in chunks {
-            let va = _mm512_loadu_ps(chunk_a.as_ptr());
-            let vb = _mm512_loadu_ps(chunk_b.as_ptr());
-            let product = _mm512_mul_ps(va, vb);
-            sum = _mm512_add_ps(sum, product);
-        }
-        
-        // Handle remainder with scalar calculation
-        let mut scalar_sum = 0.0;
-        for i in 0..remainder {
-            scalar_sum += a[a.len() - remainder + i] * b[b.len() - remainder + i];
-        }
-        
-        // Reduce sum and add scalar remainder
-        let vec_sum = _mm512_reduce_add_ps(sum);
-        vec_sum + scalar_sum
+
+    result
+}
+
+/// AVX-512 accelerated dot product calculation
+#[cfg(target_feature = "avx512f")]
+pub fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    debug_assert_eq!(a.len(), b.len(), "Vectors must have the same length for dot product");
+
+    let mut sum = _mm512_setzero_ps();
+    let chunks = a.chunks_exact(16).zip(b.chunks_exact(16));
+    let remainder = a.len() % 16;
+
+    for (chunk_a, chunk_b) in chunks {
+        let va = _mm512_loadu_ps(chunk_a.as_ptr());
+        let vb = _mm512_loadu_ps(chunk_b.as_ptr());
+        let product = _mm512_mul_ps(va, vb);
+        sum = _mm512_add_ps(sum, product);
     }
-    
-    /// Scalar fallback for ray-AABB intersection
-    pub fn ray_aabb_intersect_scalar(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> Option<f32> {
+
+    // Handle remainder with scalar calculation
+    let mut scalar_sum = 0.0;
+    for i in 0..remainder {
+        scalar_sum += a[a.len() - remainder + i] * b[b.len() - remainder + i];
+    }
+
+    // Reduce sum and add scalar remainder
+    let vec_sum = _mm512_reduce_add_ps(sum);
+    vec_sum + scalar_sum
+}
+
+/// Scalar fallback for ray-AABB intersection
+pub fn ray_aabb_intersect_scalar(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> Option<f32> {
     let inv_dir_x = 1.0 / ray_dir.x as f64;
     let inv_dir_y = 1.0 / ray_dir.y as f64;
     let inv_dir_z = 1.0 / ray_dir.z as f64;
@@ -582,7 +662,7 @@ pub fn batch_ray_aabb_intersect_simd(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<
             // Extend results directly into accumulator to avoid intermediate Vec
             acc.extend_from_slice(&results);
             acc
-        }).flatten().collect()
+        }).collect::<Vec<Vec<Option<f32>>>>().into_iter().flatten().collect()
     }
     #[cfg(target_feature = "avx2")]
     {
@@ -645,7 +725,7 @@ pub fn batch_ray_aabb_intersect_simd(rays: &[(Vec3, Vec3)], aabb: &Aabb) -> Vec<
             // Extend results directly into accumulator to avoid intermediate Vec
             acc.extend_from_slice(&results);
             acc
-        }).flatten().collect()
+        }).collect::<Vec<Vec<Option<f32>>>>().into_iter().flatten().collect()
     }
     #[cfg(not(target_feature = "avx2"))]
     {
@@ -749,7 +829,6 @@ pub fn swept_aabb_collision_scalar(aabb1: &Aabb, velocity1: Vec3, aabb2: &Aabb, 
     ray_aabb_intersect_scalar(aabb1.center(), velocity1 * delta_time, &expanded_aabb)
 }
 
-
 /// Copy-on-Write QuadTree implementation
 #[derive(Debug)]
 pub struct QuadTree<T> {
@@ -804,29 +883,29 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
         let arena = ScopedArena::new(get_global_arena_pool());
         let mut results = Vec::new();
         let mut stack = Vec::new();
-        
+
         // Start with the root node
         stack.push(self);
-        
+
         while let Some(current_node) = stack.pop() {
             // Skip if this node's bounds don't intersect with query bounds
             if !current_node.bounds.intersects(query_bounds) {
                 continue;
             }
-            
+
             // SIMD-accelerated entity filtering for better performance
             if current_node.entities.len() >= 8 {
                 // Use arena allocation for positions to avoid intermediate Vec allocation
                 let positions_capacity = current_node.entities.len();
                 let bump_arena = arena.get_inner_arena();
                 let mut positions = ArenaVec::with_capacity(bump_arena, positions_capacity);
-                
+
                 for entity in &*current_node.entities {
                     positions.push((entity.1[0], entity.1[1], entity.1[2]));
                 }
-                
+
                 let contained = query_bounds.contains_points_simd(positions.as_slice());
-                
+
                 for (i, entity) in current_node.entities.iter().enumerate() {
                     if contained[i] {
                         results.push(entity);
@@ -840,7 +919,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                     }
                 }
             }
-            
+
             // Add children to stack for processing
             if let Some(ref children) = current_node.children {
                 for child in children.iter() {
@@ -848,7 +927,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                 }
             }
         }
-        
+
         results
     }
 
@@ -860,29 +939,29 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
             let arena = ScopedArena::new(get_global_arena_pool());
             let mut results = Vec::new();
             let mut stack = Vec::new();
-            
+
             // Start with the root node
             stack.push(self);
-            
+
             while let Some(current_node) = stack.pop() {
                 // SIMD-accelerated bounds intersection check
                 if !current_node.bounds.intersects(query_bounds) {
                     continue;
                 }
-                
+
                 // SIMD-accelerated entity filtering
                 if current_node.entities.len() >= 8 {
                     // Use arena allocation for positions to avoid intermediate Vec allocation
                     let positions_capacity = current_node.entities.len();
                     let bump_arena = arena.get_inner_arena();
                     let mut positions = ArenaVec::with_capacity(bump_arena, positions_capacity);
-                    
+
                     for entity in &current_node.entities {
                         positions.push((entity.1[0], entity.1[1], entity.1[2]));
                     }
-                    
+
                     let contained = query_bounds.contains_points_simd(positions.as_slice());
-                    
+
                     for (i, is_contained) in contained.iter().enumerate() {
                         if *is_contained {
                             results.push(&current_node.entities[i]);
@@ -896,7 +975,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                         }
                     }
                 }
-                
+
                 // Add children to stack for processing
                 if let Some(ref children) = current_node.children {
                     for child in children.iter() {
@@ -904,7 +983,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                     }
                 }
             }
-            
+
             results
         }
         #[cfg(not(target_feature = "avx2"))]
@@ -942,9 +1021,9 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
             let mut children_array = Arc::try_unwrap(new_children).unwrap_or_else(|_arc| {
                 panic!("Multiple references to new_children array, cannot modify");
             });
-            
+
             children_array[quadrant].insert(entity.clone(), *pos, depth + 1);
-            
+
             new_children = Arc::new(children_array);
         }
 
@@ -989,7 +1068,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
     pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) {
         // Use memory pool for position storage to reduce allocations
         let _mem_pool = get_global_enhanced_pool();
-        
+
         if let Some(_old_pos) = self.entity_positions.insert(entity.clone(), pos) {
             // For simplicity, we'll rebuild the quadtree periodically instead of removing individual entries
         }
@@ -1012,7 +1091,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
 
         // Use fold to avoid intermediate Vec allocation during rebuild
         let _mem_pool = get_global_enhanced_pool();
-        
+
         // Use iterator adaptors to minimize intermediate allocations
         let entities_to_insert: Vec<_> = self.entity_positions.iter().map(|entry| (entry.key().clone(), *entry.value())).collect();
         for (entity, pos) in entities_to_insert {
@@ -1069,24 +1148,24 @@ pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32
     #[cfg(target_feature = "avx512f")]
     {
         use std::arch::x86_64::*;
-        
+
         let cx = _mm512_set1_ps(center.0);
         let cy = _mm512_set1_ps(center.1);
         let cz = _mm512_set1_ps(center.2);
 
         // Pre-allocate result vector with exact capacity to avoid reallocations
         let mut result = Vec::with_capacity(positions.len());
-        
+
         // Process main chunks of 16 elements (full AVX-512 width)
         let main_chunks = positions.len() / 16;
         let remainder = positions.len() % 16;
-        
+
         // Pre-allocate temporary storage for aligned loads
         let mut pos_buffers = [[0.0f32; 16]; 3];
-        
+
         for i in 0..main_chunks {
             let chunk_start = i * 16;
-            
+
             // Load all position components with better cache utilization
             for j in 0..16 {
                 let pos_idx = chunk_start + j;
@@ -1094,7 +1173,7 @@ pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32
                 pos_buffers[1][j] = positions[pos_idx].1;
                 pos_buffers[2][j] = positions[pos_idx].2;
             }
-            
+
             let px = _mm512_loadu_ps(pos_buffers[0].as_ptr());
             let py = _mm512_loadu_ps(pos_buffers[1].as_ptr());
             let pz = _mm512_loadu_ps(pos_buffers[2].as_ptr());
@@ -1124,7 +1203,7 @@ pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32
         if remainder > 0 {
             let remainder_start = positions.len() - remainder;
             let mut remainder_buffer = [0.0f32; 16];
-            
+
             // Use aligned loads for remainder when possible
             if remainder_start + remainder <= positions.len() {
                 for j in 0..remainder {
@@ -1134,7 +1213,7 @@ pub fn calculate_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32
                                          (positions[pos_idx].2 - center.2).powi(2)).sqrt();
                 }
             }
-            
+
             result.extend_from_slice(&remainder_buffer[..remainder]);
         }
 
@@ -1155,25 +1234,25 @@ pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: 
     #[cfg(target_feature = "avx512f")]
     {
         use std::arch::x86_64::*;
-        
+
         let cx = _mm512_set1_ps(center.0);
         let cy = _mm512_set1_ps(center.1);
         let cz = _mm512_set1_ps(center.2);
 
         positions.par_chunks(16).flat_map(|chunk| {
             let mut distances = [0.0f32; 16];
-            
+
             // Load all position components in one go for better cache utilization
             let mut px_arr = [0.0f32; 16];
             let mut py_arr = [0.0f32; 16];
             let mut pz_arr = [0.0f32; 16];
-            
+
             for (i, &(x, y, z)) in chunk.iter().enumerate() {
                 px_arr[i] = x;
                 py_arr[i] = y;
                 pz_arr[i] = z;
             }
-            
+
             let px = _mm512_loadu_ps(px_arr.as_ptr());
             let py = _mm512_loadu_ps(py_arr.as_ptr());
             let pz = _mm512_loadu_ps(pz_arr.as_ptr());
@@ -1195,12 +1274,12 @@ pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: 
                 acc.push(d);
                 acc
             })
-        }).collect()
+        }).collect::<Vec<Vec<f32>>>().into_iter().flatten().collect()
     }
     #[cfg(target_feature = "avx2")]
     {
         use std::arch::x86_64::*;
-        
+
         let cx = _mm256_set1_ps(center.0);
         let cy = _mm256_set1_ps(center.1);
         let cz = _mm256_set1_ps(center.2);
@@ -1249,7 +1328,7 @@ pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: 
                 acc.push(d);
                 acc
             })
-        }).collect()
+        }).collect::<Vec<Vec<f32>>>().into_iter().flatten().collect()
     }
     #[cfg(not(any(target_feature = "avx512f", target_feature = "avx2")))]
     {
@@ -1280,14 +1359,14 @@ pub fn batch_aabb_intersections(aabbs: &[Aabb], queries: &[Aabb]) -> Vec<Vec<boo
     vector_ops::batch_aabb_intersections(aabbs, queries)
 }
 
-/// SIMD-accelerated QuadTree query with multiple bounds
+/// SIMD-accelerated QuadTree query with multiple bounds using parallelism
 pub fn batch_quadtree_queries<'a, T: Clone + PartialEq + Send + Sync>(
     quadtree: &'a QuadTree<T>,
     query_bounds: &'a [Aabb],
 ) -> Vec<Vec<&'a (T, [f64; 3])>> {
-    // Use fold to avoid intermediate allocations from collect()
-    query_bounds.iter().map(|bounds| {
-      quadtree.query_simd(bounds)
+    // Use parallel processing for multiple queries to reduce latency
+    query_bounds.par_iter().map(|bounds| {
+        quadtree.query_simd(bounds)
     }).collect()
 }
 
@@ -1307,7 +1386,7 @@ mod tests {
         ];
 
         let results = aabb1.intersects_simd_batch(&test_aabbs);
-        
+
         assert_eq!(results.len(), 4);
         assert_eq!(results[0], true);  // intersects
         assert_eq!(results[1], false); // no intersection
@@ -1327,7 +1406,7 @@ mod tests {
         ];
 
         let results = aabb.contains_points_simd(&points);
-        
+
         assert_eq!(results.len(), 5);
         assert_eq!(results[0], true);  // inside
         assert_eq!(results[1], false); // outside
@@ -1340,16 +1419,16 @@ mod tests {
     fn test_quadtree_query_simd() {
         let bounds = Aabb::new(-100.0, -100.0, -100.0, 100.0, 100.0, 100.0);
         let mut quadtree = QuadTree::new(bounds, 10, 5);
-        
+
         // Insert some test entities
         quadtree.insert(Entity::from_raw(1), [10.0, 10.0, 10.0], 0);
         quadtree.insert(Entity::from_raw(2), [20.0, 20.0, 20.0], 0);
         quadtree.insert(Entity::from_raw(3), [50.0, 50.0, 50.0], 0);
         quadtree.insert(Entity::from_raw(4), [200.0, 200.0, 200.0], 0); // Outside query bounds
-        
+
         let query_bounds = Aabb::new(0.0, 0.0, 0.0, 30.0, 30.0, 30.0);
         let results = quadtree.query_simd(&query_bounds);
-        
+
         assert_eq!(results.len(), 2); // Should find entities 1 and 2
     }
 
@@ -1362,9 +1441,9 @@ mod tests {
             (1.0, 1.0, 1.0),
         ];
         let center = (0.0, 0.0, 0.0);
-        
+
         let distances = calculate_distances_simd(&positions, center);
-        
+
         assert_eq!(distances.len(), 4);
         assert!((distances[0] - 0.0).abs() < 0.001); // Distance to self
         assert!((distances[1] - 5.0).abs() < 0.001); // 3-4-5 triangle
@@ -1382,9 +1461,9 @@ mod tests {
         ];
         let center = [0.0, 0.0, 0.0];
         let max_distance = 7.0; // Should include entities 1 and 2
-        
+
         let results = filter_entities_by_distance_simd(&entities, center, max_distance);
-        
+
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, Entity::from_raw(1));
         assert_eq!(results[1].0, Entity::from_raw(2));
@@ -1398,24 +1477,24 @@ mod tests {
             Aabb::new(20.0, 20.0, 20.0, 30.0, 30.0, 30.0),
             Aabb::new(-5.0, -5.0, -5.0, 5.0, 5.0, 5.0),
         ];
-        
+
         let queries = vec![
             Aabb::new(2.0, 2.0, 2.0, 8.0, 8.0, 8.0), // intersects with 0, 1, 3
             Aabb::new(25.0, 25.0, 25.0, 35.0, 35.0, 35.0), // intersects with 2
         ];
-        
+
         let results = batch_aabb_intersections(&aabbs, &queries);
-        
+
         assert_eq!(results.len(), 2); // Two query results
         assert_eq!(results[0].len(), 4); // Four AABBs tested against first query
         assert_eq!(results[1].len(), 4); // Four AABBs tested against second query
-        
+
         // First query should intersect with AABBs 0, 1, and 3
         assert_eq!(results[0][0], true);  // AABB 0
         assert_eq!(results[0][1], true);  // AABB 1
         assert_eq!(results[0][2], false); // AABB 2
         assert_eq!(results[0][3], true);  // AABB 3
-        
+
         // Second query should only intersect with AABB 2
         assert_eq!(results[1][0], false); // AABB 0
         assert_eq!(results[1][1], false); // AABB 1

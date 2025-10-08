@@ -87,6 +87,11 @@ impl MemoryPoolManager {
         Ok(pooled.as_slice().to_vec())
     }
 
+    /// Zero-copy allocation - returns pooled object directly without copying
+    pub fn allocate_zero_copy(&self, size: usize) -> Result<SmartPooledVec<u8>, String> {
+        self.enhanced_manager.allocate(size)
+    }
+
     pub fn get_memory_pressure(&self) -> MemoryPressureLevel {
         self.enhanced_manager.get_memory_pressure()
     }

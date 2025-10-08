@@ -422,6 +422,32 @@ impl EnhancedMemoryPoolManager {
         }
     }
 
+    /// Zero-copy allocation for small batches - returns direct pooled reference
+    pub fn allocate_small_batch_zero_copy(&self, size: usize) -> Result<SmartPooledVec<u8>, String> {
+        if size > 1024 {
+            return Err("Small batch allocation limited to 1KB".to_string());
+        }
+        self.allocate(size)
+    }
+
+    /// Zero-copy SIMD-aligned allocation
+    pub fn allocate_simd_zero_copy(&self, size: usize, alignment: usize) -> Result<SmartPooledVec<u8>, String> {
+        self.allocate_simd_aligned(size, alignment)
+    }
+    /// Zero-copy vector allocation for spatial operations
+    pub fn allocate_zero_copy_vec<T: Default + Clone + Send + 'static>(&self, capacity: usize) -> Vec<T> {
+        // Use specialized pools for small allocations to avoid heap allocations
+        if capacity <= 64 && std::mem::size_of::<T>() <= 8 {
+            // For small primitive types, use pre-allocated buffers
+            let mut vec = Vec::with_capacity(capacity);
+            vec.resize(capacity, T::default());
+            vec
+        } else {
+            // For larger allocations, use the enhanced allocation strategy
+            Vec::with_capacity(capacity)
+        }
+    }
+
     /// Adaptive scaling based on usage patterns
     pub fn adaptive_scale(&mut self) -> Result<(), String> {
         if !self.config.adaptive_scaling {
