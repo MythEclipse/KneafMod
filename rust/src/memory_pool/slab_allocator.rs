@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::RwLock;
 use std::fmt::Debug;
 
 use crate::logging::PerformanceLogger;
@@ -317,6 +318,8 @@ pub struct SlabAllocator<T> {
     /// Logger for performance monitoring
     #[allow(dead_code)]
     logger: PerformanceLogger,
+    /// Global lock for thread-safe access to allocator state
+    lock: RwLock<()>,
 }
 
 impl<T> SlabAllocator<T> {
@@ -327,14 +330,16 @@ impl<T> SlabAllocator<T> {
             current_slab: HashMap::new(),
             config,
             logger: PerformanceLogger::new("slab_allocator"),
+            lock: RwLock::new(()),
         }
     }
 
     /// Allocate memory of the specified size
     pub fn allocate(&mut self, size: usize) -> Option<SlabAllocation> {
+        let _global_guard = self.lock.write().unwrap();
         let size_class = SizeClass::find_smallest_fit(size);
 
-        // Ensure we have slabs for this size class
+        // Ensure we have slabs for this size class (thread-safe now)
         self.ensure_slabs_for_size_class(&size_class);
 
         let slabs = self.slabs.get_mut(&size_class)?;
@@ -383,6 +388,8 @@ impl<T> SlabAllocator<T> {
 
     /// Deallocate memory
     pub fn deallocate(&mut self, allocation: SlabAllocation) {
+        let _global_guard = self.lock.write().unwrap();
+        
         if let Some(slabs) = self.slabs.get_mut(&allocation.size_class) {
             if let Some(slab) = slabs.get_mut(allocation.slab_index) {
                 slab.deallocate(allocation.slot_index);
@@ -418,6 +425,7 @@ impl<T> SlabAllocator<T> {
 
     /// Get allocation statistics
     pub fn stats(&self) -> SlabAllocatorStats {
+        let _global_guard = self.lock.read().unwrap();
         let mut total_memory = 0;
         let mut total_allocated = 0;
         let mut size_class_stats = HashMap::new();

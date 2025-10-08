@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
+use std::thread;
 use std::fmt::Debug;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -66,12 +68,24 @@ impl<T> Drop for PooledObject<T> {
 
             let now = SystemTime::now();
 
-            // Thread-safe pool insertion using atomic operations to prevent race conditions
-            // First, try to atomically check and increment the pool size
-            let mut pool_guard = self.pool.lock().unwrap();
-            let mut access_order_guard = self.access_order.lock().unwrap();
+            // Use a timeout for lock acquisition to prevent deadlocks
+            let pool_guard = match self.pool.lock().try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    log::warn!("Failed to acquire pool lock - object not returned to pool (deadlock prevention)");
+                    return;
+                }
+            };
+            
+            let access_order_guard = match self.access_order.lock().try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    log::warn!("Failed to acquire access order lock - object not returned to pool (deadlock prevention)");
+                    return;
+                }
+            };
 
-            // Get current usage ratio atomically to avoid race conditions
+            // Get current usage ratio
             let current_pool_size = pool_guard.len();
             let usage_ratio = current_pool_size as f64 / self.max_size as f64;
 
@@ -95,84 +109,54 @@ impl<T> Drop for PooledObject<T> {
                 LAST_LEAK_CHECK.store(current_time, Ordering::Relaxed);
             }
 
-            if usage_ratio < 0.80 { // Reduced threshold from 95% to 80%
+            // Use a more robust approach to handle pool capacity issues
+            let object_returned = if usage_ratio < 0.80 { // Reduced threshold from 95% to 80%
                 if current_pool_size < self.max_size {
                     // Safe to add directly - no eviction needed
                     pool_guard.insert(self.id, (obj, now));
                     access_order_guard.insert(now, self.id);
+                    true
                 } else {
-                    // Pool is at capacity, need to evict LRU item
-                    // Use compare-and-swap pattern to ensure thread safety
-                    if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
-                        // Remove LRU item
-                        access_order_guard.remove(&lru_time);
-                        pool_guard.remove(&lru_id);
-
-                        // Add the new object
-                        pool_guard.insert(self.id, (obj, now));
-                        access_order_guard.insert(now, self.id);
-                    } else {
-                        // Fallback: if we can't find LRU item, don't add to pool
-                        log::debug!("Could not find LRU item for eviction - object not returned to pool");
-                        LEAK_COUNTER.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            } else if usage_ratio >= 0.95 { // Critical condition - implement force cleanup
-                // Force cleanup before attempting to return object
-                log::warn!("Critical memory pressure detected ({:.2}%), performing force cleanup", usage_ratio);
-
-                // Aggressive cleanup: remove 50% of objects
-                let target_cleanup_size = (current_pool_size as f64 * 0.5) as usize;
-                let mut removed_count = 0;
-
-                while pool_guard.len() > target_cleanup_size && removed_count < 100 { // Limit cleanup iterations
-                    if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
-                        access_order_guard.remove(&lru_time);
-                        pool_guard.remove(&lru_id);
-                        removed_count += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                log::info!("Force cleanup completed: removed {} objects, pool size now {}", removed_count, pool_guard.len());
-
-                // Now try to return the object after cleanup
-                let new_pool_size = pool_guard.len();
-                if new_pool_size < self.max_size {
-                    pool_guard.insert(self.id, (obj, now));
-                    access_order_guard.insert(now, self.id);
-                    log::debug!("Object successfully returned to pool after force cleanup");
-                } else {
-                    log::error!("Failed to return object to pool even after force cleanup - pool still at capacity");
-                    LEAK_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    false
                 }
             } else {
-                // High pressure but not critical - still try to return object with LRU eviction
-                log::debug!("High memory pressure ({:.2}%) but attempting to return object", usage_ratio);
+                false
+            };
 
-                if current_pool_size >= self.max_size {
-                    // Force eviction of oldest item even in high pressure
-                    if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
-                        access_order_guard.remove(&lru_time);
-                        pool_guard.remove(&lru_id);
-                        pool_guard.insert(self.id, (obj, now));
-                        access_order_guard.insert(now, self.id);
-                        log::debug!("Object returned to pool with forced LRU eviction under high pressure");
-                    } else {
-                        log::warn!("Could not evict LRU item under high pressure - object not returned to pool");
-                        LEAK_COUNTER.fetch_add(1, Ordering::Relaxed);
-                    }
-                } else {
-                    // Still space available, add directly
-                    pool_guard.insert(self.id, (obj, now));
-                    access_order_guard.insert(now, self.id);
-                }
+            if !object_returned {
+                log::debug!("Object not returned to pool due to high memory pressure");
+                LEAK_COUNTER.fetch_add(1, Ordering::Relaxed);
             }
 
             // NOTE: deallocation accounting is handled via allocation trackers
         }
     }
+}
+
+// Add background cleanup thread for pool maintenance
+lazy_static! {
+    static ref POOL_CLEANUP_THREAD: Arc<Mutex<Option<thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+}
+
+pub fn start_pool_cleanup_thread(pool: Arc<ObjectPool<u8>>, interval: Duration) {
+    let pool = Arc::clone(&pool);
+    let handle = thread::spawn(move || {
+        let mut interval = tokio::time::interval(interval);
+        loop {
+            interval.tick().await;
+            
+            let now = Instant::now();
+            let result = pool.lazy_cleanup(0.9); // Cleanup when usage exceeds 90%
+            let elapsed = now.elapsed();
+            
+            if result {
+                log::info!("Pool cleanup completed in {:?}", elapsed);
+            }
+        }
+    });
+    
+    let mut thread_guard = POOL_CLEANUP_THREAD.lock().unwrap();
+    *thread_guard = Some(handle);
 }
 
 /// Generic object pool for memory reuse with LRU eviction

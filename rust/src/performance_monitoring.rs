@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use jni::{JNIEnv, objects::{JString, JClass}, sys::jlong};
+use std::collections::HashMap;
 use crate::logging::{PerformanceLogger, generate_trace_id};
+use crate::jni_raii::JniGlobalRef;
 use once_cell::sync::Lazy;
 use std::time::SystemTime;
 use std::collections::HashMap;
@@ -70,6 +72,9 @@ pub struct PerformanceMonitor {
     pub is_monitoring: Arc<AtomicBool>,
     pub last_alert_time_ns: Arc<AtomicU64>, // Store as nanoseconds since epoch
     pub alert_cooldown: Arc<AtomicU64>,
+    
+    // JNI reference tracking to prevent leaks
+    pub jni_global_refs: Arc<Mutex<HashMap<jlong, JString>>>,
 }
 
 impl PerformanceMonitor {
@@ -109,6 +114,9 @@ impl PerformanceMonitor {
             is_monitoring: Arc::new(AtomicBool::new(true)),
             last_alert_time_ns: Arc::new(AtomicU64::new(now_ns)),
             alert_cooldown: Arc::new(AtomicU64::new(3000)), // 3 seconds cooldown
+            
+            // JNI reference tracking to prevent leaks
+            jni_global_refs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -441,9 +449,9 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordGcEventN
 pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getPerformanceMetricsNative(
     mut env: JNIEnv,
     _class: JClass,
-) -> jlong {
+) -> JString {
     let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
-    
+
     // For simplicity, we'll return a JSON string for now
     let json = format!(
         "{{\"jniCalls\":{{\"totalCalls\":{},\"totalDurationMs\":{},\"maxDurationMs\":{}}},\"lockWaits\":{{\"totalLockWaits\":{},\"totalLockWaitTimeMs\":{},\"maxLockWaitTimeMs\":{},\"currentLockContention\":{}}},\"memory\":{{\"totalHeapBytes\":{},\"usedHeapBytes\":{},\"freeHeapBytes\":{},\"peakHeapBytes\":{},\"gcCount\":{},\"gcTimeMs\":{},\"usedHeapPercent\":{:.1}}}}}",
@@ -465,23 +473,21 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getPerformance
 
     match env.new_string(json) {
         Ok(jni_string) => {
-            match env.new_global_ref(jni_string) {
-                Ok(_global_ref) => 0, // Success (pointer return temporarily disabled)
-                Err(e) => {
-                    if let Err(throw_err) = env.throw_new("java/lang/IllegalStateException", &format!("Failed to create global ref: {}", e)) {
-                        let trace_id = generate_trace_id();
-                        PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to throw exception: {}", throw_err), "JNI_ERROR");
-                    }
-                    -1
-                }
-            }
+            // Return the string directly - JNI will manage the local reference lifetime
+            // No global ref needed since this is a return value that JNI will handle
+            jni_string
         },
         Err(e) => {
+            let trace_id = generate_trace_id();
+            PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to create JSON string: {}", e), "JNI_ERROR");
             if let Err(throw_err) = env.throw_new("java/lang/IllegalStateException", &format!("Failed to create JSON string: {}", e)) {
-                let trace_id = generate_trace_id();
                 PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to throw exception: {}", throw_err), "JNI_ERROR");
             }
-            -1 // Error
+            // Return null string on error
+            env.new_string("").unwrap_or_else(|_| {
+                // If even empty string creation fails, return a null pointer
+                std::ptr::null_mut()
+            })
         }
     }
 }

@@ -64,6 +64,7 @@ pub mod jni_bridge;
 pub mod jni_batch;
 pub mod jni_batch_processor;
 pub mod jni_async_bridge;
+pub mod jni_raii;
 
 // Parallelism modules
 pub mod parallelism;

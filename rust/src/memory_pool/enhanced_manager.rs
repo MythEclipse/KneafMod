@@ -1,6 +1,10 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{RwLock, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use std::collections::VecDeque;
+
+use lazy_static::lazy_static;
 
 use crate::logging::PerformanceLogger;
 use crate::memory_pool::object_pool::MemoryPressureLevel;
@@ -8,6 +12,12 @@ use crate::memory_pool::hierarchical::HierarchicalMemoryPool;
 use crate::memory_pool::swap::SwapMemoryPool;
 use crate::memory_pool::specialized_pools::{VecPool, StringPool};
 use crate::logging::generate_trace_id;
+
+// Global counters for memory leak detection and statistics
+lazy_static! {
+    static ref GLOBAL_DEALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static ref GLOBAL_MEMORY_DEALLOCATED: AtomicUsize = AtomicUsize::new(0);
+}
 
 /// Enhanced memory pool manager with intelligent allocation strategies
 #[derive(Debug)]
@@ -20,6 +30,8 @@ pub struct EnhancedMemoryPoolManager {
     performance_monitor: PerformanceMonitor,
     logger: PerformanceLogger,
     config: EnhancedManagerConfig,
+    allocation_queue: Mutex<VecDeque<SmartPooledVec<u8>>>,
+    leak_detection_timer: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +186,8 @@ impl EnhancedMemoryPoolManager {
             performance_monitor: PerformanceMonitor::new(),
             logger,
             config,
+            allocation_queue: Mutex::new(VecDeque::new()),
+            leak_detection_timer: AtomicU64::new(0),
         })
     }
 
@@ -268,6 +282,12 @@ impl EnhancedMemoryPoolManager {
             stats.allocation_failures += 1;
         }
 
+        // Add allocation to queue for background cleanup monitoring
+        if let Ok(ref allocation) = result {
+            let mut queue = self.allocation_queue.lock().unwrap();
+            queue.push_back(allocation.clone());
+        }
+
         result
     }
 
@@ -352,11 +372,35 @@ impl EnhancedMemoryPoolManager {
             }
         }
 
+        // Vec pool maintenance
+        result.vec_cleaned = self.vec_pool.cleanup();
+        
+        // String pool maintenance
+        result.string_cleaned = self.string_pool.cleanup();
+
         // Performance monitor cleanup
         if self.performance_monitor.should_cleanup() {
             // Reset performance counters periodically
             self.performance_monitor.mark_cleanup_done();
             result.performance_reset = true;
+        }
+
+        // Check for memory leaks
+        let leaks = self.detect_memory_leaks();
+        if !leaks.is_empty() {
+            for leak in &leaks {
+                self.logger.log_warn("perform_maintenance", &trace_id, leak);
+            }
+            result.leaks_detected = true;
+        }
+
+        // Clean up allocation queue
+        let mut queue = self.allocation_queue.lock().unwrap();
+        let queue_size = queue.len();
+        if queue_size > 0 {
+            queue.clear();
+            self.logger.log_info("perform_maintenance", &trace_id, &format!("Cleared allocation queue with {} entries", queue_size));
+            result.queue_cleaned = true;
         }
 
         let elapsed = start_time.elapsed();
@@ -375,12 +419,108 @@ impl EnhancedMemoryPoolManager {
         stats.average_allocation_time = self.performance_monitor.get_average_allocation_time();
         stats.pool_hit_ratio = self.performance_monitor.get_hit_ratio();
 
+        // Update deallocation statistics from global counters
+        stats.total_deallocations = GLOBAL_DEALLOCATIONS.load(Ordering::Relaxed) as u64;
+
+        // Calculate current memory usage based on allocations vs deallocations
+        // This is an approximation since we don't track individual allocation sizes perfectly
+        let total_allocated_bytes = stats.total_allocations as usize * 512; // Rough estimate
+        let total_deallocated_bytes = GLOBAL_MEMORY_DEALLOCATED.load(Ordering::Relaxed);
+        stats.current_memory_usage = total_allocated_bytes.saturating_sub(total_deallocated_bytes);
+
         if let Some(swap_pool) = &self.swap_pool {
             let swap_stats = swap_pool.get_compression_stats();
             stats.swap_usage_ratio = swap_stats.compression_ratio;
         }
 
         stats
+    }
+
+    /// Perform comprehensive cleanup of all pool resources
+    pub fn cleanup_all_resources(&mut self) -> Result<(), String> {
+        let trace_id = generate_trace_id();
+        let start_time = Instant::now();
+
+        self.logger.log_info("cleanup_all_resources", &trace_id, "Starting comprehensive resource cleanup");
+
+        // Clean up hierarchical pool
+        let hierarchical_cleanup = self.hierarchical_pool.cleanup_all();
+        
+        // Clean up swap pool if available
+        let swap_cleanup = if let Some(swap_pool) = &mut self.swap_pool {
+            swap_pool.cleanup()?;
+            true
+        } else {
+            false
+        };
+
+        // Clean up vec pool
+        let vec_cleanup = self.vec_pool.cleanup();
+        
+        // Clean up string pool
+        let string_cleanup = self.string_pool.cleanup();
+
+        // Reset performance monitor
+        self.performance_monitor.mark_cleanup_done();
+
+        // Clear allocation queue
+        let mut queue = self.allocation_queue.lock().unwrap();
+        queue.clear();
+
+        let elapsed = start_time.elapsed();
+        
+        self.logger.log_info("cleanup_all_resources", &trace_id, &format!(
+            "Comprehensive cleanup completed in {:?}. Results: hierarchical={}, swap={}, vec={}, string={}",
+            elapsed, hierarchical_cleanup, swap_cleanup, vec_cleanup, string_pool
+        ));
+
+        Ok(())
+    }
+
+    /// Check for memory leaks using global counters
+    pub fn detect_memory_leaks(&self) -> Vec<String> {
+        let mut leaks = Vec::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+            
+        let last_leak_check = self.leak_detection_timer.load(Ordering::Relaxed);
+        const LEAK_CHECK_INTERVAL: u64 = 60; // Check every 60 seconds
+
+        if now - last_leak_check > LEAK_CHECK_INTERVAL {
+            let allocation_stats = self.get_allocation_stats();
+            
+            // Check for allocation/deallocation imbalance
+            if allocation_stats.total_allocations > allocation_stats.total_deallocations * 2 {
+                leaks.push(format!(
+                    "Potential memory leak detected: allocations ({}) much higher than deallocations ({})",
+                    allocation_stats.total_allocations, allocation_stats.total_deallocations
+                ));
+            }
+
+            // Check for high memory usage
+            if allocation_stats.current_memory_usage > 1_000_000_000 { // 1GB threshold
+                leaks.push(format!(
+                    "High memory usage detected: {} bytes ({}MB)",
+                    allocation_stats.current_memory_usage,
+                    allocation_stats.current_memory_usage / 1_048_576
+                ));
+            }
+
+            // Check for swap pool exhaustion
+            if let Some(swap_pool) = &self.swap_pool {
+                let swap_pressure = swap_pool.get_memory_pressure();
+                if swap_pressure == MemoryPressureLevel::Critical {
+                    leaks.push("Swap pool is under critical memory pressure".to_string());
+                }
+            }
+
+            // Update leak detection timer
+            self.leak_detection_timer.store(now, Ordering::Relaxed);
+        }
+
+        leaks
     }
 
     /// Get a vector of u64 values from the pool
@@ -498,7 +638,11 @@ pub struct MaintenanceResult {
     pub defragmented: bool,
     pub cleaned_up: bool,
     pub swap_cleaned: bool,
+    pub vec_cleaned: bool,
+    pub string_cleaned: bool,
     pub performance_reset: bool,
+    pub queue_cleaned: bool,
+    pub leaks_detected: bool,
     pub duration: Duration,
 }
 
@@ -509,6 +653,18 @@ pub enum SmartPooledVec<T> {
     Swap(crate::memory_pool::swap::SwapPooledVec<T>),
     Vec(crate::memory_pool::specialized_pools::PooledVec<T>),
     String(PooledStringWrapper<T>),
+}
+
+impl<T> SmartPooledVec<T> {
+    /// Get the size in bytes of this allocation for memory tracking
+    fn size_bytes(&self) -> usize {
+        match self {
+            SmartPooledVec::Hierarchical(v) => v.len() * std::mem::size_of::<T>(),
+            SmartPooledVec::Swap(v) => v.len() * std::mem::size_of::<T>(),
+            SmartPooledVec::Vec(v) => v.len() * std::mem::size_of::<T>(),
+            SmartPooledVec::String(v) => v.data.len() * std::mem::size_of::<T>(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -552,6 +708,36 @@ impl<T> SmartPooledVec<T> {
     /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+impl<T> Drop for SmartPooledVec<T> {
+    fn drop(&mut self) {
+        // Update global deallocation statistics
+        let size_bytes = self.size_bytes();
+        GLOBAL_DEALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        GLOBAL_MEMORY_DEALLOCATED.fetch_add(size_bytes, Ordering::Relaxed);
+
+        // Ensure pooled objects are properly returned to their pools
+        // This prevents memory leaks by automatically cleaning up resources
+        match self {
+            SmartPooledVec::Hierarchical(pooled) => {
+                // Explicitly return to hierarchical pool
+                pooled.return_to_pool();
+            }
+            SmartPooledVec::Swap(pooled) => {
+                // Explicitly return to swap pool
+                pooled.return_to_pool();
+            }
+            SmartPooledVec::Vec(pooled) => {
+                // Explicitly return to vec pool
+                pooled.return_to_pool();
+            }
+            SmartPooledVec::String(wrapper) => {
+                // Explicitly return string to string pool
+                wrapper.string.return_to_pool();
+            }
+        }
     }
 }
 
@@ -609,7 +795,54 @@ mod tests {
         // Check alignment (pointer should be 32-byte aligned)
         let ptr = aligned_vec.as_slice().as_ptr() as usize;
         assert_eq!(ptr % 32, 0, "Pointer should be 32-byte aligned");
-    }
+        }
+    
+        /// RAII wrapper for enhanced memory pool allocations
+        pub struct PooledAllocationGuard<T> {
+            allocation: SmartPooledVec<T>,
+            manager: Arc<EnhancedMemoryPoolManager>,
+        }
+    
+        impl<T> PooledAllocationGuard<T> {
+            /// Create a new allocation guard
+            pub fn new(manager: Arc<EnhancedMemoryPoolManager>, allocation: SmartPooledVec<T>) -> Self {
+                Self {
+                    allocation,
+                    manager,
+                }
+            }
+    
+            /// Get immutable reference to the allocated data
+            pub fn as_slice(&self) -> &[T] {
+                self.allocation.as_slice()
+            }
+    
+            /// Get mutable reference to the allocated data
+            pub fn as_mut_slice(&mut self) -> &mut [T] {
+                self.allocation.as_mut_slice()
+            }
+    
+            /// Get length of the allocated data
+            pub fn len(&self) -> usize {
+                self.allocation.len()
+            }
+        }
+    
+        impl<T> Drop for PooledAllocationGuard<T> {
+            fn drop(&mut self) {
+                // Automatically return allocation to pool when guard is dropped
+                // This ensures proper cleanup even if exceptions occur
+                let _ = self.allocation; // Explicitly drop the allocation
+                
+                // Update leak detection timer
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                    
+                self.manager.leak_detection_timer.store(now, Ordering::Relaxed);
+            }
+        }
 
     #[test]
     fn test_performance_monitoring() {

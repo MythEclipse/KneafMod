@@ -1191,11 +1191,15 @@ impl RustDatabaseAdapter {
     
     /// Bulk swap out multiple chunks using sled batch API for atomic operations
     pub fn bulk_swap_out(&self, keys: &[String]) -> Result<usize, String> {
-        let mut success_count = 0;
+        // Acquire locks for the entire operation to maintain consistent ordering
+        let (mut stats_guard, mut swap_meta_guard) = acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS)
+            .map_err(|e| format!("Failed to acquire initial locks for bulk_swap_out: {}", e))?;
+
         let mut batch = sled::Batch::default();
-        
+        let mut success_count = 0;
+        let mut total_swap_size = 0u64;
         let start_time = std::time::Instant::now();
-        
+
         for key in keys {
             let key_bytes = key.as_bytes();
             
@@ -1209,6 +1213,7 @@ impl RustDatabaseAdapter {
             };
             
             let data_size = data.len() as u64;
+            total_swap_size += data_size;
             
             // Create world-specific swap file path with proper escaping
             let safe_key = key.replace(':', "_").replace('/', "-");
@@ -1224,46 +1229,25 @@ impl RustDatabaseAdapter {
             // Add remove operation to batch
             batch.remove(key_bytes);
             
-            // Update swap metadata with proper locking (will be done in batch later)
-            if let Ok(mut swap_meta) = try_write_lock_with_timeout(&self.swap_metadata, LOCK_TIMEOUT_MS, "swap_metadata") {
-                if let Some(metadata) = swap_meta.get_mut(key) {
-                    metadata.update_swap();
-                    metadata.size_bytes = data_size; // Update with actual decompressed size
-                }
-                // Drop the lock immediately to avoid holding it during batch operations
+            // Update swap metadata using already acquired guard (maintains lock order)
+            if let Some(metadata) = swap_meta_guard.get_mut(key) {
+                metadata.update_swap();
+                metadata.size_bytes = data_size; // Update with actual decompressed size
             }
             
             success_count += 1;
         }
-        
+
         // Execute batch atomically
         self.db.apply_batch(batch)
             .map_err(|e| format!("Failed to apply batch for world {}: {}", self.world_name, e))?;
-        
-        // Update statistics and swap metadata with consistent lock ordering
-        match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
-            Ok((mut stats, mut swap_meta)) => {
-                // Update swap metadata for all successfully processed keys
-                for key in keys.iter().take(success_count) {
-                    if let Some(metadata) = swap_meta.get_mut(key) {
-                        metadata.update_swap();
-                        // Size was already updated in the loop above
-                    }
-                }
-                
-                stats.swap_operations_total += keys.len() as u64;
-                stats.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
-                stats.total_swap_size_bytes += success_count as u64 * (keys.get(0).map(|k| {
-                    self.db.get(k.as_bytes()).ok().flatten().map(|d| d.len() as u64).unwrap_or(0)
-                }).unwrap_or(0));
-                stats.total_chunks = stats.total_chunks.saturating_sub(success_count as u64);
-            }
-            Err(e) => {
-                error!("Failed to acquire locks for bulk_swap_out: {}", e);
-                return Err(format!("Failed to update metadata: {}", e));
-            }
-        }
-        
+
+        // Update statistics using already acquired guard
+        stats_guard.swap_operations_total += keys.len() as u64;
+        stats_guard.swap_out_latency_ms = start_time.elapsed().as_millis() as u64;
+        stats_guard.total_swap_size_bytes += total_swap_size;
+        stats_guard.total_chunks = stats_guard.total_chunks.saturating_sub(success_count as u64);
+
         info!("Bulk swap out completed for world {}: {}/{} chunks swapped successfully in {} ms",
               self.world_name, success_count, keys.len(), start_time.elapsed().as_millis());
         
@@ -1356,48 +1340,47 @@ impl RustDatabaseAdapter {
         std::fs::write(&mmap_path, data)
             .map_err(|e| format!("Failed to write mmap file: {}", e))?;
         
-        // Open file for memory mapping
+        // Open file for memory mapping (for cache)
         let file = OpenOptions::new()
             .read(true)
             .open(&mmap_path)
             .map_err(|e| format!("Failed to open mmap file: {}", e))?;
         
-        // Create memory map
-        let mmap = unsafe {
+        // Create memory map for cache (we'll create a separate one for return)
+        let cache_mmap = unsafe {
             MmapOptions::new()
                 .map(&file)
-                .map_err(|e| format!("Failed to create memory map: {}", e))?
+                .map_err(|e| format!("Failed to create memory map for cache: {}", e))?
         };
         
-        // Store in memory-mapped files cache with timeout
-        match try_write_lock_with_timeout(&self.memory_mapped_files, LOCK_TIMEOUT_MS, "memory_mapped_files") {
-            Ok(mut mm_files) => {
-                // We'll recreate the mmap when needed since we can't clone it
-                // For now, just track that this key has memory-mapped access
-                mm_files.insert(key.to_string(), mmap);
-            }
-            Err(e) => {
-                error!("Failed to acquire memory mapped files lock: {}", e);
-                return Err(format!("Failed to update memory mapped files cache: {}", e));
-            }
-        }
-        
-        // Update statistics with timeout
-        if let Ok(mut stats) = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats") {
-            stats.memory_mapped_files_active += 1;
-        }
-        
-        // Return a new mmap by reading the file again since we can't clone the original
+        // Create return memory map (need to open file again since we can't clone mmap)
         let file2 = OpenOptions::new()
             .read(true)
             .open(&mmap_path)
             .map_err(|e| format!("Failed to open mmap file for return: {}", e))?;
         
-        unsafe {
+        let return_mmap = unsafe {
             MmapOptions::new()
                 .map(&file2)
-                .map_err(|e| format!("Failed to create return memory map: {}", e))
+                .map_err(|e| format!("Failed to create return memory map: {}", e))?
+        };
+        
+        // Acquire locks for memory_mapped_files and stats in correct order
+        match acquire_locks_in_order(&self.stats, &self.memory_mapped_files, None, LOCK_TIMEOUT_MS) {
+            Ok((mut stats_guard, mut mm_files_guard)) => {
+                // Update statistics
+                stats_guard.memory_mapped_files_active += 1;
+                
+                // Store in memory-mapped files cache
+                mm_files_guard.insert(key.to_string(), cache_mmap);
+            }
+            Err(e) => {
+                error!("Failed to acquire locks for create_memory_mapped_chunk: {}", e);
+                return Err(format!("Failed to update memory mapped files cache: {}", e));
+            }
         }
+        
+        Ok(return_mmap)
     }
     
     /// Get memory-mapped access for a chunk
@@ -1427,26 +1410,25 @@ impl RustDatabaseAdapter {
     pub fn remove_memory_mapped_chunk(&self, key: &str) -> Result<(), String> {
         let mmap_path = format!("{}/{}.mmap", self.swap_path, key.replace(':', "_"));
         
-        // Remove from cache with timeout
-        match try_write_lock_with_timeout(&self.memory_mapped_files, LOCK_TIMEOUT_MS, "memory_mapped_files") {
-            Ok(mut mm_files) => {
-                mm_files.remove(key);
-            }
-            Err(e) => {
-                error!("Failed to acquire memory mapped files lock: {}", e);
-                return Err(format!("Failed to update memory mapped files cache: {}", e));
-            }
-        }
-        
-        // Remove file
+        // Remove file first (safe to do before locking since we're just deleting a file)
         if Path::new(&mmap_path).exists() {
             std::fs::remove_file(&mmap_path)
                 .map_err(|e| format!("Failed to remove mmap file: {}", e))?;
         }
         
-        // Update statistics with timeout
-        if let Ok(mut stats) = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats") {
-            stats.memory_mapped_files_active = stats.memory_mapped_files_active.saturating_sub(1);
+        // Acquire locks for memory_mapped_files and stats in correct order
+        match acquire_locks_in_order(&self.stats, &self.memory_mapped_files, None, LOCK_TIMEOUT_MS) {
+            Ok((mut stats_guard, mut mm_files_guard)) => {
+                // Update statistics
+                stats_guard.memory_mapped_files_active = stats_guard.memory_mapped_files_active.saturating_sub(1);
+                
+                // Remove from cache
+                mm_files_guard.remove(key);
+            }
+            Err(e) => {
+                error!("Failed to acquire locks for remove_memory_mapped_chunk: {}", e);
+                return Err(format!("Failed to update memory mapped files cache: {}", e));
+            }
         }
         
         Ok(())

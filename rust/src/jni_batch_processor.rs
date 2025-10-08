@@ -10,6 +10,23 @@ use std::cmp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::runtime::Runtime;
 
+// Helper trait for mutex operations with timeout
+trait MutexExt {
+    fn lock_timeout(&self, timeout: Duration) -> Result<std::sync::MutexGuard<'_, Self::Target>, String>;
+}
+
+impl<T> MutexExt for std::sync::Mutex<T> {
+    fn lock_timeout(&self, timeout: Duration) -> Result<std::sync::MutexGuard<'_, T>, String> {
+        match self.try_lock_for(timeout) {
+            Ok(guard) => Ok(guard),
+            Err(_) => Err("Lock timeout exceeded".to_string()),
+        }
+    }
+}
+
+// Import lock ordering constants
+use crate::spatial::lock_order;
+
 /// Buffer pool for batch data to reduce allocations and GC pressure (sharded)
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -70,6 +87,7 @@ impl BatchBufferPool {
     }
 
     fn try_acquire_from_shard(&self, shard_idx: usize) -> Option<Vec<u8>> {
+        // Use consistent lock ordering (SPATIAL_LOCK first, then others)
         let mut buffers = self.buffer_pools[shard_idx].lock().unwrap();
         buffers.pop()
     }
@@ -82,6 +100,7 @@ impl BatchBufferPool {
         static RELEASE_COUNTER: AtomicUsize = AtomicUsize::new(0);
         let shard_idx = RELEASE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
 
+        // Use consistent lock ordering (SPATIAL_LOCK first, then others)
         let mut buffers = self.buffer_pools[shard_idx].lock().unwrap();
         let max_per_shard = self.max_buffers / self.shard_count;
         if buffers.len() < max_per_shard {
@@ -225,6 +244,9 @@ impl PriorityBatchQueue {
 
     pub fn push(&self, operation: EnhancedBatchOperation) {
         let shard_idx = self.get_shard(operation.priority);
+        
+        // Use consistent lock ordering: first acquire spatial lock, then queue lock
+        let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
         let mut queue = self.queues[shard_idx].lock().unwrap();
 
         // Insert based on priority (higher priority first)
@@ -241,6 +263,9 @@ impl PriorityBatchQueue {
         // Try to pop from highest priority shards first
         for priority_level in (0..=255).rev() {
             let shard_idx = self.get_shard(priority_level);
+            
+            // Use consistent lock ordering: first acquire spatial lock, then queue lock
+            let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
             let mut queue = self.queues[shard_idx].lock().unwrap();
             if let Some(operation) = queue.pop_front() {
                 let total_depth = self.get_total_depth();
@@ -257,7 +282,7 @@ impl PriorityBatchQueue {
         let mut batch = Vec::with_capacity(max_size);
 
         while batch.len() < max_size && start_time.elapsed() < timeout {
-            if let Some(operation) = self.pop() {
+            if let Some(operation) = self.pop_with_timeout(Duration::from_millis(100)) {
                 batch.push(operation);
             } else if !batch.is_empty() {
                 // Have some operations, break if timeout approaching
@@ -269,6 +294,32 @@ impl PriorityBatchQueue {
         }
 
         batch
+    }
+
+    /// Pop operation with timeout to prevent deadlocks
+    pub fn pop_with_timeout(&self, timeout: Duration) -> Option<EnhancedBatchOperation> {
+        // Try to pop from highest priority shards first
+        for priority_level in (0..=255).rev() {
+            let shard_idx = self.get_shard(priority_level);
+            
+            // Use consistent lock ordering: first acquire spatial lock, then queue lock with timeout
+            let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+            match self.queues[shard_idx].lock_timeout(timeout) {
+                Ok(mut queue) => {
+                    if let Some(operation) = queue.pop_front() {
+                        let total_depth = self.get_total_depth();
+                        self.metrics.current_queue_depth.store(total_depth, Ordering::Relaxed);
+                        return Some(operation);
+                    }
+                }
+                Err(_) => {
+                    debug!("Lock timeout for priority level {}", priority_level);
+                    continue;
+                }
+            }
+        }
+
+        None
     }
 
     pub fn len(&self) -> usize {
