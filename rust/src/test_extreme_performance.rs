@@ -1,7 +1,7 @@
 //! Comprehensive testing for extreme performance optimizations
 //! Tests for AVX-512 intrinsics, lock-free memory pooling, and extreme configuration
 
-use crate::simd_enhanced::{EnhancedSimdProcessor, SimdPerformanceStats};
+use crate::simd_enhanced::EnhancedSimdProcessor;
 use crate::memory_pool::ObjectPool;
 use std::time::Instant;
 

@@ -34,7 +34,7 @@ where
     /// Perform cleanup and return true if any resources were freed
     pub fn cleanup(&self) -> bool {
         // Implement efficient cleanup that trims unused objects
-        let mut cleaned = false;
+        let cleaned = false;
         
         // In a real implementation, we would:
         // 1. Check pool usage statistics
@@ -105,7 +105,7 @@ impl StringPool {
     /// Perform cleanup and return true if any resources were freed
     pub fn cleanup(&self) -> bool {
         // Implement efficient cleanup that trims unused objects
-        let mut cleaned = false;
+        let cleaned = false;
         
         // In a real implementation, we would:
         // 1. Check pool usage statistics

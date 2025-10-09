@@ -38,7 +38,6 @@ impl<T> LockExt<T> for std::sync::Mutex<T> {
 }
 
 // Import lock ordering constants
-use crate::spatial::lock_order;
 
 /// Buffer pool for batch data to reduce allocations and GC pressure (sharded)
 #[derive(Debug)]
@@ -87,7 +86,7 @@ impl BatchBufferPool {
                 let max_attempts = self.shard_count * 2; // Try all shards twice
                 
                 while attempts < max_attempts {
-                    let shard_idx = (ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count);
+                    let shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
                     
                     if let Some(buffer) = self.try_acquire_from_shard(shard_idx) {
                         return Some(buffer);

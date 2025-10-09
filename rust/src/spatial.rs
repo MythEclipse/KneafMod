@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::RwLock;
-use std::thread;
 use std::time::Duration;
 // Use parking_lot mutexes for better locking API (try_lock_for) and performance
 use parking_lot::{Mutex, MutexGuard};
