@@ -1,46 +1,163 @@
 //! Enhanced SIMD operations for high-performance vector processing
 //! Supports AVX2, SSE, and AVX-512 instruction sets with runtime detection
+//! Extreme optimization with aggressive AVX-512 intrinsics and minimal branching
 
 use std::arch::x86_64::*;
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+use crate::logging::{generate_trace_id};
 
-/// SIMD instruction set capabilities
+/// SIMD instruction set capabilities with extreme performance levels
 #[derive(Debug, Clone, Copy)]
 pub enum SimdCapability {
     Sse,
     Avx2,
     Avx512,
+    Avx512Extreme, // Ultra-aggressive AVX-512 optimizations
     Scalar,
 }
 
-/// Runtime SIMD capability detection
+/// Runtime SIMD capability detection with aggressive AVX-512 detection and logging
 pub fn detect_simd_capability() -> SimdCapability {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl") {
+        let trace_id = generate_trace_id();
+        
+        // Extreme AVX-512 detection: require all major AVX-512 features
+        let avx512_extreme = is_x86_feature_detected!("avx512f") &&
+           is_x86_feature_detected!("avx512dq") &&
+           is_x86_feature_detected!("avx512bw") &&
+           is_x86_feature_detected!("avx512vl") &&
+           is_x86_feature_detected!("avx512cd") &&
+           is_x86_feature_detected!("avx512ifma");
+        
+        let avx512_basic = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
+        let avx2 = is_x86_feature_detected!("avx2");
+        let sse = is_x86_feature_detected!("sse4.2");
+        
+        // Log detected capabilities
+        let mut capabilities = Vec::new();
+        if avx512_extreme { capabilities.push("AVX-512 Extreme"); }
+        if avx512_basic { capabilities.push("AVX-512"); }
+        if avx2 { capabilities.push("AVX2"); }
+        if sse { capabilities.push("SSE4.2"); }
+        
+        if capabilities.is_empty() {
+            capabilities.push("Scalar");
+        }
+        
+        log::info!("CPU Capabilities detected: {}", capabilities.join(" "));
+        
+        if avx512_extreme {
+            log::info!("SIMD Level: AVX-512 Extreme active");
+            return SimdCapability::Avx512Extreme;
+        }
+        if avx512_basic {
+            log::info!("SIMD Level: AVX-512 active");
             return SimdCapability::Avx512;
         }
-        if is_x86_feature_detected!("avx2") {
+        if avx2 {
+            log::info!("SIMD Level: AVX2 active");
             return SimdCapability::Avx2;
         }
-        if is_x86_feature_detected!("sse4.2") {
+        if sse {
+            log::info!("SIMD Level: SSE active");
             return SimdCapability::Sse;
         }
     }
+    
+    log::warn!("SIMD Level: Scalar fallback (no SIMD support detected)");
     SimdCapability::Scalar
 }
 
-/// Enhanced vector operations with SIMD acceleration
+/// Enhanced vector operations with SIMD acceleration and extreme optimizations
 pub struct EnhancedSimdProcessor<const MAX_BATCH_SIZE: usize = 16> {
     capability: SimdCapability,
+    // Performance counters for extreme optimization monitoring
+    operation_count: AtomicU64,
+    cycle_count: AtomicU64,
+    fallback_count: AtomicU64,
+}
+
+/// Performance statistics for extreme SIMD optimization monitoring
+#[derive(Debug, Clone)]
+pub struct SimdPerformanceStats {
+    pub total_operations: u64,
+    pub total_cycles: u64,
+    pub fallback_operations: u64,
+    pub capability: SimdCapability,
+}
+
+impl SimdPerformanceStats {
+    /// Calculate operations per cycle (OPC) metric
+    pub fn operations_per_cycle(&self) -> f64 {
+        if self.total_cycles > 0 {
+            self.total_operations as f64 / self.total_cycles as f64
+        } else {
+            0.0
+        }
+    }
+    
+    /// Calculate fallback rate
+    pub fn fallback_rate(&self) -> f64 {
+        if self.total_operations > 0 {
+            self.fallback_operations as f64 / self.total_operations as f64
+        } else {
+            0.0
+        }
+    }
 }
 
 impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
     pub fn new() -> Self {
+        let trace_id = generate_trace_id();
         let capability = detect_simd_capability();
+        
+        // Log initialization with capability
+        log::info!("EnhancedSimdProcessor initialized with capability: {:?}", capability);
+        
         Self {
             capability,
+            operation_count: AtomicU64::new(0),
+            cycle_count: AtomicU64::new(0),
+            fallback_count: AtomicU64::new(0),
         }
+    }
+    
+    /// Record operation metrics for extreme performance monitoring with logging
+    #[inline(always)]
+    fn record_operation(&self, cycles: u64, is_fallback: bool) {
+        self.operation_count.fetch_add(1, Ordering::Relaxed);
+        self.cycle_count.fetch_add(cycles, Ordering::Relaxed);
+        if is_fallback {
+            self.fallback_count.fetch_add(1, Ordering::Relaxed);
+            
+            // Log fallback events for debugging
+            log::warn!("SIMD fallback detected: {} cycles", cycles);
+        }
+    }
+    
+    /// Get performance statistics with logging
+    pub fn get_stats(&self) -> SimdPerformanceStats {
+        let trace_id = generate_trace_id();
+        let stats = SimdPerformanceStats {
+            total_operations: self.operation_count.load(Ordering::Relaxed),
+            total_cycles: self.cycle_count.load(Ordering::Relaxed),
+            fallback_operations: self.fallback_count.load(Ordering::Relaxed),
+            capability: self.capability,
+        };
+        
+        // Log performance statistics periodically
+        if stats.total_operations > 0 && stats.total_operations % 1000 == 0 {
+            log::info!("SIMD Performance: {} ops, {} cycles, {:.2} ops/cycle, {:.2}% fallback rate",
+                stats.total_operations,
+                stats.total_cycles,
+                stats.operations_per_cycle(),
+                stats.fallback_rate() * 100.0);
+        }
+        
+        stats
     }
     
     /// Get current SIMD capability
@@ -51,43 +168,42 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
     
     /// Check if AVX-512 is supported
     #[inline(always)]
-    #[cfg(target_feature = "avx512f")]
     pub fn has_avx512(&self) -> bool {
-        self.avx512_capable
+        matches!(self.capability, SimdCapability::Avx512 | SimdCapability::Avx512Extreme)
     }
     
     /// Check if AVX2 is supported
     #[inline(always)]
-    #[cfg(target_feature = "avx2")]
     pub fn has_avx2(&self) -> bool {
-        self.avx2_capable
+        matches!(self.capability, SimdCapability::Avx2 | SimdCapability::Avx512 | SimdCapability::Avx512Extreme)
     }
     
     /// Check if SSE is supported
     #[inline(always)]
-    #[cfg(target_feature = "sse4.2")]
     pub fn has_sse(&self) -> bool {
-        self.sse_capable
+        matches!(self.capability, SimdCapability::Sse | SimdCapability::Avx2 | SimdCapability::Avx512 | SimdCapability::Avx512Extreme)
     }
      
-    /// Optimized dot product with SIMD acceleration - aggressive optimization for small batches
+    /// Optimized dot product with SIMD acceleration - extreme optimization with minimal branching
     #[inline(always)]
     pub fn dot_product(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "Vectors must have equal length for dot product");
 
         let len = a.len();
+        let start_time = Instant::now();
 
-        // Aggressive optimization for small batches (2-7 elements) with branch prediction
-    if len <= 7 {
-            return self.dot_product_small_batch(a, b);
-        }
-
-        match self.capability {
+        // Extreme optimization: direct SIMD dispatch with minimal conditionals
+        let result = match self.capability {
+            SimdCapability::Avx512Extreme => unsafe { self.dot_product_avx512(a, b) },
             SimdCapability::Avx512 => unsafe { self.dot_product_avx512(a, b) },
             SimdCapability::Avx2 => unsafe { self.dot_product_avx2(a, b) },
             SimdCapability::Sse => unsafe { self.dot_product_sse(a, b) },
             SimdCapability::Scalar => self.dot_product_scalar(a, b),
-        }
+        };
+
+        let cycles = start_time.elapsed().as_nanos() as u64;
+        self.record_operation(cycles, matches!(self.capability, SimdCapability::Scalar));
+        result
     }
 
     /// Specialized dot product for small batches (2-7 elements) - no overhead, direct SIMD
@@ -295,11 +411,12 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
         let len = a.len();
 
         // Aggressive optimization for small batches (2-7 elements) with branch prediction
-    if len <= 7 {
+        if len <= 7 {
             return self.vector_add_small_batch(a, b);
         }
 
         match self.capability {
+            SimdCapability::Avx512Extreme => unsafe { self.vector_add_avx512(a, b) },
             SimdCapability::Avx512 => unsafe { self.vector_add_avx512(a, b) },
             SimdCapability::Avx2 => unsafe { self.vector_add_avx2(a, b) },
             SimdCapability::Sse => unsafe { self.vector_add_sse(a, b) },
@@ -505,6 +622,7 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
     #[inline(always)]
     pub fn batch_aabb_intersect(&self, aabbs: &[(f32, f32, f32, f32, f32, f32)], query: (f32, f32, f32, f32, f32, f32)) -> Vec<bool> {
         match self.capability {
+            SimdCapability::Avx512Extreme => unsafe { self.batch_aabb_intersect_avx512(aabbs, query) },
             SimdCapability::Avx512 => unsafe { self.batch_aabb_intersect_avx512(aabbs, query) },
             SimdCapability::Avx2 => unsafe { self.batch_aabb_intersect_avx2(aabbs, query) },
             SimdCapability::Sse => unsafe { self.batch_aabb_intersect_sse(aabbs, query) },

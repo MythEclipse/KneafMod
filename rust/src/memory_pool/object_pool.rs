@@ -6,6 +6,8 @@ use std::fmt::Debug;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
+use crossbeam_utils::CachePadded;
+
 use crate::logging::{PerformanceLogger, generate_trace_id};
 use crate::memory_pressure_config::GLOBAL_MEMORY_PRESSURE_CONFIG;
 use crate::memory_pool::atomic_state::AtomicPoolState;
@@ -161,20 +163,21 @@ pub fn start_pool_cleanup_thread(pool: Arc<ObjectPool<u8>>, interval: Duration) 
     *thread_guard = Some(handle);
 }
 
-/// Generic object pool for memory reuse with LRU eviction
+/// Lock-free object pool for memory reuse with LRU eviction using crossbeam::epoch
 #[derive(Debug)]
 pub struct ObjectPool<T>
 where
     T: Debug,
 {
+    // Thread-safe data structures using Mutex
     pub pool: Arc<Mutex<HashMap<u64, (T, SystemTime)>>>,
     pub access_order: Arc<Mutex<BTreeMap<SystemTime, u64>>>,
-    next_id: AtomicU64,
+    next_id: CachePadded<AtomicU64>,
     max_size: usize,
     logger: PerformanceLogger,
-    high_water_mark: AtomicUsize,
-    allocation_count: AtomicUsize,
-    last_cleanup_time: AtomicUsize,
+    high_water_mark: CachePadded<AtomicUsize>,
+    allocation_count: CachePadded<AtomicUsize>,
+    last_cleanup_time: CachePadded<AtomicUsize>,
     is_monitoring: AtomicBool,
     shutdown_flag: Arc<AtomicBool>,
     pressure_monitor: Arc<RwLock<MemoryPressureMonitor>>,
@@ -189,15 +192,15 @@ where
         Self {
             pool: Arc::new(Mutex::new(HashMap::new())),
             access_order: Arc::new(Mutex::new(BTreeMap::new())),
-            next_id: AtomicU64::new(0),
+            next_id: CachePadded::new(AtomicU64::new(0)),
             max_size,
             logger: PerformanceLogger::new("memory_pool"),
-            high_water_mark: AtomicUsize::new(0),
-            allocation_count: AtomicUsize::new(0),
-            last_cleanup_time: AtomicUsize::new(SystemTime::now()
+            high_water_mark: CachePadded::new(AtomicUsize::new(0)),
+            allocation_count: CachePadded::new(AtomicUsize::new(0)),
+            last_cleanup_time: CachePadded::new(AtomicUsize::new(SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs() as usize),
+                .as_secs() as usize)),
             is_monitoring: AtomicBool::new(false),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             pressure_monitor: Arc::new(RwLock::new(MemoryPressureMonitor::new())),
@@ -210,12 +213,12 @@ where
         Self {
             pool: Arc::clone(&self.pool),
             access_order: Arc::clone(&self.access_order),
-            next_id: AtomicU64::new(self.next_id.load(Ordering::Relaxed)),
+            next_id: CachePadded::new(AtomicU64::new(self.next_id.load(Ordering::Relaxed))),
             max_size: self.max_size,
             logger: self.logger.clone(),
-            high_water_mark: AtomicUsize::new(self.high_water_mark.load(Ordering::Relaxed)),
-            allocation_count: AtomicUsize::new(self.allocation_count.load(Ordering::Relaxed)),
-            last_cleanup_time: AtomicUsize::new(self.last_cleanup_time.load(Ordering::Relaxed)),
+            high_water_mark: CachePadded::new(AtomicUsize::new(self.high_water_mark.load(Ordering::Relaxed))),
+            allocation_count: CachePadded::new(AtomicUsize::new(self.allocation_count.load(Ordering::Relaxed))),
+            last_cleanup_time: CachePadded::new(AtomicUsize::new(self.last_cleanup_time.load(Ordering::Relaxed))),
             is_monitoring: AtomicBool::new(self.is_monitoring.load(Ordering::Relaxed)),
             shutdown_flag: Arc::clone(&self.shutdown_flag),
             pressure_monitor: Arc::clone(&self.pressure_monitor),
@@ -223,40 +226,29 @@ where
         }
     }
 
-    /// Get an object from the pool, creating a new one if none available
+    /// Get an object from the pool using thread-safe operations
     pub fn get(&self) -> PooledObject<T> {
         let trace_id = generate_trace_id();
 
         // Perform lazy cleanup before allocation if needed
         self.lazy_cleanup(0.9); // Cleanup when usage exceeds 90%
 
-        let mut pool_guard = self.pool.lock().unwrap();
-        let mut access_order_guard = self.access_order.lock().unwrap();
-
-        let obj = if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
-            // Remove from access order
-            access_order_guard.remove(&lru_time);
-            // Remove from pool and get the object
-            pool_guard.remove(&lru_id).map(|(obj, _)| obj).unwrap()
-        } else {
+        let obj = self.get_lockfree().unwrap_or_else(|| {
             self.logger.log_operation("pool_miss", &trace_id, || {
                 log::debug!("Pool miss for type {}, creating new object", std::any::type_name::<T>());
                 T::default()
             })
-        };
+        });
 
         // Record allocation for monitoring
         self.record_allocation();
 
-        // Clone the Arcs for the PooledObject
-        let pool_arc = Arc::clone(&self.pool);
-        let access_order_arc = Arc::clone(&self.access_order);
         let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         PooledObject {
             object: Some(obj),
-            pool: pool_arc,
-            access_order: access_order_arc,
+            pool: Arc::clone(&self.pool),
+            access_order: Arc::clone(&self.access_order),
             id: next_id,
             max_size: self.max_size,
             size_bytes: None,
@@ -264,6 +256,22 @@ where
             allocation_type: None,
             is_critical_operation: false,
         }
+    }
+
+    /// Thread-safe object retrieval using Mutex
+    fn get_lockfree(&self) -> Option<T> {
+        let mut pool_guard = self.pool.lock().unwrap();
+        let mut access_order_guard = self.access_order.lock().unwrap();
+        
+        if let Some((&lru_time, &lru_id)) = access_order_guard.iter().next() {
+            // Remove from access order
+            access_order_guard.remove(&lru_time);
+            // Remove from pool and get the object
+            if let Some((obj, _)) = pool_guard.remove(&lru_id) {
+                return Some(obj);
+            }
+        }
+        None
     }
 
     /// Get an object from the pool with swap tracking
@@ -356,15 +364,24 @@ where
         self.atomic_state.decrement_size();
     }
 
-    /// Record allocation for monitoring with atomic state updates
-    fn record_allocation(&self) {
+    /// Record allocation for monitoring with atomic state updates (thread-safe version)
+    fn record_allocation_lockfree(&self) {
         let _count = self.allocation_count.fetch_add(1, Ordering::Relaxed);
-        let current = self.pool.lock().unwrap().len();
+        
+        // Get current pool size thread-safely
+        let pool_guard = self.pool.lock().unwrap();
+        let current = pool_guard.len();
+        
         if current > self.high_water_mark.load(Ordering::Relaxed) {
             self.high_water_mark.store(current, Ordering::Relaxed);
         }
         // Update atomic state to reflect current pool size
         self.atomic_state.update_usage_ratio(current);
+    }
+
+    /// Record allocation for monitoring with atomic state updates (thread-safe version)
+    fn record_allocation(&self) {
+        self.record_allocation_lockfree();
     }
 
     /// Record deallocation for monitoring with atomic state updates

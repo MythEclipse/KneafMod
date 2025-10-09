@@ -11,6 +11,7 @@ import com.kneaf.core.performance.bridge.NativeIntegrationManager;
 import com.kneaf.core.performance.core.ItemProcessResult;
 import com.kneaf.core.performance.core.MobProcessResult;
 import com.kneaf.core.performance.core.RustPerformanceFacade;
+import com.kneaf.core.logging.RustLogger;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -33,6 +34,9 @@ public class RustPerformance {
         FACADE.initialize();
         initialized = true;
         KneafCore.LOGGER.info("RustPerformance initialized successfully");
+        
+        // Initialize Rust logging system
+        initNativeLogging();
       } catch (Exception e) {
         KneafCore.LOGGER.error("Failed to initialize RustPerformance", e);
         throw new RuntimeException("Failed to initialize performance system", e);
@@ -432,15 +436,67 @@ public class RustPerformance {
 
   /** Record JNI call performance metrics (native integration). */
  public static native void recordJniCallNative(String callType, long durationMs);
- 
+  
  /** Record lock wait performance metrics (native integration). */
  public static native void recordLockWaitNative(String lockName, long durationMs);
- 
+  
  /** Record memory usage performance metrics (native integration). */
  public static native void recordMemoryUsageNative(long totalBytes, long usedBytes, long freeBytes);
- 
+  
  /** Record GC event performance metrics (native integration). */
  public static native void recordGcEventNative(long durationMs);
+ 
+ /** Log message from Rust native code. */
+ public static void logFromNative(String level, String message) {
+     RustLogger.logFromRust(level, message);
+ }
+ 
+ /** Initialize native logging system. */
+ public static void initNativeLogging() {
+     RustLogger.initNativeLogging();
+ }
+ 
+ /** Log system status information. */
+ public static void logSystemStatus(String cpuCapabilities, String simdLevel,
+                                   double fallbackRate, double opsPerCycle) {
+     RustLogger.logSystemStatus(cpuCapabilities, simdLevel, fallbackRate, opsPerCycle);
+ }
+ 
+ /** Log memory pool status. */
+ public static void logMemoryPoolStatus(double usagePercentage, double hitRate, int contention) {
+     RustLogger.logMemoryPoolStatus(usagePercentage, hitRate, contention);
+ }
+ 
+ /** Log thread pool status. */
+ public static void logThreadPoolStatus(int activeThreads, int queueSize, double utilization) {
+     RustLogger.logThreadPoolStatus(activeThreads, queueSize, utilization);
+ }
+ 
+ /** Log performance metrics. */
+ public static void logPerformanceMetrics(double tps, double latency, long gcEvents) {
+     RustLogger.logPerformanceMetrics(tps, latency, gcEvents);
+ }
+ 
+ /** Log configuration status. */
+ public static void logConfigurationStatus(boolean extremeMode, boolean safetyChecks, double tpsThreshold) {
+     RustLogger.logConfigurationStatus(extremeMode, safetyChecks, tpsThreshold);
+ }
+ 
+ /** Log startup information. */
+ public static void logStartupInfo(String optimizationsActive, String cpuInfo, String configApplied) {
+     RustLogger.logStartupInfo(optimizationsActive, cpuInfo, configApplied);
+ }
+ 
+ /** Log real-time status updates. */
+ public static void logRealTimeStatus(String systemStatus, String importantEvents) {
+     RustLogger.logRealTimeStatus(systemStatus, importantEvents);
+ }
+ 
+ /** Log threshold-based events. */
+ public static void logThresholdEvent(String eventType, String message,
+                                     double thresholdValue, double actualValue) {
+     RustLogger.logThresholdEvent(eventType, message, thresholdValue, actualValue);
+ }
 
  /** Performance statistics data class. */
   public static class PerformanceStatistics {

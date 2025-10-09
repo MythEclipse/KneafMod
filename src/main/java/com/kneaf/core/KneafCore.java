@@ -78,6 +78,27 @@ public class KneafCore {
 
     // Check for mod compatibility and log warnings
     ModCompatibility.checkForConflicts();
+    
+    // Initialize Rust performance system with enhanced logging
+    initializeRustPerformanceSystem();
+  }
+  
+  private void initializeRustPerformanceSystem() {
+    try {
+      // Initialize Rust performance system
+      com.kneaf.core.performance.RustPerformance.initialize();
+      
+      // Log startup information
+      String optimizationsActive = "Dynamic entity ticking, Item stack merging, Mob AI optimization, Chunk generation optimization";
+      String cpuInfo = "SIMD-optimized processing with AVX2/AVX-512 support";
+      String configApplied = "Performance optimizations enabled with safety checks";
+      
+      com.kneaf.core.performance.RustPerformance.logStartupInfo(optimizationsActive, cpuInfo, configApplied);
+      
+      LOGGER.info("Rust performance system initialized with enhanced logging");
+    } catch (Exception e) {
+      LOGGER.error("Failed to initialize Rust performance system", e);
+    }
   }
 
   // Register commands

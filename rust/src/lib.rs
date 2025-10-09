@@ -72,6 +72,9 @@ pub mod parallelism;
 // Shared utilities
 pub mod shared;
 
+// Extreme performance testing
+pub mod test_extreme_performance;
+
 // Re-export commonly used types from memory_pool module
 pub use memory_pool::{
     // Core types
@@ -114,5 +117,6 @@ pub use logging::{PerformanceLogger, generate_trace_id};
 pub use types::{RustPerformanceError, Result};
 pub use memory_pressure_config::MemoryPressureConfig;
 pub use simd::{SimdOperations, SimdProcessor};
+pub use simd_enhanced::{EnhancedSimdProcessor, SimdCapability, SimdPerformanceStats};
 pub use compression::{CompressionEngine, CompressionStats};
 pub use database::RustDatabaseAdapter;

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use chrono::{DateTime, Utc};
@@ -291,13 +291,24 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_LOGGER_REGISTRY: LoggerRegistry = LoggerRegistry::new();
 }
 
-/// Initialize logging system
+/// Initialize logging system with Java integration
 pub fn init_logging() -> Result<(), Box<dyn std::error::Error>> {
     let logger = StructuredLogger::new("rustperf", Level::Info);
     log::set_boxed_logger(Box::new(logger))?;
     log::set_max_level(log::LevelFilter::Info);
     Ok(())
 }
+
+/// Initialize logging with Java JNI environment
+pub fn init_logging_with_jni(env: &mut JNIEnv) -> Result<(), Box<dyn std::error::Error>> {
+    init_logging()?;
+    JniLogger::init_java_logging(env)
+        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+    Ok(())
+}
+
+/// Global flag to track if Java logging is initialized
+static JAVA_LOGGING_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// JNI Logger for forwarding logs from Rust to Java
 #[allow(dead_code)]
@@ -312,10 +323,13 @@ impl JniLogger {
         }
     }
 
-    /// Log a message to Java via JNI
+    /// Log a message to Java via JNI with prefix formatting
     pub fn log_to_java(&self, env: &mut JNIEnv, level: &str, message: &str) {
+        // Format message with prefix
+        let formatted_message = format!("[KneafMod] {}", message);
+        
         if let Ok(cls) = env.find_class("com/kneaf/core/performance/RustPerformance") {
-            if let (Ok(jlevel), Ok(jmsg)) = (env.new_string(level), env.new_string(message)) {
+            if let (Ok(jlevel), Ok(jmsg)) = (env.new_string(level), env.new_string(&formatted_message)) {
                 let jlevel_obj = JObject::from(jlevel);
                 let jmsg_obj = JObject::from(jmsg);
                 let _ = env.call_static_method(
@@ -325,6 +339,27 @@ impl JniLogger {
                     &[JValue::Object(&jlevel_obj), JValue::Object(&jmsg_obj)],
                 );
             }
+        }
+    }
+    
+    /// Initialize Java logging system
+    pub fn init_java_logging(env: &mut JNIEnv) -> Result<(), String> {
+        if JAVA_LOGGING_INITIALIZED.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        
+        if let Ok(cls) = env.find_class("com/kneaf/core/performance/RustPerformance") {
+            let _ = env.call_static_method(
+                cls,
+                "initNativeLogging",
+                "()V",
+                &[],
+            ).map_err(|e| format!("Failed to initialize Java logging: {}", e))?;
+            
+            JAVA_LOGGING_INITIALIZED.store(true, Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err("Failed to find RustPerformance class for logging initialization".to_string())
         }
     }
 
@@ -399,6 +434,28 @@ pub fn make_jni_error_bytes(env: &JNIEnv, message: &[u8]) -> jni::sys::jbyteArra
         Ok(arr) => arr.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+/// Enhanced logging macro that sends logs to both Rust logger and Java via JNI
+#[macro_export]
+macro_rules! log_to_java {
+    ($env:expr, $level:expr, $component:expr, $operation:expr, $message:expr) => {
+        {
+            let trace_id = $crate::logging::generate_trace_id();
+            let formatted_message = format!("[{}] {}: {}", $component, $operation, $message);
+            
+            // Log to Rust logger
+            $crate::logging::LogEntry::new($level, $component, $operation, &formatted_message)
+                .with_trace_id(trace_id.to_string())
+                .log();
+            
+            // Log to Java via JNI if environment is available
+            if let Some(env) = $env {
+                let logger = $crate::logging::JniLogger::new($component);
+                logger.log_to_java(env, $level, &formatted_message);
+            }
+        }
+    };
 }
 
 /// Convenience macros for logging

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use crate::logging::{PerformanceLogger, generate_trace_id};
 use once_cell::sync::Lazy;
 use std::time::SystemTime;
+use crate::simd_enhanced::{SimdCapability, detect_simd_capability};
 
 #[derive(Debug, Default, Clone)]
 pub struct JniCallMetrics {
@@ -361,6 +362,81 @@ pub fn record_operation(start: std::time::Instant, items_processed: usize, threa
     let duration = start.elapsed().as_millis() as u64;
     let trace_id = generate_trace_id();
     PERFORMANCE_MONITOR.logger.log_info("operation", &trace_id, &format!("processed {} items on {} threads in {} ms", items_processed, thread_count, duration));
+}
+
+/// Get comprehensive system status information for logging
+pub fn get_system_status() -> String {
+    let simd_capability = detect_simd_capability();
+    let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
+    
+    format!(
+        "CPU Capabilities: {:?}, Memory: {:.1}% used, GC Events: {}, Lock Contention: {}",
+        simd_capability,
+        metrics.memory_metrics.used_heap_percent,
+        metrics.memory_metrics.gc_count,
+        metrics.lock_wait_metrics.current_lock_contention
+    )
+}
+
+/// Log system status periodically
+pub fn log_periodic_status() {
+    let trace_id = generate_trace_id();
+    let status = get_system_status();
+    PERFORMANCE_MONITOR.logger.log_info("system_status", &trace_id, &status);
+}
+
+/// Log startup information with comprehensive system details
+pub fn log_startup_info() {
+    let trace_id = generate_trace_id();
+    let simd_capability = detect_simd_capability();
+    
+    // Get CPU capabilities string
+    let cpu_capabilities = match simd_capability {
+        SimdCapability::Avx512Extreme => "AVX-512 Extreme ✓ AVX-512 ✓ AVX2 ✓ SSE4.2 ✓",
+        SimdCapability::Avx512 => "AVX-512 ✓ AVX2 ✓ SSE4.2 ✓",
+        SimdCapability::Avx2 => "AVX2 ✓ SSE4.2 ✓",
+        SimdCapability::Sse => "SSE4.2 ✓",
+        SimdCapability::Scalar => "Scalar (no SIMD)",
+    };
+    
+    PERFORMANCE_MONITOR.logger.log_info("startup", &trace_id,
+        &format!("=== KNEAF MOD STARTUP ===\nCPU Capabilities: {}\nSIMD Level: {:?}\nRust Performance Monitoring: ACTIVE",
+        cpu_capabilities, simd_capability));
+}
+
+/// Log real-time status updates with threshold checking
+pub fn log_real_time_status() {
+    let trace_id = generate_trace_id();
+    let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
+    
+    // Check thresholds and log warnings if exceeded
+    if metrics.memory_metrics.used_heap_percent > 90.0 {
+        PERFORMANCE_MONITOR.logger.log_warning("memory_threshold", &trace_id,
+            &format!("Memory usage high: {:.1}%", metrics.memory_metrics.used_heap_percent));
+    }
+    
+    if metrics.lock_wait_metrics.current_lock_contention > 10 {
+        PERFORMANCE_MONITOR.logger.log_warning("lock_contention", &trace_id,
+            &format!("High lock contention: {}", metrics.lock_wait_metrics.current_lock_contention));
+    }
+    
+    if metrics.jni_calls.max_call_duration_ms > 100 {
+        PERFORMANCE_MONITOR.logger.log_warning("jni_threshold", &trace_id,
+            &format!("Slow JNI call: {}ms", metrics.jni_calls.max_call_duration_ms));
+    }
+}
+
+/// Log performance metrics summary
+pub fn log_performance_summary() {
+    let trace_id = generate_trace_id();
+    let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
+    
+    PERFORMANCE_MONITOR.logger.log_info("performance_summary", &trace_id,
+        &format!("Performance Summary: {} JNI calls, {} lock waits, {:.1}% memory used, {} GC events",
+        metrics.jni_calls.total_calls,
+        metrics.lock_wait_metrics.total_lock_waits,
+        metrics.memory_metrics.used_heap_percent,
+        metrics.memory_metrics.gc_count));
 }
 
 static PERFORMANCE_MONITOR: Lazy<PerformanceMonitor> = Lazy::new(|| {

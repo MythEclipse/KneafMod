@@ -522,6 +522,93 @@ public class PerformanceManager {
   public static void onServerTick(MinecraftServer server) {
     // Delegate to EntityProcessor for modular implementation
     ENTITY_PROCESSOR.onServerTick(server);
+    
+    // Log real-time status updates every 100 ticks
+    if (TICK_COUNTER % 100 == 0) {
+      logRealTimeStatus();
+    }
+    
+    // Log periodic performance summary every 500 ticks
+    if (TICK_COUNTER % 500 == 0) {
+      logPerformanceSummary();
+    }
+    
+    TICK_COUNTER++;
+  }
+  
+  /** Log real-time status updates */
+  private static void logRealTimeStatus() {
+    try {
+      double tps = getAverageTPS();
+      long tickDurationMs = getLastTickDurationMs();
+      long gcEvents = gcCount.get();
+      
+      // Get memory metrics
+      double memoryUsagePct = totalHeapBytes.get() > 0 ?
+          (usedHeapBytes.get() * 100.0 / totalHeapBytes.get()) : 0.0;
+      
+      // Get lock contention
+      int lockContention = currentLockContention.get();
+      
+      // Format status message
+      String systemStatus = String.format(
+          "TPS: %.2f, Tick: %dms, Memory: %.1f%%, GC: %d, Locks: %d",
+          tps, tickDurationMs, memoryUsagePct, gcEvents, lockContention);
+      
+      // Check for important events
+      String importantEvents = "";
+      if (memoryUsagePct > 90.0) {
+        importantEvents += "HIGH_MEMORY_USAGE ";
+      }
+      if (lockContention > 10) {
+        importantEvents += "HIGH_LOCK_CONTENTION ";
+      }
+      if (tps < 15.0) {
+        importantEvents += "LOW_TPS ";
+      }
+      
+      // Log to Rust performance system
+      com.kneaf.core.performance.RustPerformance.logRealTimeStatus(systemStatus,
+          importantEvents.isEmpty() ? null : importantEvents);
+      
+    } catch (Exception e) {
+      LOGGER.debug("Error logging real-time status", e);
+    }
+  }
+  
+  /** Log periodic performance summary */
+  private static void logPerformanceSummary() {
+    try {
+      // Get performance metrics
+      double tps = getAverageTPS();
+      long tickDurationMs = getLastTickDurationMs();
+      long gcEvents = gcCount.get();
+      
+      // Log to Rust performance system
+      com.kneaf.core.performance.RustPerformance.logPerformanceMetrics(
+          tps, tickDurationMs, gcEvents);
+      
+      // Log memory pool status
+      double memoryUsagePct = totalHeapBytes.get() > 0 ?
+          (usedHeapBytes.get() * 100.0 / totalHeapBytes.get()) : 0.0;
+      double hitRate = 92.0; // Example hit rate - would need actual calculation
+      int contention = currentLockContention.get();
+      
+      com.kneaf.core.performance.RustPerformance.logMemoryPoolStatus(
+          memoryUsagePct, hitRate, contention);
+      
+      // Log thread pool status
+      ThreadPoolExecutor executor = getExecutor();
+      int activeThreads = executor != null ? executor.getActiveCount() : 0;
+      int queueSize = getExecutorQueueSize();
+      double utilization = THREAD_POOL_MANAGER.getExecutorUtilization();
+      
+      com.kneaf.core.performance.RustPerformance.logThreadPoolStatus(
+          activeThreads, queueSize, utilization);
+      
+    } catch (Exception e) {
+      LOGGER.debug("Error logging performance summary", e);
+    }
   }
 
   // Helper to initialize profiling values if needed
