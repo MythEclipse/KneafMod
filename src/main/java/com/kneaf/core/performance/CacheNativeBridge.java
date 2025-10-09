@@ -1,7 +1,5 @@
 package com.kneaf.core.performance;
 
-import java.nio.ByteBuffer;
-
 /**
  * Java native bridge for Rust cache eviction system
  * Provides JNI interface for priority queue-based cache operations

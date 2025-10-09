@@ -2,12 +2,21 @@ package com.kneaf.core.chunkstorage.database;
 
 import com.kneaf.core.chunkstorage.common.ChunkStorageUtils;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-// cleaned: removed unused list imports
 
 /**
  * High-performance Rust-based database adapter implementation. Provides native performance with
@@ -32,6 +41,39 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
   private final boolean checksumEnabled;
   private final AbstractDatabaseAdapter fallbackAdapter;
   private static volatile boolean nativeLibraryAvailable = false;
+   
+  // Cache for reflection results to reduce overhead
+  private volatile Boolean hasPutChunkAsync = null;
+  private volatile Boolean hasGetChunkAsync = null;
+  private volatile Boolean hasDeleteChunkAsync = null;
+  private volatile Boolean hasSwapOutChunkAsync = null;
+  private volatile Boolean hasSwapInChunkAsync = null;
+   
+  // LRU cache for frequent chunk access (reduces JNI calls)
+  private final ConcurrentHashMap<String, CacheEntry> readCache = new ConcurrentHashMap<>();
+  private final int MAX_CACHE_SIZE = 4096; // Doubled cache size for better performance
+  private final AtomicInteger cacheSize = new AtomicInteger(0);
+  private final ReentrantLock cacheLock = new ReentrantLock();
+  private final ConcurrentLinkedDeque<String> accessOrder = new ConcurrentLinkedDeque<>(); // Track access order
+
+  // Operation batching for improved performance
+  private static final int BATCH_SIZE_THRESHOLD = 32; // Increased for better performance
+  private final Queue<DatabaseOperation> batchQueue = new ConcurrentLinkedQueue<>();
+  private final ScheduledExecutorService batchExecutor = Executors.newSingleThreadScheduledExecutor();
+  private final ReentrantLock batchLock = new ReentrantLock();
+  private volatile boolean batchProcessingScheduled = false;
+   
+  // Start batch processing scheduler
+  static {
+    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      try {
+        // Ensure any remaining operations are processed on shutdown
+        // Note: In practice you'd want a registry of instances, this is simplified
+      } catch (Exception e) {
+        LOGGER.debug("Error during batch shutdown", e);
+      }
+    }));
+  }
 
   // Load native library with proper error handling
   static {
@@ -59,18 +101,18 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
           if (f.exists()) {
             System.load(f.getAbsolutePath());
             loaded = true;
-            LOGGER.info("Loaded Rust native library from fallback path: { }", f.getAbsolutePath());
+            LOGGER.info("Loaded Rust native library from fallback path: {}", f.getAbsolutePath());
             break;
           }
         } catch (UnsatisfiedLinkError ule) {
-          LOGGER.debug("Fallback load failed for { }: { }", path, ule.getMessage());
+          LOGGER.debug("Fallback load failed for {}: {}", path, ule.getMessage());
         }
       }
 
       if (!loaded) {
         nativeLibraryAvailable = false;
         LOGGER.warn(
-            "Failed to load Rust database library: { }. Native operations will be disabled.",
+            "Failed to load Rust database library: {}. Native operations will be disabled.",
             e.getMessage());
       } else {
         nativeLibraryAvailable = true;
@@ -115,7 +157,7 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
           ptr = nativeInit(databaseType, checksumEnabled);
         } catch (UnsatisfiedLinkError ule) {
           LOGGER.debug(
-              "nativeInit threw UnsatisfiedLinkError on attempt { }: { }",
+              "nativeInit threw UnsatisfiedLinkError on attempt {}: {}",
               attempts,
               ule.getMessage());
           ptr = 0;
@@ -132,10 +174,11 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
       }
     }
     this.nativePointer = ptr;
+     
     if (nativePointer == 0) {
       // Fall back to an in-memory adapter implementation to ensure tests can continue
       LOGGER.warn(
-          "Native Rust adapter failed to initialize; falling back to InMemoryDatabaseAdapter for databaseType={ }",
+          "Native Rust adapter failed to initialize; falling back to InMemoryDatabaseAdapter for databaseType={}",
           databaseType);
       this.fallbackAdapter = new InMemoryDatabaseAdapter(databaseType);
     } else {
@@ -145,14 +188,46 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
         // Call a cheap native method to ensure the native side is fully initialized
         nativeGetChunkCount(this.nativePointer);
       } catch (Throwable t) {
-        LOGGER.debug("Native warm-up call failed (non-fatal): { }", t.getMessage());
+        LOGGER.debug("Native warm-up call failed (non-fatal): {}", t.getMessage());
       }
     }
 
     LOGGER.info(
-        "RustDatabaseAdapter initialized with type: { }, checksum: { }",
+        "RustDatabaseAdapter initialized with type: {}, checksum: {}, cache size: {}",
         databaseType,
-        checksumEnabled);
+        checksumEnabled,
+        MAX_CACHE_SIZE);
+  }
+
+  /** Cache entry with timestamp for LRU eviction */
+  private static class CacheEntry {
+    byte[] data;
+    long lastAccessTime;
+    
+    CacheEntry(byte[] data) {
+      this.data = data;
+      this.lastAccessTime = System.currentTimeMillis();
+    }
+  }
+   
+  /** Database operation types for batching */
+  private enum OperationType {
+    PUT, GET, DELETE, HAS, SWAP_OUT, SWAP_IN
+  }
+   
+  /** Batch operation container */
+  private static class DatabaseOperation {
+    final String key;
+    final byte[] data;
+    final OperationType type;
+    final CompletableFuture<?> future;
+     
+    DatabaseOperation(String key, byte[] data, OperationType type, CompletableFuture<?> future) {
+      this.key = key;
+      this.data = data;
+      this.type = type;
+      this.future = future;
+    }
   }
 
   @Override
@@ -162,21 +237,17 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
       throw new IllegalArgumentException("Chunk data cannot be null or empty");
     }
 
-    // If a subclass overrides putChunkAsync, prefer to delegate to that async
-    // implementation so tests can simulate failures by overriding async methods.
-    try {
-      java.lang.reflect.Method m =
-          this.getClass().getMethod("putChunkAsync", String.class, byte[].class);
-      if (m.getDeclaringClass() != RustDatabaseAdapter.class) {
-        try {
-          putChunkAsync(key, data).get();
-          return;
-        } catch (Exception e) {
-          throw new IOException("Async putChunk override failed", e);
-        }
+    // Check for async override (with caching)
+    if (hasPutChunkAsync == null) {
+      hasPutChunkAsync = checkForAsyncOverride("putChunkAsync", String.class, byte[].class);
+    }
+    if (hasPutChunkAsync) {
+      try {
+        putChunkAsync(key, data).get();
+        return;
+      } catch (Exception e) {
+        throw new IOException("Async putChunk override failed", e);
       }
-    } catch (NoSuchMethodException ignored) {
-      // Fallback to default synchronous path below
     }
 
     if (nativePointer == 0) {
@@ -185,57 +256,133 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
       return;
     }
 
+    // Direct execution (batching disabled for now)
     try {
       boolean success = nativePutChunk(nativePointer, key, data);
       if (!success) {
         throw new IOException("Failed to store chunk in Rust database");
       }
+      
+      // Update cache with new data using optimized method
+      cacheChunk(key, data);
     } catch (Exception e) {
       throw new IOException("Rust database operation failed", e);
+    }
+  }
+   
+  /** Check for async method override with caching */
+  private boolean checkForAsyncOverride(String methodName, Class<?>... parameterTypes) {
+    try {
+      java.lang.reflect.Method m = this.getClass().getMethod(methodName, parameterTypes);
+      return m.getDeclaringClass() != RustDatabaseAdapter.class;
+    } catch (NoSuchMethodException e) {
+      return false;
+    }
+  }
+   
+  /** Update cache access time and order */
+  private void updateCacheAccess(String key) {
+    cacheLock.lock();
+    try {
+      accessOrder.remove(key);
+      accessOrder.addFirst(key);
+      CacheEntry entry = readCache.get(key);
+      if (entry != null) {
+        entry.lastAccessTime = System.currentTimeMillis();
+      }
+    } finally {
+      cacheLock.unlock();
+    }
+  }
+
+  /** Cache chunk with optimized eviction */
+  private void cacheChunk(String key, byte[] data) {
+    evictIfNeeded();
+    cacheLock.lock();
+    try {
+      readCache.put(key, new CacheEntry(data));
+      accessOrder.addFirst(key);
+      cacheSize.incrementAndGet();
+    } finally {
+      cacheLock.unlock();
+    }
+  }
+
+  /** Evict oldest entry if cache is full using access order tracking */
+  private void evictIfNeeded() {
+    if (cacheSize.get() >= MAX_CACHE_SIZE) {
+      cacheLock.lock();
+      try {
+        // Use access order tracking for faster LRU eviction
+        String oldestKey = accessOrder.pollLast();
+        if (oldestKey != null) {
+          readCache.remove(oldestKey);
+          cacheSize.decrementAndGet();
+        }
+      } finally {
+        cacheLock.unlock();
+      }
     }
   }
 
   @Override
   public Optional<byte[]> getChunk(String key) throws IOException {
     ChunkStorageUtils.validateKey(key);
-    // Delegate to overriding async implementation if present
-    try {
-      java.lang.reflect.Method m = this.getClass().getMethod("getChunkAsync", String.class);
-      if (m.getDeclaringClass() != RustDatabaseAdapter.class) {
-        try {
-          return getChunkAsync(key).get();
-        } catch (Exception e) {
-          throw new IOException("Async getChunk override failed", e);
-        }
+      
+    // First check read cache (read-through pattern)
+    CacheEntry cached = readCache.get(key);
+    if (cached != null) {
+      updateCacheAccess(key); // Optimized access tracking
+      return Optional.of(cached.data);
+    }
+
+    // Check for async override (with caching)
+    if (hasGetChunkAsync == null) {
+      hasGetChunkAsync = checkForAsyncOverride("getChunkAsync", String.class);
+    }
+    if (hasGetChunkAsync) {
+      try {
+        return getChunkAsync(key).get();
+      } catch (Exception e) {
+        throw new IOException("Async getChunk override failed", e);
       }
-    } catch (NoSuchMethodException ignored) {
     }
 
     if (nativePointer == 0) {
       return fallbackAdapter.getChunk(key);
     }
 
+    // Read batching disabled for now - will implement in future iterations
     try {
       byte[] data = nativeGetChunk(nativePointer, key);
+      if (data != null) {
+        // Cache successful read with optimized eviction
+        cacheChunk(key, data);
+      }
       return Optional.ofNullable(data);
     } catch (Exception e) {
-      throw new IOException("Rust database operation failed", e);
+      // Conditional logging to reduce overhead in production
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Failed to get chunk for key: {}", key, e);
+      }
+      throw new IOException("Rust database operation failed for key: " + key, e);
     }
   }
 
   @Override
   public boolean deleteChunk(String key) throws IOException {
     ChunkStorageUtils.validateKey(key);
-    try {
-      java.lang.reflect.Method m = this.getClass().getMethod("deleteChunkAsync", String.class);
-      if (m.getDeclaringClass() != RustDatabaseAdapter.class) {
-        try {
-          return deleteChunkAsync(key).get();
-        } catch (Exception e) {
-          throw new IOException("Async deleteChunk override failed", e);
-        }
+      
+    // Check for async override (with caching)
+    if (hasDeleteChunkAsync == null) {
+      hasDeleteChunkAsync = checkForAsyncOverride("deleteChunkAsync", String.class);
+    }
+    if (hasDeleteChunkAsync) {
+      try {
+        return deleteChunkAsync(key).get();
+      } catch (Exception e) {
+        throw new IOException("Async deleteChunk override failed", e);
       }
-    } catch (NoSuchMethodException ignored) {
     }
 
     if (nativePointer == 0) {
@@ -243,7 +390,18 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
     }
 
     try {
-      return nativeDeleteChunk(nativePointer, key);
+      boolean result = nativeDeleteChunk(nativePointer, key);
+      if (result) {
+        // Remove from cache when deleted with proper locking to maintain consistency
+        cacheLock.lock();
+        try {
+          readCache.remove(key);
+          cacheSize.decrementAndGet();
+        } finally {
+          cacheLock.unlock();
+        }
+      }
+      return result;
     } catch (Exception e) {
       throw new IOException("Rust database operation failed", e);
     }
@@ -264,6 +422,12 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
   @Override
   public boolean hasChunk(String key) throws IOException {
     ChunkStorageUtils.validateKey(key);
+     
+    // Fast path: check cache first (no need to call native if we know we have it)
+    if (readCache.containsKey(key)) {
+      return true;
+    }
+
     if (nativePointer == 0) {
       return fallbackAdapter.hasChunk(key);
     }
@@ -444,20 +608,30 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
       return fallbackAdapter.hasChunk(key);
     }
     // If subclass overrides swapOutChunkAsync, delegate to it so tests can simulate failures
-    try {
-      java.lang.reflect.Method m = this.getClass().getMethod("swapOutChunkAsync", String.class);
-      if (m.getDeclaringClass() != RustDatabaseAdapter.class) {
-        try {
-          return swapOutChunkAsync(key).get();
-        } catch (Exception e) {
-          throw new IOException("Async swapOutChunk override failed", e);
-        }
+    if (hasSwapOutChunkAsync == null) {
+      hasSwapOutChunkAsync = checkForAsyncOverride("swapOutChunkAsync", String.class);
+    }
+    if (hasSwapOutChunkAsync) {
+      try {
+        return swapOutChunkAsync(key).get();
+      } catch (Exception e) {
+        throw new IOException("Async swapOutChunk override failed", e);
       }
-    } catch (NoSuchMethodException ignored) {
     }
 
     try {
-      return nativeSwapOutChunk(nativePointer, key);
+      boolean result = nativeSwapOutChunk(nativePointer, key);
+      if (result) {
+        // Remove from cache when swapped out
+        cacheLock.lock();
+        try {
+          readCache.remove(key);
+          cacheSize.decrementAndGet();
+        } finally {
+          cacheLock.unlock();
+        }
+      }
+      return result;
     } catch (Exception e) {
       throw new IOException("Rust swap out operation failed", e);
     }
@@ -472,29 +646,47 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
    */
   public Optional<byte[]> swapInChunk(String key) throws IOException {
     ChunkStorageUtils.validateKey(key);
+     
+    // First check read cache (read-through pattern)
+    CacheEntry cached = readCache.get(key);
+    if (cached != null) {
+      cached.lastAccessTime = System.currentTimeMillis();
+      return Optional.of(cached.data);
+    }
+
     if (nativePointer == 0) {
       return fallbackAdapter.getChunk(key);
     }
-    try {
-      java.lang.reflect.Method m = this.getClass().getMethod("swapInChunkAsync", String.class);
-      if (m.getDeclaringClass() != RustDatabaseAdapter.class) {
-        try {
-          return swapInChunkAsync(key).get();
-        } catch (Exception e) {
-          throw new IOException("Async swapInChunk override failed", e);
-        }
+    // If subclass overrides swapInChunkAsync, delegate to it so tests can simulate failures
+    if (hasSwapInChunkAsync == null) {
+      hasSwapInChunkAsync = checkForAsyncOverride("swapInChunkAsync", String.class);
+    }
+    if (hasSwapInChunkAsync) {
+      try {
+        return swapInChunkAsync(key).get();
+      } catch (Exception e) {
+        throw new IOException("Async swapInChunk override failed", e);
       }
-    } catch (NoSuchMethodException ignored) {
     }
 
     try {
       byte[] data = nativeSwapInChunk(nativePointer, key);
       if (data != null) {
+        // Cache successful swap-in
+        evictIfNeeded();
+        readCache.put(key, new CacheEntry(data));
+        cacheSize.incrementAndGet();
         return Optional.of(data);
       }
       // Some native implementations may store chunks via putChunk but treat swapIn
       // differently. As a fallback, attempt to read the chunk directly.
       byte[] direct = nativeGetChunk(nativePointer, key);
+      if (direct != null) {
+        // Cache successful direct read
+        evictIfNeeded();
+        readCache.put(key, new CacheEntry(direct));
+        cacheSize.incrementAndGet();
+      }
       return Optional.ofNullable(direct);
     } catch (Exception e) {
       throw new IOException("Rust swap in operation failed", e);
@@ -508,17 +700,40 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
    * @return List of chunk keys that are good swap candidates
    * @throws IOException if operation fails
    */
-  public java.util.List<String> getSwapCandidates(int limit) throws IOException {
+  public List<String> getSwapCandidates(int limit) throws IOException {
     if (nativePointer == 0) {
       // Fallback: return empty list
-      return new java.util.ArrayList<>();
+      return new ArrayList<>();
     }
 
+    // Priority: chunks NOT in cache first (already swapped out), then least recently used
+    List<String> candidates = new ArrayList<>();
+     
+    // Add cached chunks (sorted by access time)
+    cacheLock.lock();
     try {
-      return nativeGetSwapCandidates(nativePointer, limit);
-    } catch (Exception e) {
-      throw new IOException("Failed to get swap candidates", e);
+      List<Map.Entry<String, CacheEntry>> sortedEntries = new ArrayList<>(readCache.entrySet());
+      sortedEntries.sort((a, b) -> Long.compare(a.getValue().lastAccessTime, b.getValue().lastAccessTime));
+       
+      int toAdd = Math.min(limit, sortedEntries.size());
+      for (int i = 0; i < toAdd; i++) {
+        candidates.add(sortedEntries.get(i).getKey());
+      }
+    } finally {
+      cacheLock.unlock();
     }
+
+    // Fill remaining candidates from native
+    if (candidates.size() < limit) {
+      try {
+        List<String> nativeCandidates = nativeGetSwapCandidates(nativePointer, limit - candidates.size());
+        candidates.addAll(nativeCandidates);
+      } catch (Exception e) {
+        throw new IOException("Failed to get native swap candidates", e);
+      }
+    }
+
+    return candidates.subList(0, Math.min(limit, candidates.size()));
   }
 
   /**
@@ -528,7 +743,7 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
    * @return Number of chunks successfully swapped out
    * @throws IOException if operation fails
    */
-  public int bulkSwapOut(java.util.List<String> keys) {
+  public int bulkSwapOut(List<String> keys) {
     if (keys == null || keys.isEmpty()) {
       throw new IllegalArgumentException("Keys list cannot be null or empty");
     }
@@ -541,7 +756,7 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
           if (fallbackAdapter.hasChunk(k)) count++;
         } catch (IOException e) {
           // Continue with other chunks if one fails
-          LOGGER.debug("Failed to check chunk existence during bulk swap out: { }", k, e);
+          LOGGER.debug("Failed to check chunk existence during bulk swap out: {}", k, e);
         }
       }
       return count;
@@ -561,13 +776,13 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
    * @return List of chunk data for successfully swapped chunks
    * @throws IOException if operation fails
    */
-  public java.util.List<byte[]> bulkSwapIn(java.util.List<String> keys) {
+  public List<byte[]> bulkSwapIn(List<String> keys) {
     if (keys == null || keys.isEmpty()) {
       throw new IllegalArgumentException("Keys list cannot be null or empty");
     }
 
     if (nativePointer == 0) {
-      java.util.List<byte[]> results = new java.util.ArrayList<>();
+      List<byte[]> results = new ArrayList<>();
       for (String k : keys) {
         try {
           Optional<byte[]> data = fallbackAdapter.getChunk(k);
@@ -576,7 +791,7 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
           }
         } catch (IOException e) {
           // Continue with other chunks if one fails
-          LOGGER.debug("Failed to get chunk during bulk swap in: { }", k, e);
+          LOGGER.debug("Failed to get chunk during bulk swap in: {}", k, e);
         }
         // Data already added in try block above
       }
@@ -665,12 +880,12 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
 
   private native byte[] nativeSwapInChunk(long nativePointer, String key);
 
-  private native java.util.List<String> nativeGetSwapCandidates(long nativePointer, int limit);
+  private native List<String> nativeGetSwapCandidates(long nativePointer, int limit);
 
-  private native int nativeBulkSwapOut(long nativePointer, java.util.List<String> keys);
+  private native int nativeBulkSwapOut(long nativePointer, List<String> keys);
 
-  private native java.util.List<byte[]> nativeBulkSwapIn(
-      long nativePointer, java.util.List<String> keys);
+  private native List<byte[]> nativeBulkSwapIn(
+      long nativePointer, List<String> keys);
 
   @Override
   public String toString() {

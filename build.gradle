@@ -6,6 +6,7 @@ plugins {
     id 'net.neoforged.moddev' version '2.0.107'
     id 'idea'
     id 'jacoco'
+    id 'java'
     // Checkstyle and Spotless removed per request
 }
 

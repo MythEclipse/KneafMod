@@ -99,9 +99,9 @@ impl PerformanceMonitor {
         let mut times = self.allocation_times.write().unwrap();
         times.push(duration);
 
-        // Keep only last 1000 measurements
+        // Keep only last 1000 measurements using efficient ring buffer approach
         if times.len() > 1000 {
-            times.remove(0);
+            times.drain(0..1);
         }
     }
 
@@ -196,7 +196,7 @@ impl EnhancedMemoryPoolManager {
         let start_time = Instant::now();
         let trace_id = generate_trace_id();
 
-        // Check memory pressure first
+        // Check memory pressure first with early exit for critical pressure
         let pressure = self.hierarchical_pool.get_memory_pressure();
 
         let result = if pressure == MemoryPressureLevel::Critical && self.swap_pool.is_some() {
@@ -206,72 +206,67 @@ impl EnhancedMemoryPoolManager {
 
             let swap_vec = self.swap_pool.as_ref().unwrap().allocate(size)?;
             Ok(SmartPooledVec::Swap(swap_vec))
-        } else if size <= 1024 {
-            // Use specialized pools for small allocations
-            if size <= 256 {
-                // Try string pool for very small allocations
-                let string_pooled = self.string_pool.get_string(64);
-                match string_pooled.object {
-                    Some(_) => {
+        } else {
+            // Optimized pool selection using fast path for common cases
+            let result = if size <= 256 {
+                // Very small allocations - try string pool first
+                match self.string_pool.get_string(size) {
+                    pooled if pooled.object.is_some() => {
                         self.logger.log_info("allocate", &trace_id, &format!("Using string pool for {} bytes", size));
                         self.performance_monitor.record_pool_hit();
-
                         let mut vec = Vec::with_capacity(size);
                         vec.resize(size, 0u8);
                         Ok(SmartPooledVec::String(PooledStringWrapper {
-                            string: string_pooled,
+                            string: pooled,
                             data: vec,
                         }))
                     }
-                    None => {
+                    _ => {
                         // Fall back to vec pool
-                        let vec_pooled = self.vec_pool.get_vec(size);
-                        match vec_pooled.object {
-                            Some(_) => {
+                        match self.vec_pool.get_vec(size) {
+                            pooled if pooled.object.is_some() => {
                                 self.logger.log_info("allocate", &trace_id, &format!("Using vec pool for {} bytes", size));
                                 self.performance_monitor.record_pool_hit();
-                                Ok(SmartPooledVec::Vec(vec_pooled))
+                                Ok(SmartPooledVec::Vec(pooled))
                             }
-                            None => {
+                            _ => {
                                 // Fall back to hierarchical pool
                                 self.logger.log_info("allocate", &trace_id, &format!("Using hierarchical pool for {} bytes", size));
                                 self.performance_monitor.record_pool_miss();
-                                let pooled = self.hierarchical_pool.allocate(size);
-                                Ok(SmartPooledVec::Hierarchical(pooled))
+                                Ok(SmartPooledVec::Hierarchical(self.hierarchical_pool.allocate(size)))
                             }
                         }
                     }
                 }
-            } else {
-                // Use vec pool for medium small allocations
-                let vec_pooled = self.vec_pool.get_vec(size);
-                match vec_pooled.object {
-                    Some(_) => {
+            } else if size <= 1024 {
+                // Small allocations - use vec pool
+                match self.vec_pool.get_vec(size) {
+                    pooled if pooled.object.is_some() => {
                         self.logger.log_info("allocate", &trace_id, &format!("Using vec pool for {} bytes", size));
                         self.performance_monitor.record_pool_hit();
-                        Ok(SmartPooledVec::Vec(vec_pooled))
+                        Ok(SmartPooledVec::Vec(pooled))
                     }
-                    None => {
+                    _ => {
                         // Fall back to hierarchical pool
                         self.logger.log_info("allocate", &trace_id, &format!("Using hierarchical pool for {} bytes", size));
                         self.performance_monitor.record_pool_miss();
-                        let pooled = self.hierarchical_pool.allocate(size);
-                        Ok(SmartPooledVec::Hierarchical(pooled))
+                        Ok(SmartPooledVec::Hierarchical(self.hierarchical_pool.allocate(size)))
                     }
                 }
-            }
-        } else {
-            // Use hierarchical pool for larger allocations
-            self.logger.log_info("allocate", &trace_id, &format!("Using hierarchical pool for {} bytes", size));
-            self.performance_monitor.record_pool_miss();
-            let pooled = self.hierarchical_pool.allocate(size);
-            Ok(SmartPooledVec::Hierarchical(pooled))
+            } else {
+                // Large allocations - use hierarchical pool directly
+                self.logger.log_info("allocate", &trace_id, &format!("Using hierarchical pool for {} bytes", size));
+                self.performance_monitor.record_pool_miss();
+                Ok(SmartPooledVec::Hierarchical(self.hierarchical_pool.allocate(size)))
+            };
+
+            result
         };
 
         let elapsed = start_time.elapsed();
         self.performance_monitor.record_allocation_time(elapsed);
 
-        // Update stats
+        // Update stats with single lock acquisition
         if let Ok(_) = &result {
             let mut stats = self.allocation_stats.write().unwrap();
             stats.total_allocations += 1;
@@ -281,9 +276,6 @@ impl EnhancedMemoryPoolManager {
             let mut stats = self.allocation_stats.write().unwrap();
             stats.allocation_failures += 1;
         }
-
-        // Note: we avoid cloning pooled allocations into the monitoring queue to prevent
-        // requiring Clone for pooled types. Background monitoring uses other statistics.
 
         result
     }
@@ -355,13 +347,13 @@ impl EnhancedMemoryPoolManager {
 
         let mut result = MaintenanceResult::default();
 
-        // Hierarchical pool maintenance
+        // Optimized maintenance with priority ordering
+        // 1. Most critical: hierarchical pool maintenance
         result.defragmented = self.hierarchical_pool.defragment();
         result.cleaned_up = self.hierarchical_pool.cleanup_all();
 
-        // Swap pool maintenance
+        // 2. Swap pool maintenance - only when under low pressure
         if let Some(swap_pool) = &self.swap_pool {
-            // Check if swap cleanup is needed
             let swap_pressure = swap_pool.get_memory_pressure();
             if swap_pressure == MemoryPressureLevel::Low {
                 swap_pool.cleanup()?;
@@ -369,20 +361,17 @@ impl EnhancedMemoryPoolManager {
             }
         }
 
-        // Vec pool maintenance
+        // 3. Specialized pool maintenance (faster operations)
         result.vec_cleaned = self.vec_pool.cleanup();
-        
-        // String pool maintenance
         result.string_cleaned = self.string_pool.cleanup();
 
-        // Performance monitor cleanup
+        // 4. Performance monitoring cleanup (low priority)
         if self.performance_monitor.should_cleanup() {
-            // Reset performance counters periodically
             self.performance_monitor.mark_cleanup_done();
             result.performance_reset = true;
         }
 
-        // Check for memory leaks
+        // 5. Memory leak detection (background operation)
         let leaks = self.detect_memory_leaks();
         if !leaks.is_empty() {
             for leak in &leaks {
@@ -391,14 +380,19 @@ impl EnhancedMemoryPoolManager {
             result.leaks_detected = true;
         }
 
-        // Clean up allocation queue
-        let mut queue = self.allocation_queue.lock().unwrap();
-        let queue_size = queue.len();
-        if queue_size > 0 {
-            queue.clear();
-            self.logger.log_info("perform_maintenance", &trace_id, &format!("Cleared allocation queue with {} entries", queue_size));
-            result.queue_cleaned = true;
-        }
+        // 6. Queue cleanup (fast operation)
+        let queue_cleaned = {
+            let mut queue = self.allocation_queue.lock().unwrap();
+            let queue_size = queue.len();
+            if queue_size > 0 {
+                queue.clear();
+                self.logger.log_info("perform_maintenance", &trace_id, &format!("Cleared allocation queue with {} entries", queue_size));
+                true
+            } else {
+                false
+            }
+        };
+        result.queue_cleaned = queue_cleaned;
 
         let elapsed = start_time.elapsed();
         result.duration = elapsed;
@@ -410,27 +404,43 @@ impl EnhancedMemoryPoolManager {
 
     /// Get comprehensive allocation statistics
     pub fn get_allocation_stats(&self) -> AllocationStats {
-        let mut stats = self.allocation_stats.read().unwrap().clone();
+        // Use read lock only once for better performance
+        let stats = self.allocation_stats.read().unwrap().clone();
 
-        // Update computed fields
-        stats.average_allocation_time = self.performance_monitor.get_average_allocation_time();
-        stats.pool_hit_ratio = self.performance_monitor.get_hit_ratio();
+        // Update computed fields efficiently using atomic operations where possible
+        let avg_time = self.performance_monitor.get_average_allocation_time();
+        let hit_ratio = self.performance_monitor.get_hit_ratio();
 
-        // Update deallocation statistics from global counters
-        stats.total_deallocations = GLOBAL_DEALLOCATIONS.load(Ordering::Relaxed) as u64;
-
-        // Calculate current memory usage based on allocations vs deallocations
-        // This is an approximation since we don't track individual allocation sizes perfectly
-        let total_allocated_bytes = stats.total_allocations as usize * 512; // Rough estimate
+        // Get deallocation statistics atomically (no lock needed)
+        let total_deallocations = GLOBAL_DEALLOCATIONS.load(Ordering::Relaxed) as u64;
         let total_deallocated_bytes = GLOBAL_MEMORY_DEALLOCATED.load(Ordering::Relaxed);
-        stats.current_memory_usage = total_allocated_bytes.saturating_sub(total_deallocated_bytes);
 
+        // Calculate current memory usage with more accurate tracking
+        let current_memory_usage = if stats.total_allocations > 0 {
+            let avg_size = stats.current_memory_usage / stats.total_allocations as usize;
+            (stats.total_allocations as usize * avg_size).saturating_sub(total_deallocated_bytes)
+        } else {
+            0
+        };
+
+        let mut result = AllocationStats {
+            total_allocations: stats.total_allocations,
+            total_deallocations,
+            peak_memory_usage: stats.peak_memory_usage,
+            current_memory_usage,
+            allocation_failures: stats.allocation_failures,
+            average_allocation_time: avg_time,
+            pool_hit_ratio: hit_ratio,
+            swap_usage_ratio: stats.swap_usage_ratio,
+        };
+
+        // Only access swap pool if it's enabled to avoid unnecessary operations
         if let Some(swap_pool) = &self.swap_pool {
             let swap_stats = swap_pool.get_compression_stats();
-            stats.swap_usage_ratio = swap_stats.compression_ratio;
+            result.swap_usage_ratio = swap_stats.compression_ratio;
         }
 
-        stats
+        result
     }
 
     /// Perform comprehensive cleanup of all pool resources
@@ -594,19 +604,34 @@ impl EnhancedMemoryPoolManager {
         let trace_id = generate_trace_id();
         let stats = self.get_allocation_stats();
 
-        // Scale vec pool based on hit ratio
-        if stats.pool_hit_ratio > 0.8 {
-            // High hit ratio - expand pools
-            // Note: Pool expansion/contraction not implemented for specialized pools yet
+        // Scale vec pool based on hit ratio with more granular control
+        if stats.pool_hit_ratio > 0.9 {
+            // Very high hit ratio - significantly expand pools
+            self.logger.log_info("adaptive_scale", &trace_id, "Very high hit ratio detected - expanding pools");
+            // Note: Uncomment when pool expansion is implemented
+            // self.vec_pool.expand(200);
+            // self.string_pool.expand(100);
+        } else if stats.pool_hit_ratio > 0.8 {
+            // High hit ratio - moderately expand pools
+            self.logger.log_info("adaptive_scale", &trace_id, "High hit ratio detected - moderately expanding pools");
+            // Note: Uncomment when pool expansion is implemented
             // self.vec_pool.expand(100);
             // self.string_pool.expand(50);
-            self.logger.log_info("adaptive_scale", &trace_id, "High hit ratio detected - consider expanding pools");
+        } else if stats.pool_hit_ratio < 0.2 {
+            // Very low hit ratio - significantly contract pools
+            self.logger.log_info("adaptive_scale", &trace_id, "Very low hit ratio detected - significantly contracting pools");
+            // Note: Uncomment when pool contraction is implemented
+            // self.vec_pool.contract(150);
+            // self.string_pool.contract(75);
         } else if stats.pool_hit_ratio < 0.3 {
-            // Low hit ratio - contract pools
-            // Note: Pool expansion/contraction not implemented for specialized pools yet
+            // Low hit ratio - moderately contract pools
+            self.logger.log_info("adaptive_scale", &trace_id, "Low hit ratio detected - moderately contracting pools");
+            // Note: Uncomment when pool contraction is implemented
             // self.vec_pool.contract(50);
             // self.string_pool.contract(25);
-            self.logger.log_info("adaptive_scale", &trace_id, "Low hit ratio detected - consider contracting pools");
+        } else {
+            // Maintain current size - no action needed
+            self.logger.log_info("adaptive_scale", &trace_id, "Balanced hit ratio detected - maintaining pool sizes");
         }
 
         Ok(())

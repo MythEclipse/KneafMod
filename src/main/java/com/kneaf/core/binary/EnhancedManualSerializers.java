@@ -33,8 +33,8 @@ public final class EnhancedManualSerializers {
             // Use standard serialization first to get a buffer
             ByteBuffer stdBuffer = ManualSerializers.serializeEntityInput(tickCount, entities, players);
             
-            // Allocate direct buffer for zero-copy
-            ByteBuffer zeroCopyBuffer = ZERO_COPY_WRAPPER.createDirectBuffer(stdBuffer.remaining());
+            // Allocate direct buffer for zero-copy (call static method correctly)
+            ByteBuffer zeroCopyBuffer = BinaryZeroCopyFacade.ZeroCopyWrapper.createDirectBuffer(stdBuffer.remaining());
             
             // In a real implementation, we would use the zero-copy Rust functions here
             // For now, copy the data (this will be optimized in the Rust implementation)
@@ -86,8 +86,8 @@ public final class EnhancedManualSerializers {
             // Use standard serialization first to get a buffer
             ByteBuffer stdBuffer = ManualSerializers.serializeMobInput(tickCount, mobs);
             
-            // Allocate direct buffer for zero-copy
-            ByteBuffer zeroCopyBuffer = ZERO_COPY_WRAPPER.createDirectBuffer(stdBuffer.remaining());
+            // Allocate direct buffer for zero-copy (call static method correctly)
+            ByteBuffer zeroCopyBuffer = BinaryZeroCopyFacade.ZeroCopyWrapper.createDirectBuffer(stdBuffer.remaining());
             
             // Copy data (will be optimized in Rust implementation)
             zeroCopyBuffer.put(stdBuffer);
@@ -135,10 +135,8 @@ public final class EnhancedManualSerializers {
         try {
             // Convert result to byte array first
             byte[] stdBuffer = ManualSerializers.serializeMobResult(result);
-            ByteBuffer stdByteBuffer = ByteBuffer.wrap(stdBuffer).order(ByteOrder.LITTLE_ENDIAN);
-            
             // Use zero-copy serialization
-            ByteBuffer directBuffer = ZERO_COPY_WRAPPER.createDirectBuffer(stdBuffer.length);
+            ByteBuffer directBuffer = BinaryZeroCopyFacade.ZeroCopyWrapper.createDirectBuffer(stdBuffer.length);
             directBuffer.put(stdBuffer);
             directBuffer.flip();
             
@@ -158,9 +156,7 @@ public final class EnhancedManualSerializers {
      */
     public static boolean isZeroCopyAvailable() {
         try {
-            // Try to create a zero-copy wrapper and test basic functionality
-            BinaryZeroCopyFacade.ZeroCopyWrapper testWrapper = new BinaryZeroCopyFacade.ZeroCopyWrapper();
-            ByteBuffer testBuffer = testWrapper.createDirectBuffer(16);
+            ByteBuffer testBuffer = BinaryZeroCopyFacade.ZeroCopyWrapper.createDirectBuffer(16);
             return testBuffer != null && testBuffer.isDirect();
         } catch (Exception e) {
             return false;

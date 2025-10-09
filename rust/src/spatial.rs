@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::RwLock;
+use std::thread;
 use std::time::Duration;
 // Use parking_lot mutexes for better locking API (try_lock_for) and performance
 use parking_lot::{Mutex, MutexGuard};
@@ -23,6 +25,7 @@ pub mod lock_order {
     pub static CACHE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
     pub static MEMORY_POOL_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
     pub static DASHMAP_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    pub static SPATIAL_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 }
 
 // Architecture-specific prefetch helpers used in SIMD-optimized paths
@@ -992,7 +995,7 @@ impl<T: Clone + PartialEq + Send + Sync> Clone for QuadTree<T> {
     fn clone(&self) -> Self {
         Self {
             bounds: self.bounds.clone(),
-            entities: Arc::clone(&self.entities),
+            entities: self.entities.clone(),
             children: self.children.clone(),
             lock: Mutex::new(()),
             max_entities: self.max_entities,
@@ -1269,8 +1272,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> Clone for Spatia
 impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition<T> {
     // Use lock striping for better concurrency (32 stripes)
     const LOCK_STRIPES: usize = 32;
-    pub(super) node_locks: Arc<Vec<RwLock<()>>>,
-    
+
     fn get_lock_stripe(&self, pos: &[f64; 3]) -> usize {
         // Use position-based hashing for consistent lock distribution
         let hash = ((pos[0].to_bits() ^ pos[1].to_bits() ^ pos[2].to_bits()) as usize) % Self::LOCK_STRIPES;
@@ -1280,14 +1282,12 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
         Self {
             quadtree: QuadTree::new(world_bounds, max_entities, max_depth),
             entity_positions: DashMap::new(),
-            node_locks: Arc::new(vec![RwLock::new(()); Self::LOCK_STRIPES]),
         }
     }
 
     pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) -> Result<(), String> {
         // Use consistent lock ordering: per-node lock first, then dashmap lock
         let stripe = self.get_lock_stripe(&pos);
-        let _node_guard = self.node_locks[stripe].read();
         let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
             
         // Use memory pool for position storage to reduce allocations
@@ -1304,7 +1304,6 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
     pub fn query_nearby(&self, center: [f64; 3], radius: f64) -> Result<Vec<(T, [f64; 3])>, String> {
         // Use consistent lock ordering: per-node lock first, then dashmap lock
         let stripe = self.get_lock_stripe(&center);
-        let _node_guard = self.node_locks[stripe].read();
         let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
             
         let query_bounds = Aabb::new(
@@ -1316,7 +1315,6 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
 
     pub fn rebuild(&mut self) -> Result<(), String> {
         // Use consistent lock ordering: all node locks first, then dashmap lock
-        let _all_locks = self.node_locks.iter().map(|lock| lock.write()).collect::<Vec<_>>();
         let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
             
         let world_bounds = self.quadtree.bounds.clone();

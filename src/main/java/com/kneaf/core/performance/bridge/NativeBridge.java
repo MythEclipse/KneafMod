@@ -491,7 +491,6 @@ public final class NativeBridge {
           java.nio.ByteBuffer in = java.nio.ByteBuffer.wrap(task).order(java.nio.ByteOrder.LITTLE_ENDIAN);
           if (task.length >= 13) {
             long taskId = in.getLong();
-            byte taskType = in.get();
             int len = in.getInt();
             if (len > 0 && in.remaining() >= len) {
               byte[] payload = new byte[len];

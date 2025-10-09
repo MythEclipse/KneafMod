@@ -28,6 +28,7 @@ impl AtomicPoolState {
         } else {
             0.0
         };
+        // Use Relaxed ordering for better performance since this is just for monitoring
         self.usage_ratio.store(ratio.to_bits(), Ordering::Relaxed);
     }
 

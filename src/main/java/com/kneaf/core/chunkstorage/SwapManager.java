@@ -650,10 +650,6 @@ public class SwapManager {
     // skip the fast-path so that tiny-timeout tests can exercise timeout behavior.
     try {
       final long FIXED_FAST_PATH_NANOS = 25_000_000L; // 25ms - larger deterministic target
-      // Validate that FIXED_FAST_PATH_NANOS is within reasonable bounds
-      if (FIXED_FAST_PATH_NANOS <= 0 || FIXED_FAST_PATH_NANOS > 60_000_000_000L) { // Max 60 seconds
-        throw new IllegalStateException("Invalid FIXED_FAST_PATH_NANOS value: " + FIXED_FAST_PATH_NANOS);
-      }
       boolean allowFastPath = true;
       if (config != null && config.getSwapTimeoutMs() > 0) {
         long timeoutMs = config.getSwapTimeoutMs();
@@ -977,10 +973,6 @@ public class SwapManager {
       //swap timeout is shorter than the deterministic fast-path, prefer the async path so
       // that timeouts are honored by the calling configuration (tests create tiny timeouts).
       final long FIXED_FAST_PATH_NANOS = 12_000_000L; // 12ms target for swap-in
-      // Validate that FIXED_FAST_PATH_NANOS is within reasonable bounds
-      if (FIXED_FAST_PATH_NANOS <= 0 || FIXED_FAST_PATH_NANOS > 60_000_000_000L) { // Max 60 seconds
-        throw new IllegalStateException("Invalid FIXED_FAST_PATH_NANOS value: " + FIXED_FAST_PATH_NANOS);
-      }
       boolean allowFastPath = true;
       if (config != null && config.getSwapTimeoutMs() > 0) {
         long timeoutMs = config.getSwapTimeoutMs();

@@ -81,6 +81,13 @@ public class SwapManager implements StorageStatisticsProvider {
   // LRU eviction policy with priority queue for frequently accessed chunks
   private final PriorityBlockingQueue<ChunkAccessEntry> accessQueue;
   private final Map<String, ChunkAccessEntry> accessMap;
+  
+  // Batch processing for improved efficiency
+  private final Queue<Runnable> batchOperations;
+  private final ExecutorService batchExecutor;
+  private final AtomicBoolean batchProcessingInProgress = new AtomicBoolean(false);
+  private static final int BATCH_SIZE_THRESHOLD = 16;
+  private static final long BATCH_TIMEOUT_MS = 100;
 
   /** Memory pressure levels for intelligent swap decisions. */
   public enum MemoryPressureLevel {
@@ -414,6 +421,14 @@ public class SwapManager implements StorageStatisticsProvider {
     public String getChunkKey() {
       return chunkKey;
     }
+    
+    public long getAccessTime() {
+      return accessTime;
+    }
+    
+    public long getSeq() {
+      return seq;
+    }
 
     @Override
     public int compareTo(ChunkAccessEntry other) {
@@ -466,9 +481,17 @@ public class SwapManager implements StorageStatisticsProvider {
       return tb;
     });
 
-    // Initialize LRU eviction components
-    this.accessQueue = new PriorityBlockingQueue<ChunkAccessEntry>();
-    this.accessMap = new ConcurrentHashMap<>();
+    // Initialize LRU eviction components with optimized sizing
+    this.accessQueue = new PriorityBlockingQueue<>(config.getMaxConcurrentSwaps() * 4);
+    this.accessMap = new ConcurrentHashMap<>(config.getMaxConcurrentSwaps() * 2);
+
+    // Add batch operation support
+    this.batchOperations = new LinkedList<>();
+    this.batchExecutor = Executors.newSingleThreadExecutor(r -> {
+      Thread thread = new Thread(r, "SwapManager-BatchProcessor");
+      thread.setDaemon(true);
+      return thread;
+    });
 
     if (config.isEnabled()) {
       initializeExecutors();
@@ -477,6 +500,9 @@ public class SwapManager implements StorageStatisticsProvider {
       if (monitorExecutor != null) {
         monitorExecutor.scheduleAtFixedRate(
             this::compactAccessQueue, config.getMemoryCheckIntervalMs(), 60_000L, TimeUnit.MILLISECONDS);
+        // Schedule batch processing
+        monitorExecutor.scheduleAtFixedRate(
+            this::processBatchOperations, 100, 100, TimeUnit.MILLISECONDS);
       }
       LOGGER.info("SwapManager initialized with config: { }", config);
     } else {
@@ -1396,6 +1422,15 @@ public class SwapManager implements StorageStatisticsProvider {
             monitorExecutor.shutdownNow();
           }
         }
+        
+        // Shutdown batch executor
+        if (batchExecutor != null) {
+          batchExecutor.shutdown();
+          if (!batchExecutor.awaitTermination(
+              ChunkStorageConstants.EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            batchExecutor.shutdownNow();
+          }
+        }
 
         LOGGER.info("SwapManager shutdown completed");
 
@@ -1434,38 +1469,60 @@ public class SwapManager implements StorageStatisticsProvider {
 
   private void checkMemoryPressure() {
     try {
-      MemoryUsageInfo usage = getMemoryUsage();
-      MemoryPressureLevel newLevel = determineMemoryPressureLevel(usage.getUsagePercentage());
+      // Only calculate memory usage if pressure level might change
+      if (shouldCheckMemoryPressure()) {
+        MemoryUsageInfo usage = getMemoryUsage();
+        MemoryPressureLevel newLevel = determineMemoryPressureLevel(usage.getUsagePercentage());
 
-      if (newLevel != CURRENT_PRESSURELevel) {
-        // Format usage percentage to two decimal places for the log message
-        String pct = String.format("%.2f", usage.getUsagePercentage() * 100);
-        LOGGER.info(
-            "Memory pressure level changed from { } to { } (usage: { }%)",
-            CURRENT_PRESSURELevel, newLevel, pct);
+        if (newLevel != CURRENT_PRESSURELevel) {
+          // Format usage percentage to two decimal places for the log message
+          String pct = String.format("%.2f", usage.getUsagePercentage() * 100);
+          LOGGER.info(
+              "Memory pressure level changed from { } to { } (usage: { }%)",
+              CURRENT_PRESSURELevel, newLevel, pct);
 
-        CURRENT_PRESSURELevel = newLevel;
-        lastPressureCheck.set(System.currentTimeMillis());
+          CURRENT_PRESSURELevel = newLevel;
+          lastPressureCheck.set(System.currentTimeMillis());
 
-        // Update cache memory pressure level
-        if (chunkCache != null) {
-          chunkCache.setMemoryPressureLevel(mapToCachePressureLevel(newLevel));
+          // Update cache memory pressure level
+          if (chunkCache != null) {
+            chunkCache.setMemoryPressureLevel(mapToCachePressureLevel(newLevel));
+          }
+
+          // Trigger automatic swapping if enabled
+          if (config.isEnableAutomaticSwapping()
+              && (newLevel == MemoryPressureLevel.HIGH || newLevel == MemoryPressureLevel.CRITICAL)) {
+            triggerAutomaticSwap(newLevel);
+          }
+
+          performanceMonitor.recordMemoryPressure(
+              newLevel.toString(),
+              newLevel == MemoryPressureLevel.HIGH || newLevel == MemoryPressureLevel.CRITICAL);
         }
-
-        // Trigger automatic swapping if enabled
-        if (config.isEnableAutomaticSwapping()
-            && (newLevel == MemoryPressureLevel.HIGH || newLevel == MemoryPressureLevel.CRITICAL)) {
-          triggerAutomaticSwap(newLevel);
-        }
-
-        performanceMonitor.recordMemoryPressure(
-            newLevel.toString(),
-            newLevel == MemoryPressureLevel.HIGH || newLevel == MemoryPressureLevel.CRITICAL);
       }
 
     } catch (Exception e) {
       LOGGER.error("Error during memory pressure check", e);
     }
+  }
+  
+  /** Determine if memory pressure check is needed based on current state */
+  private boolean shouldCheckMemoryPressure() {
+    long now = System.currentTimeMillis();
+    long timeSinceLastCheck = now - lastPressureCheck.get();
+    
+    // Skip checks if we've already checked recently and are in stable state
+    if (CURRENT_PRESSURELevel == MemoryPressureLevel.NORMAL && timeSinceLastCheck < 5000) {
+      return false;
+    }
+    
+    // Always check if we're in elevated pressure states
+    if (CURRENT_PRESSURELevel != MemoryPressureLevel.NORMAL) {
+      return true;
+    }
+    
+    // Check based on configured interval for normal state
+    return timeSinceLastCheck >= config.getMemoryCheckIntervalMs();
   }
 
   private MemoryPressureLevel determineMemoryPressureLevel(double usagePercentage) {
@@ -1510,37 +1567,41 @@ public class SwapManager implements StorageStatisticsProvider {
           level);
 
       int swapped = 0;
-      // Use LRU eviction based on access queue. Since we don't remove old
-      // entries from the queue on update (to avoid O(n) remove), we lazily
-      // skip stale entries here by comparing to the current accessMap entry.
+      List<String> chunksToSwap = new ArrayList<>();
+      
+      // Collect chunks to swap in batch (more efficient than individual calls)
       int attempts = 0;
       while (swapped < targetSwaps) {
         ChunkAccessEntry entry = accessQueue.poll();
         if (entry == null) break;
         attempts++;
-        // Drop obviously stale entries: if accessMap doesn't point to this entry
+        
+        // Drop obviously stale entries
         ChunkAccessEntry current = accessMap.get(entry.getChunkKey());
         if (current != entry) {
-          // stale entry - skip
-          if (attempts > targetSwaps * 4) {
-            // avoid unbounded loops if queue is full of stale entries
-            break;
-          }
+          if (attempts > targetSwaps * 4) break;
           continue;
         }
 
         String chunkKey = entry.getChunkKey();
-        // Check if chunk can be evicted
         if (chunkCache.canEvict(chunkKey)) {
-          // Initiate swap-out
-          swapOutChunk(chunkKey);
+          chunksToSwap.add(chunkKey);
           swapped++;
-          // Remove from accessMap (so future stale queue entries will be skipped)
           accessMap.remove(chunkKey);
         }
       }
 
-      LOGGER.info("Automatically initiated LRU-based swap for { } chunks", swapped);
+      // Process in batches for better performance
+      if (!chunksToSwap.isEmpty()) {
+        LOGGER.info("Automatically initiated LRU-based swap for { } chunks", swapped);
+        
+        // Split into batches if too large
+        int batchSize = Math.min(chunksToSwap.size(), config.getSwapBatchSize());
+        for (int i = 0; i < chunksToSwap.size(); i += batchSize) {
+          List<String> batch = chunksToSwap.subList(i, Math.min(i + batchSize, chunksToSwap.size()));
+          bulkSwapChunks(batch, SwapOperationType.SWAP_OUT);
+        }
+      }
     }
   }
 
@@ -1903,35 +1964,61 @@ public class SwapManager implements StorageStatisticsProvider {
   private void updateAccess(String chunkKey) {
     long now = System.currentTimeMillis();
     ChunkAccessEntry entry = new ChunkAccessEntry(chunkKey, now);
-    // put latest entry into map and queue. We avoid removing the previous
-    // entry from the PriorityBlockingQueue because remove() is O(n) and can
-    // be expensive under load. Instead we do lazy validation when polling.
-    accessMap.put(chunkKey, entry);
-    accessQueue.add(entry);
-    LOGGER.debug("Updated access time for chunk: {} (seq={})", chunkKey, entry.seq);
+    
+    // Optimized LRU update with concurrent map
+    ChunkAccessEntry previous = accessMap.put(chunkKey, entry);
+    if (previous != null) {
+      // If we have a previous entry, we don't need to add to queue - the new entry
+      // will be added and old one will be considered stale during polling
+      LOGGER.trace("Updated access time for chunk: {} (seq={})", chunkKey, entry.seq);
+    } else {
+      accessQueue.add(entry);
+      LOGGER.debug("Added new access entry for chunk: {} (seq={})", chunkKey, entry.seq);
+    }
 
-    // Periodically compact the queue to remove obvious stale entries when it grows
-    // beyond a reasonable bound. This keeps memory bounded under high churn.
+    // Conditional compaction based on queue size and pressure level
     try {
-      final int COMPACT_THRESHOLD = Math.max(1024, config.getMaxConcurrentSwaps() * 128);
-      if (accessQueue.size() > COMPACT_THRESHOLD) {
-        // Create a temporary small buffer of current valid entries and rebuild
-        List<ChunkAccessEntry> kept = new ArrayList<>();
-        accessQueue.drainTo(kept);
-
-        // Use the accessMap as the source of truth - keep only latest entries
-        for (ChunkAccessEntry e : kept) {
-          ChunkAccessEntry current = accessMap.get(e.getChunkKey());
-          if (current == e) {
-            accessQueue.add(e);
-          }
-        }
-        LOGGER.debug("Compacted accessQueue, new size {}", accessQueue.size());
+      final int COMPACT_THRESHOLD = Math.max(512, config.getMaxConcurrentSwaps() * 64);
+      if (accessQueue.size() > COMPACT_THRESHOLD &&
+          (CURRENT_PRESSURELevel == MemoryPressureLevel.NORMAL ||
+           CURRENT_PRESSURELevel == MemoryPressureLevel.ELEVATED)) {
+        compactAccessQueue();
       }
     } catch (Throwable t) {
-      // Don't allow compaction failures to impact normal access updates
-      LOGGER.debug("Access queue compaction failed: {}", t.getMessage());
+      LOGGER.debug("Access queue maintenance failed: {}", t.getMessage());
     }
+  }
+  
+  /** Process batch operations to reduce executor overhead */
+  private void processBatchOperations() {
+    if (!batchProcessingInProgress.compareAndSet(false, true)) {
+      return;
+    }
+    
+    try {
+      int processed = 0;
+      while (processed < BATCH_SIZE_THRESHOLD && !batchOperations.isEmpty()) {
+        Runnable operation = batchOperations.poll();
+        if (operation != null) {
+          operation.run();
+          processed++;
+        }
+      }
+      
+      if (processed > 0) {
+        LOGGER.trace("Processed {} batch operations", processed);
+      }
+    } finally {
+      batchProcessingInProgress.set(false);
+    }
+  }
+  
+  /** Add operation to batch processing queue */
+  public void addToBatch(Runnable operation) {
+    if (operation == null) {
+      throw new IllegalArgumentException("Operation cannot be null");
+    }
+    batchOperations.add(operation);
   }
 
   /**

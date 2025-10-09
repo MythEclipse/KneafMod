@@ -586,6 +586,10 @@ public final class PerformanceConfig {
     }
   }
 
+  /**
+   * @return True if performance monitoring is enabled, false otherwise
+   * @implNote Thread-safe due to final field initialization
+   */
   public boolean isEnabled() {
     return enabled;
   }
@@ -626,8 +630,12 @@ public final class PerformanceConfig {
     return maxThreadpoolSize;
   }
 
+  /**
+   * @return Defensive copy of excluded entity types array
+   * @implNote Returns empty array instead of null for safer usage
+   */
   public String[] getExcludedEntityTypes() {
-    return excludedEntityTypes.clone();
+    return excludedEntityTypes != null ? excludedEntityTypes.clone() : new String[0];
   }
 
   public int getNetworkExecutorpoolSize() {
@@ -757,7 +765,15 @@ public boolean isCombineMultipleOperations() {
 
 
 
+  private static class ConfigHolder {
+    static final PerformanceConfig INSTANCE = loadConfig();
+  }
+  
   public static PerformanceConfig load() {
+    return ConfigHolder.INSTANCE;
+  }
+  
+  private static PerformanceConfig loadConfig() {
     Properties props = new Properties();
     Path path = Paths.get(DEFAULT_CONFIG_PATH);
     if (Files.exists(path)) {

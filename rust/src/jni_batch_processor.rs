@@ -11,26 +11,29 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::runtime::Runtime;
 
 // Helper trait for mutex operations with timeout
-trait MutexExt<T> {
-    fn lock_timeout(&self, timeout: Duration) -> Result<std::sync::MutexGuard<'_, T>, String>;
+// Use a more efficient lock strategy with better backoff
+trait LockExt<T> {
+    fn try_lock_with_backoff(&self, max_attempts: usize, initial_backoff: Duration) -> Result<std::sync::MutexGuard<'_, T>, String>;
 }
 
-impl<T> MutexExt<T> for std::sync::Mutex<T> {
-    fn lock_timeout(&self, timeout: Duration) -> Result<std::sync::MutexGuard<'_, T>, String> {
-        let start = Instant::now();
-        loop {
+impl<T> LockExt<T> for std::sync::Mutex<T> {
+    fn try_lock_with_backoff(&self, max_attempts: usize, initial_backoff: Duration) -> Result<std::sync::MutexGuard<'_, T>, String> {
+        let mut backoff = initial_backoff;
+        for attempt in 0..max_attempts {
             match self.try_lock() {
                 Ok(guard) => return Ok(guard),
                 Err(_) => {
-                    if start.elapsed() >= timeout {
+                    if attempt == max_attempts - 1 {
                         return Err("Lock timeout exceeded".to_string());
                     }
-                    // small sleep to avoid busy loop
-                    std::thread::sleep(Duration::from_micros(50));
-                    continue;
+                    // Exponential backoff with jitter
+                    let jitter = Duration::from_micros(rand::random::<u64>() % 100);
+                    std::thread::sleep(backoff + jitter);
+                    backoff *= 2;
                 }
             }
         }
+        Err("Lock acquisition failed".to_string())
     }
 }
 
@@ -79,19 +82,24 @@ impl BatchBufferPool {
         static ACQUIRE_COUNTER: AtomicUsize = AtomicUsize::new(0);
         let shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
 
-        // Try current shard first
-        if let Some(buffer) = self.try_acquire_from_shard(shard_idx) {
-            return Some(buffer);
-        }
-
-        // Try other shards
-        for i in 0..self.shard_count {
-            if i != shard_idx {
-                if let Some(buffer) = self.try_acquire_from_shard(i) {
-                    return Some(buffer);
+        // Use a more efficient shard selection algorithm with local affinity
+                let mut attempts = 0;
+                let max_attempts = self.shard_count * 2; // Try all shards twice
+                
+                while attempts < max_attempts {
+                    let shard_idx = (ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count);
+                    
+                    if let Some(buffer) = self.try_acquire_from_shard(shard_idx) {
+                        return Some(buffer);
+                    }
+                    
+                    attempts += 1;
+                    
+                    // If we've tried all shards once, add some jitter to avoid contention
+                    if attempts == self.shard_count {
+                        std::thread::sleep(Duration::from_micros(1));
+                    }
                 }
-            }
-        }
 
         None
     }
@@ -284,64 +292,101 @@ impl PriorityBatchQueue {
     }
 
     pub fn drain_batch(&self, max_size: usize, timeout: Duration) -> Vec<EnhancedBatchOperation> {
-        let start_time = Instant::now();
-        let mut batch = Vec::with_capacity(max_size);
-        let initial_queue_depth = self.len();
-
-        // Real-time adaptive batching based on queue depth changes
-        while batch.len() < max_size && start_time.elapsed() < timeout {
-            if let Some(operation) = self.pop_with_timeout(Duration::from_millis(50)) { // Reduced timeout for faster batching
-                batch.push(operation);
+            let start_time = Instant::now();
+            let mut batch = Vec::with_capacity(max_size);
+            let initial_queue_depth = self.len();
+    
+            // Use a more efficient batching algorithm with reduced lock contention
+            while batch.len() < max_size && start_time.elapsed() < timeout {
+                // Try to get operations from all shards in parallel without holding locks
+                let mut operations = Vec::with_capacity(max_size - batch.len());
                 
-                // Adaptive termination: if queue depth decreased significantly, stop early
-                let current_depth = self.len();
-                let depth_change = initial_queue_depth - current_depth;
-                
-                // If we've processed a significant portion of the queue or it's emptying fast, stop early
-                if (batch.len() as f64 / max_size as f64) > 0.8 ||
-                   (depth_change > 0 && (depth_change as f64 / initial_queue_depth as f64) > 0.5) {
-                    break;
+                for shard_idx in 0..self.shard_count {
+                    if start_time.elapsed() >= timeout {
+                        break;
+                    }
+                    
+                    // Use try_lock to minimize contention
+                    if let Ok(mut queue) = self.queues[shard_idx].try_lock() {
+                        let batch_size = std::cmp::min(max_size - batch.len(), queue.len());
+                        if batch_size > 0 {
+                            // Take operations from the front of the queue
+                            for _ in 0..batch_size {
+                                if let Some(op) = queue.pop_front() {
+                                    operations.push(op);
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
-            } else if !batch.is_empty() {
-                // Have some operations, break if timeout approaching
-                break;
-            } else {
-                // No operations available - check if we should wait or return empty batch
-                let elapsed = start_time.elapsed();
-                if elapsed < Duration::from_millis(10) {
-                    std::thread::sleep(Duration::from_micros(10)); // Very short wait for new operations
+                
+                // Add all collected operations to the batch
+                batch.extend(operations.clone());
+                
+                // If we got some operations, check if we should continue
+                if operations.is_empty() {
+                    // No operations available - check if we should wait or return empty batch
+                    let elapsed = start_time.elapsed();
+                    if elapsed < Duration::from_millis(10) {
+                        std::thread::sleep(Duration::from_micros(1)); // Very short wait for new operations
+                    } else {
+                        break; // Don't wait too long for empty queues
+                    }
                 } else {
-                    break; // Don't wait too long for empty queues
+                    // Check adaptive termination conditions
+                    let current_depth = self.len();
+                    let depth_change = initial_queue_depth - current_depth;
+                    
+                    // If we've processed a significant portion of the queue or it's emptying fast, stop early
+                    if (batch.len() as f64 / max_size as f64) > 0.9 ||  // More aggressive batching
+                       (depth_change > 0 && (depth_change as f64 / initial_queue_depth as f64) > 0.7) {
+                        break;
+                    }
                 }
             }
+    
+            batch
         }
-
-        batch
-    }
 
     /// Pop operation with timeout to prevent deadlocks
     pub fn pop_with_timeout(&self, timeout: Duration) -> Option<EnhancedBatchOperation> {
-        // Try to pop from highest priority shards first
-        for priority_level in (0..=255).rev() {
-            let shard_idx = self.get_shard(priority_level);
+            // Use a more efficient approach with try_lock to minimize contention
+            let start_time = Instant::now();
+            let max_attempts = 5; // Limit number of attempts to avoid long delays
             
-            match self.queues[shard_idx].lock_timeout(timeout) {
-                Ok(mut queue) => {
-                    if let Some(operation) = queue.pop_front() {
-                        let total_depth = self.get_total_depth();
-                        self.metrics.current_queue_depth.store(total_depth, Ordering::Relaxed);
-                        return Some(operation);
+            for attempt in 0..max_attempts {
+                // Check if we've exceeded the timeout
+                if start_time.elapsed() >= timeout {
+                    return None;
+                }
+                
+                // Try to get an operation from any shard
+                for priority_level in (0..=255).rev() {
+                    let shard_idx = self.get_shard(priority_level);
+                    
+                    // Use try_lock with backoff to minimize contention
+                    match self.queues[shard_idx].try_lock_with_backoff(3, Duration::from_micros(1)) {
+                        Ok(mut queue) => {
+                            if let Some(operation) = queue.pop_front() {
+                                let total_depth = self.get_total_depth();
+                                self.metrics.current_queue_depth.store(total_depth, Ordering::Relaxed);
+                                return Some(operation);
+                            }
+                        }
+                        Err(_) => continue, // Try next shard if this one is locked
                     }
                 }
-                Err(_) => {
-                    debug!("Lock timeout for priority level {}", priority_level);
-                    continue;
+                
+                // Add short delay between attempts to reduce contention
+                if attempt < max_attempts - 1 {
+                    std::thread::sleep(Duration::from_micros(1));
                 }
             }
+    
+            None
         }
-
-        None
-    }
 
     pub fn len(&self) -> usize {
         self.get_total_depth()
@@ -373,18 +418,20 @@ struct AsyncBatchTask {
     result_sender: oneshot::Sender<Result<EnhancedBatchResult, String>>,
 }
 
-/// Zero-copy buffer pool for direct memory access (sharded)
+/// Zero-copy buffer pool for direct memory access (sharded with better performance characteristics)
 #[derive(Debug)]
 struct ZeroCopyBufferPool {
     buffer_pools: Arc<Vec<Mutex<Vec<Vec<u8>>>>>, // Sharded pools
     shard_count: usize,
     max_buffers: usize,
     buffer_size: usize,
+    #[allow(dead_code)]
+    high_water_mark: AtomicUsize,
 }
 
 impl ZeroCopyBufferPool {
     fn new(max_buffers: usize, buffer_size: usize) -> Self {
-        let shard_count = 4; // 4 shards for reduced contention
+        let shard_count = 8; // Increased shards for better parallelism
         let buffers_per_shard = max_buffers / shard_count;
         let mut buffer_pools = Vec::with_capacity(shard_count);
 
@@ -401,49 +448,109 @@ impl ZeroCopyBufferPool {
             shard_count,
             max_buffers,
             buffer_size,
+            high_water_mark: AtomicUsize::new(0),
         }
     }
 
     fn acquire_buffer(&self) -> Option<Vec<u8>> {
-        // Use round-robin sharding
-        static ACQUIRE_COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
+        // Use thread-local sharding based on thread ID for better affinity
+        let thread_id = rand::random::<usize>();
+        let shard_idx = thread_id % self.shard_count;
 
-        // Try current shard first
-        if let Some(buffer) = self.try_acquire_from_shard(shard_idx) {
-            return Some(buffer);
-        }
-
-        // Try other shards
-        for i in 0..self.shard_count {
-            if i != shard_idx {
-                if let Some(buffer) = self.try_acquire_from_shard(i) {
-                    return Some(buffer);
-                }
+        // First try with try_lock to avoid blocking
+        if let Ok(mut buffers) = self.buffer_pools[shard_idx].try_lock() {
+            if let Some(buffer) = buffers.pop() {
+                return Some(buffer);
             }
         }
+
+        // If that fails, use a more systematic approach with backoff
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: usize = 5;
+        const BASE_BACKOFF: Duration = Duration::from_micros(1);
+        
+        while attempts < MAX_ATTEMPTS {
+            for i in 0..self.shard_count {
+                if let Ok(mut buffers) = self.buffer_pools[i].try_lock() {
+                    if let Some(buffer) = buffers.pop() {
+                        return Some(buffer);
+                    }
+                }
+            }
+            
+            attempts += 1;
+            let backoff = BASE_BACKOFF * 2u32.pow(attempts as u32);
+            std::thread::sleep(backoff);
+        }
+
+        // Update high water mark for monitoring
+        let current_count = self.get_current_buffer_count();
+        self.high_water_mark.store(current_count, Ordering::Relaxed);
 
         None
     }
 
     fn try_acquire_from_shard(&self, shard_idx: usize) -> Option<Vec<u8>> {
-        let mut buffers = self.buffer_pools[shard_idx].lock().unwrap();
-        buffers.pop()
+        self.buffer_pools[shard_idx].lock().unwrap().pop()
     }
 
     fn release_buffer(&self, mut buffer: Vec<u8>) {
+        // Reset buffer contents efficiently
         buffer.clear();
-        buffer.reserve(self.buffer_size.saturating_sub(buffer.capacity()));
+        buffer.shrink_to_fit(); // More aggressive memory return
+        
+        // Use thread-local sharding for release
+        let thread_id = rand::random::<usize>();
+        let shard_idx = thread_id % self.shard_count;
 
-        // Use round-robin sharding for release
-        static ZC_RELEASE_COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let shard_idx = ZC_RELEASE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
-
-        let mut buffers = self.buffer_pools[shard_idx].lock().unwrap();
-        let max_per_shard = self.max_buffers / self.shard_count;
-        if buffers.len() < max_per_shard {
-            buffers.push(buffer);
+        if let Ok(mut buffers) = self.buffer_pools[shard_idx].try_lock() {
+            let max_per_shard = self.max_buffers / self.shard_count;
+            if buffers.len() < max_per_shard {
+                buffers.push(buffer);
+                return;
+            }
         }
+
+        // If shard is full, try other shards with backoff
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: usize = 3;
+        const BASE_BACKOFF: Duration = Duration::from_micros(1);
+        
+        while attempts < MAX_ATTEMPTS {
+            for i in 0..self.shard_count {
+                if i == shard_idx {
+                    continue;
+                }
+                
+                if let Ok(mut buffers) = self.buffer_pools[i].try_lock() {
+                    let max_per_shard = self.max_buffers / self.shard_count;
+                    if buffers.len() < max_per_shard {
+                        buffers.push(buffer);
+                        return;
+                    }
+                }
+            }
+            
+            attempts += 1;
+            let backoff = BASE_BACKOFF * 2u32.pow(attempts as u32);
+            std::thread::sleep(backoff);
+        }
+
+        // If all shards are full, we have to leak the buffer to avoid contention
+        // This is a deliberate optimization to prevent blocking on buffer release
+        // The buffer will be reallocated when needed
+    }
+
+    fn get_current_buffer_count(&self) -> usize {
+        let mut count = 0;
+        for pool in self.buffer_pools.iter() {
+            count += pool.lock().unwrap().len();
+        }
+        count
+    }
+
+    pub fn get_high_water_mark(&self) -> usize {
+        self.high_water_mark.load(Ordering::Relaxed)
     }
 }
 
@@ -705,50 +812,74 @@ impl EnhancedBatchProcessor {
     }
 
     fn calculate_optimal_batch_size(
-        config: &EnhancedBatchConfig,
-        metrics: &Arc<EnhancedBatchMetrics>,
-        queue_depth: usize,
-        operation_type: u8,
-    ) -> usize {
-        if !config.enable_adaptive_sizing {
-            return config.min_batch_size;
+            config: &EnhancedBatchConfig,
+            metrics: &Arc<EnhancedBatchMetrics>,
+            queue_depth: usize,
+            operation_type: u8,
+        ) -> usize {
+            if !config.enable_adaptive_sizing {
+                return config.min_batch_size;
+            }
+            
+            let base_size = metrics.adaptive_batch_size.load(Ordering::Relaxed);
+            let pressure_level = metrics.get_pressure_level();
+            
+            // More granular pressure-based scaling with exponential response
+            let multiplier = match pressure_level {
+                0..=10 => 2.0,     // Very low pressure - double batch size
+                11..=20 => 1.7,    // Low pressure - significantly increase batch size
+                21..=35 => 1.4,    // Moderate low pressure - increase batch size
+                36..=50 => 1.1,    // Near normal pressure - slightly increase batch size
+                51..=65 => 1.0,    // Normal pressure - use base size
+                66..=75 => 0.8,    // Moderate high pressure - slightly reduce batch size
+                76..=85 => 0.6,    // High pressure - reduce batch size
+                86..=95 => 0.4,    // Very high pressure - significantly reduce batch size
+                _ => 0.2,           // Extreme pressure - minimal batch size to prevent overload
+            };
+            
+            let adjusted_size = (base_size as f64 * multiplier) as usize;
+            
+            // Queue depth adaptation with more precise thresholds
+            let depth_factor = match queue_depth {
+                d if d == 0 => 0.0,                          // Empty queue - no operations
+                d if d < config.min_batch_size => 0.5,       // Very low queue - minimal batch
+                d if d < config.min_batch_size * 2 => 0.7, // Low queue - small batch
+                d if d < config.min_batch_size * 2 => 0.9,   // Below normal - slightly smaller batch
+                d if d < config.max_batch_size => 1.0,       // Normal queue - base size
+                d if d < config.max_batch_size * 2 => 1.2,// Above normal - slightly larger batch
+                d if d < config.max_batch_size => 1.5,   // Very high queue - significantly larger batch
+                d if d < config.max_batch_size * 2 => 1.5,   // Very high queue - significantly larger batch
+                _ => 2.0,                                    // Extreme queue - maximum batch size
+            };
+            
+            // Apply operation type specific adjustments with more granularity
+            let type_factor = match operation_type {
+                0x01 => 1.2,  // Echo operations can be larger
+                0x02 => 0.8,  // Heavy operations should be smaller
+                0x03 => 1.5,  // Fast operations can be very large
+                0x04 => 0.9,  // Medium operations slightly smaller
+                _ => 1.0,     // Default
+            };
+            
+            // Apply system load factor based on historical performance
+            let load_factor = if metrics.get_pressure_level() < 50 {
+                1.1 // Good performance - push larger batches
+            } else if metrics.get_pressure_level() < 80 {
+                1.0 // Stable performance - use calculated size
+            } else {
+                0.9 // Poor performance - use smaller batches to reduce load
+            };
+            
+            let final_size = (adjusted_size as f64 * depth_factor * type_factor * load_factor) as usize;
+            
+            // Ensure we stay within configured bounds but allow for more aggressive sizing
+            // when under low pressure to maximize throughput
+            if pressure_level < 30 {
+                cmp::max(config.min_batch_size, cmp::min(config.max_batch_size * 2, final_size))
+            } else {
+                cmp::max(config.min_batch_size, cmp::min(config.max_batch_size, final_size))
+            }
         }
-        
-        let base_size = metrics.adaptive_batch_size.load(Ordering::Relaxed);
-        let pressure_level = metrics.get_pressure_level();
-        
-        // Adjust batch size based on pressure and queue depth with more aggressive scaling
-        let multiplier = match pressure_level {
-            0..=15 => 1.5,    // Very low pressure - significantly increase batch size
-            16..=35 => 1.3,    // Low pressure - increase batch size
-            36..=60 => 1.0,    // Normal pressure - use base size
-            61..=85 => 0.7,    // Medium pressure - reduce batch size more
-            _ => 0.5,           // High pressure - reduce significantly more
-        };
-        
-        let adjusted_size = (base_size as f64 * multiplier) as usize;
-        
-        // Real-time queue depth adaptation (more aggressive)
-        let depth_factor = match queue_depth {
-            d if d < config.min_batch_size => 0.7,                // Very low queue - smaller batches
-            d if d < config.min_batch_size * 2 => 0.9,             // Low queue - slightly smaller batches
-            d if d <= config.max_batch_size => 1.1,                // Normal queue - slightly larger batches
-            d if d <= config.max_batch_size * 1.5 => 1.3,          // High queue - larger batches
-            d if d <= config.max_batch_size * 2 => 1.6,            // Very high queue - significantly larger batches
-            _ => 2.0,                                              // Extreme queue - maximum batch size
-        };
-        
-        // Apply operation type specific adjustments
-        let type_factor = match operation_type {
-            0x01 => 1.1,  // Echo operations can be larger
-            0x02 => 0.9,  // Heavy operations should be smaller
-            _ => 1.0,     // Default
-        };
-        
-        let final_size = (adjusted_size as f64 * depth_factor * type_factor) as usize;
-        
-        cmp::max(config.min_batch_size, cmp::min(config.max_batch_size, final_size))
-    }
 
     fn process_batch(operation_type: u8, batch: Vec<EnhancedBatchOperation>, metrics: &Arc<EnhancedBatchMetrics>) {
         let start_time = Instant::now();

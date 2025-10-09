@@ -1,6 +1,5 @@
 package com.kneaf.core.performance.monitoring;
    
-import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -271,6 +270,22 @@ public class PerformanceManager {
     int itemsProcessed = 0;
     int executorQueueSize = 0;
 
+    /** Reset all profiling fields to zero for reuse */
+    void reset() {
+      entityCollectionTime = 0;
+      itemConsolidationTime = 0;
+      optimizationProcessingTime = 0;
+      optimizationApplicationTime = 0;
+      spatialGridTime = 0;
+      spatialLockWaitTime = 0;
+      allocationTime = 0;
+      lockContentionTime = 0;
+      TOTAL_TICK_TIME = 0;
+      entitiesProcessed = 0;
+      itemsProcessed = 0;
+      executorQueueSize = 0;
+    }
+
     String toJson() {
       return String.format(
           "{\"entityCollectionMs\":%.2f,\"itemConsolidationMs\":%.2f,\"optimizationProcessingMs\":%.2f,\"optimizationApplicationMs\":%.2f,\"spatialGridMs\":%.2f,\"totalTickMs\":%.2f,\"entitiesProcessed\":%d,\"itemsProcessed\":%d,\"executorQueueSize\":%d}",
@@ -289,8 +304,12 @@ public class PerformanceManager {
     }
   }
 
-  private static final ThreadLocal<ProfileData> PROFILE_DATA =
-      ThreadLocal.withInitial(ProfileData::new);
+  private static final ThreadLocal<ProfileData> PROFILE_DATA = new ThreadLocal<ProfileData>() {
+    @Override
+    protected ProfileData initialValue() {
+      return new ProfileData();
+    }
+  };
 
   // Distance transition configuration
   private static final int DEFAULT_TRANSITION_TICKS = 20; // default smoothing window
@@ -398,22 +417,22 @@ public class PerformanceManager {
   }
 
 
-  // Timing utilities for nanosecond-resolution measurements
-  private static final ThreadLocal<Instant> TIMING_MARKER = ThreadLocal.withInitial(Instant::now);
+  // Timing utilities for nanosecond-resolution measurements (optimized with System.nanoTime())
+  private static final ThreadLocal<Long> TIMING_MARKER = ThreadLocal.withInitial(() -> System.nanoTime());
   
   /** Record timing for critical sections with nanosecond resolution */
   public static void startTiming() {
-    TIMING_MARKER.set(Instant.now());
+    TIMING_MARKER.set(System.nanoTime());
   }
   
   /** Get elapsed time since last startTiming() call in nanoseconds */
   public static long getElapsedNanos() {
-    return Instant.now().minusNanos(TIMING_MARKER.get().toEpochMilli() * 1_000_000).toEpochMilli() * 1_000_000;
+    return System.nanoTime() - TIMING_MARKER.get();
   }
   
   /** Reset timing marker */
   public static void resetTiming() {
-    TIMING_MARKER.set(Instant.now());
+    TIMING_MARKER.set(System.nanoTime());
   }
 
   private PerformanceManager() {}
@@ -421,26 +440,33 @@ public class PerformanceManager {
   // Runtime toggle (initialized from config)
   private static volatile boolean enabled = CONFIG.isEnabled();
   private static final Object lock = new Object();
-  private static AtomicLong jniCalls = new AtomicLong(0);
-  private static AtomicLong lockWaitTime = new AtomicLong(0);
-  private static AtomicLong memoryUsage = new AtomicLong(0);
   
-  // Modular components (singleton instances)
-  private static final ThreadPoolManager THREAD_POOL_MANAGER = new ThreadPoolManager();
-  private static final EntityProcessor ENTITY_PROCESSOR = new EntityProcessor();
+  // Modular components (lazy-loaded singletons for better startup performance)
+  private static class LazySingletonHolder {
+    static final ThreadPoolManager THREAD_POOL_MANAGER = new ThreadPoolManager();
+    static final EntityProcessor ENTITY_PROCESSOR = new EntityProcessor();
+  }
+  
+  private static ThreadPoolManager getThreadPoolManager() {
+    return LazySingletonHolder.THREAD_POOL_MANAGER;
+  }
+  
+  private static EntityProcessor getEntityProcessor() {
+    return LazySingletonHolder.ENTITY_PROCESSOR;
+  }
   // Delegate executor queue size check to ThreadPoolManager
   private static int getExecutorQueueSize() {
-    return THREAD_POOL_MANAGER.getExecutorQueueSize();
+    return getThreadPoolManager().getExecutorQueueSize();
   }
 
   // Delegate executor retrieval to ThreadPoolManager
   private static ThreadPoolExecutor getExecutor() {
-    return THREAD_POOL_MANAGER.getExecutor();
+    return getThreadPoolManager().getExecutor();
   }
 
   // Delegate shutdown to ThreadPoolManager
   public static void shutdown() {
-    THREAD_POOL_MANAGER.shutdown();
+    getThreadPoolManager().shutdown();
   }
 
   // Spatial grid for efficient player position queries per level
@@ -780,10 +806,12 @@ public static Map<String, Object> getCallGraphMetrics() {
   }
   
   public static void onServerTick(MinecraftServer server) {
+    if (!isEnabled()) return; // Early exit if disabled
+    
     beginMethod("onServerTick");
     startTiming();
     // Delegate to EntityProcessor for modular implementation
-    ENTITY_PROCESSOR.onServerTick(server);
+    getEntityProcessor().onServerTick(server);
     long entityProcessingNanos = getElapsedNanos();
     resetTiming();
     
@@ -798,6 +826,7 @@ public static Map<String, Object> getCallGraphMetrics() {
       if (PROFILING_ENABLED && (TICK_COUNTER % PROFILING_SAMPLE_RATE == 0)) {
         ProfileData profile = PROFILE_DATA.get();
         if (profile != null) {
+          profile.reset(); // Reset before use to avoid accumulation
           profile.entityCollectionTime = entityProcessingNanos;
           profile.spatialGridTime = statusLogNanos;
         }
@@ -821,6 +850,7 @@ public static Map<String, Object> getCallGraphMetrics() {
       if (PROFILING_ENABLED) {
         ProfileData profile = PROFILE_DATA.get();
         if (profile != null) {
+          profile.reset(); // Reset before use to avoid accumulation
           profile.TOTAL_TICK_TIME = entityProcessingNanos + summaryLogNanos + tpsUpdateNanos;
           profile.executorQueueSize = getExecutorQueueSize();
         }
@@ -831,6 +861,7 @@ public static Map<String, Object> getCallGraphMetrics() {
     if (PROFILING_ENABLED && (TICK_COUNTER % PROFILING_SAMPLE_RATE == 0)) {
       ProfileData profile = PROFILE_DATA.get();
       if (profile != null) {
+        profile.reset(); // Reset before use to avoid accumulation
         profile.TOTAL_TICK_TIME = entityProcessingNanos + tpsUpdateNanos;
         profile.executorQueueSize = getExecutorQueueSize();
       }
@@ -842,6 +873,7 @@ public static Map<String, Object> getCallGraphMetrics() {
   
   /** Log real-time status updates */
   private static void logRealTimeStatus() {
+    if (!isEnabled() || !CONFIG.isBroadcastToClient()) return; // Early exit for disabled or no broadcast
     try {
       double tps = getAverageTPS();
       long tickDurationMs = getLastTickDurationMs();
@@ -889,6 +921,7 @@ public static Map<String, Object> getCallGraphMetrics() {
   
   /** Log periodic performance summary */
   private static void logPerformanceSummary() {
+    if (!isEnabled() || !CONFIG.isBroadcastToClient()) return; // Early exit for disabled or no broadcast
     try {
       // Get performance metrics
       double tps = getAverageTPS();
@@ -906,8 +939,7 @@ public static Map<String, Object> getCallGraphMetrics() {
       boolean serverLagging = tickDurationMs > 50;
       String performanceStatus = serverLagging ? "DEGRADED" : "NORMAL";
       
-      // Enhanced performance metrics with lag information
-      String enhancedMetrics = String.format(
+      String.format(
           "Performance Metrics: {:.2f} TPS, {:.2f}ms latency, {} GC events, Status: {}",
           tps, tickDurationMs, gcEvents, performanceStatus);
       
@@ -926,7 +958,7 @@ public static Map<String, Object> getCallGraphMetrics() {
       ThreadPoolExecutor executor = getExecutor();
       int activeThreads = executor != null ? executor.getActiveCount() : 0;
       int queueSize = getExecutorQueueSize();
-      double utilization = THREAD_POOL_MANAGER.getExecutorUtilization();
+      double utilization = getThreadPoolManager().getExecutorUtilization();
       
       com.kneaf.core.performance.RustPerformance.logThreadPoolStatus(
           activeThreads, queueSize, utilization);
@@ -1058,7 +1090,7 @@ public static Map<String, Object> getCallGraphMetrics() {
       MinecraftServer server, EntityProcessor.EntityDataCollection data, boolean shouldProfile) {
     try {
       long processingStart = shouldProfile ? System.nanoTime() : 0;
-      EntityProcessor.OptimizationResults processorResults = ENTITY_PROCESSOR.processOptimizations(data);
+      EntityProcessor.OptimizationResults processorResults = getEntityProcessor().processOptimizations(data);
       
       // Convert to PerformanceManager results format for compatibility
       OptimizationResults results = adaptOptimizationResults(processorResults);
@@ -1071,7 +1103,7 @@ public static Map<String, Object> getCallGraphMetrics() {
       }
 
       long applicationStart = shouldProfile ? System.nanoTime() : 0;
-      ENTITY_PROCESSOR.applyOptimizations(server, processorResults);
+      getEntityProcessor().applyOptimizations(server, processorResults);
       if (shouldProfile) {
         ProfileData profile = PROFILE_DATA.get();
         if (profile != null) {
@@ -1083,7 +1115,7 @@ public static Map<String, Object> getCallGraphMetrics() {
         // Already using PerformanceManager results format in this method
         logOptimizations(server, results);
       }
-      ENTITY_PROCESSOR.removeItems(server, processorResults.itemResult());
+      getEntityProcessor().removeItems(server, processorResults.itemResult());
     } catch (Exception ex) {
       LOGGER.warn("Error processing optimizations synchronously", ex);
     }
@@ -1828,7 +1860,7 @@ public static Map<String, Object> getCallGraphMetrics() {
 
     // Log spatial grid statistics periodically for performance monitoring
     if (TICK_COUNTER % 1000 == 0) {
-      ENTITY_PROCESSOR.logSpatialGridStats(server);
+      getEntityProcessor().logSpatialGridStats(server);
     }
 
     // Compact metrics line periodically
