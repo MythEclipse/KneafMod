@@ -76,7 +76,11 @@ public class NetworkOptimizer {
 
   // Compression: use thread-local Deflater to be thread-safe
   private static final ThreadLocal<Deflater> DEFLATER_LOCAL =
-      ThreadLocal.withInitial(() -> new Deflater(Deflater.BEST_SPEED));
+      ThreadLocal.withInitial(() -> {
+        Deflater deflater = new Deflater(Deflater.BEST_SPEED);
+        deflater.setStrategy(Deflater.HUFFMAN_ONLY); // Optimized compression strategy
+        return deflater;
+      });
 
   private NetworkOptimizer() {}
 
@@ -169,52 +173,63 @@ public class NetworkOptimizer {
     }
     // Reset size counter conservatively (may be slightly lower if concurrent enqueues occur)
     PACKET_BATCH_SIZE.addAndGet(-batch.size());
-    // Process batch with rate limiting and compression
-    for (Packet<?> packet : batch) {
-      // Estimate size without heavy toString(); try packet's serialized size if available, else
-      // fallback to class name length
-      int estSize = 0;
-      try {
-        // If packet has a method to estimate size, use reflection in a safe way; otherwise estimate
-        // by class name
-        java.lang.reflect.Method m = packet.getClass().getMethod("getPacketSize");
-        Object res = m.invoke(packet);
-        if (res instanceof Integer integer) estSize = integer;
-      } catch (Exception ex) {
-        estSize = packet.getClass().getSimpleName().length() * 10; // conservative estimate
-      }
-
-      // Apply compression if packet appears large (adaptive threshold)
-      int compressionThreshold =
-          com.kneaf.core.performance.core.PerformanceConstants
-              .getAdaptivePacketCompressionThreshold(tps);
-      if (estSize > compressionThreshold) {
-        byte[] raw = packet.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] compressed = compressPacketData(raw);
-        LOGGER.debug(
-            "Compressed packet { } est { } -> { } bytes",
-            packet.getClass().getSimpleName(),
-            raw.length,
-            compressed.length);
-      }
-
-      // Apply rate limiting using scheduled executor rather than blocking sleep
-      int rateLimitDelay = calculateRateLimitDelayByEstimate(packet, estSize);
-      if (rateLimitDelay > 0) {
-        getNetworkExecutor()
-            .schedule(
-                () ->
-                    LOGGER.debug(
-                        "Rate-limited packet send: { } delayed { }ms",
-                        packet.getClass().getSimpleName(),
-                        rateLimitDelay),
-                rateLimitDelay,
-                java.util.concurrent.TimeUnit.MILLISECONDS);
-      } else {
-        LOGGER.debug("Processed packet immediately: { }", packet.getClass().getSimpleName());
+    
+    // Process batch with rate limiting and compression - use parallel stream for large batches
+    if (batch.size() > 10) {
+      batch.parallelStream().forEach(packet -> processIndividualPacket(tps, packet));
+    } else {
+      for (Packet<?> packet : batch) {
+        processIndividualPacket(tps, packet);
       }
     }
+    
     LOGGER.debug("Processed batched packets: { }", batch.size());
+  }
+
+  /** Process individual packet with compression and rate limiting */
+  private static void processIndividualPacket(double tps, Packet<?> packet) {
+    // Estimate size without heavy toString(); try packet's serialized size if available, else
+    // fallback to class name length
+    int estSize = 0;
+    try {
+      // If packet has a method to estimate size, use reflection in a safe way; otherwise estimate
+      // by class name
+      java.lang.reflect.Method m = packet.getClass().getMethod("getPacketSize");
+      Object res = m.invoke(packet);
+      if (res instanceof Integer integer) estSize = integer;
+    } catch (Exception ex) {
+      estSize = packet.getClass().getSimpleName().length() * 10; // conservative estimate
+    }
+
+    // Apply compression if packet appears large (adaptive threshold)
+    int compressionThreshold =
+        com.kneaf.core.performance.core.PerformanceConstants
+            .getAdaptivePacketCompressionThreshold(tps);
+    if (estSize > compressionThreshold) {
+      byte[] raw = packet.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      byte[] compressed = compressPacketData(raw);
+      LOGGER.debug(
+          "Compressed packet { } est { } -> { } bytes",
+          packet.getClass().getSimpleName(),
+          raw.length,
+          compressed.length);
+    }
+
+    // Apply rate limiting using scheduled executor rather than blocking sleep
+    int rateLimitDelay = calculateRateLimitDelayByEstimate(packet, estSize);
+    if (rateLimitDelay > 0) {
+      getNetworkExecutor()
+          .schedule(
+              () ->
+                  LOGGER.debug(
+                      "Rate-limited packet send: { } delayed { }ms",
+                      packet.getClass().getSimpleName(),
+                      rateLimitDelay),
+              rateLimitDelay,
+              java.util.concurrent.TimeUnit.MILLISECONDS);
+    } else {
+      LOGGER.debug("Processed packet immediately: { }", packet.getClass().getSimpleName());
+    }
   }
 
   /** Calculates rate limit delay based on packet type and size. */
