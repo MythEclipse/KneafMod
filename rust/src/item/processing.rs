@@ -300,7 +300,7 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
                 if type_items.len() > 1 {
                     let mut total_count = 0u32;
                     let mut keep_id = None;
-                    
+
                     // Single pass: collect total count and identify items to remove
                     for item in &type_items {
                         total_count += item.count;
@@ -313,9 +313,30 @@ pub fn process_item_entities(input: ItemInput) -> ItemProcessResult {
                             keep_id = Some(item.id);
                         }
                     }
-                    
+
+                    // DEBUG: Log if total_count exceeds max item count
+                    const MAX_ITEM_COUNT: u32 = 64;
+                    if total_count > MAX_ITEM_COUNT {
+                        let log_msg = format!("[ITEM_MERGE_DEBUG] Type: {}, Items: {}, Total count: {} (exceeds max {})\n",
+                            _type, type_items.len(), total_count, MAX_ITEM_COUNT);
+                        if let Err(e) = LOG_SENDER.send(log_msg) {
+                            eprintln!("Failed to send merge debug log: {}", e);
+                        }
+                    }
+
                     if let Some(keep_id) = keep_id {
-                        local_item_updates.push(ItemUpdate { id: keep_id, new_count: total_count });
+                        const MAX_ITEM_COUNT: u32 = 64;
+                        let capped_count = total_count.min(MAX_ITEM_COUNT);
+                        local_item_updates.push(ItemUpdate { id: keep_id, new_count: capped_count });
+
+                        // Log if we had to cap the count
+                        if total_count > MAX_ITEM_COUNT {
+                            let log_msg = format!("[ITEM_MERGE_WARNING] Type: {}, Total count: {} capped to {}\n",
+                                _type, total_count, MAX_ITEM_COUNT);
+                            if let Err(e) = LOG_SENDER.send(log_msg) {
+                                eprintln!("Failed to send merge warning log: {}", e);
+                            }
+                        }
                     }
                 }
             }
