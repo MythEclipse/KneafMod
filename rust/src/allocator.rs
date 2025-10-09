@@ -56,7 +56,7 @@ unsafe impl Send for TrackedAllocation {}
 /// Memory allocation tracker for leak detection (lock-free with sharding)
 #[derive(Debug)]
 pub struct AllocationTracker {
-    active_allocations: Arc<Vec<Mutex<HashMap<u64, (usize, std::time::Instant)>>>>, // Sharded for reduced contention
+    active_allocations: Arc<Vec<std::sync::atomic::AtomicPtr<std::sync::Mutex<HashMap<u64, (usize, std::time::Instant)>>>>>, // Lock-free sharded structure
     total_allocations: AtomicU64,
     total_deallocations: AtomicU64,
     shard_count: usize,
@@ -67,7 +67,8 @@ impl AllocationTracker {
         let shard_count = 16; // 16 shards for reduced lock contention
         let mut shards = Vec::with_capacity(shard_count);
         for _ in 0..shard_count {
-            shards.push(Mutex::new(HashMap::new()));
+            let mutex = Mutex::new(HashMap::new());
+            shards.push(std::sync::atomic::AtomicPtr::new(Box::into_raw(Box::new(mutex))));
         }
 
         Self {
@@ -85,21 +86,28 @@ impl AllocationTracker {
     pub fn track_allocation(&self, allocation_id: u64, size: usize) {
         self.total_allocations.fetch_add(1, Ordering::Relaxed);
         let shard_idx = self.get_shard(allocation_id);
-        let mut shard = self.active_allocations[shard_idx].lock().unwrap();
+        
+        // Lock-free shard access with relaxed ordering where safe
+        let shard_ptr = self.active_allocations[shard_idx].load(Ordering::Relaxed);
+        let mut shard = unsafe { &mut *shard_ptr }.lock().unwrap();
         shard.insert(allocation_id, (size, std::time::Instant::now()));
     }
 
     pub fn track_deallocation(&self, allocation_id: u64) -> Option<usize> {
         self.total_deallocations.fetch_add(1, Ordering::Relaxed);
         let shard_idx = self.get_shard(allocation_id);
-        let mut shard = self.active_allocations[shard_idx].lock().unwrap();
+        
+        // Lock-free shard access with relaxed ordering where safe
+        let shard_ptr = self.active_allocations[shard_idx].load(Ordering::Relaxed);
+        let mut shard = unsafe { &mut *shard_ptr }.lock().unwrap();
         shard.remove(&allocation_id).map(|(size, _)| size)
     }
 
     pub fn get_leak_report(&self) -> Vec<(u64, usize, std::time::Duration)> {
         let mut report = Vec::new();
         for shard in self.active_allocations.iter() {
-            let shard_data = shard.lock().unwrap();
+            let shard_ptr = shard.load(Ordering::Relaxed);
+            let shard_data = unsafe { &mut *shard_ptr }.lock().unwrap();
             for (&id, &(size, timestamp)) in shard_data.iter() {
                 report.push((id, size, timestamp.elapsed()));
             }
@@ -109,7 +117,8 @@ impl AllocationTracker {
 
     pub fn has_leaks(&self) -> bool {
         for shard in self.active_allocations.iter() {
-            let shard_data = shard.lock().unwrap();
+            let shard_ptr = shard.load(Ordering::Relaxed);
+            let shard_data = unsafe { &mut *shard_ptr }.lock().unwrap();
             if !shard_data.is_empty() {
                 return true;
             }

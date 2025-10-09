@@ -255,8 +255,6 @@ impl PriorityBatchQueue {
     pub fn push(&self, operation: EnhancedBatchOperation) {
         let shard_idx = self.get_shard(operation.priority);
         
-        // Use consistent lock ordering: first acquire spatial lock, then queue lock
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
         let mut queue = self.queues[shard_idx].lock().unwrap();
 
         // Insert based on priority (higher priority first)
@@ -274,8 +272,6 @@ impl PriorityBatchQueue {
         for priority_level in (0..=255).rev() {
             let shard_idx = self.get_shard(priority_level);
             
-            // Use consistent lock ordering: first acquire spatial lock, then queue lock
-            let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
             let mut queue = self.queues[shard_idx].lock().unwrap();
             if let Some(operation) = queue.pop_front() {
                 let total_depth = self.get_total_depth();
@@ -290,16 +286,33 @@ impl PriorityBatchQueue {
     pub fn drain_batch(&self, max_size: usize, timeout: Duration) -> Vec<EnhancedBatchOperation> {
         let start_time = Instant::now();
         let mut batch = Vec::with_capacity(max_size);
+        let initial_queue_depth = self.len();
 
+        // Real-time adaptive batching based on queue depth changes
         while batch.len() < max_size && start_time.elapsed() < timeout {
-            if let Some(operation) = self.pop_with_timeout(Duration::from_millis(100)) {
+            if let Some(operation) = self.pop_with_timeout(Duration::from_millis(50)) { // Reduced timeout for faster batching
                 batch.push(operation);
+                
+                // Adaptive termination: if queue depth decreased significantly, stop early
+                let current_depth = self.len();
+                let depth_change = initial_queue_depth - current_depth;
+                
+                // If we've processed a significant portion of the queue or it's emptying fast, stop early
+                if (batch.len() as f64 / max_size as f64) > 0.8 ||
+                   (depth_change > 0 && (depth_change as f64 / initial_queue_depth as f64) > 0.5) {
+                    break;
+                }
             } else if !batch.is_empty() {
                 // Have some operations, break if timeout approaching
                 break;
             } else {
-                // No operations available, wait a bit
-                std::thread::sleep(Duration::from_micros(50)); // Reduced sleep for more aggressive batching
+                // No operations available - check if we should wait or return empty batch
+                let elapsed = start_time.elapsed();
+                if elapsed < Duration::from_millis(10) {
+                    std::thread::sleep(Duration::from_micros(10)); // Very short wait for new operations
+                } else {
+                    break; // Don't wait too long for empty queues
+                }
             }
         }
 
@@ -312,8 +325,6 @@ impl PriorityBatchQueue {
         for priority_level in (0..=255).rev() {
             let shard_idx = self.get_shard(priority_level);
             
-            // Use consistent lock ordering: first acquire spatial lock, then queue lock with timeout
-            let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
             match self.queues[shard_idx].lock_timeout(timeout) {
                 Ok(mut queue) => {
                     if let Some(operation) = queue.pop_front() {
@@ -697,7 +708,7 @@ impl EnhancedBatchProcessor {
         config: &EnhancedBatchConfig,
         metrics: &Arc<EnhancedBatchMetrics>,
         queue_depth: usize,
-        _operation_type: u8,
+        operation_type: u8,
     ) -> usize {
         if !config.enable_adaptive_sizing {
             return config.min_batch_size;
@@ -706,24 +717,35 @@ impl EnhancedBatchProcessor {
         let base_size = metrics.adaptive_batch_size.load(Ordering::Relaxed);
         let pressure_level = metrics.get_pressure_level();
         
-        // Adjust batch size based on pressure and queue depth
+        // Adjust batch size based on pressure and queue depth with more aggressive scaling
         let multiplier = match pressure_level {
-            0..=20 => 1.2,   // Low pressure, increase batch size
-            21..=50 => 1.0,  // Normal pressure, use base size
-            51..=80 => 0.8,  // Medium pressure, reduce batch size
-            _ => 0.6,        // High pressure, reduce significantly
+            0..=15 => 1.5,    // Very low pressure - significantly increase batch size
+            16..=35 => 1.3,    // Low pressure - increase batch size
+            36..=60 => 1.0,    // Normal pressure - use base size
+            61..=85 => 0.7,    // Medium pressure - reduce batch size more
+            _ => 0.5,           // High pressure - reduce significantly more
         };
         
         let adjusted_size = (base_size as f64 * multiplier) as usize;
         
-        // Further adjust based on queue depth
+        // Real-time queue depth adaptation (more aggressive)
         let depth_factor = match queue_depth {
-            d if d < config.min_batch_size => 0.8,
-            d if d > config.max_batch_size * 2 => 1.5,
-            _ => 1.0,
+            d if d < config.min_batch_size => 0.7,                // Very low queue - smaller batches
+            d if d < config.min_batch_size * 2 => 0.9,             // Low queue - slightly smaller batches
+            d if d <= config.max_batch_size => 1.1,                // Normal queue - slightly larger batches
+            d if d <= config.max_batch_size * 1.5 => 1.3,          // High queue - larger batches
+            d if d <= config.max_batch_size * 2 => 1.6,            // Very high queue - significantly larger batches
+            _ => 2.0,                                              // Extreme queue - maximum batch size
         };
         
-        let final_size = (adjusted_size as f64 * depth_factor) as usize;
+        // Apply operation type specific adjustments
+        let type_factor = match operation_type {
+            0x01 => 1.1,  // Echo operations can be larger
+            0x02 => 0.9,  // Heavy operations should be smaller
+            _ => 1.0,     // Default
+        };
+        
+        let final_size = (adjusted_size as f64 * depth_factor * type_factor) as usize;
         
         cmp::max(config.min_batch_size, cmp::min(config.max_batch_size, final_size))
     }

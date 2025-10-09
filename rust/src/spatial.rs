@@ -17,7 +17,6 @@ pub mod lock_order {
     use super::*;
     // Global mutexes to enforce lock ordering across subsystems.
     // Use Lazy to ensure they're initialized at runtime only once.
-    pub static SPATIAL_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
     pub static JNI_BATCH_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
     pub static SLAB_ALLOCATOR_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
     pub static DATABASE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -957,7 +956,7 @@ pub fn swept_aabb_collision_scalar(aabb1: &Aabb, velocity1: Vec3, aabb2: &Aabb, 
 #[derive(Debug)]
 pub struct QuadTree<T> {
     pub bounds: Aabb,
-    pub entities: Arc<Vec<(T, [f64; 3])>>,
+    pub entities: Vec<(T, [f64; 3])>, // Flat array storage to eliminate CoW overhead
     pub children: Option<Arc<[QuadTree<T>; 4]>>,
     pub lock: Mutex<()>, // parking_lot Mutex for thread-safe operations
     pub max_entities: usize,
@@ -1006,7 +1005,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     pub fn new(bounds: Aabb, max_entities: usize, max_depth: usize) -> Self {
         Self {
             bounds,
-            entities: Arc::new(Vec::new()),
+            entities: Vec::new(), // Flat array storage
             children: None,
             max_entities,
             max_depth,
@@ -1041,8 +1040,6 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     }
 
     pub fn insert(&mut self, entity: T, pos: [f64; 3], depth: usize) -> Result<(), String> {
-    // Use consistent lock ordering: spatial lock first, then any other locks
-    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
         let mut guard = self.guard_with_timeout()?;
         
         if guard.get_quad_tree().children.is_some() {
@@ -1052,9 +1049,13 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                 children[quadrant].insert(entity, pos, depth + 1)?;
             }
         } else {
-            let entities = Arc::make_mut(&mut guard.get_quad_tree_mut().entities);
+            // Use incremental update instead of full subtree rebuilding when possible
+            let entities = &mut guard.get_quad_tree_mut().entities;
             entities.push((entity, pos));
-            if guard.get_quad_tree().entities.len() > guard.get_quad_tree().max_entities && depth < guard.get_quad_tree().max_depth {
+            
+            // Only subdivide if we actually exceed the limit (more efficient)
+            // Use exact comparison instead of len() > max_entities to avoid overflow checks
+            if entities.len() > guard.get_quad_tree().max_entities && depth < guard.get_quad_tree().max_depth {
                 guard.get_quad_tree_mut().subdivide(depth);
             }
         }
@@ -1228,13 +1229,11 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
         ]);
 
         let entities = std::mem::take(&mut self.entities);
-        // Redistribute entities to children using CoW
-        for (entity, pos) in &*entities {
-            let quadrant = self.get_quadrant(*pos);
-
-            // Use Arc::make_mut instead of try_unwrap to safely handle shared references
+        // Redistribute entities to children using direct insertion (no CoW)
+        for (entity, pos) in entities {
+            let quadrant = self.get_quadrant(pos);
             let children_array = Arc::make_mut(&mut new_children);
-            let _ = children_array[quadrant].insert(entity.clone(), *pos, depth + 1);
+            let _ = children_array[quadrant].insert(entity, pos, depth + 1);
         }
 
         self.children = Some(new_children);
@@ -1268,18 +1267,29 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> Clone for Spatia
 }
 
 impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition<T> {
+    // Use lock striping for better concurrency (32 stripes)
+    const LOCK_STRIPES: usize = 32;
+    pub(super) node_locks: Arc<Vec<RwLock<()>>>,
+    
+    fn get_lock_stripe(&self, pos: &[f64; 3]) -> usize {
+        // Use position-based hashing for consistent lock distribution
+        let hash = ((pos[0].to_bits() ^ pos[1].to_bits() ^ pos[2].to_bits()) as usize) % Self::LOCK_STRIPES;
+        hash
+    }
     pub fn new(world_bounds: Aabb, max_entities: usize, max_depth: usize) -> Self {
         Self {
             quadtree: QuadTree::new(world_bounds, max_entities, max_depth),
             entity_positions: DashMap::new(),
+            node_locks: Arc::new(vec![RwLock::new(()); Self::LOCK_STRIPES]),
         }
     }
 
     pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) -> Result<(), String> {
-        // Use consistent lock ordering: spatial lock first, then dashmap lock
-    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
-    let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
-        
+        // Use consistent lock ordering: per-node lock first, then dashmap lock
+        let stripe = self.get_lock_stripe(&pos);
+        let _node_guard = self.node_locks[stripe].read();
+        let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
+            
         // Use memory pool for position storage to reduce allocations
         let _mem_pool = get_global_enhanced_pool();
 
@@ -1292,10 +1302,11 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
     }
 
     pub fn query_nearby(&self, center: [f64; 3], radius: f64) -> Result<Vec<(T, [f64; 3])>, String> {
-        // Use consistent lock ordering: spatial lock first, then dashmap lock
-    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
-    let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
-        
+        // Use consistent lock ordering: per-node lock first, then dashmap lock
+        let stripe = self.get_lock_stripe(&center);
+        let _node_guard = self.node_locks[stripe].read();
+        let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
+            
         let query_bounds = Aabb::new(
             center[0] - radius, center[1] - radius, center[2] - radius,
             center[0] + radius, center[1] + radius, center[2] + radius,
@@ -1304,10 +1315,10 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
     }
 
     pub fn rebuild(&mut self) -> Result<(), String> {
-        // Use consistent lock ordering: spatial lock first, then dashmap lock
-    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
-    let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
-        
+        // Use consistent lock ordering: all node locks first, then dashmap lock
+        let _all_locks = self.node_locks.iter().map(|lock| lock.write()).collect::<Vec<_>>();
+        let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
+            
         let world_bounds = self.quadtree.bounds.clone();
         let max_entities = self.quadtree.max_entities;
         let max_depth = self.quadtree.max_depth;

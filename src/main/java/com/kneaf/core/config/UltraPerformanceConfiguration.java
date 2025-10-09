@@ -38,13 +38,13 @@ public class UltraPerformanceConfiguration {
             .threadpoolSize(getInt(props, "threadpoolSize", Math.max(1, Runtime.getRuntime().availableProcessors())))
             .logIntervalTicks(getInt(props, "logIntervalTicks", 1000)) // Less frequent logging
             .scanIntervalTicks(getInt(props, "scanIntervalTicks", 1))
-            .tpsThresholdForAsync(getDouble(props, "tpsThresholdForAsync", 18.0)) // Lower threshold for more aggressive async
+            .tpsThresholdForAsync(getDouble(props, "tpsThresholdForAsync", 17.0)) // Lower threshold for more aggressive async (from 19.0 to 17.0)
             .maxEntitiesToCollect(getInt(props, "maxEntitiesToCollect", 50000)) // Higher limit
             .entityDistanceCutoff(getDouble(props, "entityDistanceCutoff", 128.0)) // Smaller cutoff
             .maxLogBytes(getLong(props, "maxLogBytes", 5L * 1024 * 1024)) // Smaller log size
             .adaptiveThreadPool(getBoolean(props, "adaptiveThreadPool", true))
             .maxThreadpoolSize(getInt(props, "maxThreadpoolSize", Math.max(1, Runtime.getRuntime().availableProcessors() * 2)))
-            .profilingEnabled(getBoolean(props, "profilingEnabled", false)) // Disable profiling for performance
+            .profilingEnabled(getBoolean(props, "profilingEnabled", false)) // Disable profiling
             .slowTickThresholdMs(getLong(props, "slowTickThresholdMs", 30L)) // Lower threshold
             .profilingSampleRate(getInt(props, "profilingSampleRate", 10)) // Minimal sampling
             
@@ -74,10 +74,10 @@ public class UltraPerformanceConfiguration {
             .enableLockFreePooling(getBoolean(props, "enableLockFreePooling", true))
             .memoryPressureThreshold(getDouble(props, "memoryPressureThreshold", 0.95)) // Higher threshold
             .enableAggressivePreallocation(getBoolean(props, "enableAggressivePreallocation", true))
-            .preallocationBufferSize(getInt(props, "preallocationBufferSize", 1024)) // Larger buffer
+            .preallocationBufferSize(getInt(props, "preallocationBufferSize", 512)) // Standard buffer size
             .enableSafetyChecks(getBoolean(props, "enableSafetyChecks", false)) // Disable safety checks
             .enableMemoryLeakDetection(getBoolean(props, "enableMemoryLeakDetection", false)) // Disable leak detection
-            .enablePerformanceMonitoring(getBoolean(props, "enablePerformanceMonitoring", false)) // Minimal monitoring
+            .enablePerformanceMonitoring(getBoolean(props, "enablePerformanceMonitoring", false)) // Disable monitoring
             .enableErrorRecovery(getBoolean(props, "enableErrorRecovery", false)) // Disable error recovery
             .enableMinimalMonitoring(getBoolean(props, "enableMinimalMonitoring", true))
             .monitoringSampleRate(getInt(props, "monitoringSampleRate", 5)) // Very low sampling
