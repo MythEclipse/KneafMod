@@ -85,17 +85,34 @@ public class KneafCore {
   
   private void initializeRustPerformanceSystem() {
     try {
-      // Initialize Rust performance system
-      com.kneaf.core.performance.RustPerformance.initialize();
+      // Check if ultra-performance configuration exists
+      boolean useUltraPerformance = java.nio.file.Files.exists(java.nio.file.Paths.get("config/kneaf-performance-ultra.properties"));
       
-      // Log startup information
-      String optimizationsActive = "Dynamic entity ticking, Item stack merging, Mob AI optimization, Chunk generation optimization";
-      String cpuInfo = "SIMD-optimized processing with AVX2/AVX-512 support";
-      String configApplied = "Performance optimizations enabled with safety checks";
-      
-      com.kneaf.core.performance.RustPerformance.logStartupInfo(optimizationsActive, cpuInfo, configApplied);
-      
-      LOGGER.info("Rust performance system initialized with enhanced logging");
+      if (useUltraPerformance) {
+        // Initialize Rust performance system with ultra-performance configuration
+        com.kneaf.core.performance.RustPerformance.initializeUltraPerformance();
+        
+        // Log startup information for ultra-performance
+        String optimizationsActive = "Ultra-performance mode: Dynamic entity ticking, Item stack merging, Mob AI optimization, Chunk generation optimization, Aggressive SIMD, Lock-free pooling";
+        String cpuInfo = "Ultra-performance: SIMD-optimized processing with AVX2/AVX-512 support, Aggressive inlining, Loop unrolling";
+        String configApplied = "Ultra-performance optimizations enabled with safety checks disabled for maximum speed";
+        
+        com.kneaf.core.performance.RustPerformance.logStartupInfo(optimizationsActive, cpuInfo, configApplied);
+        
+        LOGGER.info("Rust performance system initialized with ULTRA-PERFORMANCE configuration");
+      } else {
+        // Initialize Rust performance system with standard configuration
+        com.kneaf.core.performance.RustPerformance.initialize();
+        
+        // Log startup information
+        String optimizationsActive = "Dynamic entity ticking, Item stack merging, Mob AI optimization, Chunk generation optimization";
+        String cpuInfo = "SIMD-optimized processing with AVX2/AVX-512 support";
+        String configApplied = "Performance optimizations enabled with safety checks";
+        
+        com.kneaf.core.performance.RustPerformance.logStartupInfo(optimizationsActive, cpuInfo, configApplied);
+        
+        LOGGER.info("Rust performance system initialized with enhanced logging");
+      }
     } catch (Exception e) {
       LOGGER.error("Failed to initialize Rust performance system", e);
     }

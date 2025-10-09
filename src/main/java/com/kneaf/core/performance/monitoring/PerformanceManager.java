@@ -267,6 +267,10 @@ public class PerformanceManager {
 
   // Runtime toggle (initialized from config)
   private static volatile boolean enabled = CONFIG.isEnabled();
+  private static final Object lock = new Object();
+  private static AtomicLong jniCalls = new AtomicLong(0);
+  private static AtomicLong lockWaitTime = new AtomicLong(0);
+  private static AtomicLong memoryUsage = new AtomicLong(0);
   
   // Modular components (singleton instances)
   private static final ThreadPoolManager THREAD_POOL_MANAGER = new ThreadPoolManager();
@@ -550,10 +554,14 @@ public class PerformanceManager {
       // Get lock contention
       int lockContention = currentLockContention.get();
       
-      // Format status message
+      // Check if server is lagging significantly
+      boolean serverLagging = tickDurationMs > 50; // More than 50ms per tick indicates lag
+      String lagStatus = serverLagging ? "LAGGING" : "NORMAL";
+      
+      // Format status message with lag indication
       String systemStatus = String.format(
-          "TPS: %.2f, Tick: %dms, Memory: %.1f%%, GC: %d, Locks: %d",
-          tps, tickDurationMs, memoryUsagePct, gcEvents, lockContention);
+          "TPS: %.2f, Tick: %dms, Memory: %.1f%%, GC: %d, Locks: %d, Status: %s",
+          tps, tickDurationMs, memoryUsagePct, gcEvents, lockContention, lagStatus);
       
       // Check for important events
       String importantEvents = "";
@@ -565,6 +573,9 @@ public class PerformanceManager {
       }
       if (tps < 15.0) {
         importantEvents += "LOW_TPS ";
+      }
+      if (serverLagging) {
+        importantEvents += "SERVER_LAGGING ";
       }
       
       // Log to Rust performance system
@@ -584,14 +595,28 @@ public class PerformanceManager {
       long tickDurationMs = getLastTickDurationMs();
       long gcEvents = gcCount.get();
       
-      // Log to Rust performance system
+      // Get memory metrics
+      double memoryUsagePct = totalHeapBytes.get() > 0 ?
+          (usedHeapBytes.get() * 100.0 / totalHeapBytes.get()) : 0.0;
+      
+      // Get lock contention
+      int lockContention = currentLockContention.get();
+      
+      // Check if server is lagging
+      boolean serverLagging = tickDurationMs > 50;
+      String performanceStatus = serverLagging ? "DEGRADED" : "NORMAL";
+      
+      // Enhanced performance metrics with lag information
+      String enhancedMetrics = String.format(
+          "Performance Metrics: {:.2f} TPS, {:.2f}ms latency, {} GC events, Status: {}",
+          tps, tickDurationMs, gcEvents, performanceStatus);
+      
+      // Log enhanced metrics to Rust performance system
       com.kneaf.core.performance.RustPerformance.logPerformanceMetrics(
           tps, tickDurationMs, gcEvents);
       
       // Log memory pool status
-      double memoryUsagePct = totalHeapBytes.get() > 0 ?
-          (usedHeapBytes.get() * 100.0 / totalHeapBytes.get()) : 0.0;
-      double hitRate = 92.0; // Example hit rate - would need actual calculation
+      double hitRate = 92.0; // Default hit rate - would need actual calculation from memory pool
       int contention = currentLockContention.get();
       
       com.kneaf.core.performance.RustPerformance.logMemoryPoolStatus(
@@ -605,6 +630,12 @@ public class PerformanceManager {
       
       com.kneaf.core.performance.RustPerformance.logThreadPoolStatus(
           activeThreads, queueSize, utilization);
+      
+      // Log additional performance information if server is lagging
+      if (serverLagging) {
+        LOGGER.warn("[KneafMod] Server performance degraded: TPS={:.2f}, Tick={}ms, Memory={:.1f}%, Locks={}",
+                   tps, tickDurationMs, memoryUsagePct, lockContention);
+      }
       
     } catch (Exception e) {
       LOGGER.debug("Error logging performance summary", e);
@@ -776,11 +807,19 @@ public class PerformanceManager {
       long delta = currentTime - lastTickTime;
       // record last tick duration for external consumers (e.g. thread-scaling decisions)
       lastTickDurationNanos = delta;
+      
+      // Calculate actual TPS based on tick duration - don't cap at 20.0 to reflect real performance
       double tps = 1_000_000_000.0 / delta;
-      double capped = Math.min(tps, 20.0);
-      RustPerformance.setCurrentTPS(capped);
+      
+      // If server is lagging significantly (delta > 100ms), calculate TPS based on actual performance
+      if (delta > 100_000_000L) { // More than 100ms per tick indicates lag
+        // Calculate realistic TPS based on actual tick time
+        tps = Math.min(20.0, 1000.0 / (delta / 1_000_000.0)); // Convert to ms and calculate TPS
+      }
+      
+      RustPerformance.setCurrentTPS(tps);
       // update rolling window
-      TPS_WINDOW[tpsWindowIndex % TPS_WINDOW_SIZE] = capped;
+      TPS_WINDOW[tpsWindowIndex % TPS_WINDOW_SIZE] = tps;
       tpsWindowIndex = (tpsWindowIndex + 1) % TPS_WINDOW_SIZE;
     }
     // If this is the first tick, ensure lastTickDurationNanos is zeroed
@@ -810,7 +849,17 @@ public class PerformanceManager {
         count++;
       }
     }
-    return count == 0 ? 20.0 : sum / count;
+    
+    // If we have valid measurements, return actual average
+    if (count > 0) {
+      double avg = sum / count;
+      // If average is significantly below 20.0, it indicates real performance issues
+      // Don't artificially inflate the average - show the actual performance
+      return avg;
+    }
+    
+    // Default to 20.0 only if no measurements available
+    return 20.0;
   }
 
   private static EntityDataCollection collectEntityData(MinecraftServer server) {
@@ -1614,3 +1663,4 @@ public class PerformanceManager {
     }
   }
 }
+

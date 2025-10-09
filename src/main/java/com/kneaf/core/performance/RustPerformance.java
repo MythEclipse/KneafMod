@@ -12,6 +12,7 @@ import com.kneaf.core.performance.core.ItemProcessResult;
 import com.kneaf.core.performance.core.MobProcessResult;
 import com.kneaf.core.performance.core.RustPerformanceFacade;
 import com.kneaf.core.logging.RustLogger;
+import com.kneaf.core.config.UltraPerformanceConfiguration;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -40,6 +41,28 @@ public class RustPerformance {
       } catch (Exception e) {
         KneafCore.LOGGER.error("Failed to initialize RustPerformance", e);
         throw new RuntimeException("Failed to initialize performance system", e);
+      }
+    }
+  }
+
+  /** Initialize the performance system with ultra-performance configuration. */
+  public static void initializeUltraPerformance() {
+    if (!initialized) {
+      try {
+        // Load ultra-performance configuration
+        UltraPerformanceConfiguration.load();
+        FACADE.initialize();
+        initialized = true;
+        KneafCore.LOGGER.info("RustPerformance initialized with ultra-performance configuration");
+        
+        // Initialize Rust logging system
+        initNativeLogging();
+        
+        // Log ultra-performance activation
+        logConfigurationStatus(true, false, UltraPerformanceConfiguration.getConfig().getTpsThresholdForAsync());
+      } catch (Exception e) {
+        KneafCore.LOGGER.error("Failed to initialize RustPerformance with ultra-performance", e);
+        throw new RuntimeException("Failed to initialize ultra-performance system", e);
       }
     }
   }
