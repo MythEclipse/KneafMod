@@ -1,32 +1,34 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
+// Use parking_lot mutexes for better locking API (try_lock_for) and performance
+use parking_lot::{Mutex, MutexGuard};
+use once_cell::sync::Lazy;
 use glam::Vec3;
 use bevy_ecs::prelude::Entity;
 use rayon::prelude::*;
 use crate::simd::{vector_ops, entity_processing};
 use crate::memory_pool::get_global_enhanced_pool;
-use crate::arena::{get_global_arena_pool, ScopedArena, ArenaVec};
+use crate::arena::{get_global_arena_pool, ScopedArena};
 use dashmap::DashMap;
 
 // Lock ordering constants to prevent deadlocks
 pub mod lock_order {
-    /// Order for spatial quad tree locks
-    pub const SPATIAL_LOCK: usize = 0;
-    /// Order for JNI batch processor locks
-    pub const JNI_BATCH_LOCK: usize = 1;
-    /// Order for slab allocator locks
-    pub const SLAB_ALLOCATOR_LOCK: usize = 2;
-    /// Order for database locks
-    pub const DATABASE_LOCK: usize = 3;
-    /// Order for cache locks
-    pub const CACHE_LOCK: usize = 4;
-    /// Order for enhanced memory pool locks
-    pub const MEMORY_POOL_LOCK: usize = 5;
-    /// Order for DashMap locks
-    pub const DASHMAP_LOCK: usize = 6;
+    use super::*;
+    // Global mutexes to enforce lock ordering across subsystems.
+    // Use Lazy to ensure they're initialized at runtime only once.
+    pub static SPATIAL_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    pub static JNI_BATCH_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    pub static SLAB_ALLOCATOR_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    pub static DATABASE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    pub static CACHE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    pub static MEMORY_POOL_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    pub static DASHMAP_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 }
+
+// Architecture-specific prefetch helpers used in SIMD-optimized paths
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -52,7 +54,7 @@ impl Aabb {
     }
 
     pub fn from_center_size(center: Vec3, size: Vec3) -> Self {
-        let min = center - size / 2.0;
+        let min = center - size * 0.5;
         let max = center + size / 2.0;
         Self {
             min_x: min.x as f64,
@@ -452,7 +454,7 @@ impl Aabb {
 pub fn ray_aabb_intersect_simd(ray_origin: Vec3, ray_dir: Vec3, aabb: &Aabb) -> Option<f32> {
     #[cfg(target_feature = "avx512f")]
     {
-        use std::arch::x86_64::*;
+    use std::arch::x86_64::*;
 
         let origin = _mm512_set1_ps(ray_origin.x as f32);
         let dir = _mm512_set1_ps(ray_dir.x as f32);
@@ -726,8 +728,8 @@ pub fn batch_ray_aabb_intersect_simd<const BATCH_SIZE: usize>(rays: &[(Vec3, Vec
             // Prefetch next chunk data proactively
             if let Some(next_chunk) = chunk.get(AVX512_BATCH_SIZE..) {
                 unsafe {
-                    _mm_prefetch(&next_chunk[0].0.x as *const f32, _MM_HINT_T0);
-                    _mm_prefetch(&next_chunk[0].1.x as *const f32, _MM_HINT_T0);
+                    _mm_prefetch(&next_chunk[0].0.x as *const u8, _MM_HINT_T0);
+                    _mm_prefetch(&next_chunk[0].1.x as *const u8, _MM_HINT_T0);
                 }
             }
             
@@ -735,8 +737,8 @@ pub fn batch_ray_aabb_intersect_simd<const BATCH_SIZE: usize>(rays: &[(Vec3, Vec
             for i in 0..chunk_len {
                 let (origin, dir) = &chunk[i];
                 
-                // Use likely() for common case optimization
-                if likely(dir.x != 0.0 && dir.y != 0.0 && dir.z != 0.0) {
+                // Common case: all direction components non-zero
+                if dir.x != 0.0 && dir.y != 0.0 && dir.z != 0.0 {
             
                 let origin_x = _mm512_set1_ps(origin.x as f32);
                 let origin_y = _mm512_set1_ps(origin.y as f32);
@@ -773,10 +775,11 @@ pub fn batch_ray_aabb_intersect_simd<const BATCH_SIZE: usize>(rays: &[(Vec3, Vec
                 let t_min_val = _mm512_reduce_max_ps(t_min);
                 let t_max_val = _mm512_reduce_min_ps(t_max);
             
-                // Use likely hint for branch prediction
-                if likely(t_min_val <= t_max_val && t_max_val >= 0.0) {
+                // Branch: valid intersection
+                if t_min_val <= t_max_val && t_max_val >= 0.0 {
                     results[i] = Some(t_min_val.max(0.0));
                 }
+            }
             }
 
             // Extend results directly into accumulator to avoid intermediate Vec
@@ -864,34 +867,34 @@ pub fn swept_aabb_collision_simd(aabb1: &Aabb, velocity1: Vec3, aabb2: &Aabb, de
         use std::arch::x86_64::*;
 
         // Expand AABB2 by AABB1's size in the direction of movement - with branch prediction hints
-        let expanded_min_x = if likely(velocity1.x > 0.0) {
+    let expanded_min_x = if velocity1.x > 0.0 {
             aabb2.min_x - aabb1.half_size().x as f64 * delta_time as f64
         } else {
             aabb2.min_x
         };
-        let expanded_max_x = if likely(velocity1.x < 0.0) {
+    let expanded_max_x = if velocity1.x < 0.0 {
             aabb2.max_x + aabb1.half_size().x as f64 * delta_time as f64
         } else {
             aabb2.max_x
         };
         
-        let expanded_min_y = if likely(velocity1.y > 0.0) {
+    let expanded_min_y = if velocity1.y > 0.0 {
             aabb2.min_y - aabb1.half_size().y as f64 * delta_time as f64
         } else {
             aabb2.min_y
         };
-        let expanded_max_y = if likely(velocity1.y < 0.0) {
+    let expanded_max_y = if velocity1.y < 0.0 {
             aabb2.max_y + aabb1.half_size().y as f64 * delta_time as f64
         } else {
             aabb2.max_y
         };
         
-        let expanded_min_z = if likely(velocity1.z > 0.0) {
+    let expanded_min_z = if velocity1.z > 0.0 {
             aabb2.min_z - aabb1.half_size().z as f64 * delta_time as f64
         } else {
             aabb2.min_z
         };
-        let expanded_max_z = if likely(velocity1.z < 0.0) {
+    let expanded_max_z = if velocity1.z < 0.0 {
             aabb2.max_z + aabb1.half_size().z as f64 * delta_time as f64
         } else {
             aabb2.max_z
@@ -956,26 +959,27 @@ pub struct QuadTree<T> {
     pub bounds: Aabb,
     pub entities: Arc<Vec<(T, [f64; 3])>>,
     pub children: Option<Arc<[QuadTree<T>; 4]>>,
-    pub lock: Mutex<()>, // Add lock for thread-safe operations
+    pub lock: Mutex<()>, // parking_lot Mutex for thread-safe operations
     pub max_entities: usize,
     pub max_depth: usize,
 }
 
 /// RAII wrapper for thread-safe QuadTree operations
 pub struct QuadTreeGuard<'a, T> {
-    quad_tree: &'a mut QuadTree<T>,
+    quad_tree: *mut QuadTree<T>,
+    #[allow(dead_code)]
     lock_guard: MutexGuard<'a, ()>,
 }
 
 impl<'a, T> QuadTreeGuard<'a, T> {
     /// Get immutable reference to the underlying QuadTree
     pub fn get_quad_tree(&self) -> &QuadTree<T> {
-        self.quad_tree
+        unsafe { &*self.quad_tree }
     }
 
     /// Get mutable reference to the underlying QuadTree
     pub fn get_quad_tree_mut(&mut self) -> &mut QuadTree<T> {
-        self.quad_tree
+        unsafe { &mut *self.quad_tree }
     }
 }
 
@@ -991,6 +995,7 @@ impl<T: Clone + PartialEq + Send + Sync> Clone for QuadTree<T> {
             bounds: self.bounds.clone(),
             entities: Arc::clone(&self.entities),
             children: self.children.clone(),
+            lock: Mutex::new(()),
             max_entities: self.max_entities,
             max_depth: self.max_depth,
         }
@@ -1012,14 +1017,22 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     /// Get a RAII guard for thread-safe operations
     /// Get a RAII guard for thread-safe operations with timeout
     pub fn guard(&mut self, timeout: Option<Duration>) -> Result<QuadTreeGuard<'_, T>, String> {
-        let lock_guard = match timeout {
-            Some(duration) => self.lock.try_lock_for(duration).map_err(|_| "Lock timeout exceeded")?,
-            None => self.lock.lock().map_err(|e| format!("Lock error: {}", e))?,
+        // Create the pointer before locking to avoid borrow conflicts
+        let quad_tree_ptr = self as *mut _;
+        // parking_lot::Mutex::try_lock_for returns Option<MutexGuard>
+        let guard_opt = match timeout {
+            Some(duration) => self.lock.try_lock_for(duration),
+            None => Some(self.lock.lock()),
         };
-        Ok(QuadTreeGuard {
-            quad_tree: self,
-            lock_guard,
-        })
+
+        if let Some(lock_guard) = guard_opt {
+            Ok(QuadTreeGuard {
+                quad_tree: quad_tree_ptr,
+                lock_guard,
+            })
+        } else {
+            Err("Lock timeout exceeded".to_string())
+        }
     }
 
     /// Get a RAII guard for thread-safe operations with default timeout (1 second)
@@ -1028,8 +1041,8 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     }
 
     pub fn insert(&mut self, entity: T, pos: [f64; 3], depth: usize) -> Result<(), String> {
-        // Use consistent lock ordering: spatial lock first, then any other locks
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+    // Use consistent lock ordering: spatial lock first, then any other locks
+    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
         let mut guard = self.guard_with_timeout()?;
         
         if guard.get_quad_tree().children.is_some() {
@@ -1050,28 +1063,29 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     }
 
     #[inline(always)]
-    pub fn query(&self, query_bounds: &Aabb) -> Vec<&(T, [f64; 3])> {
+    pub fn query(&self, query_bounds: &Aabb) -> Vec<(T, [f64; 3])> {
         // Use consistent lock ordering: spatial lock first, then any other locks
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
         
         // Use scoped arena for temporary allocations to reduce memory pressure
-        let arena = ScopedArena::new(get_global_enhanced_pool());
+        let _arena = ScopedArena::new(get_global_arena_pool());
         let mut results = Vec::new();
-        let mut stack = Vec::new();
+        let mut stack: Vec<*const QuadTree<T>> = Vec::new();
 
         // Start with the root node
-        stack.push(self);
+        stack.push(self as *const _);
 
-        while let Some(current_node) = stack.pop() {
-            let guard = current_node.guard(); // Thread-safe querying
+        while let Some(current_node_ptr) = stack.pop() {
+                let current_node = unsafe { &mut *(current_node_ptr as *mut QuadTree<T>) };
+                let guard = current_node.guard(None).expect("Failed to acquire quadtree lock"); // Thread-safe querying
             
             // Skip if this node's bounds don't intersect with query bounds - with branch prediction
-            if likely(!guard.get_quad_tree().bounds.intersects(query_bounds)) {
+            if !guard.get_quad_tree().bounds.intersects(query_bounds) {
                 continue;
             }
 
             // SIMD-accelerated entity filtering for better performance
-            if likely(guard.get_quad_tree().entities.len() >= 8) {
+            if guard.get_quad_tree().entities.len() >= 8 {
                 // Use pre-allocated buffer for positions to avoid intermediate allocations
                 const POS_BUF_SIZE: usize = 128;
                 let mut pos_buffer = [(0.0f64, 0.0f64, 0.0f64); POS_BUF_SIZE];
@@ -1081,7 +1095,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                 unsafe {
                     if entity_count > 0 {
                         let first_entity = guard.get_quad_tree().entities.get_unchecked(0);
-                        _mm_prefetch(&first_entity.1[0] as *const f64, _MM_HINT_T0);
+                        _mm_prefetch((&first_entity.1[0] as *const f64) as *const i8, _MM_HINT_T0);
                     }
                 }
 
@@ -1092,7 +1106,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                     let take = std::cmp::min(remaining, POS_BUF_SIZE);
                     
                     for j in 0..take {
-                        let entity = guard.get_quad_tree().entities.get_unchecked(i + j);
+                        let entity = unsafe { guard.get_quad_tree().entities.get_unchecked(i + j) };
                         pos_buffer[j] = (entity.1[0], entity.1[1], entity.1[2]);
                     }
                     
@@ -1102,7 +1116,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                     // Store results with unrolled loop for better ILP
                     for j in 0..take {
                         if contained[j] {
-                            results.push(guard.get_quad_tree().entities.get_unchecked(i + j));
+                            results.push(unsafe { guard.get_quad_tree().entities.get_unchecked(i + j).clone() });
                         }
                     }
                     
@@ -1112,7 +1126,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                 // Fallback to scalar processing for small batches
                 for entity in &*guard.get_quad_tree().entities {
                     if query_bounds.contains(entity.1[0], entity.1[1], entity.1[2]) {
-                        results.push(entity);
+                        results.push(entity.clone());
                     }
                 }
             }
@@ -1129,9 +1143,9 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
     }
 
     /// SIMD-optimized query with vectorized bounds checking and entity filtering
-    pub fn query_simd(&self, query_bounds: &Aabb) -> Vec<&(T, [f64; 3])> {
+    pub fn query_simd(&self, query_bounds: &Aabb) -> Vec<(T, [f64; 3])> {
         // Use consistent lock ordering: spatial lock first, then any other locks
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
         
         #[cfg(target_feature = "avx2")]
         {
@@ -1156,7 +1170,7 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
                     let bump_arena = arena.get_inner_arena();
                     let mut positions = ArenaVec::with_capacity(bump_arena, positions_capacity);
 
-                    for entity in &current_node.entities {
+                    for entity in &*current_node.entities {
                         positions.push((entity.1[0], entity.1[1], entity.1[2]));
                     }
 
@@ -1164,14 +1178,14 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
 
                     for (i, is_contained) in contained.iter().enumerate() {
                         if *is_contained {
-                            results.push(&current_node.entities[i]);
+                            results.push(current_node.entities[i].clone());
                         }
                     }
                 } else {
                     // Scalar fallback for small batches
-                    for entity in &current_node.entities {
+                    for entity in &*current_node.entities {
                         if query_bounds.contains(entity.1[0], entity.1[1], entity.1[2]) {
-                            results.push(entity);
+                            results.push(entity.clone());
                         }
                     }
                 }
@@ -1217,10 +1231,10 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
         // Redistribute entities to children using CoW
         for (entity, pos) in &*entities {
             let quadrant = self.get_quadrant(*pos);
-            
+
             // Use Arc::make_mut instead of try_unwrap to safely handle shared references
             let children_array = Arc::make_mut(&mut new_children);
-            children_array[quadrant].insert(entity.clone(), *pos, depth + 1);
+            let _ = children_array[quadrant].insert(entity.clone(), *pos, depth + 1);
         }
 
         self.children = Some(new_children);
@@ -1263,8 +1277,8 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
 
     pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) -> Result<(), String> {
         // Use consistent lock ordering: spatial lock first, then dashmap lock
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
-        let _dashmap_guard = lock_order::DASHMAP_LOCK.lock().unwrap();
+    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
+    let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
         
         // Use memory pool for position storage to reduce allocations
         let _mem_pool = get_global_enhanced_pool();
@@ -1277,10 +1291,10 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
         Ok(())
     }
 
-    pub fn query_nearby(&self, center: [f64; 3], radius: f64) -> Result<Vec<&(T, [f64; 3])>, String> {
+    pub fn query_nearby(&self, center: [f64; 3], radius: f64) -> Result<Vec<(T, [f64; 3])>, String> {
         // Use consistent lock ordering: spatial lock first, then dashmap lock
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
-        let _dashmap_guard = lock_order::DASHMAP_LOCK.lock().unwrap();
+    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
+    let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
         
         let query_bounds = Aabb::new(
             center[0] - radius, center[1] - radius, center[2] - radius,
@@ -1291,8 +1305,8 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
 
     pub fn rebuild(&mut self) -> Result<(), String> {
         // Use consistent lock ordering: spatial lock first, then dashmap lock
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
-        let _dashmap_guard = lock_order::DASHMAP_LOCK.lock().unwrap();
+    let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
+    let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
         
         let world_bounds = self.quadtree.bounds.clone();
         let max_entities = self.quadtree.max_entities;
@@ -1556,7 +1570,7 @@ pub fn calculate_distances_simd_portable(positions: &[(f32, f32, f32)], center: 
     }
     #[cfg(not(any(target_feature = "avx512f", target_feature = "avx2")))]
     {
-        calculate_distances_simd(positions, center)
+        entity_processing::calculate_entity_distances(positions, center)
     }
 }
 
@@ -1587,7 +1601,7 @@ pub fn batch_aabb_intersections(aabbs: &[Aabb], queries: &[Aabb]) -> Vec<Vec<boo
 pub fn batch_quadtree_queries<'a, T: Clone + PartialEq + Send + Sync>(
     quadtree: &'a QuadTree<T>,
     query_bounds: &'a [Aabb],
-) -> Vec<Vec<&'a (T, [f64; 3])>> {
+) -> Vec<Vec<(T, [f64; 3])>> {
     // Use parallel processing for multiple queries to reduce latency
     query_bounds.par_iter().map(|bounds| {
         quadtree.query_simd(bounds)
@@ -1666,7 +1680,7 @@ mod tests {
         ];
         let center = (0.0, 0.0, 0.0);
 
-        let distances = calculate_distances_simd(&positions, center);
+        let distances = calculate_distances_simd::<16>(&positions, center);
 
         assert_eq!(distances.len(), 4);
         assert!((distances[0] - 0.0).abs() < 0.001); // Distance to self

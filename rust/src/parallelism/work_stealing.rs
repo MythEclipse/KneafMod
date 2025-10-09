@@ -9,31 +9,12 @@ static PARALLEL_TASK_STATS: AtomicUsize = AtomicUsize::new(0);
 #[derive(Debug)]
 pub struct WorkStealingScheduler<T> {
     tasks: Vec<T>,
-    task_type: TaskType,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TaskType {
-    CpuBound,
-    IoBound,
-    Mixed,
 }
 
 impl<T> WorkStealingScheduler<T> {
-    /// Create a new work stealing scheduler with automatic task type detection
+    /// Create a new work stealing scheduler
     pub fn new(tasks: Vec<T>) -> Self {
-        let task_type = if tasks.len() > 1000 {
-            TaskType::CpuBound // Assume CPU-bound for large task counts
-        } else {
-            TaskType::Mixed // Default to mixed for smaller task counts
-        };
-        
-        Self { tasks, task_type }
-    }
-
-    /// Create a new work stealing scheduler with explicit task type
-    pub fn new_with_type(tasks: Vec<T>, task_type: TaskType) -> Self {
-        Self { tasks, task_type }
+        Self { tasks }
     }
 
     /// Execute tasks with optimized work distribution and performance monitoring
@@ -50,7 +31,7 @@ impl<T> WorkStealingScheduler<T> {
             PARALLEL_TASK_STATS.fetch_add(1, Ordering::Relaxed);
             
             // Use branch prediction for common case optimization
-            if likely(task_count == 0) {
+            if task_count == 0 {
                 return Vec::new();
             }
 
@@ -82,41 +63,32 @@ impl<T> WorkStealingScheduler<T> {
         where
             F: Fn(T) -> R,
     {
-        let mut results = Vec::with_capacity(self.tasks.len());
-        let tasks = self.tasks;
-        
-        // Unroll loop for better instruction level parallelism
-        let len = tasks.len();
-        let mut i = 0;
-        
-        while i < len {
-            results.push(processor(tasks[i]));
-            i += 1;
-        }
-        
-        results
+        self.tasks.into_iter().map(processor).collect()
     }
 
     /// Parallel execution with Rayon work stealing
     fn execute_parallel<F, R>(self, processor: F) -> Vec<R>
         where
             F: Fn(T) -> R + Send + Sync + 'static,
+            T: Send + 'static,
             R: Send + 'static,
     {
         // For CPU-bound tasks, use Rayon's default (which is usually optimal)
         // For I/O-bound tasks, we might want different configuration, but Rayon handles this well
-        
+
+        let task_count = self.tasks.len();
+
         // Measure execution time for performance monitoring
         let start = Instant::now();
         let results = self.tasks.into_par_iter().map(processor).collect();
         let duration = start.elapsed();
-        
+
         // Log performance statistics (in a real system, this would go to a proper monitoring system)
         #[cfg(debug_assertions)]
         {
-            eprintln!("Parallel execution: {} tasks in {:?}", self.tasks.len(), duration);
+            eprintln!("Parallel execution: {} tasks in {:?}", task_count, duration);
         }
-        
+
         results
     }
 

@@ -11,15 +11,25 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::runtime::Runtime;
 
 // Helper trait for mutex operations with timeout
-trait MutexExt {
-    fn lock_timeout(&self, timeout: Duration) -> Result<std::sync::MutexGuard<'_, Self::Target>, String>;
+trait MutexExt<T> {
+    fn lock_timeout(&self, timeout: Duration) -> Result<std::sync::MutexGuard<'_, T>, String>;
 }
 
-impl<T> MutexExt for std::sync::Mutex<T> {
+impl<T> MutexExt<T> for std::sync::Mutex<T> {
     fn lock_timeout(&self, timeout: Duration) -> Result<std::sync::MutexGuard<'_, T>, String> {
-        match self.try_lock_for(timeout) {
-            Ok(guard) => Ok(guard),
-            Err(_) => Err("Lock timeout exceeded".to_string()),
+        let start = Instant::now();
+        loop {
+            match self.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(_) => {
+                    if start.elapsed() >= timeout {
+                        return Err("Lock timeout exceeded".to_string());
+                    }
+                    // small sleep to avoid busy loop
+                    std::thread::sleep(Duration::from_micros(50));
+                    continue;
+                }
+            }
         }
     }
 }
@@ -246,7 +256,7 @@ impl PriorityBatchQueue {
         let shard_idx = self.get_shard(operation.priority);
         
         // Use consistent lock ordering: first acquire spatial lock, then queue lock
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+        let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
         let mut queue = self.queues[shard_idx].lock().unwrap();
 
         // Insert based on priority (higher priority first)
@@ -265,7 +275,7 @@ impl PriorityBatchQueue {
             let shard_idx = self.get_shard(priority_level);
             
             // Use consistent lock ordering: first acquire spatial lock, then queue lock
-            let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+            let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
             let mut queue = self.queues[shard_idx].lock().unwrap();
             if let Some(operation) = queue.pop_front() {
                 let total_depth = self.get_total_depth();
@@ -303,7 +313,7 @@ impl PriorityBatchQueue {
             let shard_idx = self.get_shard(priority_level);
             
             // Use consistent lock ordering: first acquire spatial lock, then queue lock with timeout
-            let _spatial_guard = lock_order::SPATIAL_LOCK.lock().unwrap();
+            let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
             match self.queues[shard_idx].lock_timeout(timeout) {
                 Ok(mut queue) => {
                     if let Some(operation) = queue.pop_front() {
@@ -381,10 +391,6 @@ impl ZeroCopyBufferPool {
             max_buffers,
             buffer_size,
         }
-    }
-
-    fn get_shard(&self, thread_id: usize) -> usize {
-        thread_id % self.shard_count
     }
 
     fn acquire_buffer(&self) -> Option<Vec<u8>> {

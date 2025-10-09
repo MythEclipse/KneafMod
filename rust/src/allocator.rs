@@ -220,10 +220,6 @@ impl SlabAllocator {
         }
     }
 
-    fn get_shard(&self, thread_id: usize) -> usize {
-        thread_id % self.shard_count
-    }
-
     pub fn allocate(&self) -> Option<Vec<u8>> {
         // Use round-robin sharding for better distribution
         static SHARD_COUNTER: AtomicUsize = AtomicUsize::new(0);

@@ -3,18 +3,16 @@ use std::ops::Deref;
 
 /// RAII wrapper for JNI global references to prevent memory leaks
 pub struct JniGlobalRef<'a> {
+    #[allow(dead_code)]
     env: &'a JNIEnv<'a>,
-    global_ref: Option<JObject<'a>>,
+    global_ref: Option<jni::objects::GlobalRef>,
 }
 
 impl<'a> JniGlobalRef<'a> {
     /// Create a new global reference from a local reference
     pub fn new(env: &'a JNIEnv<'a>, local_ref: JObject<'a>) -> Result<Self, String> {
         match env.new_global_ref(local_ref) {
-            Ok(global_ref) => Ok(JniGlobalRef {
-                env,
-                global_ref: Some(global_ref),
-            }),
+            Ok(global_ref) => Ok(JniGlobalRef { env, global_ref: Some(global_ref) }),
             Err(e) => Err(format!("Failed to create global ref: {}", e)),
         }
     }
@@ -35,13 +33,9 @@ impl<'a> Deref for JniGlobalRef<'a> {
 
 impl<'a> Drop for JniGlobalRef<'a> {
     fn drop(&mut self) {
-        if let Some(global_ref) = self.global_ref.take() {
-            // Safely delete the global reference
-            unsafe {
-                if let Err(e) = self.env.delete_global_ref(global_ref) {
-                    eprintln!("Warning: Failed to delete global ref: {}", e);
-                }
-            }
+        if let Some(_global_ref) = self.global_ref.take() {
+            // GlobalRef implements Drop and will clean up the reference when it goes out of scope.
+            // No explicit env.delete_global_ref call is needed here.
         }
     }
 }
@@ -69,10 +63,8 @@ impl<'a> JniLocalRef<'a> {
     /// Manually delete the local reference (useful for early cleanup)
     pub fn delete(mut self) {
         if let Some(local_ref) = self.local_ref.take() {
-            unsafe {
-                if let Err(e) = self.env.delete_local_ref(local_ref) {
-                    eprintln!("Warning: Failed to delete local ref: {}", e);
-                }
+            if let Err(e) = self.env.delete_local_ref(local_ref) {
+                eprintln!("Warning: Failed to delete local ref: {}", e);
             }
         }
     }
@@ -89,10 +81,8 @@ impl<'a> Deref for JniLocalRef<'a> {
 impl<'a> Drop for JniLocalRef<'a> {
     fn drop(&mut self) {
         if let Some(local_ref) = self.local_ref.take() {
-            unsafe {
-                if let Err(e) = self.env.delete_local_ref(local_ref) {
-                    eprintln!("Warning: Failed to delete local ref: {}", e);
-                }
+            if let Err(e) = self.env.delete_local_ref(local_ref) {
+                eprintln!("Warning: Failed to delete local ref: {}", e);
             }
         }
     }

@@ -1,12 +1,11 @@
 use std::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use jni::objects::GlobalRef;
 use jni::{JNIEnv, objects::{JString, JClass}, sys::jlong};
 use std::collections::HashMap;
 use crate::logging::{PerformanceLogger, generate_trace_id};
-use crate::jni_raii::JniGlobalRef;
 use once_cell::sync::Lazy;
 use std::time::SystemTime;
-use std::collections::HashMap;
 
 #[derive(Debug, Default, Clone)]
 pub struct JniCallMetrics {
@@ -74,7 +73,7 @@ pub struct PerformanceMonitor {
     pub alert_cooldown: Arc<AtomicU64>,
     
     // JNI reference tracking to prevent leaks
-    pub jni_global_refs: Arc<Mutex<HashMap<jlong, JString>>>,
+    pub jni_global_refs: Arc<Mutex<HashMap<jlong, GlobalRef>>>,
 }
 
 impl PerformanceMonitor {
@@ -449,7 +448,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordGcEventN
 pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getPerformanceMetricsNative(
     mut env: JNIEnv,
     _class: JClass,
-) -> JString {
+) -> jni::sys::jstring {
     let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
 
     // For simplicity, we'll return a JSON string for now
@@ -472,22 +471,12 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getPerformance
     );
 
     match env.new_string(json) {
-        Ok(jni_string) => {
-            // Return the string directly - JNI will manage the local reference lifetime
-            // No global ref needed since this is a return value that JNI will handle
-            jni_string
-        },
+        Ok(jni_string) => jni_string.into_raw(),
         Err(e) => {
             let trace_id = generate_trace_id();
             PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to create JSON string: {}", e), "JNI_ERROR");
-            if let Err(throw_err) = env.throw_new("java/lang/IllegalStateException", &format!("Failed to create JSON string: {}", e)) {
-                PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to throw exception: {}", throw_err), "JNI_ERROR");
-            }
-            // Return null string on error
-            env.new_string("").unwrap_or_else(|_| {
-                // If even empty string creation fails, return a null pointer
-                std::ptr::null_mut()
-            })
+            let _ = env.throw_new("java/lang/IllegalStateException", &format!("Failed to create JSON string: {}", e));
+            std::ptr::null_mut()
         }
     }
 }

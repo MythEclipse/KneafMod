@@ -1366,19 +1366,14 @@ impl RustDatabaseAdapter {
         };
         
         // Acquire locks for memory_mapped_files and stats in correct order
-        match acquire_locks_in_order(&self.stats, &self.memory_mapped_files, None, LOCK_TIMEOUT_MS) {
-            Ok((mut stats_guard, mut mm_files_guard)) => {
-                // Update statistics
-                stats_guard.memory_mapped_files_active += 1;
-                
-                // Store in memory-mapped files cache
-                mm_files_guard.insert(key.to_string(), cache_mmap);
-            }
-            Err(e) => {
-                error!("Failed to acquire locks for create_memory_mapped_chunk: {}", e);
-                return Err(format!("Failed to update memory mapped files cache: {}", e));
-            }
-        }
+        let mut stats_guard = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats").map_err(|e| e.to_string())?;
+        let mut mm_files_guard = try_write_lock_with_timeout(&self.memory_mapped_files, LOCK_TIMEOUT_MS, "memory_mapped_files").map_err(|e| e.to_string())?;
+
+        // Update statistics
+        stats_guard.memory_mapped_files_active += 1;
+        
+        // Store in memory-mapped files cache
+        mm_files_guard.insert(key.to_string(), cache_mmap);
         
         Ok(return_mmap)
     }
@@ -1417,19 +1412,14 @@ impl RustDatabaseAdapter {
         }
         
         // Acquire locks for memory_mapped_files and stats in correct order
-        match acquire_locks_in_order(&self.stats, &self.memory_mapped_files, None, LOCK_TIMEOUT_MS) {
-            Ok((mut stats_guard, mut mm_files_guard)) => {
-                // Update statistics
-                stats_guard.memory_mapped_files_active = stats_guard.memory_mapped_files_active.saturating_sub(1);
-                
-                // Remove from cache
-                mm_files_guard.remove(key);
-            }
-            Err(e) => {
-                error!("Failed to acquire locks for remove_memory_mapped_chunk: {}", e);
-                return Err(format!("Failed to update memory mapped files cache: {}", e));
-            }
-        }
+        let mut stats_guard = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats").map_err(|e| e.to_string())?;
+        let mut mm_files_guard = try_write_lock_with_timeout(&self.memory_mapped_files, LOCK_TIMEOUT_MS, "memory_mapped_files").map_err(|e| e.to_string())?;
+
+        // Update statistics
+        stats_guard.memory_mapped_files_active = stats_guard.memory_mapped_files_active.saturating_sub(1);
+        
+        // Remove from cache
+        mm_files_guard.remove(key);
         
         Ok(())
     }

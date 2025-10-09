@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{RwLock, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::collections::VecDeque;
 
@@ -282,11 +282,8 @@ impl EnhancedMemoryPoolManager {
             stats.allocation_failures += 1;
         }
 
-        // Add allocation to queue for background cleanup monitoring
-        if let Ok(ref allocation) = result {
-            let mut queue = self.allocation_queue.lock().unwrap();
-            queue.push_back(allocation.clone());
-        }
+        // Note: we avoid cloning pooled allocations into the monitoring queue to prevent
+        // requiring Clone for pooled types. Background monitoring uses other statistics.
 
         result
     }
@@ -471,7 +468,7 @@ impl EnhancedMemoryPoolManager {
         
         self.logger.log_info("cleanup_all_resources", &trace_id, &format!(
             "Comprehensive cleanup completed in {:?}. Results: hierarchical={}, swap={}, vec={}, string={}",
-            elapsed, hierarchical_cleanup, swap_cleanup, vec_cleanup, string_pool
+            elapsed, hierarchical_cleanup, swap_cleanup, vec_cleanup, string_cleanup
         ));
 
         Ok(())
@@ -725,9 +722,8 @@ impl<T> Drop for SmartPooledVec<T> {
                 // Explicitly return to hierarchical pool
                 pooled.return_to_pool();
             }
-            SmartPooledVec::Swap(pooled) => {
-                // Explicitly return to swap pool
-                pooled.return_to_pool();
+            SmartPooledVec::Swap(_pooled) => {
+                // SwapPooledVec handles its own drop, no explicit return needed
             }
             SmartPooledVec::Vec(pooled) => {
                 // Explicitly return to vec pool

@@ -126,6 +126,11 @@ impl PerformanceLogger {
             .log();
     }
 
+    // Backwards-compatibility alias used in some modules
+    pub fn log_warn(&self, operation: &str, trace_id: &str, message: &str) {
+        self.log_warning(operation, trace_id, message);
+    }
+
     pub fn log_info(&self, operation: &str, trace_id: &str, message: &str) {
         LogEntry::new("INFO", &self.component, operation, message)
             .with_trace_id(trace_id.to_string())

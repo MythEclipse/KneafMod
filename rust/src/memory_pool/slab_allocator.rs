@@ -340,7 +340,7 @@ impl<T> SlabAllocator<T> {
         let size_class = SizeClass::find_smallest_fit(size);
 
         // Ensure we have slabs for this size class (thread-safe now)
-        self.ensure_slabs_for_size_class(&size_class);
+        Self::ensure_slabs_for_size_class(&mut self.slabs, &mut self.current_slab, &self.config, &size_class);
 
         let slabs = self.slabs.get_mut(&size_class)?;
         let current_slab_idx = self.current_slab.get(&size_class)?
@@ -372,7 +372,7 @@ impl<T> SlabAllocator<T> {
         }
 
         // All slabs are full, need to allocate new slab
-        self.allocate_new_slab(&size_class);
+        Self::allocate_new_slab(&mut self.slabs, &self.config, &size_class);
         if let Some(slot_idx) = self.slabs.get_mut(&size_class)?.last_mut()?.allocate() {
             let slab_idx = self.slabs.get(&size_class)?.len() - 1;
             return Some(SlabAllocation {
@@ -398,27 +398,27 @@ impl<T> SlabAllocator<T> {
     }
 
     /// Ensure slabs exist for a size class
-    fn ensure_slabs_for_size_class(&mut self, size_class: &SizeClass) {
-        if !self.slabs.contains_key(size_class) {
+    fn ensure_slabs_for_size_class(slabs_map: &mut HashMap<SizeClass, Vec<Slab>>, current_slab_map: &mut HashMap<SizeClass, AtomicUsize>, config: &SlabAllocatorConfig, size_class: &SizeClass) {
+        if !slabs_map.contains_key(size_class) {
             let mut slabs = Vec::new();
 
             // Pre-allocate initial slabs if configured
-            if self.config.pre_allocate {
-                for _ in 0..self.config.max_slabs_per_class.min(1) {
-                    slabs.push(Slab::new(size_class.exact_size(), self.config.slab_size));
+            if config.pre_allocate {
+                for _ in 0..config.max_slabs_per_class.min(1) {
+                    slabs.push(Slab::new(size_class.exact_size(), config.slab_size));
                 }
             }
 
-            self.slabs.insert(*size_class, slabs);
-            self.current_slab.insert(*size_class, AtomicUsize::new(0));
+            slabs_map.insert(*size_class, slabs);
+            current_slab_map.insert(*size_class, AtomicUsize::new(0));
         }
     }
 
     /// Allocate a new slab for a size class
-    fn allocate_new_slab(&mut self, size_class: &SizeClass) {
-        if let Some(slabs) = self.slabs.get_mut(size_class) {
-            if slabs.len() < self.config.max_slabs_per_class {
-                slabs.push(Slab::new(size_class.exact_size(), self.config.slab_size));
+    fn allocate_new_slab(slabs_map: &mut HashMap<SizeClass, Vec<Slab>>, config: &SlabAllocatorConfig, size_class: &SizeClass) {
+        if let Some(slabs) = slabs_map.get_mut(size_class) {
+            if slabs.len() < config.max_slabs_per_class {
+                slabs.push(Slab::new(size_class.exact_size(), config.slab_size));
             }
         }
     }

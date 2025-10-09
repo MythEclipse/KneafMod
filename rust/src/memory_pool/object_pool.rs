@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-use crate::logging::PerformanceLogger;
+use crate::logging::{PerformanceLogger, generate_trace_id};
 use crate::memory_pressure_config::GLOBAL_MEMORY_PRESSURE_CONFIG;
 use crate::memory_pool::atomic_state::AtomicPoolState;
 
@@ -68,16 +68,16 @@ impl<T> Drop for PooledObject<T> {
 
             let now = SystemTime::now();
 
-            // Use a timeout for lock acquisition to prevent deadlocks
-            let pool_guard = match self.pool.lock().try_lock() {
+            // Acquire locks (blocking) to return object to pool
+            let mut pool_guard = match self.pool.lock() {
                 Ok(guard) => guard,
                 Err(_) => {
                     log::warn!("Failed to acquire pool lock - object not returned to pool (deadlock prevention)");
                     return;
                 }
             };
-            
-            let access_order_guard = match self.access_order.lock().try_lock() {
+
+            let mut access_order_guard = match self.access_order.lock() {
                 Ok(guard) => guard,
                 Err(_) => {
                     log::warn!("Failed to acquire access order lock - object not returned to pool (deadlock prevention)");
@@ -134,6 +134,8 @@ impl<T> Drop for PooledObject<T> {
 }
 
 // Add background cleanup thread for pool maintenance
+use lazy_static::lazy_static;
+
 lazy_static! {
     static ref POOL_CLEANUP_THREAD: Arc<Mutex<Option<thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
 }
@@ -141,20 +143,20 @@ lazy_static! {
 pub fn start_pool_cleanup_thread(pool: Arc<ObjectPool<u8>>, interval: Duration) {
     let pool = Arc::clone(&pool);
     let handle = thread::spawn(move || {
-        let mut interval = tokio::time::interval(interval);
         loop {
-            interval.tick().await;
-            
+            // Sleep for the configured interval between cleanup runs
+            thread::sleep(interval);
+
             let now = Instant::now();
             let result = pool.lazy_cleanup(0.9); // Cleanup when usage exceeds 90%
             let elapsed = now.elapsed();
-            
+
             if result {
                 log::info!("Pool cleanup completed in {:?}", elapsed);
             }
         }
     });
-    
+
     let mut thread_guard = POOL_CLEANUP_THREAD.lock().unwrap();
     *thread_guard = Some(handle);
 }
@@ -439,9 +441,7 @@ where
     }
 }
 
-// Import statements needed for this module
-use std::sync::RwLock;
-use crate::logging::generate_trace_id;
+// (imports consolidated at the top of the file)
 
 /// Swap memory allocation tracking
 #[derive(Debug, Clone)]
@@ -678,4 +678,4 @@ pub struct MemoryPressureMonitoringStats {
     pub last_check_time: SystemTime,
 }
 
-use std::time::Duration;
+// Finalized imports consolidated at top of file.

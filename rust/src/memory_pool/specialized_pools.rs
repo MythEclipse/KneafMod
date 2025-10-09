@@ -31,6 +31,13 @@ where
         }
     }
 
+    /// Perform cleanup and return true if any resources were freed
+    pub fn cleanup(&self) -> bool {
+        // For now, we do a noop cleanup that returns false (no resources freed)
+        // A real implementation would trim pool sizes or free unused buffers
+        false
+    }
+
     pub fn get_vec(&self, capacity: usize) -> PooledVec<T> {
         let mut pooled = self.pool.get();
         let vec = pooled.as_mut();
@@ -84,6 +91,12 @@ impl StringPool {
         }
     }
 
+    /// Perform cleanup and return true if any resources were freed
+    pub fn cleanup(&self) -> bool {
+        // No-op for now
+        false
+    }
+
     pub fn get_string(&self, capacity: usize) -> PooledString {
         let mut pooled = self.pool.get();
         pooled.clear();
@@ -107,6 +120,20 @@ impl StringPool {
 }
 
 pub type PooledString = PooledObject<String>;
+
+// Provide a small shim to satisfy calls to return_to_pool from SmartPooledVec drop
+impl<T> PooledObject<Vec<T>> {
+    pub fn return_to_pool(&mut self) {
+        // Return is handled by Drop in PooledObject; this is a no-op shim to satisfy callers
+        // Actual pool return logic is implemented in Drop for PooledObject
+    }
+}
+
+impl PooledObject<String> {
+    pub fn return_to_pool(&mut self) {
+        // No-op shim for String pooled objects
+    }
+}
 
 #[cfg(test)]
 mod tests {
