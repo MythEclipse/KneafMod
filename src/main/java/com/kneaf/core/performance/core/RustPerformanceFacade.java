@@ -247,25 +247,33 @@ public class RustPerformanceFacade {
  }
 
   /** Process item entities for merging and optimization. */
- public CompletableFuture<ItemProcessResult> processItemEntities(List<ItemEntityData> items) {
-   ensureInitialized();
-
-   try {
-     // Use batch processing for large item collections
-     if (items.size() >= 25 && NATIVE_MANAGER.isNativeAvailable()) {
-       return batchProcessor.submitItemRequest(PerformanceConstants.ITEMS_KEY, items);
-     } else {
-       // Direct processing for small collections
-       ItemProcessResult result = entityProcessor.processItemEntities(items);
-       return CompletableFuture.completedFuture(result);
-     }
-   } catch (Exception e) {
-     KneafCore.LOGGER.error("Error processing item entities", e);
-     // Fallback: no optimization
-     return CompletableFuture.completedFuture(
-         new ItemProcessResult(new ArrayList<Long>(), 0, 0, new ArrayList<>()));
-   }
- }
+    public CompletableFuture<ItemProcessResult> processItemEntities(List<ItemEntityData> items) {
+      ensureInitialized();
+  
+      try {
+        // Check if native processing is available first
+        if (!NATIVE_MANAGER.isNativeAvailable()) {
+          KneafCore.LOGGER.debug("Native item processing unavailable, using Java fallback");
+          // Direct Java processing for all item sizes when native is unavailable
+          ItemProcessResult result = entityProcessor.processItemEntities(items);
+          return CompletableFuture.completedFuture(result);
+        }
+  
+        // Use batch processing for large item collections when native is available
+        if (items.size() >= 25) {
+          return batchProcessor.submitItemRequest(PerformanceConstants.ITEMS_KEY, items);
+        } else {
+          // Direct processing for small collections
+          ItemProcessResult result = entityProcessor.processItemEntities(items);
+          return CompletableFuture.completedFuture(result);
+        }
+      } catch (Exception e) {
+        KneafCore.LOGGER.warn("Error processing item entities, using fallback", e);
+        // Fallback: no optimization - return all items as-is with no merging/despawning
+        return CompletableFuture.completedFuture(
+            new ItemProcessResult(new ArrayList<Long>(), 0, 0, new ArrayList<>()));
+      }
+    }
 
   /** Process mob AI for optimization. */
  public CompletableFuture<MobProcessResult> processMobAI(List<MobData> mobs) {

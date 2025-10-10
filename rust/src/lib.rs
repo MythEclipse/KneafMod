@@ -38,9 +38,6 @@ pub mod entity {
     pub mod bindings;
 }
 
-// Item processing modules
-pub mod item;
-
 // Mob processing modules
 pub mod mob {
     pub mod types;

@@ -236,18 +236,6 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   }
 
   @Override
-  public byte[] processItemEntitiesBinary(ByteBuffer input) {
-    // Implementation would use a worker to process item entities
-    return new byte[0];
-  }
-
-  @Override
-  public String processItemEntitiesJson(String input) {
-    // Implementation would use a worker to process item entities
-    return "{ }";
-  }
-
-  @Override
   public byte[] processMobAiBinary(ByteBuffer input) {
     // Implementation would use a worker to process mob AI
     return new byte[0];
@@ -283,6 +271,17 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
     return "{ }";
   }
 
+  @Override
+  public byte[] processItemEntitiesBinary(ByteBuffer input) {
+    // Item optimization removed - return empty result as fallback
+    return new byte[0];
+  }
+
+  @Override
+  public String processItemEntitiesJson(String input) {
+    // Item optimization removed - return empty result as fallback
+    return "{ }";
+  }
   @Override
   public String getMemoryStats() {
     // Return memory statistics as JSON string

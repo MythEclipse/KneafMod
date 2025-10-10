@@ -255,8 +255,11 @@ public class PerformanceOptimizer {
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     }
-    System.runFinalization();
+
+    // Removed deprecated System.runFinalization() (deprecated since JDK 18).
+    // Finalizers are deprecated and unreliable; prefer multiple GC passes and explicit resource/ cache cleanup.
     System.gc();
+    Thread.yield();
 
     // Clear all internal caches aggressively
     clearAllInternalCaches();

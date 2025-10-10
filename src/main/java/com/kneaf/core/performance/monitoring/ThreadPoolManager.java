@@ -472,7 +472,7 @@ public class ThreadPoolManager {
         PerformanceMetricsLogger.logLine(String.format("PERF: async_application duration=%.2fms", durationMs));
       }
 
-      entityProcessor.removeItems(server, results.itemResult());
+      // Item optimization removed - no items to process
     } catch (Exception e) {
       LOGGER.warn("Error applying optimizations on server thread", e);
     }

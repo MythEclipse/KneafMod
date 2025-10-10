@@ -6,9 +6,7 @@ import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.MobData;
 import com.kneaf.core.data.entity.PlayerData;
 import com.kneaf.core.data.entity.VillagerData;
-import com.kneaf.core.data.item.ItemEntityData;
 import com.kneaf.core.performance.bridge.NativeIntegrationManager;
-import com.kneaf.core.performance.core.ItemProcessResult;
 import com.kneaf.core.performance.core.MobProcessResult;
 import com.kneaf.core.performance.core.RustPerformanceFacade;
 import com.kneaf.core.logging.RustLogger;
@@ -68,58 +66,35 @@ public class RustPerformance {
   }
 
   /** Get entities that should be ticked based on optimization criteria. */
- public static CompletableFuture<List<Long>> getEntitiesToTickAsync(List<EntityData> entities, List<PlayerData> players) {
-   ensureInitialized();
-   return FACADE.getEntitiesToTick(entities, players);
- }
+  public static CompletableFuture<List<Long>> getEntitiesToTickAsync(List<EntityData> entities, List<PlayerData> players) {
+    ensureInitialized();
+    return FACADE.getEntitiesToTick(entities, players);
+  }
 
- /** Get entities that should be ticked based on optimization criteria (synchronous fallback for legacy code). */
- public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
-   ensureInitialized();
-   try {
-     return FACADE.getEntitiesToTick(entities, players).join();
-   } catch (Exception e) {
-     KneafCore.LOGGER.error("Error getting entities to tick", e);
-     // Fallback: return all entities
-     return entities.stream().map(entity -> entity.getId()).toList();
-   }
- }
+  /** Get entities that should be ticked based on optimization criteria (synchronous fallback for legacy code). */
+  public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
+    ensureInitialized();
+    try {
+      return FACADE.getEntitiesToTick(entities, players).join();
+    } catch (Exception e) {
+      KneafCore.LOGGER.error("Error getting entities to tick", e);
+      // Fallback: return all entities
+      return entities.stream().map(entity -> entity.getId()).toList();
+    }
+  }
 
-  /** Process item entities for merging and optimization (asynchronous). */
- public static CompletableFuture<ItemProcessResult> processItemEntitiesAsync(List<ItemEntityData> items) {
-   ensureInitialized();
-   return FACADE.processItemEntities(items);
- }
 
- /** Process item entities for merging and optimization (synchronous fallback for legacy code). */
- public static ItemProcessResult processItemEntities(List<ItemEntityData> items) {
-   ensureInitialized();
-   try {
-     return FACADE.processItemEntities(items).join();
-   } catch (Exception e) {
-     KneafCore.LOGGER.error("Error processing item entities", e);
-     // Fallback: no optimization
-     return new ItemProcessResult(new java.util.ArrayList<Long>(), 0, 0, new java.util.ArrayList<>());
-   }
- }
-
-  /** Process mob AI for optimization (asynchronous). */
- public static CompletableFuture<MobProcessResult> processMobAIAsync(List<MobData> mobs) {
-   ensureInitialized();
-   return FACADE.processMobAI(mobs);
- }
-
- /** Process mob AI for optimization (synchronous fallback for legacy code). */
- public static MobProcessResult processMobAI(List<MobData> mobs) {
-   ensureInitialized();
-   try {
-     return FACADE.processMobAI(mobs).join();
-   } catch (Exception e) {
-     KneafCore.LOGGER.error("Error processing mob AI", e);
-     // Fallback: no optimization
-     return new MobProcessResult(new java.util.ArrayList<Long>(), new java.util.ArrayList<Long>());
-   }
- }
+  /** Process mob AI for optimization (synchronous fallback for legacy code - NOOP for item optimization removal). */
+  public static MobProcessResult processMobAI(List<MobData> mobs) {
+    ensureInitialized();
+    try {
+      return FACADE.processMobAI(mobs).join();
+    } catch (Exception e) {
+      KneafCore.LOGGER.error("Error processing mob AI", e);
+      // Fallback: no optimization (item optimization removed)
+      return new MobProcessResult(new java.util.ArrayList<Long>(), new java.util.ArrayList<Long>());
+    }
+  }
 
   /** Process villager AI for optimization. */
   /**
@@ -179,22 +154,22 @@ public class RustPerformance {
   }
 
   /** Get block entities that should be ticked (asynchronous). */
- public static CompletableFuture<List<Long>> getBlockEntitiesToTickAsync(List<BlockEntityData> blockEntities) {
-   ensureInitialized();
-   return FACADE.getBlockEntitiesToTick(blockEntities);
- }
+  public static CompletableFuture<List<Long>> getBlockEntitiesToTickAsync(List<BlockEntityData> blockEntities) {
+    ensureInitialized();
+    return FACADE.getBlockEntitiesToTick(blockEntities);
+  }
 
- /** Get block entities that should be ticked (synchronous fallback for legacy code). */
- public static List<Long> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
-   ensureInitialized();
-   try {
-     return FACADE.getBlockEntitiesToTick(blockEntities).join();
-   } catch (Exception e) {
-     KneafCore.LOGGER.error("Error getting block entities to tick", e);
-     // Fallback: return all block entities
-     return blockEntities.stream().map(block -> block.getId()).toList();
-   }
- }
+  /** Get block entities that should be ticked (synchronous fallback for legacy code). */
+  public static List<Long> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
+    ensureInitialized();
+    try {
+      return FACADE.getBlockEntitiesToTick(blockEntities).join();
+    } catch (Exception e) {
+      KneafCore.LOGGER.error("Error getting block entities to tick", e);
+      // Fallback: return all block entities
+      return blockEntities.stream().map(block -> block.getId()).toList();
+    }
+  }
 
   /** Optimize villager processing with spatial awareness. */
   public static List<Long> optimizeVillagers(
@@ -406,16 +381,14 @@ public class RustPerformance {
     return FACADE.getPerformanceStatistics().getTotalBlocksProcessed();
   }
 
-  /** Get total items merged. */
+  /** Get total items merged (fallback - always returns 0 as optimization is removed). */
   public static long getTotalMerged() {
-    ensureInitialized();
-    return FACADE.getPerformanceStatistics().getTotalItemsProcessed();
+    return 0; // Item optimization removed - no merging occurs
   }
 
-  /** Get total items despawned. */
+  /** Get total items despawned (fallback - always returns 0 as optimization is removed). */
   public static long getTotalDespawned() {
-    ensureInitialized();
-    return FACADE.getPerformanceStatistics().getTotalItemsProcessed();
+    return 0; // Item optimization removed - no despawning occurs
   }
 
   /** Pre-generate nearby chunks synchronously. */
@@ -458,70 +431,70 @@ public class RustPerformance {
   public static native void cleanupZeroCopyOperation(long operationId);
 
   /** Record JNI call performance metrics (native integration). */
- public static native void recordJniCallNative(String callType, long durationMs);
+  public static native void recordJniCallNative(String callType, long durationMs);
   
- /** Record lock wait performance metrics (native integration). */
- public static native void recordLockWaitNative(String lockName, long durationMs);
+  /** Record lock wait performance metrics (native integration). */
+  public static native void recordLockWaitNative(String lockName, long durationMs);
   
- /** Record memory usage performance metrics (native integration). */
- public static native void recordMemoryUsageNative(long totalBytes, long usedBytes, long freeBytes);
+  /** Record memory usage performance metrics (native integration). */
+  public static native void recordMemoryUsageNative(long totalBytes, long usedBytes, long freeBytes);
   
- /** Record GC event performance metrics (native integration). */
- public static native void recordGcEventNative(long durationMs);
- 
- /** Log message from Rust native code. */
- public static void logFromNative(String level, String message) {
-     RustLogger.logFromRust(level, message);
- }
- 
- /** Initialize native logging system. */
- public static void initNativeLogging() {
-     RustLogger.initNativeLogging();
- }
- 
- /** Log system status information. */
- public static void logSystemStatus(String cpuCapabilities, String simdLevel,
-                                   double fallbackRate, double opsPerCycle) {
-     RustLogger.logSystemStatus(cpuCapabilities, simdLevel, fallbackRate, opsPerCycle);
- }
- 
- /** Log memory pool status. */
- public static void logMemoryPoolStatus(double usagePercentage, double hitRate, int contention) {
-     RustLogger.logMemoryPoolStatus(usagePercentage, hitRate, contention);
- }
- 
- /** Log thread pool status. */
- public static void logThreadPoolStatus(int activeThreads, int queueSize, double utilization) {
-     RustLogger.logThreadPoolStatus(activeThreads, queueSize, utilization);
- }
- 
- /** Log performance metrics. */
- public static void logPerformanceMetrics(double tps, double latency, long gcEvents) {
-     RustLogger.logPerformanceMetrics(tps, latency, gcEvents);
- }
- 
- /** Log configuration status. */
- public static void logConfigurationStatus(boolean extremeMode, boolean safetyChecks, double tpsThreshold) {
-     RustLogger.logConfigurationStatus(extremeMode, safetyChecks, tpsThreshold);
- }
- 
- /** Log startup information. */
- public static void logStartupInfo(String optimizationsActive, String cpuInfo, String configApplied) {
-     RustLogger.logStartupInfo(optimizationsActive, cpuInfo, configApplied);
- }
- 
- /** Log real-time status updates. */
- public static void logRealTimeStatus(String systemStatus, String importantEvents) {
-     RustLogger.logRealTimeStatus(systemStatus, importantEvents);
- }
- 
- /** Log threshold-based events. */
- public static void logThresholdEvent(String eventType, String message,
-                                     double thresholdValue, double actualValue) {
-     RustLogger.logThresholdEvent(eventType, message, thresholdValue, actualValue);
- }
+  /** Record GC event performance metrics (native integration). */
+  public static native void recordGcEventNative(long durationMs);
+   
+  /** Log message from Rust native code. */
+  public static void logFromNative(String level, String message) {
+      RustLogger.logFromRust(level, message);
+  }
+   
+  /** Initialize native logging system. */
+  public static void initNativeLogging() {
+      RustLogger.initNativeLogging();
+  }
+   
+  /** Log system status information. */
+  public static void logSystemStatus(String cpuCapabilities, String simdLevel,
+                                     double fallbackRate, double opsPerCycle) {
+      RustLogger.logSystemStatus(cpuCapabilities, simdLevel, fallbackRate, opsPerCycle);
+  }
+   
+  /** Log memory pool status. */
+  public static void logMemoryPoolStatus(double usagePercentage, double hitRate, int contention) {
+      RustLogger.logMemoryPoolStatus(usagePercentage, hitRate, contention);
+  }
+   
+  /** Log thread pool status. */
+  public static void logThreadPoolStatus(int activeThreads, int queueSize, double utilization) {
+      RustLogger.logThreadPoolStatus(activeThreads, queueSize, utilization);
+  }
+   
+  /** Log performance metrics. */
+  public static void logPerformanceMetrics(double tps, double latency, long gcEvents) {
+      RustLogger.logPerformanceMetrics(tps, latency, gcEvents);
+  }
+   
+  /** Log configuration status. */
+  public static void logConfigurationStatus(boolean extremeMode, boolean safetyChecks, double tpsThreshold) {
+      RustLogger.logConfigurationStatus(extremeMode, safetyChecks, tpsThreshold);
+  }
+   
+  /** Log startup information. */
+  public static void logStartupInfo(String optimizationsActive, String cpuInfo, String configApplied) {
+      RustLogger.logStartupInfo(optimizationsActive, cpuInfo, configApplied);
+  }
+   
+  /** Log real-time status updates. */
+  public static void logRealTimeStatus(String systemStatus, String importantEvents) {
+      RustLogger.logRealTimeStatus(systemStatus, importantEvents);
+  }
+   
+  /** Log threshold-based events. */
+  public static void logThresholdEvent(String eventType, String message,
+                                       double thresholdValue, double actualValue) {
+      RustLogger.logThresholdEvent(eventType, message, thresholdValue, actualValue);
+  }
 
- /** Performance statistics data class. */
+  /** Performance statistics data class. */
   public static class PerformanceStatistics {
     private final long totalEntitiesProcessed;
     private final long totalItemsProcessed;

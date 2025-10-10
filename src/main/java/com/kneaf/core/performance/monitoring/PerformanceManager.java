@@ -1,5 +1,5 @@
 package com.kneaf.core.performance.monitoring;
-   
+    
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -7,7 +7,6 @@ import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.MobData;
 import com.kneaf.core.data.entity.PlayerData;
-import com.kneaf.core.data.item.ItemEntityData;
 import com.kneaf.core.performance.RustPerformance;
 import com.kneaf.core.performance.spatial.SpatialGrid;
 import com.mojang.logging.LogUtils;
@@ -30,8 +29,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.Entity.RemovalReason;
-import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.phys.AABB;
 import org.slf4j.Logger;
 
@@ -63,7 +60,7 @@ public class PerformanceManager {
   private static final AtomicLong gcCount = new AtomicLong(0);
   private static final AtomicLong gcTimeMs = new AtomicLong(0);
   private static final AtomicLong peakHeapUsageBytes = new AtomicLong(0);
-  
+   
   // Allocation monitoring
   private static final AtomicLong totalAllocations = new AtomicLong(0);
   private static final AtomicLong totalAllocationBytes = new AtomicLong(0);
@@ -71,19 +68,19 @@ public class PerformanceManager {
   private static final AtomicLong totalDeallocations = new AtomicLong(0);
   private static final AtomicLong allocationLatencyNanos = new AtomicLong(0);
   private static final ConcurrentHashMap<String, AtomicLong> allocationTypes = new ConcurrentHashMap<>();
-  
+   
   // Lock contention monitoring
   private static final AtomicLong lockContentionEvents = new AtomicLong(0);
   private static final AtomicLong totalContentionWaitTimeMs = new AtomicLong(0);
   private static final ConcurrentHashMap<String, AtomicInteger> lockContentionTypes = new ConcurrentHashMap<>();
   private static final AtomicInteger maxQueueLength = new AtomicInteger(0);
   private static final long LOCK_CONTENTION_THRESHOLD = 5; // Default threshold: 5 threads waiting
-  
+   
   // Allocation pressure monitoring
   private static final AtomicLong allocationPressureEvents = new AtomicLong(0);
   private static final AtomicLong highAllocationLatencyEvents = new AtomicLong(0);
   private static final long HIGH_ALLOCATION_LATENCY_THRESHOLD_MS = 10; // 10ms threshold
-  
+   
   // Configuration testing
   private static final ConcurrentHashMap<String, TestResult> configTestResults = new ConcurrentHashMap<>();
   private static final AtomicLong testIdCounter = new AtomicLong(0);
@@ -114,11 +111,11 @@ public class PerformanceManager {
   // Configuration (loaded from config/kneaf-performance.properties)
   private static final com.kneaf.core.performance.monitoring.PerformanceConfig CONFIG =
       com.kneaf.core.performance.monitoring.PerformanceConfig.load();
-  
+   
   // Call graph analysis (simplified for now)
   private static final ConcurrentHashMap<String, CallGraphNode> callGraph = new ConcurrentHashMap<>();
   private static final ThreadLocal<java.util.Stack<CallGraphFrame>> callStack = ThreadLocal.withInitial(java.util.Stack::new);
-  
+   
   /** Configuration test result structure */
   private static class TestResult {
     String testName;
@@ -141,7 +138,7 @@ public class PerformanceManager {
       this.startTime = System.currentTimeMillis();
     }
   }
-  
+   
   /** Call graph node for tracking method execution */
   private static class CallGraphNode {
     String methodName;
@@ -150,16 +147,16 @@ public class PerformanceManager {
     long maxExecutionTimeNs = 0;
     long minExecutionTimeNs = Long.MAX_VALUE;
     Map<String, CallGraphNode> children = new ConcurrentHashMap<>();
-    
+     
     CallGraphNode(String methodName) {
       this.methodName = methodName;
     }
-    
+     
     /** Update node with execution duration metrics */
     void updateWithDuration(long durationNs) {
       callCount++;
       totalExecutionTimeNs += durationNs;
-      
+       
       if (durationNs > maxExecutionTimeNs) {
         maxExecutionTimeNs = durationNs;
       }
@@ -168,12 +165,12 @@ public class PerformanceManager {
       }
     }
   }
-  
+   
   /** Call graph frame for tracking call stack */
  private static class CallGraphFrame {
    String methodName;
    long startTimeNs;
-   
+    
    CallGraphFrame(String methodName) {
      this.methodName = methodName;
      this.startTimeNs = System.nanoTime();
@@ -258,7 +255,6 @@ public class PerformanceManager {
   // Profiling data structures
   private static final class ProfileData {
     long entityCollectionTime = 0;
-    long itemConsolidationTime = 0;
     long optimizationProcessingTime = 0;
     long optimizationApplicationTime = 0;
     long spatialGridTime = 0;
@@ -267,13 +263,11 @@ public class PerformanceManager {
     long lockContentionTime = 0;
     long TOTAL_TICK_TIME = 0;
     int entitiesProcessed = 0;
-    int itemsProcessed = 0;
     int executorQueueSize = 0;
 
     /** Reset all profiling fields to zero for reuse */
     void reset() {
       entityCollectionTime = 0;
-      itemConsolidationTime = 0;
       optimizationProcessingTime = 0;
       optimizationApplicationTime = 0;
       spatialGridTime = 0;
@@ -282,15 +276,13 @@ public class PerformanceManager {
       lockContentionTime = 0;
       TOTAL_TICK_TIME = 0;
       entitiesProcessed = 0;
-      itemsProcessed = 0;
       executorQueueSize = 0;
     }
 
     String toJson() {
       return String.format(
-          "{\"entityCollectionMs\":%.2f,\"itemConsolidationMs\":%.2f,\"optimizationProcessingMs\":%.2f,\"optimizationApplicationMs\":%.2f,\"spatialGridMs\":%.2f,\"totalTickMs\":%.2f,\"entitiesProcessed\":%d,\"itemsProcessed\":%d,\"executorQueueSize\":%d}",
+          "{\"entityCollectionMs\":%.2f,\"optimizationProcessingMs\":%.2f,\"optimizationApplicationMs\":%.2f,\"spatialGridMs\":%.2f,\"totalTickMs\":%.2f,\"entitiesProcessed\":%d,\"executorQueueSize\":%d}",
           entityCollectionTime / 1_000_000.0,
-          itemConsolidationTime / 1_000_000.0,
           optimizationProcessingTime / 1_000_000.0,
           optimizationApplicationTime / 1_000_000.0,
           spatialGridTime / 1_000_000.0,
@@ -299,7 +291,6 @@ public class PerformanceManager {
           allocationTime / 1_000_000.0,
           TOTAL_TICK_TIME / 1_000_000.0,
           entitiesProcessed,
-          itemsProcessed,
           executorQueueSize);
     }
   }
@@ -419,17 +410,17 @@ public class PerformanceManager {
 
   // Timing utilities for nanosecond-resolution measurements (optimized with System.nanoTime())
   private static final ThreadLocal<Long> TIMING_MARKER = ThreadLocal.withInitial(() -> System.nanoTime());
-  
+   
   /** Record timing for critical sections with nanosecond resolution */
   public static void startTiming() {
     TIMING_MARKER.set(System.nanoTime());
   }
-  
+   
   /** Get elapsed time since last startTiming() call in nanoseconds */
   public static long getElapsedNanos() {
     return System.nanoTime() - TIMING_MARKER.get();
   }
-  
+   
   /** Reset timing marker */
   public static void resetTiming() {
     TIMING_MARKER.set(System.nanoTime());
@@ -440,17 +431,17 @@ public class PerformanceManager {
   // Runtime toggle (initialized from config)
   private static volatile boolean enabled = CONFIG.isEnabled();
   private static final Object lock = new Object();
-  
+   
   // Modular components (lazy-loaded singletons for better startup performance)
   private static class LazySingletonHolder {
     static final ThreadPoolManager THREAD_POOL_MANAGER = new ThreadPoolManager();
     static final EntityProcessor ENTITY_PROCESSOR = new EntityProcessor();
   }
-  
+   
   private static ThreadPoolManager getThreadPoolManager() {
     return LazySingletonHolder.THREAD_POOL_MANAGER;
   }
-  
+   
   private static EntityProcessor getEntityProcessor() {
     return LazySingletonHolder.ENTITY_PROCESSOR;
   }
@@ -490,7 +481,7 @@ public class PerformanceManager {
       int stripeIndex = Math.abs(level.hashCode() % STRIPED_LOCKS.length);
       return STRIPED_LOCKS[stripeIndex];
   }
-  
+   
   public static boolean isEnabled() {
     return enabled;
   }
@@ -501,14 +492,12 @@ public class PerformanceManager {
 
   private record EntityDataCollection(
       List<EntityData> entities,
-      List<ItemEntityData> items,
       List<MobData> mobs,
       List<BlockEntityData> blockEntities,
       List<PlayerData> players) {}
 
   private record EntityCollectionContext(
       List<EntityData> entities,
-      List<ItemEntityData> items,
       List<MobData> mobs,
       int maxEntities,
       double distanceCutoff,
@@ -524,7 +513,6 @@ public class PerformanceManager {
           && Double.compare(that.distanceCutoff, distanceCutoff) == 0
           && Double.compare(that.cutoffSq, cutoffSq) == 0
           && Objects.equals(entities, that.entities)
-          && Objects.equals(items, that.items)
           && Objects.equals(mobs, that.mobs)
           && Objects.equals(players, that.players)
           && Arrays.equals(excluded, that.excluded);
@@ -533,7 +521,7 @@ public class PerformanceManager {
     @Override
     public int hashCode() {
       int result =
-          Objects.hash(entities, items, mobs, maxEntities, distanceCutoff, players, cutoffSq);
+          Objects.hash(entities, mobs, maxEntities, distanceCutoff, players, cutoffSq);
       result = 31 * result + Arrays.hashCode(excluded);
       return result;
     }
@@ -543,8 +531,6 @@ public class PerformanceManager {
       return "EntityCollectionContext{"
           + "entities="
           + entities
-          + ", items="
-          + items
           + ", mobs="
           + mobs
           + ", maxEntities="
@@ -568,20 +554,20 @@ public class PerformanceManager {
   /** Record JNI call with duration tracking and threshold checking */
   public static void recordJniCall(String callType, long durationMs) {
     if (!isEnabled()) return;
-    
+     
     // Update atomic counters
     totalJniCalls.incrementAndGet();
     totalJniCallDurationMs.addAndGet(durationMs);
-    
+     
     // Update max call duration
     long currentMax = maxJniCallDurationMs.get();
     if (durationMs > currentMax) {
       maxJniCallDurationMs.compareAndSet(currentMax, durationMs);
     }
-    
+     
     // Update call type statistics
     jniCallTypes.computeIfAbsent(callType, k -> new AtomicLong(0)).incrementAndGet();
-    
+     
     // Check threshold and trigger alert if needed
     if (durationMs > JNI_CALL_THRESHOLD_MS) {
       String alert = String.format("JNI call exceeded threshold: %dms > %dms (type: %s)",
@@ -589,32 +575,32 @@ public class PerformanceManager {
       addThresholdAlert(alert);
     }
   }
-  
+   
   /** Record simple JNI call without specific type */
   public static void recordJniCall() {
     recordJniCall("unspecified", 0);
   }
-  
+   
   /** Record lock wait event with duration tracking and threshold checking */
   public static void recordLockWait(String lockName, long durationMs) {
     if (!isEnabled()) return;
-    
+     
     // Update atomic counters
     totalLockWaits.incrementAndGet();
     totalLockWaitTimeMs.addAndGet(durationMs);
-    
+     
     // Update per-lock wait time statistics
     lockWaitTypes.computeIfAbsent(lockName, k -> new AtomicLong(0)).addAndGet(durationMs);
-    
+     
     // Update max lock wait time
     long currentMax = maxLockWaitTimeMs.get();
     if (durationMs > currentMax) {
       maxLockWaitTimeMs.compareAndSet(currentMax, durationMs);
     }
-    
+     
     // Update current lock contention (approximate - decremented elsewhere)
     currentLockContention.incrementAndGet();
-    
+     
     // Check threshold and trigger alert if needed
     if (durationMs > LOCK_WAIT_THRESHOLD_MS) {
       String alert = String.format("Lock wait exceeded threshold: %dms > %dms (lock: %s)",
@@ -622,17 +608,17 @@ public class PerformanceManager {
       addThresholdAlert(alert);
     }
   }
-  
+   
   /** Record lock contention event with queue length and duration */
   public static void recordLockContention(String lockName, int queueLength, long durationMs) {
     if (!isEnabled()) return;
-    
+     
     // Update contention counters
     lockContentionEvents.incrementAndGet();
     totalContentionWaitTimeMs.addAndGet(durationMs);
     lockContentionTypes.computeIfAbsent(lockName, k -> new AtomicInteger(0)).addAndGet(queueLength);
     maxQueueLength.compareAndSet(maxQueueLength.get(), Math.max(maxQueueLength.get(), queueLength));
-    
+     
     // Check contention threshold and trigger alert if needed
     if (queueLength > LOCK_CONTENTION_THRESHOLD) {
       String alert = String.format("Lock contention exceeded threshold: %d > %d (lock: %s)",
@@ -640,30 +626,30 @@ public class PerformanceManager {
       addThresholdAlert(alert);
     }
   }
-  
+   
   /** Record lock contention resolution (decrement counter) */
   public static void recordLockResolved() {
     if (!isEnabled()) return;
     currentLockContention.updateAndGet(count -> Math.max(0, count - 1));
   }
-  
+   
   /** Record memory usage statistics with threshold checking */
   public static void recordMemoryUsage(long totalBytes, long usedBytes, long freeBytes) {
     if (!isEnabled()) return;
-    
+     
     // Update atomic counters
     totalHeapBytes.set(totalBytes);
     usedHeapBytes.set(usedBytes);
     freeHeapBytes.set(freeBytes);
-    
+     
     double usedPct = totalBytes > 0 ? (usedBytes * 100.0 / totalBytes) : 0.0;
-    
+     
     // Update peak heap usage
     long currentPeak = peakHeapUsageBytes.get();
     if (usedBytes > currentPeak) {
       peakHeapUsageBytes.compareAndSet(currentPeak, usedBytes);
     }
-    
+     
     // Check threshold and trigger alert if needed
     if (usedPct > MEMORY_USAGE_THRESHOLD_PCT) {
       String alert = String.format("Memory usage exceeded threshold: %.1f%% > %.1f%%",
@@ -671,15 +657,15 @@ public class PerformanceManager {
       addThresholdAlert(alert);
     }
   }
-  
+   
   /** Record GC event with duration tracking and threshold checking */
   public static void recordGcEvent(long durationMs) {
     if (!isEnabled()) return;
-    
+     
     // Update atomic counters
     gcCount.incrementAndGet();
     gcTimeMs.addAndGet(durationMs);
-    
+     
     // Check threshold and trigger alert if needed
     if (durationMs > GC_DURATION_THRESHOLD_MS) {
       String alert = String.format("GC duration exceeded threshold: %dms > %dms",
@@ -687,19 +673,19 @@ public class PerformanceManager {
       addThresholdAlert(alert);
     }
   }
-  
+   
   /** Add threshold alert to be processed during next periodic log (unique entries only) */
  public static void addThresholdAlert(String alert) {
    if (!isEnabled() || alert == null || alert.isBlank()) return;
    thresholdAlerts.add(alert);
  }
-  
+   
   /** Clear all threshold alerts */
   public static void clearThresholdAlerts() {
     if (!isEnabled()) return;
     thresholdAlerts.clear();
   }
-  
+   
   /** Get current JNI call metrics */
   public static Map<String, Object> getJniCallMetrics() {
     Map<String, Object> metrics = new HashMap<>();
@@ -709,7 +695,7 @@ public class PerformanceManager {
     metrics.put("callTypes", new HashMap<>(jniCallTypes));
     return metrics;
   }
-  
+   
   /** Get current lock wait metrics */
  public static Map<String, Object> getLockWaitMetrics() {
   Map<String, Object> metrics = new HashMap<>();
@@ -720,7 +706,7 @@ public class PerformanceManager {
   return metrics;
 }
 
-/** Get lock wait metrics broken down by lock type */
+ /** Get lock wait metrics broken down by lock type */
 public static Map<String, Object> getLockWaitTypeMetrics() {
   Map<String, Object> metrics = new HashMap<>();
   metrics.put("totalWaits", totalLockWaits.get());
@@ -730,20 +716,20 @@ public static Map<String, Object> getLockWaitTypeMetrics() {
   metrics.put("lockWaitTypes", new HashMap<>(lockWaitTypes));
   return metrics;
 }
-  
+
   /** Get current memory metrics */
  public static Map<String, Object> getMemoryMetrics() {
-   Map<String, Object> metrics = new HashMap<>();
-   metrics.put("totalHeapBytes", totalHeapBytes.get());
-   metrics.put("usedHeapBytes", usedHeapBytes.get());
-   metrics.put("freeHeapBytes", freeHeapBytes.get());
-   metrics.put("peakHeapBytes", peakHeapUsageBytes.get());
-   metrics.put("gcCount", gcCount.get());
-   metrics.put("gcTimeMs", gcTimeMs.get());
-   return metrics;
- }
- 
- /** Get current allocation metrics */
+    Map<String, Object> metrics = new HashMap<>();
+    metrics.put("totalHeapBytes", totalHeapBytes.get());
+    metrics.put("usedHeapBytes", usedHeapBytes.get());
+    metrics.put("freeHeapBytes", freeHeapBytes.get());
+    metrics.put("peakHeapBytes", peakHeapUsageBytes.get());
+    metrics.put("gcCount", gcCount.get());
+    metrics.put("gcTimeMs", gcTimeMs.get());
+    return metrics;
+  }
+  
+  /** Get current allocation metrics */
 public static Map<String, Object> getAllocationMetrics() {
   Map<String, Object> metrics = new HashMap<>();
   metrics.put("totalAllocations", totalAllocations.get());
@@ -758,7 +744,7 @@ public static Map<String, Object> getAllocationMetrics() {
   return metrics;
 }
 
-/** Get current lock contention metrics */
+ /** Get current lock contention metrics */
 public static Map<String, Object> getLockContentionMetrics() {
  Map<String, Object> metrics = new HashMap<>();
  metrics.put("totalContentionEvents", lockContentionEvents.get());
@@ -768,60 +754,60 @@ public static Map<String, Object> getLockContentionMetrics() {
  return metrics;
 }
 
-/** Get call graph metrics for performance analysis */
+ /** Get call graph metrics for performance analysis */
 public static Map<String, Object> getCallGraphMetrics() {
- if (!CALL_GRAPH_ENABLED) return Collections.emptyMap();
- 
- Map<String, Object> metrics = new HashMap<>();
- for (Map.Entry<String, CallGraphNode> entry : callGraph.entrySet()) {
-   Map<String, Object> nodeMetrics = new HashMap<>();
-   CallGraphNode node = entry.getValue();
-   
-   nodeMetrics.put("totalExecutionTimeNs", node.totalExecutionTimeNs);
-   nodeMetrics.put("callCount", node.callCount);
-   nodeMetrics.put("maxExecutionTimeNs", node.maxExecutionTimeNs);
-   nodeMetrics.put("minExecutionTimeNs", node.minExecutionTimeNs);
-   nodeMetrics.put("avgExecutionTimeNs", node.callCount > 0 ? node.totalExecutionTimeNs / node.callCount : 0);
-   
-   // Add child metrics
-   Map<String, Object> childMetrics = new HashMap<>();
-   for (Map.Entry<String, CallGraphNode> childEntry : node.children.entrySet()) {
-     CallGraphNode childNode = childEntry.getValue();
-     Map<String, Object> childData = new HashMap<>();
-     childData.put("totalExecutionTimeNs", childNode.totalExecutionTimeNs);
-     childData.put("callCount", childNode.callCount);
-     childData.put("avgExecutionTimeNs", childNode.callCount > 0 ? childNode.totalExecutionTimeNs / childNode.callCount : 0);
-     childMetrics.put(childEntry.getKey(), childData);
-   }
-   
-   nodeMetrics.put("children", childMetrics);
-   metrics.put(entry.getKey(), nodeMetrics);
- }
- return metrics;
-}
+  if (!CALL_GRAPH_ENABLED) return Collections.emptyMap();
   
+  Map<String, Object> metrics = new HashMap<>();
+  for (Map.Entry<String, CallGraphNode> entry : callGraph.entrySet()) {
+    Map<String, Object> nodeMetrics = new HashMap<>();
+    CallGraphNode node = entry.getValue();
+    
+    nodeMetrics.put("totalExecutionTimeNs", node.totalExecutionTimeNs);
+    nodeMetrics.put("callCount", node.callCount);
+    nodeMetrics.put("maxExecutionTimeNs", node.maxExecutionTimeNs);
+    nodeMetrics.put("minExecutionTimeNs", node.minExecutionTimeNs);
+    nodeMetrics.put("avgExecutionTimeNs", node.callCount > 0 ? node.totalExecutionTimeNs / node.callCount : 0);
+    
+    // Add child metrics
+    Map<String, Object> childMetrics = new HashMap<>();
+    for (Map.Entry<String, CallGraphNode> childEntry : node.children.entrySet()) {
+      CallGraphNode childNode = childEntry.getValue();
+      Map<String, Object> childData = new HashMap<>();
+      childData.put("totalExecutionTimeNs", childNode.totalExecutionTimeNs);
+      childData.put("callCount", childNode.callCount);
+      childData.put("avgExecutionTimeNs", childNode.callCount > 0 ? childNode.totalExecutionTimeNs / childNode.callCount : 0);
+      childMetrics.put(childEntry.getKey(), childData);
+    }
+    
+    nodeMetrics.put("children", childMetrics);
+    metrics.put(entry.getKey(), nodeMetrics);
+  }
+  return metrics;
+}
+   
   /** Get current threshold alerts */
   public static List<String> getThresholdAlerts() {
     return new ArrayList<>(thresholdAlerts);
   }
-  
+   
   public static void onServerTick(MinecraftServer server) {
     if (!isEnabled()) return; // Early exit if disabled
-    
+     
     beginMethod("onServerTick");
     startTiming();
     // Delegate to EntityProcessor for modular implementation
     getEntityProcessor().onServerTick(server);
     long entityProcessingNanos = getElapsedNanos();
     resetTiming();
-    
+     
     // Log real-time status updates every 100 ticks
     if (TICK_COUNTER % 100 == 0) {
       startTiming();
       logRealTimeStatus();
       long statusLogNanos = getElapsedNanos();
       resetTiming();
-      
+       
       // Record profiling data for status logging
       if (PROFILING_ENABLED && (TICK_COUNTER % PROFILING_SAMPLE_RATE == 0)) {
         ProfileData profile = PROFILE_DATA.get();
@@ -832,20 +818,20 @@ public static Map<String, Object> getCallGraphMetrics() {
         }
       }
     }
-    
+     
     // Update TPS metrics BEFORE summary logging to ensure variable is in scope
     startTiming();
     updateTPS();
     long tpsUpdateNanos = getElapsedNanos();
     resetTiming();
-    
+     
     // Log periodic performance summary every 500 ticks
     if (TICK_COUNTER % 500 == 0) {
       startTiming();
       logPerformanceSummary();
       long summaryLogNanos = getElapsedNanos();
       resetTiming();
-      
+       
       // Record full tick profile when summary is logged
       if (PROFILING_ENABLED) {
         ProfileData profile = PROFILE_DATA.get();
@@ -856,7 +842,7 @@ public static Map<String, Object> getCallGraphMetrics() {
         }
       }
     }
-    
+     
     // Record complete tick metrics with all components
     if (PROFILING_ENABLED && (TICK_COUNTER % PROFILING_SAMPLE_RATE == 0)) {
       ProfileData profile = PROFILE_DATA.get();
@@ -866,11 +852,11 @@ public static Map<String, Object> getCallGraphMetrics() {
         profile.executorQueueSize = getExecutorQueueSize();
       }
     }
-    
+     
     TICK_COUNTER++;
     endMethod();
   }
-  
+   
   /** Log real-time status updates */
   private static void logRealTimeStatus() {
     if (!isEnabled() || !CONFIG.isBroadcastToClient()) return; // Early exit for disabled or no broadcast
@@ -878,23 +864,23 @@ public static Map<String, Object> getCallGraphMetrics() {
       double tps = getAverageTPS();
       long tickDurationMs = getLastTickDurationMs();
       long gcEvents = gcCount.get();
-      
+       
       // Get memory metrics
       double memoryUsagePct = totalHeapBytes.get() > 0 ?
           (usedHeapBytes.get() * 100.0 / totalHeapBytes.get()) : 0.0;
-      
+       
       // Get lock contention
       int lockContention = currentLockContention.get();
-      
+       
       // Check if server is lagging significantly
       boolean serverLagging = tickDurationMs > 50; // More than 50ms per tick indicates lag
       String lagStatus = serverLagging ? "LAGGING" : "NORMAL";
-      
+       
       // Format status message with lag indication
       String systemStatus = String.format(
           "TPS: %.2f, Tick: %dms, Memory: %.1f%%, GC: %d, Locks: %d, Status: %s",
           tps, tickDurationMs, memoryUsagePct, gcEvents, lockContention, lagStatus);
-      
+       
       // Check for important events
       String importantEvents = "";
       if (memoryUsagePct > 90.0) {
@@ -909,16 +895,16 @@ public static Map<String, Object> getCallGraphMetrics() {
       if (serverLagging) {
         importantEvents += "SERVER_LAGGING ";
       }
-      
+       
       // Log to Rust performance system
       com.kneaf.core.performance.RustPerformance.logRealTimeStatus(systemStatus,
           importantEvents.isEmpty() ? null : importantEvents);
-      
+       
     } catch (Exception e) {
       LOGGER.debug("Error logging real-time status", e);
     }
   }
-  
+   
   /** Log periodic performance summary */
   private static void logPerformanceSummary() {
     if (!isEnabled() || !CONFIG.isBroadcastToClient()) return; // Early exit for disabled or no broadcast
@@ -927,48 +913,48 @@ public static Map<String, Object> getCallGraphMetrics() {
       double tps = getAverageTPS();
       long tickDurationMs = getLastTickDurationMs();
       long gcEvents = gcCount.get();
-      
+       
       // Get memory metrics
       double memoryUsagePct = totalHeapBytes.get() > 0 ?
           (usedHeapBytes.get() * 100.0 / totalHeapBytes.get()) : 0.0;
-      
+       
       // Get lock contention
       int lockContention = currentLockContention.get();
-      
+       
       // Check if server is lagging
       boolean serverLagging = tickDurationMs > 50;
       String performanceStatus = serverLagging ? "DEGRADED" : "NORMAL";
-      
+       
       String.format(
           "Performance Metrics: {:.2f} TPS, {:.2f}ms latency, {} GC events, Status: {}",
           tps, tickDurationMs, gcEvents, performanceStatus);
-      
+       
       // Log enhanced metrics to Rust performance system
       com.kneaf.core.performance.RustPerformance.logPerformanceMetrics(
           tps, tickDurationMs, gcEvents);
-      
+       
       // Log memory pool status
       double hitRate = 92.0; // Default hit rate - would need actual calculation from memory pool
       int contention = currentLockContention.get();
-      
+       
       com.kneaf.core.performance.RustPerformance.logMemoryPoolStatus(
           memoryUsagePct, hitRate, contention);
-      
+       
       // Log thread pool status
       ThreadPoolExecutor executor = getExecutor();
       int activeThreads = executor != null ? executor.getActiveCount() : 0;
       int queueSize = getExecutorQueueSize();
       double utilization = getThreadPoolManager().getExecutorUtilization();
-      
+       
       com.kneaf.core.performance.RustPerformance.logThreadPoolStatus(
           activeThreads, queueSize, utilization);
-      
+       
       // Log additional performance information if server is lagging
       if (serverLagging) {
         LOGGER.warn("[KneafMod] Server performance degraded: TPS={:.2f}, Tick={}ms, Memory={:.1f}%, Locks={}",
                    tps, tickDurationMs, memoryUsagePct, lockContention);
       }
-      
+       
     } catch (Exception e) {
       LOGGER.debug("Error logging performance summary", e);
     }
@@ -991,16 +977,11 @@ public static Map<String, Object> getCallGraphMetrics() {
     if (shouldProfile && profile != null) {
       profile.entityCollectionTime = System.nanoTime() - entityCollectionStart;
       profile.entitiesProcessed = data.entities().size();
-      profile.itemsProcessed = data.items().size();
     }
 
-    long consolidationStart = shouldProfile ? System.nanoTime() : 0;
-    List<ItemEntityData> consolidated = consolidateItemEntities(data.items());
-    if (shouldProfile && profile != null) {
-      profile.itemConsolidationTime = System.nanoTime() - consolidationStart;
-    }
+    // Item consolidation removed - pass through raw items without optimization
     return new EntityDataCollection(
-        data.entities(), consolidated, data.mobs(), data.blockEntities(), data.players());
+        data.entities(), data.mobs(), data.blockEntities(), data.players());
   }
 
   private static void submitAsyncOptimizations(
@@ -1047,7 +1028,6 @@ public static Map<String, Object> getCallGraphMetrics() {
       if (TICK_COUNTER % CONFIG.getLogIntervalTicks() == 0) {
         logOptimizations(server, results);
       }
-      removeItems(server, results.itemResult());
     } catch (Exception e) {
       LOGGER.warn("Error applying optimizations on server thread", e);
     }
@@ -1077,7 +1057,6 @@ public static Map<String, Object> getCallGraphMetrics() {
       if (TICK_COUNTER % CONFIG.getLogIntervalTicks() == 0) {
         logOptimizations(server, results);
       }
-      removeItems(server, results.itemResult());
     } catch (Exception ex) {
       LOGGER.warn("Error processing optimizations synchronously", ex);
     }
@@ -1091,10 +1070,10 @@ public static Map<String, Object> getCallGraphMetrics() {
     try {
       long processingStart = shouldProfile ? System.nanoTime() : 0;
       EntityProcessor.OptimizationResults processorResults = getEntityProcessor().processOptimizations(data);
-      
+       
       // Convert to PerformanceManager results format for compatibility
       OptimizationResults results = adaptOptimizationResults(processorResults);
-      
+       
       if (shouldProfile) {
         ProfileData profile = PROFILE_DATA.get();
         if (profile != null) {
@@ -1115,7 +1094,6 @@ public static Map<String, Object> getCallGraphMetrics() {
         // Already using PerformanceManager results format in this method
         logOptimizations(server, results);
       }
-      getEntityProcessor().removeItems(server, processorResults.itemResult());
     } catch (Exception ex) {
       LOGGER.warn("Error processing optimizations synchronously", ex);
     }
@@ -1128,7 +1106,6 @@ public static Map<String, Object> getCallGraphMetrics() {
     return new OptimizationResults(
       source.toTick(),
       source.blockResult(),
-      source.itemResult(),
       source.mobResult()
     );
   }
@@ -1139,16 +1116,16 @@ public static Map<String, Object> getCallGraphMetrics() {
       long delta = currentTime - lastTickTime;
       // record last tick duration for external consumers (e.g. thread-scaling decisions)
       lastTickDurationNanos = delta;
-      
+       
       // Calculate actual TPS based on tick duration - don't cap at 20.0 to reflect real performance
       double tps = 1_000_000_000.0 / delta;
-      
+       
       // If server is lagging significantly (delta > 100ms), calculate TPS based on actual performance
       if (delta > 100_000_000L) { // More than 100ms per tick indicates lag
         // Calculate realistic TPS based on actual tick time
         tps = Math.min(20.0, 1000.0 / (delta / 1_000_000.0)); // Convert to ms and calculate TPS
       }
-      
+       
       RustPerformance.setCurrentTPS(tps);
       // update rolling window
       TPS_WINDOW[tpsWindowIndex % TPS_WINDOW_SIZE] = tps;
@@ -1181,7 +1158,7 @@ public static Map<String, Object> getCallGraphMetrics() {
         count++;
       }
     }
-    
+     
     // If we have valid measurements, return actual average
     if (count > 0) {
       double avg = sum / count;
@@ -1189,7 +1166,7 @@ public static Map<String, Object> getCallGraphMetrics() {
       // Don't artificially inflate the average - show the actual performance
       return avg;
     }
-    
+     
     // Default to 20.0 only if no measurements available
     return 20.0;
   }
@@ -1198,7 +1175,6 @@ public static Map<String, Object> getCallGraphMetrics() {
     // Pre-size collections to avoid repeated resizing
     int estimatedEntities = Math.min(CONFIG.getMaxEntitiesToCollect(), 5000);
     List<EntityData> entities = new ArrayList<>(estimatedEntities);
-    List<ItemEntityData> items = new ArrayList<>(estimatedEntities / 4);
     List<MobData> mobs = new ArrayList<>(estimatedEntities / 8);
     List<BlockEntityData> blockEntities = new ArrayList<>(128);
     List<PlayerData> players = new ArrayList<>(32);
@@ -1225,7 +1201,6 @@ public static Map<String, Object> getCallGraphMetrics() {
           level,
           new EntityCollectionContext(
               entities,
-              items,
               mobs,
               maxEntities,
               distanceCutoff,
@@ -1237,7 +1212,7 @@ public static Map<String, Object> getCallGraphMetrics() {
       players.addAll(levelPlayers);
       if (entities.size() >= maxEntities) break; // global cap
     }
-    return new EntityDataCollection(entities, items, mobs, blockEntities, players);
+    return new EntityDataCollection(entities, mobs, blockEntities, players);
   }
 
   private static void collectEntitiesFromLevel(ServerLevel level, EntityCollectionContext context) {
@@ -1278,7 +1253,6 @@ public static Map<String, Object> getCallGraphMetrics() {
               minSq,
               context.excluded(),
               context.entities(),
-              context.items(),
               context.mobs());
         }
       }
@@ -1335,14 +1309,14 @@ public static Map<String, Object> getCallGraphMetrics() {
   private static SpatialGrid getOrCreateSpatialGrid(ServerLevel level, List<PlayerData> players) {
     beginMethod("getOrCreateSpatialGrid");
     startTiming();
-    
+     
       // Get lock for this specific level using lock striping
       ReentrantLock lock = getGridLock(level);
       lock.lock();
       try {
         long lockWaitNanos = getElapsedNanos();
         resetTiming();
-        
+         
         SpatialGrid grid =
             LEVEL_SPATIAL_GRIDS.computeIfAbsent(
                 level,
@@ -1406,7 +1380,6 @@ public static Map<String, Object> getCallGraphMetrics() {
       double minSq,
       String[] excluded,
       List<EntityData> entities,
-      List<ItemEntityData> items,
       List<MobData> mobs) {
     String typeStr = entity.getType().toString();
     if (isExcludedType(typeStr, excluded)) return;
@@ -1422,9 +1395,7 @@ public static Map<String, Object> getCallGraphMetrics() {
             isBlockEntity,
             typeStr));
 
-    if (entity instanceof ItemEntity itemEntity) {
-      collectItemEntity(entity, itemEntity, items);
-    } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
+    if (entity instanceof net.minecraft.world.entity.Mob mob) {
       collectMobEntity(entity, mob, mobs, distance, typeStr);
     }
   }
@@ -1438,16 +1409,6 @@ public static Map<String, Object> getCallGraphMetrics() {
     return false;
   }
 
-  private static void collectItemEntity(
-      Entity entity, ItemEntity itemEntity, List<ItemEntityData> items) {
-    var chunkPos = entity.chunkPosition();
-    var itemStack = itemEntity.getItem();
-    var itemType = itemStack.getItem().getDescriptionId();
-    var count = itemStack.getCount();
-    var ageSeconds = itemEntity.getAge() / 20;
-    items.add(
-        new ItemEntityData(entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
-  }
 
   /**
    * Perform reduced frequency distance calculation to optimize performance. Uses cached distances
@@ -1495,7 +1456,6 @@ public static Map<String, Object> getCallGraphMetrics() {
               minSq,
               context.excluded(),
               context.entities(),
-              context.items(),
               context.mobs());
         }
       }
@@ -1512,55 +1472,6 @@ public static Map<String, Object> getCallGraphMetrics() {
     // Use the precomputed distance from caller to avoid an extra player iteration
     boolean isPassive = !(mob instanceof net.minecraft.world.entity.monster.Monster);
     mobs.add(new MobData(entity.getId(), distance, isPassive, typeStr));
-  }
-
-  /**
-   * Pack chunk coordinates and item type hash into a composite long key. Format: [chunkX (21
-   * bits)][chunkZ (21 bits)][itemTypeHash (22 bits)] This provides efficient HashMap operations
-   * without string allocations.
-   */
-  private static long packItemKey(int chunkX, int chunkZ, String itemType) {
-    // Use 21 bits for each coordinate (covers ±1 million chunks) and 22 bits for hash
-    long packedChunkX = ((long) chunkX) & 0x1FFFFF; // 21 bits
-    long packedChunkZ = ((long) chunkZ) & 0x1FFFFF; // 21 bits
-    long itemHash = itemType == null ? 0 : ((long) itemType.hashCode()) & 0x3FFFFF; // 22 bits
-
-    return (packedChunkX << 43) | (packedChunkZ << 22) | itemHash;
-  }
-
-  /**
-   * Consolidate collected item entity data by chunk X/Z and item type to reduce the number of items
-   * we hand to the downstream Rust processing. This only aggregates the collected snapshot and does
-   * not modify world state directly, so it is safe and purely an optimization.
-   */
-  private static List<ItemEntityData> consolidateItemEntities(List<ItemEntityData> items) {
-    if (items == null || items.isEmpty()) return items;
-
-    int estimatedSize = Math.min(items.size(), items.size() / 2 + 1);
-    Map<Long, ItemEntityData> agg = HashMap.newHashMap(estimatedSize);
-
-    // Pre-calculate hash codes to avoid repeated calls
-    for (ItemEntityData it : items) {
-      long key = packItemKey(it.getChunkX(), it.getChunkZ(), it.getItemType());
-
-      ItemEntityData cur = agg.get(key);
-      if (cur == null) {
-        agg.put(key, it);
-      } else {
-        // Sum counts and keep smallest age to represent the merged group
-        int newCount = cur.getCount() + it.getCount();
-        int newAge = Math.min(cur.getAgeSeconds(), it.getAgeSeconds());
-        // Preserve a valid entity id from one of the merged items (use the existing entry's id)
-        long preservedId = cur.getId();
-        agg.put(
-            key,
-            new ItemEntityData(
-                preservedId, it.getChunkX(), it.getChunkZ(), it.getItemType(), newCount, newAge));
-      }
-    }
-
-    // Pre-size the result list to avoid resizing
-    return new ArrayList<>(agg.values());
   }
 
   // (Intentionally using direct HashMap construction for simplicity)
@@ -1580,12 +1491,6 @@ public static Map<String, Object> getCallGraphMetrics() {
     resetTiming();
     recordJniCall("getBlockEntitiesToTick", TimeUnit.NANOSECONDS.toMillis(getBlockEntitiesToTickNanos));
 
-    startTiming();
-    com.kneaf.core.performance.core.ItemProcessResult itemResult =
-        RustPerformance.processItemEntities(data.items());
-    long processItemEntitiesNanos = getElapsedNanos();
-    resetTiming();
-    recordJniCall("processItemEntities", TimeUnit.NANOSECONDS.toMillis(processItemEntitiesNanos));
 
     startTiming();
     com.kneaf.core.performance.core.MobProcessResult mobResult =
@@ -1594,11 +1499,10 @@ public static Map<String, Object> getCallGraphMetrics() {
     resetTiming();
     recordJniCall("processMobAI", TimeUnit.NANOSECONDS.toMillis(processMobAINanos));
 
-    return new OptimizationResults(toTick, blockResult, itemResult, mobResult);
+    return new OptimizationResults(toTick, blockResult, mobResult);
   }
 
   private static void applyOptimizations(MinecraftServer server, OptimizationResults results) {
-    applyItemUpdates(server, results.itemResult());
     applyMobOptimizations(server, results.mobResult());
     // Ensure server-level distance settings are constrained when optimization level requires it
     try {
@@ -1711,8 +1615,8 @@ public static Map<String, Object> getCallGraphMetrics() {
           // ignore if not available
         }
 
-  int rem = remaining.intValue();
-  TRANSITION_REMAINING.put(level, Integer.valueOf(rem - 1));
+      int rem = remaining.intValue();
+      TRANSITION_REMAINING.put(level, Integer.valueOf(rem - 1));
       } catch (Throwable t) {
         LOGGER.debug("Error transitioning distance for level {}: {}", level, t.getMessage());
         // Clean up to avoid endless retries
@@ -1760,8 +1664,8 @@ public static Map<String, Object> getCallGraphMetrics() {
           // ignore if not available
         }
 
-  int remSim = remaining.intValue();
-  TRANSITION_REMAINING_SIM.put(level, Integer.valueOf(remSim - 1));
+      int remSim = remaining.intValue();
+      TRANSITION_REMAINING_SIM.put(level, Integer.valueOf(remSim - 1));
       } catch (Throwable t) {
         LOGGER.debug("Error transitioning simulation distance for level {}: {}", level, t.getMessage());
         TRANSITION_REMAINING_SIM.remove(level);
@@ -1792,29 +1696,6 @@ public static Map<String, Object> getCallGraphMetrics() {
     }
     }
 
-  private static void applyItemUpdates(
-      MinecraftServer server, com.kneaf.core.performance.core.ItemProcessResult itemResult) {
-    if (itemResult == null || itemResult.getItemUpdates() == null) return;
-
-    // Batch entity lookup: create a map of entity IDs to updates for O(1) lookup
-    Map<Integer, com.kneaf.core.performance.core.PerformanceProcessor.ItemUpdate> updateMap =
-        new HashMap<>();
-    for (var update : itemResult.getItemUpdates()) {
-      updateMap.put((int) update.getId(), update);
-    }
-
-    // Process all levels once - O(U + L) complexity
-    for (ServerLevel level : server.getAllLevels()) {
-      for (Map.Entry<Integer, com.kneaf.core.performance.core.PerformanceProcessor.ItemUpdate>
-          entry : updateMap.entrySet()) {
-        Entity entity = level.getEntity(entry.getKey());
-        if (entity instanceof ItemEntity itemEntity) {
-          com.kneaf.core.performance.core.PerformanceProcessor.ItemUpdate update = entry.getValue();
-          itemEntity.getItem().setCount(update.getNewCount());
-        }
-      }
-    }
-  }
 
   private static void applyMobOptimizations(
       MinecraftServer server, com.kneaf.core.performance.core.MobProcessResult mobResult) {
@@ -1875,19 +1756,6 @@ public static Map<String, Object> getCallGraphMetrics() {
   private static void logReadableOptimizations(
       MinecraftServer server, OptimizationResults results) {
     if (results == null) return;
-    if (results.itemResult() != null) {
-      long merged = results.itemResult().getMergedCount();
-      long despawned = results.itemResult().getDespawnedCount();
-      if (merged > 0 || despawned > 0) {
-        broadcastPerformanceLine(
-            server, String.format("Item optimization: %d merged, %d despawned", merged, despawned));
-      }
-      if (!results.itemResult().getItemsToRemove().isEmpty()) {
-        broadcastPerformanceLine(
-            server,
-            String.format("Items removed: %d", results.itemResult().getItemsToRemove().size()));
-      }
-    }
 
     if (results.mobResult() != null) {
       int disabled = results.mobResult().getDisableList().size();
@@ -1988,27 +1856,19 @@ public static Map<String, Object> getCallGraphMetrics() {
 
   private static String buildOptimizationSummary(OptimizationResults results) {
     double avg = getRollingAvgTPS();
-    long itemsMerged = results.itemResult() == null ? 0L : results.itemResult().getMergedCount();
-    long itemsDespawned =
-        results.itemResult() == null ? 0L : results.itemResult().getDespawnedCount();
     int mobsDisabled =
         results.mobResult() == null ? 0 : results.mobResult().getDisableList().size();
     int mobsSimplified =
         results.mobResult() == null ? 0 : results.mobResult().getSimplifyList().size();
-    int itemsRemoved =
-        results.itemResult() == null ? 0 : results.itemResult().getItemsToRemove().size();
     int blockEntities = results.blockResult() == null ? 0 : results.blockResult().size();
     int queueSize = getExecutorQueueSize();
     return String.format(
-        "avgTps=%.2f currentThreshold=%.2f queueSize=%d itemsMerged=%d itemsDespawned=%d mobsDisabled=%d mobsSimplified=%d itemsRemoved=%d blockEntities=%d",
+        "avgTps=%.2f currentThreshold=%.2f queueSize=%d mobsDisabled=%d mobsSimplified=%d blockEntities=%d",
         avg,
         currentTpsThreshold,
         queueSize,
-        itemsMerged,
-        itemsDespawned,
         mobsDisabled,
         mobsSimplified,
-        itemsRemoved,
         blockEntities);
   }
 
@@ -2018,11 +1878,6 @@ public static Map<String, Object> getCallGraphMetrics() {
    */
   private static boolean hasMeaningfulOptimizations(OptimizationResults results) {
     if (results == null) return false;
-    if (results.itemResult() != null) {
-      if (results.itemResult().getMergedCount() > 0) return true;
-      if (results.itemResult().getDespawnedCount() > 0) return true;
-      if (!results.itemResult().getItemsToRemove().isEmpty()) return true;
-    }
     if (results.mobResult() != null) {
       if (!results.mobResult().getDisableList().isEmpty()) return true;
       if (!results.mobResult().getSimplifyList().isEmpty()) return true;
@@ -2030,29 +1885,19 @@ public static Map<String, Object> getCallGraphMetrics() {
     return results.blockResult() != null && !results.blockResult().isEmpty();
   }
 
+  /**
+   * Fallback implementation that preserves all items without removal.
+   * Maintains API compatibility while removing optimization logic.
+   */
   private static void removeItems(
       MinecraftServer server, com.kneaf.core.performance.core.ItemProcessResult itemResult) {
-    if (itemResult == null
-        || itemResult.getItemsToRemove() == null
-        || itemResult.getItemsToRemove().isEmpty()) return;
-    for (ServerLevel level : server.getAllLevels()) {
-      for (Long id : itemResult.getItemsToRemove()) {
-        try {
-          Entity entity = level.getEntity(id.intValue());
-          if (entity != null) {
-            entity.remove(RemovalReason.DISCARDED);
-          }
-        } catch (Exception e) {
-          LOGGER.debug("Error removing item entity { } on level { }", id, level.dimension(), e);
-        }
-      }
-    }
+    // Always return immediately - no items to remove in this simplified mode
+    if (itemResult == null) return;
   }
 
   private record OptimizationResults(
       List<Long> toTick,
       List<Long> blockResult,
-      com.kneaf.core.performance.core.ItemProcessResult itemResult,
       com.kneaf.core.performance.core.MobProcessResult mobResult) {}
 
   // Static initializer to set initial threshold and initialize Rust allocator
@@ -2071,4 +1916,3 @@ public static Map<String, Object> getCallGraphMetrics() {
     }
   }
 }
-

@@ -5,7 +5,6 @@ import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.MobData;
 import com.kneaf.core.data.entity.PlayerData;
-import com.kneaf.core.data.item.ItemEntityData;
 import com.kneaf.core.performance.RustPerformance;
 import com.kneaf.core.performance.spatial.SpatialGrid;
 import com.mojang.logging.LogUtils;
@@ -14,8 +13,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.Entity.RemovalReason;
-import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.phys.AABB;
 import org.slf4j.Logger;
 
@@ -38,7 +35,7 @@ public class EntityProcessor {
   private static final Map<ServerLevel, SpatialGrid> LEVEL_SPATIAL_GRIDS = new HashMap<>();
   private static final Object SPATIAL_GRID_LOCK = new Object();
   private static final int ASYNC_COLLECTION_THREADS = Runtime.getRuntime().availableProcessors() / 2;
-  
+   
   // Adaptive memory pool configuration
   private static final int MEMORY_POOL_INITIAL_CAPACITY = 1024;
   private static final float MEMORY_POOL_LOAD_FACTOR = 0.75f;
@@ -92,15 +89,16 @@ public class EntityProcessor {
             .build()
     );
   }
-  
+   
   private final ExecutorService asyncCollector;
 
   /**
    * Collect and consolidate entity data from the server asynchronously.
+   * Item optimization has been removed - returns raw entity data.
    */
   public CompletableFuture<EntityDataCollection> collectAndConsolidateAsync(MinecraftServer server, boolean shouldProfile) {
     long collectionStart = shouldProfile ? System.nanoTime() : 0;
-    
+      
     return CompletableFuture.supplyAsync(() -> collectEntityData(server), asyncCollector)
         .thenApply(rawData -> {
           if (shouldProfile) {
@@ -110,21 +108,17 @@ public class EntityProcessor {
           return rawData;
         })
         .thenApplyAsync(rawData -> {
-          long consolidationStart = shouldProfile ? System.nanoTime() : 0;
-          List<ItemEntityData> consolidatedItems = consolidateItemEntities(rawData.items());
-          
           if (shouldProfile) {
-            long durationMs = (System.nanoTime() - consolidationStart) / 1_000_000;
-            PerformanceMetricsLogger.logLine(String.format("PERF: item_consolidation duration=%dms", durationMs));
+            long durationMs = System.nanoTime() - (shouldProfile ? collectionStart : 0);
+            PerformanceMetricsLogger.logLine(String.format("PERF: entity_processing duration=%dms", durationMs / 1_000_000));
           }
-
-          return new EntityDataCollection(
-              rawData.entities(), consolidatedItems, rawData.mobs(), rawData.blockEntities(), rawData.players());
+          return rawData;
         }, asyncCollector);
   }
 
   /**
    * Collect and consolidate entity data from the server (synchronous fallback).
+   * Item optimization has been removed - returns raw entity data.
    */
   public EntityDataCollection collectAndConsolidate(MinecraftServer server, boolean shouldProfile) {
     try {
@@ -137,37 +131,33 @@ public class EntityProcessor {
 
   /**
    * Synchronous entity collection (fallback for async failures).
+   * Item optimization has been removed - returns raw entity data.
    */
   private EntityDataCollection collectAndConsolidateSync(MinecraftServer server, boolean shouldProfile) {
     long entityCollectionStart = shouldProfile ? System.nanoTime() : 0;
     EntityDataCollection rawData = collectEntityData(server);
-    
+     
     if (shouldProfile) {
       long durationMs = (System.nanoTime() - entityCollectionStart) / 1_000_000;
       PerformanceMetricsLogger.logLine(String.format("PERF: entity_collection duration=%dms", durationMs));
     }
 
-    long consolidationStart = shouldProfile ? System.nanoTime() : 0;
-    List<ItemEntityData> consolidatedItems = consolidateItemEntities(rawData.items());
-    
     if (shouldProfile) {
-      long durationMs = (System.nanoTime() - consolidationStart) / 1_000_000;
-      PerformanceMetricsLogger.logLine(String.format("PERF: item_consolidation duration=%dms", durationMs));
+      long durationMs = System.nanoTime() - (shouldProfile ? entityCollectionStart : 0);
+      PerformanceMetricsLogger.logLine(String.format("PERF: entity_processing duration=%dms", durationMs / 1_000_000));
     }
 
-    return new EntityDataCollection(
-        rawData.entities(), consolidatedItems, rawData.mobs(), rawData.blockEntities(), rawData.players());
+    return rawData;
   }
 
   private EntityDataCollection collectEntityData(MinecraftServer server) {
     if (server == null) {
-      return new EntityDataCollection(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+      return new EntityDataCollection(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
     }
 
     // Pre-size collections to avoid repeated resizing
     int estimatedEntities = Math.min(CONFIG.getMaxEntitiesToCollect(), 5000);
     List<EntityData> entities = new ArrayList<>(estimatedEntities);
-    List<ItemEntityData> items = new ArrayList<>(estimatedEntities / 4);
     List<MobData> mobs = new ArrayList<>(estimatedEntities / 8);
     List<BlockEntityData> blockEntities = new ArrayList<>(128);
     List<PlayerData> players = new ArrayList<>(32);
@@ -188,7 +178,7 @@ public class EntityProcessor {
 
     for (ServerLevel level : levels) {
       if (levelsProcessed >= maxParallelLevels) break;
-      
+       
       List<ServerPlayer> serverPlayers = level.players();
       List<PlayerData> levelPlayers = new ArrayList<>(serverPlayers.size());
 
@@ -201,7 +191,7 @@ public class EntityProcessor {
           collectEntitiesFromLevel(
               level,
               new EntityCollectionContext(
-                  entities, items, mobs, maxEntities, distanceCutoff, levelPlayers, excludedTypes, cutoffSq));
+                  entities, mobs, maxEntities, distanceCutoff, levelPlayers, excludedTypes, cutoffSq));
         } catch (Exception e) {
           LOGGER.debug("Error collecting entities from level {}: {}", level.dimension(), e.getMessage());
         }
@@ -209,7 +199,7 @@ public class EntityProcessor {
 
       players.addAll(levelPlayers);
       levelsProcessed++;
-      
+       
       if (entities.size() >= maxEntities) {
         break;
       }
@@ -221,7 +211,7 @@ public class EntityProcessor {
       LOGGER.debug("Some levels failed entity collection, continuing with available data", e);
     }
 
-    return new EntityDataCollection(entities, items, mobs, blockEntities, players);
+    return new EntityDataCollection(entities, mobs, blockEntities, players);
   }
 
   private void collectEntitiesFromLevel(ServerLevel level, EntityCollectionContext context) {
@@ -251,9 +241,9 @@ public class EntityProcessor {
     for (int i = 0; i < entityCount && context.entities().size() < context.maxEntities(); i++) {
       Entity entity = entityList.get(i);
       double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, context.distanceCutoff());
-      
+       
       if (minSq <= context.cutoffSq()) {
-        processEntityWithinCutoff(entity, minSq, context.excluded(), context.entities(), context.items(), context.mobs());
+        processEntityWithinCutoff(entity, minSq, context.excluded(), context.entities(), context.mobs());
       }
     }
   }
@@ -283,7 +273,7 @@ public class EntityProcessor {
       if (!isExcludedType(typeStr, context.excluded())) {
         double minSq = computeMinSquaredDistanceToPlayersOptimized(entity, spatialGrid, context.distanceCutoff());
         if (minSq <= context.cutoffSq()) {
-          processEntityWithinCutoff(entity, minSq, context.excluded(), context.entities(), context.items(), context.mobs());
+          processEntityWithinCutoff(entity, minSq, context.excluded(), context.entities(), context.mobs());
         }
       }
     }
@@ -336,7 +326,7 @@ public class EntityProcessor {
     }
   }
 
-  private void processEntityWithinCutoff(Entity entity, double minSq, String[] excluded, List<EntityData> entities, List<ItemEntityData> items, List<MobData> mobs) {
+  private void processEntityWithinCutoff(Entity entity, double minSq, String[] excluded, List<EntityData> entities, List<MobData> mobs) {
     String typeStr = entity.getType().toString();
     if (isExcludedType(typeStr, excluded)) return;
     
@@ -355,20 +345,18 @@ public class EntityProcessor {
 
     entities.add(entityData);
 
-    if (entity instanceof ItemEntity itemEntity) {
-      collectItemEntity(entity, itemEntity, items);
-    } else if (entity instanceof net.minecraft.world.entity.Mob mob) {
+    if (entity instanceof net.minecraft.world.entity.Mob mob) {
       collectMobEntity(entity, mob, mobs, distance, typeStr);
     }
   }
-  
+   
   /**
    * Get entity data from adaptive memory pool
    */
   private EntityData getFromMemoryPool(long entityId) {
     return entityMemoryPool.get(entityId);
   }
-  
+   
   /**
    * Put entity data into adaptive memory pool with size control
    */
@@ -380,7 +368,7 @@ public class EntityProcessor {
     entityMemoryPool.put(entityId, entityData);
     poolSize.incrementAndGet();
   }
-  
+   
   /**
    * Evict entity from memory pool (simple implementation)
    */
@@ -392,7 +380,7 @@ public class EntityProcessor {
     entityMemoryPool.remove(entry.getKey());
     poolSize.decrementAndGet();
   }
-  
+   
   /**
    * Clear memory pool (called during server ticks or when needed)
    */
@@ -410,55 +398,9 @@ public class EntityProcessor {
     return false;
   }
 
-  private void collectItemEntity(Entity entity, ItemEntity itemEntity, List<ItemEntityData> items) {
-    var chunkPos = entity.chunkPosition();
-    var itemStack = itemEntity.getItem();
-    var itemType = itemStack.getItem().getDescriptionId();
-    var count = itemStack.getCount();
-    var ageSeconds = itemEntity.getAge() / 20;
-    items.add(new ItemEntityData(entity.getId(), chunkPos.x, chunkPos.z, itemType, count, ageSeconds));
-  }
-
   private void collectMobEntity(Entity entity, net.minecraft.world.entity.Mob mob, List<MobData> mobs, double distance, String typeStr) {
     boolean isPassive = !(mob instanceof net.minecraft.world.entity.monster.Monster);
     mobs.add(new MobData(entity.getId(), distance, isPassive, typeStr));
-  }
-
-  /**
-   * Consolidate collected item entity data by chunk X/Z and item type.
-   */
-  public List<ItemEntityData> consolidateItemEntities(List<ItemEntityData> items) {
-    if (items == null || items.isEmpty()) return items;
-
-    int estimatedSize = Math.min(items.size(), items.size() / 2 + 1);
-    Map<Long, ItemEntityData> agg = new HashMap<>(estimatedSize);
-
-    for (ItemEntityData it : items) {
-      long key = packItemKey(it.getChunkX(), it.getChunkZ(), it.getItemType());
-
-      ItemEntityData cur = agg.get(key);
-      if (cur == null) {
-        agg.put(key, it);
-      } else {
-        int newCount = cur.getCount() + it.getCount();
-        int newAge = Math.min(cur.getAgeSeconds(), it.getAgeSeconds());
-        long preservedId = cur.getId();
-        agg.put(key, new ItemEntityData(preservedId, it.getChunkX(), it.getChunkZ(), it.getItemType(), newCount, newAge));
-      }
-    }
-
-    return new ArrayList<>(agg.values());
-  }
-
-  /**
-   * Pack chunk coordinates and item type hash into a composite long key.
-   */
-  private long packItemKey(int chunkX, int chunkZ, String itemType) {
-    long packedChunkX = ((long) chunkX) & 0x1FFFFF; // 21 bits
-    long packedChunkZ = ((long) chunkZ) & 0x1FFFFF; // 21 bits
-    long itemHash = itemType == null ? 0 : ((long) itemType.hashCode()) & 0x3FFFFF; // 22 bits
-
-    return (packedChunkX << 43) | (packedChunkZ << 22) | itemHash;
   }
 
   /**
@@ -467,38 +409,19 @@ public class EntityProcessor {
   public OptimizationResults processOptimizations(EntityDataCollection data) {
     List<Long> toTick = RustPerformance.getEntitiesToTick(data.entities(), data.players());
     List<Long> blockResult = RustPerformance.getBlockEntitiesToTick(data.blockEntities());
-    com.kneaf.core.performance.core.ItemProcessResult itemResult = RustPerformance.processItemEntities(data.items());
     com.kneaf.core.performance.core.MobProcessResult mobResult = RustPerformance.processMobAI(data.mobs());
     
-    return new OptimizationResults(toTick, blockResult, itemResult, mobResult);
+    return new OptimizationResults(toTick, blockResult, mobResult);
   }
 
   /**
    * Apply optimization results to the server world.
    */
   public void applyOptimizations(MinecraftServer server, OptimizationResults results) {
-    applyItemUpdates(server, results.itemResult());
     applyMobOptimizations(server, results.mobResult());
     enforceServerDistanceBounds(server);
   }
 
-  private void applyItemUpdates(MinecraftServer server, com.kneaf.core.performance.core.ItemProcessResult itemResult) {
-    if (itemResult == null || itemResult.getItemUpdates() == null) return;
-
-    Map<Integer, com.kneaf.core.performance.core.PerformanceProcessor.ItemUpdate> updateMap = new HashMap<>();
-    for (var update : itemResult.getItemUpdates()) {
-      updateMap.put((int) update.getId(), update);
-    }
-
-    for (ServerLevel level : server.getAllLevels()) {
-      for (Map.Entry<Integer, com.kneaf.core.performance.core.PerformanceProcessor.ItemUpdate> entry : updateMap.entrySet()) {
-        Entity entity = level.getEntity(entry.getKey());
-        if (entity instanceof ItemEntity itemEntity) {
-          itemEntity.getItem().setCount(entry.getValue().getNewCount());
-        }
-      }
-    }
-  }
 
   private void applyMobOptimizations(MinecraftServer server, com.kneaf.core.performance.core.MobProcessResult mobResult) {
     if (mobResult == null) return;
@@ -538,7 +461,7 @@ public class EntityProcessor {
       com.kneaf.core.performance.core.RustPerformanceFacade facade = com.kneaf.core.performance.core.RustPerformanceFacade.getInstance();
       com.kneaf.core.performance.core.PerformanceOptimizer.OptimizationLevel level = 
           facade.isNativeAvailable() ? facade.getCurrentOptimizationLevel() : null;
-      
+       
       if (level != null) {
         int target = mapOptimizationLevelToDistance(level);
         setTargetDistance(server, target);
@@ -619,7 +542,7 @@ public class EntityProcessor {
     for (ServerLevel level : server.getAllLevels()) {
       Integer remaining = TRANSITION_REMAINING.get(level);
       Integer target = TARGET_DISTANCE.get(level);
-      
+       
       if (remaining == null || target == null) continue;
 
       try {
@@ -649,7 +572,7 @@ public class EntityProcessor {
     for (ServerLevel level : server.getAllLevels()) {
       Integer remaining = TRANSITION_REMAINING_SIM.get(level);
       Integer target = TARGET_SIMULATION_DISTANCE.get(level);
-      
+       
       if (remaining == null || target == null) continue;
 
       try {
@@ -738,7 +661,7 @@ public class EntityProcessor {
     if (getter != null && setter != null) {
       int current = ((Number) getter.invoke(level)).intValue();
       int orig = originalMap.get(level).intValue();
-      
+       
       if (current != orig) {
         setter.invoke(level, Integer.valueOf(orig));
       }
@@ -826,26 +749,6 @@ public class EntityProcessor {
   }
 
   /**
-   * Remove items from the world based on optimization results.
-   */
-  public void removeItems(MinecraftServer server, com.kneaf.core.performance.core.ItemProcessResult itemResult) {
-    if (itemResult == null || itemResult.getItemsToRemove() == null || itemResult.getItemsToRemove().isEmpty()) return;
-    
-    for (ServerLevel level : server.getAllLevels()) {
-      for (Long id : itemResult.getItemsToRemove()) {
-        try {
-          Entity entity = level.getEntity(id.intValue());
-          if (entity != null) {
-            entity.remove(RemovalReason.DISCARDED);
-          }
-        } catch (Exception e) {
-          LOGGER.debug("Error removing item entity {} on level {}", id, level.dimension(), e);
-        }
-      }
-    }
-  }
-
-  /**
    * Log spatial grid statistics for performance monitoring.
    */
   public void logSpatialGridStats(MinecraftServer server) {
@@ -889,7 +792,6 @@ public class EntityProcessor {
    */
   public record EntityDataCollection(
       List<EntityData> entities,
-      List<ItemEntityData> items,
       List<MobData> mobs,
       List<BlockEntityData> blockEntities,
       List<PlayerData> players) {}
@@ -899,7 +801,6 @@ public class EntityProcessor {
    */
   public record EntityCollectionContext(
       List<EntityData> entities,
-      List<ItemEntityData> items,
       List<MobData> mobs,
       int maxEntities,
       double distanceCutoff,
@@ -913,7 +814,6 @@ public class EntityProcessor {
   public record OptimizationResults(
       List<Long> toTick,
       List<Long> blockResult,
-      com.kneaf.core.performance.core.ItemProcessResult itemResult,
       com.kneaf.core.performance.core.MobProcessResult mobResult) {}
 
   /**
@@ -972,13 +872,13 @@ public class EntityProcessor {
       // Fall back to original synchronous processing
       updateTPS();
       TICK_COUNTER++;
-      
+       
       if (!shouldPerformScan()) {
         return;
       }
 
       EntityDataCollection data = collectAndConsolidate(server, false);
-      
+       
       try {
         applyDistanceTransitions(server);
       } catch (Throwable t) {

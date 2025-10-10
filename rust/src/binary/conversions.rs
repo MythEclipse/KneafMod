@@ -3,7 +3,6 @@ use crate::mob::types::{MobInput, MobProcessResult};
 use crate::block::types::{BlockInput, BlockProcessResult};
 use crate::entity::types::{Input as EntityInput, EntityData as REntityData, PlayerData as RPlayerData};
 use crate::villager::types::{VillagerInput, VillagerProcessResult, VillagerData, PlayerData as VillagerPlayerData};
-use crate::item::types::{ItemInput, ItemEntityData as RItemEntityData};
 
 use std::io::{Cursor, Read};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -126,69 +125,6 @@ pub fn serialize_entity_result(result: &crate::entity::types::ProcessResult) -> 
     out.write_u64::<LittleEndian>(0u64).map_err(|e| e.to_string())?;
     out.write_i32::<LittleEndian>(result.entities_to_tick.len() as i32).map_err(|e| e.to_string())?;
     for id in &result.entities_to_tick { out.write_u64::<LittleEndian>(*id).map_err(|e| e.to_string())?; }
-    Ok(out)
-}
-
-// Placeholder for item conversions (if needed in the future)
-pub fn deserialize_item_input(data: &[u8]) -> Result<crate::item::ItemInput, String> {
-    let mut cur = Cursor::new(data);
-    let _tick_count = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
-    let num = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
-    let mut items = Vec::with_capacity(num);
-    for _ in 0..num {
-        let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
-        let chunk_x = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())?;
-        let chunk_z = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())?;
-        let itype_len = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
-        let mut itype = String::new();
-        if itype_len > 0 { let mut buf = vec![0u8; itype_len]; cur.read_exact(&mut buf).map_err(|e| e.to_string())?; itype = String::from_utf8(buf).map_err(|e| e.to_string())?; }
-    let count = cur.read_u32::<LittleEndian>().map_err(|e| e.to_string())?;
-    let age = cur.read_u32::<LittleEndian>().map_err(|e| e.to_string())?;
-    items.push(RItemEntityData { id, chunk_x, chunk_z, item_type: itype, count, age_seconds: age });
-    }
-    Ok(ItemInput { items })
-}
-pub fn serialize_item_result(result: &crate::item::ItemProcessResult) -> Result<Vec<u8>, String> {
-    // Java side expects the BinarySerializer list format for deserializing item process results:
-    // [tickCount:u64][numItems:i32][items...]
-    // Each item: [id:u64][chunkX:i32][chunkZ:i32][itemTypeLen:i32][itemTypeBytes...][count:i32][ageSeconds:i32]
-    // We'll write a placeholder tickCount (0) because the Rust result does not use it for items.
-    let mut out: Vec<u8> = Vec::new();
-    // placeholder tickCount
-    out.write_u64::<LittleEndian>(0u64).map_err(|e| e.to_string())?;
-
-    // Build a vector of ItemEntityData representing the current state: updates (with new_count) and removals (count=0)
-    // We'll represent removed items as entries with count == 0 so Java can detect removals.
-    let mut items: Vec<(u64, i32, i32, String, i32, i32)> = Vec::new();
-
-    // Item updates: we don't have chunkX/chunkZ/ageSeconds in ItemUpdate; leave as zeros where unknown.
-    for upd in &result.item_updates {
-        items.push((upd.id, 0, 0, String::new(), upd.new_count as i32, 0));
-    }
-
-    // Items to remove: represent as entries with count == 0
-    for id in &result.items_to_remove {
-        items.push((*id, 0, 0, String::new(), 0, 0));
-    }
-
-    // Write number of items
-    out.write_i32::<LittleEndian>(items.len() as i32).map_err(|e| e.to_string())?;
-
-    for (id, chunk_x, chunk_z, item_type, count, age) in items {
-        out.write_u64::<LittleEndian>(id).map_err(|e| e.to_string())?;
-        out.write_i32::<LittleEndian>(chunk_x).map_err(|e| e.to_string())?;
-        out.write_i32::<LittleEndian>(chunk_z).map_err(|e| e.to_string())?;
-        let bytes = item_type.as_bytes();
-        out.write_i32::<LittleEndian>(bytes.len() as i32).map_err(|e| e.to_string())?;
-        if !bytes.is_empty() { out.extend_from_slice(bytes); }
-        out.write_i32::<LittleEndian>(count).map_err(|e| e.to_string())?;
-        out.write_i32::<LittleEndian>(age).map_err(|e| e.to_string())?;
-    }
-
-    // Also append merged/despawned counts at the end for compatibility, though Java code currently ignores these
-    out.write_i64::<LittleEndian>(result.merged_count as i64).map_err(|e| e.to_string())?;
-    out.write_i64::<LittleEndian>(result.despawned_count as i64).map_err(|e| e.to_string())?;
-    
     Ok(out)
 }
 
