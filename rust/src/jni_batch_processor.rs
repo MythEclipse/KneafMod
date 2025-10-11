@@ -79,7 +79,7 @@ impl BatchBufferPool {
     fn acquire_buffer(&self) -> Option<Vec<u8>> {
         // Use round-robin sharding
         static ACQUIRE_COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
+        let _shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
 
         // Use a more efficient shard selection algorithm with local affinity
                 let mut attempts = 0;
@@ -423,7 +423,6 @@ struct ZeroCopyBufferPool {
     buffer_pools: Arc<Vec<Mutex<Vec<Vec<u8>>>>>, // Sharded pools
     shard_count: usize,
     max_buffers: usize,
-    buffer_size: usize,
     #[allow(dead_code)]
     high_water_mark: AtomicUsize,
 }
@@ -446,7 +445,6 @@ impl ZeroCopyBufferPool {
             buffer_pools: Arc::new(buffer_pools),
             shard_count,
             max_buffers,
-            buffer_size,
             high_water_mark: AtomicUsize::new(0),
         }
     }
@@ -489,6 +487,7 @@ impl ZeroCopyBufferPool {
         None
     }
 
+    #[allow(dead_code)]
     fn try_acquire_from_shard(&self, shard_idx: usize) -> Option<Vec<u8>> {
         self.buffer_pools[shard_idx].lock().unwrap().pop()
     }
@@ -548,6 +547,7 @@ impl ZeroCopyBufferPool {
         count
     }
 
+    #[allow(dead_code)]
     pub fn get_high_water_mark(&self) -> usize {
         self.high_water_mark.load(Ordering::Relaxed)
     }

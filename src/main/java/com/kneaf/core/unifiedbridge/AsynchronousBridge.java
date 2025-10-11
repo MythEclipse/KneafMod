@@ -96,11 +96,7 @@ public class AsynchronousBridge implements UnifiedBridge {
             LOGGER.log(FINE, "Executing sync operation: {0} with {1} parameters", 
                     new Object[]{operationName, parameters.length});
             
-            BridgeResult result = new BridgeResult.Builder()
-                    .operationName(operationName)
-                    .success(true)
-                    .message("Operation completed successfully")
-                    .build();
+            BridgeResult result = BridgeResultFactory.createSuccess(operationName);
             
             metrics.recordOperation(operationName, startTime, System.nanoTime(), 
                     calculateBytesProcessed(parameters), true);
@@ -139,11 +135,10 @@ public class AsynchronousBridge implements UnifiedBridge {
                     successfulOperations++;
                     totalBytesProcessed += calculateBytesProcessed(operation.getParameters());
                 } catch (BridgeException e) {
-                    resultBuilder.addOperationResult(new BridgeResult.Builder()
-                            .operationName(operation.getOperationName())
-                            .success(false)
-                            .message(e.getMessage())
-                            .build());
+                    resultBuilder.addOperationResult(BridgeResultFactory.createFailure(
+                            operation.getOperationName(),
+                            e.getMessage()
+                    ));
                     LOGGER.log(Level.WARNING, "Batch operation failed: " + operation.getOperationName(), e);
                 }
             }
@@ -169,7 +164,13 @@ public class AsynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Allocate zero-copy buffer from native memory.
+     * @param size Buffer size in bytes
+     * @param bufferType Type of buffer to allocate
+     * @return Handle to allocated buffer
+     * @throws BridgeException If buffer allocation fails
+     */
     public long allocateZeroCopyBuffer(long size, BufferType bufferType) throws BridgeException {
         Objects.requireNonNull(bufferType, "Buffer type cannot be null");
         
@@ -194,7 +195,11 @@ public class AsynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Free previously allocated buffer.
+     * @param bufferHandle Handle of buffer to free
+     * @throws BridgeException If buffer free operation fails
+     */
     public void freeBuffer(long bufferHandle) throws BridgeException {
         long startTime = System.nanoTime();
         
@@ -216,7 +221,12 @@ public class AsynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Get content of allocated buffer.
+     * @param bufferHandle Handle of buffer to get content from
+     * @return ByteBuffer containing buffer content
+     * @throws BridgeException If buffer access fails
+     */
     public ByteBuffer getBufferContent(long bufferHandle) throws BridgeException {
         long startTime = System.nanoTime();
         
@@ -236,7 +246,12 @@ public class AsynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Create a worker for asynchronous processing.
+     * @param workerConfig Configuration for the worker
+     * @return Handle to created worker
+     * @throws BridgeException If worker creation fails
+     */
     public long createWorker(WorkerConfig workerConfig) throws BridgeException {
         Objects.requireNonNull(workerConfig, "Worker config cannot be null");
         
@@ -259,7 +274,11 @@ public class AsynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Destroy an asynchronous worker.
+     * @param workerHandle Handle of worker to destroy
+     * @throws BridgeException If worker destruction fails
+     */
     public void destroyWorker(long workerHandle) throws BridgeException {
         long startTime = System.nanoTime();
         
@@ -281,7 +300,13 @@ public class AsynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Push a task to an asynchronous worker for processing.
+     * @param workerHandle Handle of worker to push task to
+     * @param task Task to process
+     * @return Operation ID for the task
+     * @throws BridgeException If task push fails
+     */
     public long pushTask(long workerHandle, NativeTask task) throws BridgeException {
         Objects.requireNonNull(task, "Task cannot be null");
         
@@ -306,7 +331,13 @@ public class AsynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Poll for completed tasks from an asynchronous worker.
+     * @param workerHandle Handle of worker to poll
+     * @param maxResults Maximum number of results to return
+     * @return List of completed task results
+     * @throws BridgeException If task polling fails
+     */
     public List<BridgeResult> pollTasks(long workerHandle, int maxResults) throws BridgeException {
         long startTime = System.nanoTime();
         
@@ -350,7 +381,11 @@ public class AsynchronousBridge implements UnifiedBridge {
         return errorHandler;
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Register an asynchronous bridge plugin.
+     * @param plugin Plugin to register
+     * @return true if registration succeeded, false otherwise
+     */
     public boolean registerPlugin(BridgePlugin plugin) {
         Objects.requireNonNull(plugin, "Plugin cannot be null");
         
@@ -365,7 +400,11 @@ public class AsynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Unregister an asynchronous bridge plugin.
+     * @param plugin Plugin to unregister
+     * @return true if unregistration succeeded, false otherwise
+     */
     public boolean unregisterPlugin(BridgePlugin plugin) {
         Objects.requireNonNull(plugin, "Plugin cannot be null");
         

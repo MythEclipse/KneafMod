@@ -116,7 +116,7 @@ class TPSMonitoringTest {
     @Test
     void testConfigurationOptimizationImpact() {
         // Test that configuration thresholds are applied
-        PerformanceConfig config = PerformanceConfig.load();
+        com.kneaf.core.performance.monitoring.PerformanceConfig config = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
         
         // Verify TPS threshold configuration
         double tpsThreshold = config.getTpsThresholdForAsync();

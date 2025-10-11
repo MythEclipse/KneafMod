@@ -2,9 +2,11 @@ package com.kneaf.core.unifiedbridge;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.HashMap;
+import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Logger;
 import static java.util.logging.Level.FINE;
 import static java.util.logging.Level.WARNING;
@@ -354,7 +356,7 @@ public final class JniCallManager {
             double averageDurationNanos = calls > 0 ? (double) totalDurationNanos.get() / calls : 0;
             double averageParams = calls > 0 ? (double) totalParams.get() / calls : 0;
 
-            Map<String, Object> stats = new java.util.HashMap<>();
+            Map<String, Object> stats = new HashMap<>();
             stats.put("methodName", methodName);
             stats.put("callCount", calls);
             stats.put("successRate", successRate);
@@ -366,7 +368,7 @@ public final class JniCallManager {
             stats.put("averageDurationNanos", averageDurationNanos);
             stats.put("averageDurationMs", durationNanosToMillis(averageDurationNanos));
             stats.put("lastCallTime", lastCallTime.get());
-            return java.util.Collections.unmodifiableMap(stats);
+            return Collections.unmodifiableMap(stats);
         }
 
         /**

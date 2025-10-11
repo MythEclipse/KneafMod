@@ -14,10 +14,10 @@ import java.util.logging.Logger;
 public class SynchronousBridge implements UnifiedBridge {
     
     // Add missing fields
-    private BridgeMetrics metrics;
     private static final Logger LOGGER = Logger.getLogger(SynchronousBridge.class.getName());
     
     private BridgeConfiguration config;
+    private BridgeMetrics metrics;
     private final WorkerManager workerManager;
     private final JniCallManager jniCallManager;
     private final ResourceManager resourceManager;
@@ -30,15 +30,19 @@ public class SynchronousBridge implements UnifiedBridge {
     public SynchronousBridge(BridgeConfiguration config) {
         this.config = Objects.requireNonNull(config);
         this.workerManager = WorkerManager.getInstance(config);
-        this.jniCallManager = JniCallManager.getInstance();
-        this.resourceManager = ResourceManager.getInstance();
-        this.errorHandler = BridgeErrorHandler.getInstance();
+        this.jniCallManager = JniCallManager.getInstance(config);
+        this.resourceManager = ResourceManager.getInstance(config);
+        this.errorHandler = BridgeErrorHandler.getDefault();
         this.metrics = BridgeMetrics.getInstance(config);
         
-        LOGGER.info(() -> String.format("Created SynchronousBridge with config: %s", config.toMap()));
+        LOGGER.info("Created SynchronousBridge with config: " + config.toMap());
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Create a worker with specified concurrency level.
+     * @param concurrency Number of concurrent threads
+     * @return Worker handle
+     */
     public long createWorker(int concurrency) {
         try {
             return workerManager.createWorker(concurrency);
@@ -47,7 +51,10 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Destroy a worker by handle.
+     * @param workerHandle Worker handle to destroy
+     */
     public void destroyWorker(long workerHandle) {
         try {
             workerManager.destroyWorker(workerHandle);
@@ -56,7 +63,11 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Push a task with byte array payload to a worker.
+     * @param workerHandle Worker handle
+     * @param payload Task payload
+     */
     public void pushTask(long workerHandle, byte[] payload) {
         Objects.requireNonNull(payload, "Payload cannot be null");
         
@@ -74,7 +85,11 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Push a task with ByteBuffer payload to a worker.
+     * @param workerHandle Worker handle
+     * @param payload Task payload
+     */
     public void pushTask(long workerHandle, ByteBuffer payload) {
         Objects.requireNonNull(payload, "Payload cannot be null");
         
@@ -93,7 +108,11 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Poll for task results from a worker.
+     * @param workerHandle Worker handle
+     * @return Task result payload
+     */
     public byte[] pollResult(long workerHandle) {
         try {
             // Method ini tidak ada di JniCallManager, kita buat placeholder
@@ -104,7 +123,11 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Poll for task results as ByteBuffer from a worker.
+     * @param workerHandle Worker handle
+     * @return Task result as ByteBuffer
+     */
     public ByteBuffer pollResultBuffer(long workerHandle) {
         try {
             byte[] result = pollResult(workerHandle);
@@ -122,7 +145,12 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Push a batch of tasks to a worker.
+     * @param workerHandle Worker handle
+     * @param payloads Array of task payloads
+     * @return CompletableFuture with batch result
+     */
     public CompletableFuture<BatchResult> pushBatch(long workerHandle, byte[][] payloads) {
         Objects.requireNonNull(payloads, "Payloads cannot be null");
         
@@ -167,7 +195,12 @@ public class SynchronousBridge implements UnifiedBridge {
         });
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Push a batch of ByteBuffer tasks to a worker.
+     * @param workerHandle Worker handle
+     * @param payloads Array of ByteBuffer task payloads
+     * @return CompletableFuture with batch result
+     */
     public CompletableFuture<BatchResult> pushBatch(long workerHandle, ByteBuffer[] payloads) {
         Objects.requireNonNull(payloads, "Payloads cannot be null");
         
@@ -195,7 +228,11 @@ public class SynchronousBridge implements UnifiedBridge {
         });
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Allocate a buffer of specified size.
+     * @param size Buffer size in bytes
+     * @return Allocated ByteBuffer
+     */
     public ByteBuffer allocateBuffer(int size) {
         try {
             // Method ini tidak ada di ResourceManager
@@ -206,7 +243,10 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Free a previously allocated buffer.
+     * @param buffer Buffer to free
+     */
     public void freeBuffer(ByteBuffer buffer) {
         try {
             // Method ini tidak ada di ResourceManager
@@ -217,7 +257,11 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Get native memory address of a buffer.
+     * @param buffer Buffer to get address from
+     * @return Native memory address
+     */
     public long getBufferAddress(ByteBuffer buffer) {
         try {
             // Method ini tidak ada di ResourceManager
@@ -228,7 +272,13 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Submit a zero-copy operation to a worker.
+     * @param workerHandle Worker handle
+     * @param buffer Direct ByteBuffer for zero-copy operation
+     * @param operationType Type of operation to perform
+     * @return Operation handle
+     */
     public long submitZeroCopyOperation(long workerHandle, ByteBuffer buffer, int operationType) {
         try {
             // Zero-copy operations require direct buffers
@@ -248,7 +298,11 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Poll for result of a zero-copy operation.
+     * @param operationId Operation handle
+     * @return Result as ByteBuffer
+     */
     public ByteBuffer pollZeroCopyResult(long operationId) {
         try {
             // Method ini tidak ada di JniCallManager
@@ -259,7 +313,10 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Cleanup resources for a zero-copy operation.
+     * @param operationId Operation handle
+     */
     public void cleanupZeroCopyOperation(long operationId) {
         try {
             // Method ini tidak ada di JniCallManager
@@ -269,7 +326,10 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Get bridge statistics.
+     * @return Map of statistics
+     */
     public Map<String, Object> getStats() {
         try {
             Map<String, Object> workerStats = workerManager.getWorkerStats();
@@ -291,7 +351,11 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Get optimal batch size for performance.
+     * @param requestedSize Requested batch size
+     * @return Optimal batch size
+     */
     public int getOptimalBatchSize(int requestedSize) {
         try {
             // Method ini tidak ada di JniCallManager
@@ -303,7 +367,9 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Flush pending operations.
+     */
     public void flush() {
         try {
             // Method ini tidak ada di JniCallManager
@@ -313,7 +379,10 @@ public class SynchronousBridge implements UnifiedBridge {
         }
     }
 
-    // Method ini tidak ada di interface UnifiedBridge
+    /**
+     * Check if native functionality is available.
+     * @return true if native functionality is available, false otherwise
+     */
     public boolean isNativeAvailable() {
         // Method ini tidak ada di JniCallManager
         // return jniCallManager.isNativeAvailable();
@@ -330,11 +399,7 @@ public class SynchronousBridge implements UnifiedBridge {
         
         try {
             // In real implementation, this would call native code synchronously
-            BridgeResult result = new BridgeResult.Builder()
-                    .operationName(operationName)
-                    .success(true)
-                    .message("Operation completed successfully")
-                    .build();
+            BridgeResult result = BridgeResultFactory.createSuccess(operationName);
             
             metrics.recordOperation(operationName, startTime, System.nanoTime(), 0, result.isSuccess());
             

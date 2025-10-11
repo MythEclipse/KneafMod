@@ -1,6 +1,6 @@
 package com.kneaf.core.performance.unified;
 
-import com.kneaf.core.config.performance.PerformanceConfig;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;

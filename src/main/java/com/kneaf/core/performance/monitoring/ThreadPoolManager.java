@@ -17,7 +17,7 @@ import org.slf4j.Logger;
  */
 public class ThreadPoolManager {
   private static final Logger LOGGER = LogUtils.getLogger();
-  private static final PerformanceConfig CONFIG = PerformanceConfig.load();
+  private static final com.kneaf.core.performance.monitoring.PerformanceConfig CONFIG = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
 
   // Advanced ThreadPoolExecutor with dynamic sizing and monitoring
   private static volatile ThreadPoolExecutor serverTaskExecutor = null;

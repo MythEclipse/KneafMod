@@ -83,11 +83,7 @@ public class ZeroCopyBridge implements UnifiedBridge {
             LOGGER.log(FINE, "Executing zero-copy sync operation: {0} with {1} parameters", 
                     new Object[]{operationName, parameters.length});
             
-            BridgeResult result = new BridgeResult.Builder()
-                    .operationName(operationName)
-                    .success(true)
-                    .message("Zero-copy operation completed successfully")
-                    .build();
+            BridgeResult result = BridgeResultFactory.createSuccess(operationName);
             
             metrics.recordOperation(operationName, startTime, System.nanoTime(), 
                     calculateBytesProcessed(parameters), true);
@@ -127,11 +123,10 @@ public class ZeroCopyBridge implements UnifiedBridge {
                     successfulOperations++;
                     totalBytesProcessed += calculateBytesProcessed(operation.getParameters());
                 } catch (BridgeException e) {
-                    resultBuilder.addOperationResult(new BridgeResult.Builder()
-                            .operationName(operation.getOperationName())
-                            .success(false)
-                            .message(e.getMessage())
-                            .build());
+                    resultBuilder.addOperationResult(BridgeResultFactory.createFailure(
+                            operation.getOperationName(),
+                            e.getMessage()
+                    ));
                     LOGGER.log(Level.WARNING, "Zero-copy batch operation failed: " + operation.getOperationName(), e);
                 }
             }
@@ -157,9 +152,13 @@ public class ZeroCopyBridge implements UnifiedBridge {
         }
     }
 
-    // Method-method tambahan yang tidak ada di interface UnifiedBridge
-    // Harus dihapus @Override-nya atau dijadikan method biasa
-    
+    /**
+     * Allocate zero-copy buffer from native memory.
+     * @param size Buffer size in bytes
+     * @param bufferType Type of buffer to allocate
+     * @return Handle to allocated buffer
+     * @throws BridgeException If buffer allocation fails
+     */
     public long allocateZeroCopyBuffer(long size, BufferType bufferType) throws BridgeException {
         Objects.requireNonNull(bufferType, "Buffer type cannot be null");
         
@@ -188,6 +187,11 @@ public class ZeroCopyBridge implements UnifiedBridge {
         }
     }
     
+    /**
+     * Free previously allocated zero-copy buffer.
+     * @param bufferHandle Handle of buffer to free
+     * @throws BridgeException If buffer free operation fails
+     */
     public void freeBuffer(long bufferHandle) throws BridgeException {
         long startTime = System.nanoTime();
         
@@ -209,6 +213,12 @@ public class ZeroCopyBridge implements UnifiedBridge {
         }
     }
     
+    /**
+     * Get content of allocated zero-copy buffer.
+     * @param bufferHandle Handle of buffer to get content from
+     * @return ByteBuffer containing buffer content
+     * @throws BridgeException If buffer access fails
+     */
     public ByteBuffer getBufferContent(long bufferHandle) throws BridgeException {
         long startTime = System.nanoTime();
         
@@ -234,6 +244,12 @@ public class ZeroCopyBridge implements UnifiedBridge {
         }
     }
     
+    /**
+     * Create a worker optimized for zero-copy operations.
+     * @param workerConfig Configuration for the worker
+     * @return Handle to created worker
+     * @throws BridgeException If worker creation fails
+     */
     public long createWorker(WorkerConfig workerConfig) throws BridgeException {
         Objects.requireNonNull(workerConfig, "Worker config cannot be null");
         
@@ -259,6 +275,11 @@ public class ZeroCopyBridge implements UnifiedBridge {
         }
     }
     
+    /**
+     * Destroy a zero-copy worker.
+     * @param workerHandle Handle of worker to destroy
+     * @throws BridgeException If worker destruction fails
+     */
     public void destroyWorker(long workerHandle) throws BridgeException {
         long startTime = System.nanoTime();
         
@@ -280,6 +301,13 @@ public class ZeroCopyBridge implements UnifiedBridge {
         }
     }
     
+    /**
+     * Push a task to a zero-copy worker for processing.
+     * @param workerHandle Handle of worker to push task to
+     * @param task Task to process
+     * @return Operation ID for the task
+     * @throws BridgeException If task push fails
+     */
     public long pushTask(long workerHandle, NativeTask task) throws BridgeException {
         Objects.requireNonNull(task, "Task cannot be null");
         
@@ -317,6 +345,13 @@ public class ZeroCopyBridge implements UnifiedBridge {
         }
     }
     
+    /**
+     * Poll for completed tasks from a zero-copy worker.
+     * @param workerHandle Handle of worker to poll
+     * @param maxResults Maximum number of results to return
+     * @return List of completed task results
+     * @throws BridgeException If task polling fails
+     */
     public List<TaskResult> pollTasks(long workerHandle, int maxResults) throws BridgeException {
         long startTime = System.nanoTime();
         
@@ -361,6 +396,11 @@ public class ZeroCopyBridge implements UnifiedBridge {
         return errorHandler;
     }
     
+    /**
+     * Register a zero-copy bridge plugin.
+     * @param plugin Plugin to register
+     * @return true if registration succeeded, false otherwise
+     */
     public boolean registerPlugin(BridgePlugin plugin) {
         Objects.requireNonNull(plugin, "Plugin cannot be null");
         

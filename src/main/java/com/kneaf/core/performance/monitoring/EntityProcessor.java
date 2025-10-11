@@ -29,7 +29,7 @@ public class EntityProcessor {
   private static final Logger LOGGER = LogUtils.getLogger();
 
   // Configuration
-  private static final PerformanceConfig CONFIG = PerformanceConfig.load();
+  private static final com.kneaf.core.performance.monitoring.PerformanceConfig CONFIG = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
 
   // Spatial grid for efficient player position queries per level
   private static final Map<ServerLevel, SpatialGrid> LEVEL_SPATIAL_GRIDS = new HashMap<>();

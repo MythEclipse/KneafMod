@@ -76,17 +76,17 @@ impl<T> WorkStealingScheduler<T> {
         // For CPU-bound tasks, use Rayon's default (which is usually optimal)
         // For I/O-bound tasks, we might want different configuration, but Rayon handles this well
 
-        let task_count = self.tasks.len();
+        let _task_count = self.tasks.len();
 
         // Measure execution time for performance monitoring
         let start = Instant::now();
         let results = self.tasks.into_par_iter().map(processor).collect();
-        let duration = start.elapsed();
+        let _duration = start.elapsed();
 
         // Log performance statistics (in a real system, this would go to a proper monitoring system)
         #[cfg(debug_assertions)]
         {
-            eprintln!("Parallel execution: {} tasks in {:?}", task_count, duration);
+            eprintln!("Parallel execution: {} tasks in {:?}", _task_count, _duration);
         }
 
         results

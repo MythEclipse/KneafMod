@@ -26,7 +26,7 @@ public class ThreadPoolValidationTest {
 
   private static void testConfigurationLoading() {
     System.out.println("Test 1: Configuration loading");
-    PerformanceConfig config = PerformanceConfig.load();
+    com.kneaf.core.performance.monitoring.PerformanceConfig config = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
 
     System.out.println("  - Dynamic thread scaling: " + config.isDynamicThreadScaling());
     System.out.println("  - Work stealing enabled: " + config.isWorkStealingEnabled());
@@ -45,7 +45,7 @@ public class ThreadPoolValidationTest {
     // Note: We can't fully test the ThreadPoolExecutor creation without Minecraft server context
     // but we can validate that the configuration is properly structured
 
-    PerformanceConfig config = PerformanceConfig.load();
+    com.kneaf.core.performance.monitoring.PerformanceConfig config = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
 
     // Validate configuration bounds
     assert config.getMinThreadpoolSize() >= 1 : "Min threads should be >= 1";

@@ -1,6 +1,6 @@
 package com.kneaf.core;
 
-import com.kneaf.core.config.performance.PerformanceConfig;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.config.UnifiedConfiguration;
 import com.kneaf.core.config.chunkstorage.ChunkStorageConfig;
 import com.kneaf.core.config.swap.SwapConfig;
@@ -17,7 +17,7 @@ public class UnifiedConfigurationTest {
     @Test
     public void testUnifiedConfigurationCreation() throws Exception {
         // Test that we can create a UnifiedConfiguration instance using the builder pattern
-        PerformanceConfig performanceConfig = PerformanceConfig.builder()
+        PerformanceConfig performanceConfig = new PerformanceConfig.Builder()
                 .enabled(true)
                 .threadpoolSize(4)
                 .build();
@@ -45,7 +45,7 @@ public class UnifiedConfigurationTest {
     @Test
     public void testConfigurationModification() throws Exception {
         // Test that configuration can be modified through the builder pattern
-        PerformanceConfig modifiedConfig = PerformanceConfig.builder()
+        PerformanceConfig modifiedConfig = new PerformanceConfig.Builder()
                 .threadpoolSize(8)
                 .profilingEnabled(true)
                 .maxEntitiesToCollect(10000)
@@ -60,7 +60,7 @@ public class UnifiedConfigurationTest {
     @Test
     public void testUnifiedConfigurationImmutability() throws Exception {
         // Test that UnifiedConfiguration is immutable
-        PerformanceConfig performanceConfig = PerformanceConfig.builder().build();
+        PerformanceConfig performanceConfig = new PerformanceConfig.Builder().build();
         ChunkStorageConfig chunkStorageConfig = ChunkStorageConfig.builder().build();
         SwapConfig swapConfig = SwapConfig.builder().build();
         ResourceConfig resourceConfig = ResourceConfig.builder().build();

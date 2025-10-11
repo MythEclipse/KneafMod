@@ -33,17 +33,22 @@ class RustPerformanceTest {
     }
 
     try {
+      // Ensure RustPerformance is initialized before use
+      RustPerformance.initialize();
+      
+      // Use the fallback implementations that don't require native libraries
       String mem = RustPerformance.getMemoryStats();
-      Assertions.assertNotNull(mem);
-
+      Assertions.assertNotNull(mem, "Memory stats should not be null");
+    
       String cpu = RustPerformance.getCpuStats();
-      Assertions.assertNotNull(cpu);
-
+      Assertions.assertNotNull(cpu, "CPU stats should not be null");
+    
+      // These methods have pure-Java fallbacks that always work
       String sum = RustPerformance.parallelSumNative("[1,2,3,4]");
-      Assertions.assertTrue(sum.contains("sum"));
-
+      Assertions.assertTrue(sum.contains("sum"), "Sum result should contain 'sum' key");
+    
       String mm = RustPerformance.matrixMultiplyNative("[[1,2],[3,4]]", "[[5,6],[7,8]]");
-      Assertions.assertNotNull(mm);
+      Assertions.assertNotNull(mm, "Matrix multiply result should not be null");
 
       // Test ByteBuffer allocation via AutoCloseable wrapper
       try (NativeFloatBuffer nbuf = NativeFloatBuffer.allocateFromNative(2, 3)) {

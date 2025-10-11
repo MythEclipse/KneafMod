@@ -18,7 +18,7 @@ public final class PerformanceMetricsLogger {
   private static final Path LOG_PATH = Paths.get("run", "logs", "kneaf-performance.log");
   private static final Path LOG_ARCHIVE_DIR = Paths.get("run", "logs", "archive");
   // Cache the config so we don't reload properties file on every rotation check
-  private static final PerformanceConfig CONFIG = PerformanceConfig.load();
+  private static final com.kneaf.core.performance.monitoring.PerformanceConfig CONFIG = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
   // Single-threaded executor to perform file IO off the main thread to avoid blocking ticks
   private static final ExecutorService LOG_EXECUTOR =
       Executors.newSingleThreadExecutor(r -> {

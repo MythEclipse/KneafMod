@@ -2,11 +2,13 @@ package com.kneaf.core.config;
 
 import com.kneaf.core.config.chunkstorage.ChunkStorageConfig;
 import com.kneaf.core.config.core.ConfigSource;
+import com.kneaf.core.config.core.ConfigurationUtils;
 import com.kneaf.core.config.core.PropertiesFileConfigSource;
 import com.kneaf.core.config.exception.ConfigurationException;
-import com.kneaf.core.config.performance.PerformanceConfig;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.config.resource.ResourceConfig;
 import com.kneaf.core.config.swap.SwapConfig;
+import com.kneaf.core.KneafCore;
 
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
@@ -16,10 +18,16 @@ import java.util.concurrent.ConcurrentMap;
  * Centralized configuration manager that consolidates all configuration systems.
  * Provides unified access to performance, chunk storage, swap, and resource configurations.
  */
-public final class ConfigurationManager {
-    private static final ConfigurationManager INSTANCE = new ConfigurationManager();
-    private final ConcurrentMap<Class<?>, Object> configurations = new ConcurrentHashMap<>();
-    private final ConfigSource configSource;
+public class ConfigurationManager {
+    private static volatile ConfigurationManager INSTANCE = null;
+    private static final Object INSTANCE_LOCK = new Object();
+    protected ConcurrentMap<Class<?>, Object> configurations = new ConcurrentHashMap<>();
+    protected ConfigSource configSource;
+    
+    // Prevent static initialization issues by making all static fields non-initializing
+    static {
+      // Empty static block to prevent JVM from initializing class prematurely
+    }
 
     /**
      * Private constructor to enforce singleton pattern.
@@ -29,18 +37,84 @@ public final class ConfigurationManager {
         try {
             initializeConfigurations();
         } catch (ConfigurationException e) {
-            throw new RuntimeException("Failed to initialize configurations", e);
+            KneafCore.LOGGER.warn("Failed to load initial configurations - using defaults", e);
+            // Continue with empty configs instead of failing
         }
     }
 
     /**
-     * Get the singleton instance of ConfigurationManager.
+     * Get the singleton instance of ConfigurationManager with lazy initialization.
      *
      * @return the singleton instance
      */
     public static ConfigurationManager getInstance() {
+        if (INSTANCE == null) {
+            synchronized (INSTANCE_LOCK) {
+                if (INSTANCE == null) {
+                    try {
+                        INSTANCE = new ConfigurationManager();
+                    } catch (Throwable t) {
+                        System.err.println("Failed to create ConfigurationManager instance: " + t.getMessage());
+                        // Create a new instance with empty state instead of failing
+                        INSTANCE = new ConfigurationManager() {
+                            {
+                                try {
+                                    this.configSource = new PropertiesFileConfigSource("config/kneaf-core.properties");
+                                } catch (Exception e) {
+                                    System.err.println("Failed to create config source: " + e.getMessage());
+                                    // Use a simple empty properties object as fallback
+                                    this.configSource = new ConfigSource() {
+                                        @Override
+                                        public Properties load() throws ConfigurationException {
+                                            return new Properties();
+                                        }
+                                        
+                                        @Override
+                                        public String getName() {
+                                            return "fallback";
+                                        }
+                                    };
+                                }
+                            }
+                        };
+                    }
+                }
+            }
+        }
         return INSTANCE;
     }
+    
+    /** Get singleton instance with null safety */
+    public static ConfigurationManager getSafeInstance() {
+        try {
+            return getInstance();
+        } catch (Throwable t) {
+            System.err.println("Failed to get ConfigurationManager instance: " + t.getMessage());
+            // Return a new instance with empty configurations instead of failing
+            return new ConfigurationManager() {
+                {
+                    try {
+                        this.configSource = new PropertiesFileConfigSource("config/kneaf-core.properties");
+                    } catch (Exception e) {
+                        System.err.println("Failed to create config source: " + e.getMessage());
+                        // Use a fallback config source if properties file loading fails
+                        this.configSource = new ConfigSource() {
+                            @Override
+                            public Properties load() throws ConfigurationException {
+                                return new Properties();
+                            }
+                            
+                            @Override
+                            public String getName() {
+                                return "fallback";
+                            }
+                        };
+                    }
+                }
+            };
+        }
+    }
+
 
     /**
      * Get configuration for the specified type.
@@ -59,7 +133,7 @@ public final class ConfigurationManager {
             }
         });
     }
-    
+
     /**
      * Create a configuration instance for the given type.
      *
@@ -115,43 +189,9 @@ public final class ConfigurationManager {
      * @return the created PerformanceConfig
      * @throws ConfigurationException if creation fails
      */
-    private PerformanceConfig createPerformanceConfig(Properties props) throws ConfigurationException {
-        return PerformanceConfig.builder()
-                .enabled(getBooleanProperty(props, "performance.enabled", true))
-                .threadpoolSize(getIntProperty(props, "performance.threadpoolSize", 4))
-                .logIntervalTicks(getIntProperty(props, "performance.logIntervalTicks", 100))
-                .scanIntervalTicks(getIntProperty(props, "performance.scanIntervalTicks", 1))
-                .tpsThresholdForAsync(getDoubleProperty(props, "performance.tpsThresholdForAsync", 19.0))
-                .maxEntitiesToCollect(getIntProperty(props, "performance.maxEntitiesToCollect", 20000))
-                .entityDistanceCutoff(getDoubleProperty(props, "performance.entityDistanceCutoff", 256.0))
-                .maxLogBytes(getLongProperty(props, "performance.maxLogBytes", 10L * 1024 * 1024))
-                .adaptiveThreadPool(getBooleanProperty(props, "performance.adaptiveThreadPool", false))
-                .maxThreadpoolSize(getIntProperty(props, "performance.maxThreadpoolSize", 
-                        Math.max(1, Runtime.getRuntime().availableProcessors() - 1)))
-                .excludedEntityTypes(getStringArrayProperty(props, "performance.excludedEntityTypes", new String[0]))
-                .networkExecutorpoolSize(getIntProperty(props, "performance.networkExecutorpoolSize",
-                        Math.max(1, Runtime.getRuntime().availableProcessors() / 2)))
-                .profilingEnabled(getBooleanProperty(props, "performance.profilingEnabled", true))
-                .slowTickThresholdMs(getLongProperty(props, "performance.slowTickThresholdMs", 50L))
-                .profilingSampleRate(getIntProperty(props, "performance.profilingSampleRate", 100))
-                .minThreadpoolSize(getIntProperty(props, "performance.minThreadpoolSize", 2))
-                .dynamicThreadScaling(getBooleanProperty(props, "performance.dynamicThreadScaling", true))
-                .threadScaleUpThreshold(getDoubleProperty(props, "performance.threadScaleUpThreshold", 0.8))
-                .threadScaleDownThreshold(getDoubleProperty(props, "performance.threadScaleDownThreshold", 0.3))
-                .threadScaleUpDelayTicks(getIntProperty(props, "performance.threadScaleUpDelayTicks", 100))
-                .threadScaleDownDelayTicks(getIntProperty(props, "performance.threadScaleDownDelayTicks", 200))
-                .workStealingEnabled(getBooleanProperty(props, "performance.workStealingEnabled", true))
-                .workStealingQueueSize(getIntProperty(props, "performance.workStealingQueueSize", 100))
-                .cpuAwareThreadSizing(getBooleanProperty(props, "performance.cpuAwareThreadSizing", false))
-                .cpuLoadThreshold(getDoubleProperty(props, "performance.cpuLoadThreshold", 0.7))
-                .threadPoolKeepAliveSeconds(getIntProperty(props, "performance.threadPoolKeepAliveSeconds", 60))
-                .distanceCalculationInterval(getIntProperty(props, "performance.distanceCalculationInterval", 1))
-                .distanceApproximationEnabled(getBooleanProperty(props, "performance.distanceApproximationEnabled", true))
-                .distanceCacheSize(getIntProperty(props, "performance.distanceCacheSize", 100))
-                .itemProcessingIntervalMultiplier(getIntProperty(props, "performance.itemProcessingIntervalMultiplier", 1))
-                .spatialGridUpdateInterval(getIntProperty(props, "performance.spatialGridUpdateInterval", 1))
-                .incrementalSpatialUpdates(getBooleanProperty(props, "performance.incrementalSpatialUpdates", true))
-                .build();
+    private com.kneaf.core.performance.monitoring.PerformanceConfig createPerformanceConfig(Properties props) throws ConfigurationException {
+        // Use the main PerformanceConfig implementation
+        return com.kneaf.core.performance.monitoring.PerformanceConfig.load();
     }
 
     /**
@@ -163,20 +203,20 @@ public final class ConfigurationManager {
      */
     private ChunkStorageConfig createChunkStorageConfig(Properties props) throws ConfigurationException {
         return ChunkStorageConfig.builder()
-                .enabled(getBooleanProperty(props, "chunkstorage.enabled", true))
-                .cacheCapacity(getIntProperty(props, "chunkstorage.cacheCapacity", 1000))
-                .evictionPolicy(getProperty(props, "chunkstorage.evictionPolicy", "LRU"))
-                .asyncThreadpoolSize(getIntProperty(props, "chunkstorage.asyncThreadpoolSize", 4))
-                .enableAsyncOperations(getBooleanProperty(props, "chunkstorage.enableAsyncOperations", true))
-                .maintenanceIntervalMinutes(getLongProperty(props, "chunkstorage.maintenanceIntervalMinutes", 60))
-                .enableBackups(getBooleanProperty(props, "chunkstorage.enableBackups", true))
-                .backupPath(getProperty(props, "chunkstorage.backupPath", "backups/chunkstorage"))
-                .enableChecksums(getBooleanProperty(props, "chunkstorage.enableChecksums", true))
-                .enableCompression(getBooleanProperty(props, "chunkstorage.enableCompression", false))
-                .maxBackupFiles(getIntProperty(props, "chunkstorage.maxBackupFiles", 10))
-                .backupRetentionDays(getLongProperty(props, "chunkstorage.backupRetentionDays", 7))
-                .databaseType(getProperty(props, "chunkstorage.databaseType", "rust"))
-                .useRustDatabase(getBooleanProperty(props, "chunkstorage.useRustDatabase", true))
+                .enabled(ConfigurationUtils.getBooleanProperty(props, "chunkstorage.enabled", true))
+                .cacheCapacity(ConfigurationUtils.getIntProperty(props, "chunkstorage.cacheCapacity", 1000))
+                .evictionPolicy(ConfigurationUtils.getProperty(props, "chunkstorage.evictionPolicy", "LRU"))
+                .asyncThreadpoolSize(ConfigurationUtils.getIntProperty(props, "chunkstorage.asyncThreadpoolSize", 4))
+                .enableAsyncOperations(ConfigurationUtils.getBooleanProperty(props, "chunkstorage.enableAsyncOperations", true))
+                .maintenanceIntervalMinutes(ConfigurationUtils.getLongProperty(props, "chunkstorage.maintenanceIntervalMinutes", 60))
+                .enableBackups(ConfigurationUtils.getBooleanProperty(props, "chunkstorage.enableBackups", true))
+                .backupPath(ConfigurationUtils.getProperty(props, "chunkstorage.backupPath", "backups/chunkstorage"))
+                .enableChecksums(ConfigurationUtils.getBooleanProperty(props, "chunkstorage.enableChecksums", true))
+                .enableCompression(ConfigurationUtils.getBooleanProperty(props, "chunkstorage.enableCompression", false))
+                .maxBackupFiles(ConfigurationUtils.getIntProperty(props, "chunkstorage.maxBackupFiles", 10))
+                .backupRetentionDays(ConfigurationUtils.getLongProperty(props, "chunkstorage.backupRetentionDays", 7))
+                .databaseType(ConfigurationUtils.getProperty(props, "chunkstorage.databaseType", "rust"))
+                .useRustDatabase(ConfigurationUtils.getBooleanProperty(props, "chunkstorage.useRustDatabase", true))
                 .build();
     }
 
@@ -189,18 +229,18 @@ public final class ConfigurationManager {
      */
     private SwapConfig createSwapConfig(Properties props) throws ConfigurationException {
         return SwapConfig.builder()
-                .enabled(getBooleanProperty(props, "swap.enabled", true))
-                .memoryCheckIntervalMs(getLongProperty(props, "swap.memoryCheckIntervalMs", 5000))
-                .maxConcurrentSwaps(getIntProperty(props, "swap.maxConcurrentSwaps", 10))
-                .swapBatchSize(getIntProperty(props, "swap.swapBatchSize", 50))
-                .swapTimeoutMs(getLongProperty(props, "swap.swapTimeoutMs", 30000))
-                .enableAutomaticSwapping(getBooleanProperty(props, "swap.enableAutomaticSwapping", true))
-                .criticalMemoryThreshold(getDoubleProperty(props, "swap.criticalMemoryThreshold", 0.95))
-                .highMemoryThreshold(getDoubleProperty(props, "swap.highMemoryThreshold", 0.85))
-                .elevatedMemoryThreshold(getDoubleProperty(props, "swap.elevatedMemoryThreshold", 0.75))
-                .minSwapChunkAgeMs(getIntProperty(props, "swap.minSwapChunkAgeMs", 60000))
-                .enableSwapStatistics(getBooleanProperty(props, "swap.enableSwapStatistics", true))
-                .enablePerformanceMonitoring(getBooleanProperty(props, "swap.enablePerformanceMonitoring", true))
+                .enabled(ConfigurationUtils.getBooleanProperty(props, "swap.enabled", true))
+                .memoryCheckIntervalMs(ConfigurationUtils.getLongProperty(props, "swap.memoryCheckIntervalMs", 5000))
+                .maxConcurrentSwaps(ConfigurationUtils.getIntProperty(props, "swap.maxConcurrentSwaps", 10))
+                .swapBatchSize(ConfigurationUtils.getIntProperty(props, "swap.swapBatchSize", 50))
+                .swapTimeoutMs(ConfigurationUtils.getLongProperty(props, "swap.swapTimeoutMs", 30000))
+                .enableAutomaticSwapping(ConfigurationUtils.getBooleanProperty(props, "swap.enableAutomaticSwapping", true))
+                .criticalMemoryThreshold(ConfigurationUtils.getDoubleProperty(props, "swap.criticalMemoryThreshold", 0.95))
+                .highMemoryThreshold(ConfigurationUtils.getDoubleProperty(props, "swap.highMemoryThreshold", 0.85))
+                .elevatedMemoryThreshold(ConfigurationUtils.getDoubleProperty(props, "swap.elevatedMemoryThreshold", 0.75))
+                .minSwapChunkAgeMs(ConfigurationUtils.getIntProperty(props, "swap.minSwapChunkAgeMs", 60000))
+                .enableSwapStatistics(ConfigurationUtils.getBooleanProperty(props, "swap.enableSwapStatistics", true))
+                .enablePerformanceMonitoring(ConfigurationUtils.getBooleanProperty(props, "swap.enablePerformanceMonitoring", true))
                 .build();
     }
 
@@ -213,106 +253,11 @@ public final class ConfigurationManager {
      */
     private ResourceConfig createResourceConfig(Properties props) throws ConfigurationException {
         return ResourceConfig.builder()
-                .maxMemoryUsage(getLongProperty(props, "resource.maxMemoryUsage", 1024L * 1024 * 1024)) // 1GB default
-                .resourceCacheSize(getIntProperty(props, "resource.resourceCacheSize", 1000))
+                .maxMemoryUsage(ConfigurationUtils.getLongProperty(props, "resource.maxMemoryUsage", 1024L * 1024 * 1024)) // 1GB default
+                .resourceCacheSize(ConfigurationUtils.getIntProperty(props, "resource.resourceCacheSize", 1000))
                 .loadPriority(ResourceConfig.LoadPriority.valueOf(
-                        getProperty(props, "resource.loadPriority", "MEDIUM").toUpperCase()))
+                        ConfigurationUtils.getProperty(props, "resource.loadPriority", "MEDIUM").toUpperCase()))
                 .build();
     }
-
-    /**
-     * Get a boolean property from properties with a default value.
-     *
-     * @param props      the properties to get from
-     * @param key        the key to get
-     * @param defaultValue the default value if the key is not present
-     * @return the property value
-     */
-    private boolean getBooleanProperty(Properties props, String key, boolean defaultValue) {
-        String value = props.getProperty(key);
-        return value != null ? Boolean.parseBoolean(value) : defaultValue;
-    }
-
-    /**
-     * Get an integer property from properties with a default value.
-     *
-     * @param props      the properties to get from
-     * @param key        the key to get
-     * @param defaultValue the default value if the key is not present
-     * @return the property value
-     */
-    private int getIntProperty(Properties props, String key, int defaultValue) {
-        String value = props.getProperty(key);
-        if (value == null) return defaultValue;
-        try {
-            return Integer.parseInt(value.trim());
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
-    /**
-     * Get a long property from properties with a default value.
-     *
-     * @param props      the properties to get from
-     * @param key        the key to get
-     * @param defaultValue the default value if the key is not present
-     * @return the property value
-     */
-    private long getLongProperty(Properties props, String key, long defaultValue) {
-        String value = props.getProperty(key);
-        if (value == null) return defaultValue;
-        try {
-            return Long.parseLong(value.trim());
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
-    /**
-     * Get a double property from properties with a default value.
-     *
-     * @param props      the properties to get from
-     * @param key        the key to get
-     * @param defaultValue the default value if the key is not present
-     * @return the property value
-     */
-    private double getDoubleProperty(Properties props, String key, double defaultValue) {
-        String value = props.getProperty(key);
-        if (value == null) return defaultValue;
-        try {
-            return Double.parseDouble(value.trim());
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
-    /**
-     * Get a string property from properties with a default value.
-     *
-     * @param props      the properties to get from
-     * @param key        the key to get
-     * @param defaultValue the default value if the key is not present
-     * @return the property value
-     */
-    private String getProperty(Properties props, String key, String defaultValue) {
-        String value = props.getProperty(key);
-        return value != null ? value.trim() : defaultValue;
-    }
-
-    /**
-     * Get a string array property from properties with a default value.
-     *
-     * @param props      the properties to get from
-     * @param key        the key to get
-     * @param defaultValue the default value if the key is not present
-     * @return the property value
-     */
-    private String[] getStringArrayProperty(Properties props, String key, String[] defaultValue) {
-        String value = props.getProperty(key);
-        if (value == null || value.trim().isEmpty()) {
-            return defaultValue != null ? defaultValue.clone() : new String[0];
-        }
-        return value.split("\\s*,\\s*");
-    }
 }
+

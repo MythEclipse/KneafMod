@@ -22,8 +22,8 @@ pub enum SimdCapability {
 pub fn detect_simd_capability() -> SimdCapability {
     #[cfg(target_arch = "x86_64")]
     {
-        let trace_id = generate_trace_id();
-        
+        let _trace_id = generate_trace_id();
+
         // Extreme AVX-512 detection: require all major AVX-512 features
         let avx512_extreme = is_x86_feature_detected!("avx512f") &&
            is_x86_feature_detected!("avx512dq") &&
@@ -111,7 +111,7 @@ impl SimdPerformanceStats {
 
 impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
     pub fn new() -> Self {
-        let trace_id = generate_trace_id();
+        let _trace_id = generate_trace_id();
         let capability = detect_simd_capability();
         
         // Log initialization with capability
@@ -140,7 +140,7 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
     
     /// Get performance statistics with logging
     pub fn get_stats(&self) -> SimdPerformanceStats {
-        let trace_id = generate_trace_id();
+        let _trace_id = generate_trace_id();
         let stats = SimdPerformanceStats {
             total_operations: self.operation_count.load(Ordering::Relaxed),
             total_cycles: self.cycle_count.load(Ordering::Relaxed),
@@ -189,7 +189,6 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
     pub fn dot_product(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "Vectors must have equal length for dot product");
 
-        let len = a.len();
         let start_time = Instant::now();
 
         // Extreme optimization: direct SIMD dispatch with minimal conditionals
@@ -208,6 +207,7 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
 
     /// Specialized dot product for small batches (2-7 elements) - no overhead, direct SIMD
     #[inline(always)]
+    #[allow(dead_code)]
     fn dot_product_small_batch(&self, a: &[f32], b: &[f32]) -> f32 {
         let len = a.len();
 
@@ -242,6 +242,7 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
 
     /// SSE optimized dot product for exactly 4 elements (no padding)
     #[target_feature(enable = "sse4.2")]
+    #[allow(dead_code)]
     unsafe fn dot_product_sse_exact4(&self, a: &[f32], b: &[f32]) -> f32 {
         let va = _mm_loadu_ps(a.as_ptr());
         let vb = _mm_loadu_ps(b.as_ptr());
@@ -251,6 +252,7 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
 
     /// SSE optimized dot product for 5-7 elements with minimal overhead
     #[target_feature(enable = "sse4.2")]
+    #[allow(dead_code)]
     unsafe fn dot_product_sse_small(&self, a: &[f32], b: &[f32]) -> f32 {
         let len = a.len();
         let mut sum = 0.0f32;

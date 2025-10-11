@@ -71,7 +71,7 @@ public class NeoForgeEventIntegration {
   }
 
   private static int getMaxVillagersPerTick() {
-    PerformanceConfig cfg = PerformanceConfig.load();
+    com.kneaf.core.performance.monitoring.PerformanceConfig cfg = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
     int base = Math.max(10, cfg.getMaxEntitiesToCollect() / 200);
     double tpsFactor = Math.max(0.5, Math.min(1.5, PerformanceManager.getAverageTPS() / 20.0));
     return Math.max(5, (int) (base * tpsFactor));
@@ -85,7 +85,7 @@ public class NeoForgeEventIntegration {
       MinecraftServer server = event.getServer();
 
       // Load performance configuration
-      PerformanceConfig config = PerformanceConfig.load();
+      com.kneaf.core.performance.monitoring.PerformanceConfig config = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
       optimizationsEnabled = config.isEnabled();
       benchmarkMode = config.isProfilingEnabled();
 

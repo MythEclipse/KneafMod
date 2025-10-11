@@ -298,11 +298,10 @@ public final class MigrationHelper {
                         successfulOperations++;
                         totalBytesProcessed += calculateBytesProcessed(operation.getParameters());
                     } catch (BridgeException e) {
-                        resultBuilder.addOperationResult(new BridgeResult.Builder()
-                                .operationName(operation.getOperationName())
-                                .success(false)
-                                .message(e.getMessage())
-                                .build());
+                        resultBuilder.addOperationResult(BridgeResultFactory.createFailure(
+                                operation.getOperationName(),
+                                e.getMessage()
+                        ));
                     }
                 }
                 

@@ -102,9 +102,9 @@ public final class ResourceConfig implements ConfigurationProvider {
      */
     public static final class Builder {
 
-        private long maxMemoryUsage;
-        private int resourceCacheSize;
-        private LoadPriority loadPriority;
+        private long maxMemoryUsage = 1024L; // 1GB default
+        private int resourceCacheSize = 100; // Default cache size
+        private LoadPriority loadPriority = LoadPriority.MEDIUM;
 
         /**
          * Sets the maximum memory usage in MB.

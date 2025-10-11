@@ -39,7 +39,7 @@ public class BatchProcessor {
   private final Object batchLock = new Object();
   
   // Configuration
- private static final PerformanceConfig CONFIG = PerformanceConfig.load();
+ private static final com.kneaf.core.performance.monitoring.PerformanceConfig CONFIG = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
 
  // Entity collection optimizations
  private final AtomicInteger entityCollectionCounter = new AtomicInteger(0);

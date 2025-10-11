@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 class PerformanceManagerSmokeTest {
   @Test
   void loadConfigAndClasses() {
-    PerformanceConfig cfg = PerformanceConfig.load();
+    com.kneaf.core.performance.monitoring.PerformanceConfig cfg = com.kneaf.core.performance.monitoring.PerformanceConfig.load();
     assertNotNull(cfg, "Config should load");
     // Ensure getter works
     assertTrue(cfg.getNetworkExecutorpoolSize() >= 1, "Network executor pool size should be >= 1");

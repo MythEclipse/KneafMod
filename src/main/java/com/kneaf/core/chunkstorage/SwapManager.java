@@ -47,16 +47,48 @@ public class SwapManager {
   private static volatile double HIGH_MEMORY_THRESHOLD;
   private static volatile double ELEVATED_MEMORY_THRESHOLD;
   private static volatile double NORMAL_MEMORY_THRESHOLD;
-   // Static initialization to load memory pressure configuration from Rust
-   static {
-     loadMemoryPressureConfiguration();
-   }
+  
+  // Flag to track if native library is loaded
+  private static volatile boolean nativeLibraryLoaded = false;
+  
+  // Lazy initialization holder for thread-safe singleton initialization
+  private static class NativeLibraryLoader {
+    static {
+      try {
+        // Load native library explicitly - adjust path as needed for your project
+        String libPath = "src/main/resources/natives/librustperf.dll";
+        System.load(libPath);
+        LOGGER.info("Successfully loaded native library: {}", libPath);
+        nativeLibraryLoaded = true;
+      } catch (UnsatisfiedLinkError e) {
+        LOGGER.error("Failed to load native library: {}", e.getMessage());
+        nativeLibraryLoaded = false;
+      } catch (SecurityException e) {
+        LOGGER.error("Security exception loading native library: {}", e.getMessage());
+        nativeLibraryLoaded = false;
+      } catch (Exception e) {
+        LOGGER.error("Unexpected error loading native library: {}", e.getMessage());
+        nativeLibraryLoaded = false;
+      }
+    }
+  }
 
-   /**
-    * Load memory pressure configuration from centralized Rust configuration.
-    * Falls back to default values if JNI call fails.
-    */
-   private static void loadMemoryPressureConfiguration() {
+  /**
+   * Get native library loading status
+   */
+  public static boolean isNativeLibraryLoaded() {
+    return nativeLibraryLoaded;
+  }
+
+  /**
+   * Load memory pressure configuration from centralized Rust configuration.
+   * Falls back to default values if JNI call fails.
+   */
+  private static void loadMemoryPressureConfiguration() {
+    // Ensure native library is loaded before attempting JNI calls
+    ensureNativeLibraryLoaded();
+    // Ensure native library is loaded before attempting JNI calls
+    ensureNativeLibraryLoaded();
      try {
        // Get configuration JSON from Rust via JNI
        String configJson = nativeGetMemoryPressureConfig();
@@ -113,6 +145,7 @@ public class SwapManager {
        if (valueEnd == -1) {
          valueEnd = json.indexOf('}', valueStart);
        }
+   
        if (valueEnd == -1) return 0.0;
 
        String valueStr = json.substring(valueStart, valueEnd).trim();
@@ -122,14 +155,28 @@ public class SwapManager {
        return 0.0;
      }
    }
-
+ 
    // Native method declarations for memory pressure configuration
    static native String nativeGetMemoryPressureConfig();
    static native int nativeUpdateMemoryPressureConfig(String configJson);
    static native boolean nativeValidateMemoryPressureConfig(String configJson);
    static native int nativeGetMemoryPressureLevel(double usageRatio);
-
-  // Swap configuration
+ 
+   /**
+    * Ensure native library is loaded before making JNI calls
+    */
+   private static void ensureNativeLibraryLoaded() {
+     if (!nativeLibraryLoaded) {
+       try {
+         LOGGER.info("Loading native library for JNI calls");
+         NativeLibraryLoader.class.getClassLoader().loadClass(NativeLibraryLoader.class.getName());
+       } catch (ClassNotFoundException e) {
+         LOGGER.error("Failed to load native library loader: {}", e.getMessage());
+       }
+     }
+   }
+ 
+   // Swap configuration
   private final SwapConfig config;
   private final MemoryMXBean memoryBean;
   private final AtomicBoolean enabled;

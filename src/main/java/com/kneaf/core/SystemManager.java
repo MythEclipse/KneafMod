@@ -2,7 +2,7 @@ package com.kneaf.core;
 
 import com.kneaf.core.config.ConfigurationManager;
 import com.kneaf.core.config.exception.ConfigurationException;
-import com.kneaf.core.config.performance.PerformanceConfig;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.performance.unified.PerformanceManager;
 import com.kneaf.core.command.unified.UnifiedCommandSystem;
 import com.kneaf.core.unifiedbridge.UnifiedBridgeImpl;

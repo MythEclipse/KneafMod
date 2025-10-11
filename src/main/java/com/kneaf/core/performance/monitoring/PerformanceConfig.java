@@ -871,29 +871,44 @@ public boolean isCombineMultipleOperations() {
     return b.build();
   }
 
-  private static long parseLongOrDefault(String v, long def) {
-    if (v == null) return def;
-    try {
-      return Long.parseLong(v.trim());
-    } catch (NumberFormatException e) {
+  private static int parseIntOrDefault(String v, int def) {
+    if (v == null || v.trim().isEmpty()) {
       return def;
     }
-  }
-
-  private static int parseIntOrDefault(String v, int def) {
-    if (v == null) return def;
     try {
       return Integer.parseInt(v.trim());
     } catch (NumberFormatException e) {
+      if (getLogger().isLoggable(Level.WARNING)) {
+        getLogger().log(Level.WARNING, "Invalid integer value: '" + v + "', using default: " + def);
+      }
       return def;
     }
   }
 
   private static double parseDoubleOrDefault(String v, double def) {
-    if (v == null) return def;
+    if (v == null || v.trim().isEmpty()) {
+      return def;
+    }
     try {
       return Double.parseDouble(v.trim());
     } catch (NumberFormatException e) {
+      if (getLogger().isLoggable(Level.WARNING)) {
+        getLogger().log(Level.WARNING, "Invalid double value: '" + v + "',using default: " + def);
+      }
+      return def;
+    }
+  }
+
+  private static long parseLongOrDefault(String v, long def) {
+    if (v == null || v.trim().isEmpty()) {
+      return def;
+    }
+    try {
+      return Long.parseLong(v.trim());
+    } catch (NumberFormatException e) {
+      if (getLogger().isLoggable(Level.WARNING)) {
+        getLogger().log(Level.WARNING, "Invalid long value: '" + v + "', using default: " + def);
+      }
       return def;
     }
   }

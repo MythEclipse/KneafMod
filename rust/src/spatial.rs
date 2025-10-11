@@ -1285,7 +1285,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
 
     pub fn insert_or_update(&mut self, entity: T, pos: [f64; 3]) -> Result<(), String> {
         // Use consistent lock ordering: per-node lock first, then dashmap lock
-        let stripe = self.get_lock_stripe(&pos);
+        let _stripe = self.get_lock_stripe(&pos);
         let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
             
         // Use memory pool for position storage to reduce allocations
@@ -1301,7 +1301,7 @@ impl<T: Clone + PartialEq + std::hash::Hash + Eq + Send + Sync> SpatialPartition
 
     pub fn query_nearby(&self, center: [f64; 3], radius: f64) -> Result<Vec<(T, [f64; 3])>, String> {
         // Use consistent lock ordering: per-node lock first, then dashmap lock
-        let stripe = self.get_lock_stripe(&center);
+        let _stripe = self.get_lock_stripe(&center);
         let _dashmap_guard = lock_order::DASHMAP_LOCK.lock();
             
         let query_bounds = Aabb::new(

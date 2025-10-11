@@ -1,8 +1,7 @@
 package com.kneaf.core.performance.unified;
 
 import com.kneaf.core.config.ConfigurationManager;
-import com.kneaf.core.config.exception.ConfigurationException;
-import com.kneaf.core.config.performance.PerformanceConfig;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.performance.monitoring.PerformanceMetricsLogger;
 
 import java.util.*;
@@ -34,13 +33,7 @@ public class PerformanceManager {
         this.metricsCollector = new MetricsCollector();
         
         // Always start with a default configuration
-        PerformanceConfig defaultConfig = null;
-        try {
-            defaultConfig = PerformanceConfig.builder().build();
-        } catch (ConfigurationException e) {
-            getLogger().error("Failed to create default performance configuration", e);
-            // If we can't create a default, we'll have to work with minimal functionality
-        }
+        PerformanceConfig defaultConfig = new PerformanceConfig.Builder().build();
         
         // Try to load from configuration manager
         this.performanceConfig = defaultConfig;

@@ -1,7 +1,7 @@
 package com.kneaf.core.config.core;
 
 import com.kneaf.core.config.exception.ConfigurationException;
-import com.kneaf.core.config.performance.PerformanceConfig;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 
 /**
  * Validator for PerformanceConfig instances.

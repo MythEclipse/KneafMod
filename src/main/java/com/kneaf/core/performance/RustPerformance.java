@@ -2,7 +2,7 @@ package com.kneaf.core.performance;
 
 import com.kneaf.core.KneafCore;
 import com.kneaf.core.config.ConfigurationManager;
-import com.kneaf.core.config.performance.PerformanceConfig;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.MobData;
@@ -29,31 +29,60 @@ import java.util.stream.Collectors;
  */
 public class RustPerformance {
 
-  private static final RustPerformanceFacade FACADE = RustPerformanceFacade.getInstance();
-  private static final NativeIntegrationManager NATIVE_MANAGER = new NativeIntegrationManager();
-  private static final UnifiedBridge UNIFIED_BRIDGE = getUnifiedBridgeInstance();
-  private static final ConfigurationManager CONFIG_MANAGER = ConfigurationManager.getInstance();
-  private static PerformanceConfig CONFIG = loadPerformanceConfig();
+  private static volatile RustPerformanceFacade FACADE = null;
+  private static volatile NativeIntegrationManager NATIVE_MANAGER = null;
+  private static volatile UnifiedBridge UNIFIED_BRIDGE = null;
+  private static volatile ConfigurationManager CONFIG_MANAGER = null;
+  private static volatile PerformanceConfig CONFIG = null;
   
-  private static boolean initialized = false;
+  private static volatile boolean initialized = false;
+  private static volatile boolean nativeLibraryAvailable = false;
 
   /** Initialize the performance system. */
-  public static void initialize() {
-    if (!initialized) {
-      try {
-        CONFIG = reloadConfiguration();
-        FACADE.initialize();
-        UNIFIED_BRIDGE.setConfiguration(createBridgeConfiguration(CONFIG));
-        initialized = true;
-        KneafCore.LOGGER.info("RustPerformance initialized successfully with UnifiedBridge");
-        
-        // Initialize Rust logging system
-        initNativeLogging();
-      } catch (Exception e) {
-        KneafCore.LOGGER.error("Failed to initialize RustPerformance", e);
-        throw new RuntimeException("Failed to initialize performance system", e);
+  public static synchronized void initialize() {
+      if (!initialized) {
+          try {
+              CONFIG = reloadConfiguration();
+              
+              // Lazy initialize facade
+              if (FACADE == null) {
+                  FACADE = RustPerformanceFacade.getInstance();
+              }
+              FACADE.initialize();
+              
+              // Try to initialize UnifiedBridge and check for native library availability
+              try {
+                  if (UNIFIED_BRIDGE == null) {
+                      UNIFIED_BRIDGE = getUnifiedBridgeInstance();
+                      // Test if native library is actually available
+                      nativeLibraryAvailable = isNativeLibraryAvailable();
+                  }
+                  
+                  if (nativeLibraryAvailable) {
+                      UNIFIED_BRIDGE.setConfiguration(createBridgeConfiguration(CONFIG));
+                      initialized = true;
+                      KneafCore.LOGGER.info("RustPerformance initialized successfully with UnifiedBridge (native library available)");
+                  } else {
+                      KneafCore.LOGGER.warn("RustPerformance initialized in fallback mode - native library not available");
+                      initialized = true; // Still mark as initialized, just without native support
+                  }
+              } catch (Throwable t) {
+                  KneafCore.LOGGER.warn("Failed to initialize UnifiedBridge - running in fallback mode", t);
+                  nativeLibraryAvailable = false;
+                  initialized = true; // Still mark as initialized, just without native support
+              }
+              
+              // Initialize Rust logging system if native library is available
+              if (nativeLibraryAvailable) {
+                  initNativeLogging();
+              }
+          } catch (Exception e) {
+              KneafCore.LOGGER.error("Failed to initialize RustPerformance core components", e);
+              // Don't throw RuntimeException - allow fallback mode
+              KneafCore.LOGGER.warn("Continuing in fallback mode without RustPerformance");
+              initialized = true;
+          }
       }
-    }
   }
 
   /** Initialize the performance system with ultra-performance configuration. */
@@ -64,12 +93,33 @@ public class RustPerformance {
         UltraPerformanceConfiguration.load();
         CONFIG = reloadConfiguration();
         FACADE.initialize();
-        UNIFIED_BRIDGE.setConfiguration(createBridgeConfiguration(CONFIG));
-        initialized = true;
-        KneafCore.LOGGER.info("RustPerformance initialized with ultra-performance configuration");
         
-        // Initialize Rust logging system
-        initNativeLogging();
+        // Try to initialize UnifiedBridge with ultra-performance settings
+        try {
+          if (UNIFIED_BRIDGE == null) {
+            UNIFIED_BRIDGE = getUnifiedBridgeInstance();
+            // Test if native library is actually available
+            nativeLibraryAvailable = isNativeLibraryAvailable();
+          }
+          
+          if (nativeLibraryAvailable) {
+            UNIFIED_BRIDGE.setConfiguration(createBridgeConfiguration(CONFIG));
+            initialized = true;
+            KneafCore.LOGGER.info("RustPerformance initialized with ultra-performance configuration (native library available)");
+          } else {
+            KneafCore.LOGGER.warn("RustPerformance initialized with ultra-performance in fallback mode - native library not available");
+            initialized = true; // Still mark as initialized, just without native support
+          }
+        } catch (Throwable t) {
+          KneafCore.LOGGER.warn("Failed to initialize UnifiedBridge with ultra-performance - running in fallback mode", t);
+          nativeLibraryAvailable = false;
+          initialized = true; // Still mark as initialized, just without native support
+        }
+        
+        // Initialize Rust logging system if native library is available
+        if (nativeLibraryAvailable) {
+          initNativeLogging();
+        }
         
         // Log ultra-performance activation
         logConfigurationStatus(true, false, CONFIG.getTpsThresholdForAsync());
@@ -671,6 +721,20 @@ public class RustPerformance {
   public static void initNativeLogging() {
       RustLogger.initNativeLogging();
   }
+  
+  /** Internal method to check native library availability (used during initialization). */
+  private static boolean isNativeLibraryAvailable() {
+    try {
+      if (UNIFIED_BRIDGE == null) {
+        return false;
+      }
+      BridgeResult result = UNIFIED_BRIDGE.executeSync("is_native_available");
+      return result.getResultBoolean();
+    } catch (Throwable t) {
+      // Any exception means native library is not available
+      return false;
+    }
+  }
 
   /** Log system status information. */
   public static void logSystemStatus(String cpuCapabilities, String simdLevel,
@@ -777,7 +841,10 @@ public class RustPerformance {
 
   /** Helper method to reload configuration */
   private static PerformanceConfig reloadConfiguration() throws Exception {
-    return CONFIG_MANAGER.getConfiguration(PerformanceConfig.class);
+      if (CONFIG_MANAGER == null) {
+          CONFIG_MANAGER = ConfigurationManager.getInstance();
+      }
+      return CONFIG_MANAGER.getConfiguration(PerformanceConfig.class);
   }
 
   /** Helper method to load initial configuration */
@@ -788,7 +855,7 @@ public class RustPerformance {
       KneafCore.LOGGER.warn("Failed to load performance configuration, using defaults: " + e.getMessage());
       // Create a default configuration
       try {
-        return PerformanceConfig.builder()
+        return new PerformanceConfig.Builder()
                 .enabled(true)
                 .threadpoolSize(4)
                 .tpsThresholdForAsync(19.0)
@@ -800,7 +867,7 @@ public class RustPerformance {
         KneafCore.LOGGER.warn("Failed to build PerformanceConfig, using fallback", ex);
         // Return a simple config object
         try {
-          return PerformanceConfig.builder()
+          return new PerformanceConfig.Builder()
               .enabled(true)
               .threadpoolSize(4)
               .tpsThresholdForAsync(19.0)

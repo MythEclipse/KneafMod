@@ -112,23 +112,19 @@ public class UltraPerformanceConfiguration {
     }
     
     private static boolean getBoolean(Properties props, String key, boolean defaultValue) {
-        String value = props.getProperty(key);
-        return value != null ? Boolean.parseBoolean(value) : defaultValue;
+        return com.kneaf.core.config.core.ConfigurationUtils.getBooleanProperty(props, key, defaultValue);
     }
     
     private static int getInt(Properties props, String key, int defaultValue) {
-        String value = props.getProperty(key);
-        return value != null ? Integer.parseInt(value) : defaultValue;
+        return com.kneaf.core.config.core.ConfigurationUtils.getIntProperty(props, key, defaultValue);
     }
     
     private static long getLong(Properties props, String key, long defaultValue) {
-        String value = props.getProperty(key);
-        return value != null ? Long.parseLong(value) : defaultValue;
+        return com.kneaf.core.config.core.ConfigurationUtils.getLongProperty(props, key, defaultValue);
     }
     
     private static double getDouble(Properties props, String key, double defaultValue) {
-        String value = props.getProperty(key);
-        return value != null ? Double.parseDouble(value) : defaultValue;
+        return com.kneaf.core.config.core.ConfigurationUtils.getDoubleProperty(props, key, defaultValue);
     }
     
     public static PerformanceConfiguration getConfig() {

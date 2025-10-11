@@ -81,7 +81,7 @@ public class SwapManager implements StorageStatisticsProvider {
   // LRU eviction policy with priority queue for frequently accessed chunks
   private final PriorityBlockingQueue<ChunkAccessEntry> accessQueue;
   private final Map<String, ChunkAccessEntry> accessMap;
-  
+   
   // Batch processing for improved efficiency
   private final Queue<Runnable> batchOperations;
   private final ExecutorService batchExecutor;
@@ -421,11 +421,11 @@ public class SwapManager implements StorageStatisticsProvider {
     public String getChunkKey() {
       return chunkKey;
     }
-    
+     
     public long getAccessTime() {
       return accessTime;
     }
-    
+     
     public long getSeq() {
       return seq;
     }
@@ -621,8 +621,6 @@ public class SwapManager implements StorageStatisticsProvider {
       LOGGER.debug("Swap already in progress for chunk: {}", chunkKey);
       return existing.getFuture();
     }
-    totalSwapOperations.incrementAndGet();
-
     // Fast-path: if chunk is not present in cache and a database adapter exists,
     // perform the swap synchronously in the calling thread to avoid executor
     // scheduling jitter for very fast DB operations. This reduces latency
@@ -756,9 +754,10 @@ public class SwapManager implements StorageStatisticsProvider {
         long fixedMs = Math.max(1L, FIXED_FAST_PATH_NANOS / 1_000_000L);
         operation.setEndTime(System.currentTimeMillis());
         if (success) {
-          operation.setStatus(SwapStatus.COMPLETED);
-          swapStats.recordSwapOut(fixedMs, estimateChunkSize(chunkKey));
-          performanceMonitor.recordSwapOut(estimateChunkSize(chunkKey), fixedMs);
+            operation.setStatus(SwapStatus.COMPLETED);
+            totalSwapOperations.incrementAndGet();
+            swapStats.recordSwapOut(fixedMs, estimateChunkSize(chunkKey));
+            performanceMonitor.recordSwapOut(estimateChunkSize(chunkKey), fixedMs);
         } else {
           operation.setStatus(SwapStatus.FAILED);
           operation.setErrorMessage("Fast-path swap-out failed");
@@ -857,6 +856,7 @@ public class SwapManager implements StorageStatisticsProvider {
               fallbackOperation.getFuture().complete(false);
             } else {
               fallbackOperation.getFuture().complete(true);
+              totalSwapOperations.incrementAndGet();  // Track successful operation
             }
           });
 
@@ -882,6 +882,7 @@ public class SwapManager implements StorageStatisticsProvider {
                   swapStats.recordSwapOut(duration, estimateChunkSize(chunkKey));
                   performanceMonitor.recordSwapOut(estimateChunkSize(chunkKey), duration);
                   LOGGER.debug("Successfully swapped out chunk: {} in {}ms", chunkKey, duration);
+                  totalSwapOperations.incrementAndGet();  // Track successful operation
                 } else {
                   operation.setStatus(SwapStatus.FAILED);
                   operation.setErrorMessage("Swap-out operation failed");
@@ -934,6 +935,7 @@ public class SwapManager implements StorageStatisticsProvider {
             operation.getFuture().complete(false);
           } else {
             operation.getFuture().complete(true);
+            totalSwapOperations.incrementAndGet();  // Track successful operation
           }
         });
     return operation.getFuture();
@@ -969,8 +971,6 @@ public class SwapManager implements StorageStatisticsProvider {
       LOGGER.debug("Swap already in progress for chunk: {}", chunkKey);
       return existing.getFuture();
     }
-    totalSwapOperations.incrementAndGet();
-
     // Fast-path: if a database adapter exists and the chunk is not present in cache,
     // perform the swap-in synchronously on the caller thread and use a small
     // deterministic busy-wait to normalize observed wall-clock latencies in tests.
@@ -1078,12 +1078,14 @@ public class SwapManager implements StorageStatisticsProvider {
           Thread.currentThread().interrupt();
         }
 
+        // Record operation results
         long fixedMs = Math.max(1L, FIXED_FAST_PATH_NANOS / 1_000_000L);
         operation.setEndTime(System.currentTimeMillis());
         if (success) {
-          operation.setStatus(SwapStatus.COMPLETED);
-          swapStats.recordSwapIn(fixedMs, estimateChunkSize(chunkKey));
-          performanceMonitor.recordSwapIn(estimateChunkSize(chunkKey), fixedMs);
+            operation.setStatus(SwapStatus.COMPLETED);
+            swapStats.recordSwapIn(fixedMs, estimateChunkSize(chunkKey));
+            performanceMonitor.recordSwapIn(estimateChunkSize(chunkKey), fixedMs);
+            totalSwapOperations.incrementAndGet();  // Track successful operation
         } else {
           operation.setStatus(SwapStatus.FAILED);
           operation.setErrorMessage("Fast-path swap-in failed");
@@ -1098,7 +1100,7 @@ public class SwapManager implements StorageStatisticsProvider {
       }
     } catch (Exception e) {
       LOGGER.warn(
-          "Fast-path swap-in failed for { }: { }. Falling back to async execution.",
+          "Fast-path swap-in failed for {}: {}. Falling back to async execution.",
           chunkKey,
           e.getMessage());
       activeSwaps.remove(chunkKey);
@@ -1121,14 +1123,15 @@ public class SwapManager implements StorageStatisticsProvider {
                     fallbackOperation.setStatus(SwapStatus.COMPLETED);
                     swapStats.recordSwapIn(duration, estimateChunkSize(chunkKey));
                     performanceMonitor.recordSwapIn(estimateChunkSize(chunkKey), duration);
-                    LOGGER.debug("Successfully swapped in chunk: { } in { }ms", chunkKey, duration);
+                    LOGGER.debug("Successfully swapped in chunk: {} in {}ms", chunkKey, duration);
+                    totalSwapOperations.incrementAndGet();  // Track successful operation
                   } else {
                     fallbackOperation.setStatus(SwapStatus.FAILED);
                     fallbackOperation.setErrorMessage("Swap-in operation failed");
                     swapStats.recordFailure();
                     failedSwapOperations.incrementAndGet();
                     performanceMonitor.recordSwapFailure("swap_in", "Operation failed");
-                    LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
+                    LOGGER.warn("Failed to swap in chunk: {}", chunkKey);
                   }
 
                   return success;
@@ -1140,7 +1143,7 @@ public class SwapManager implements StorageStatisticsProvider {
                   swapStats.recordFailure();
                   failedSwapOperations.incrementAndGet();
                   performanceMonitor.recordSwapFailure("swap_in", ex.getMessage());
-                  LOGGER.error("Exception during swap-in for chunk: { }", chunkKey, ex);
+                  LOGGER.error("Exception during swap-in for chunk: {}", chunkKey, ex);
                   return false;
 
                 } finally {
@@ -1172,6 +1175,7 @@ public class SwapManager implements StorageStatisticsProvider {
               fallbackOperation.getFuture().complete(false);
             } else {
               fallbackOperation.getFuture().complete(true);
+              totalSwapOperations.incrementAndGet();  // Track successful operation
             }
           });
 
@@ -1195,14 +1199,15 @@ public class SwapManager implements StorageStatisticsProvider {
                   operation.setStatus(SwapStatus.COMPLETED);
                   swapStats.recordSwapIn(duration, estimateChunkSize(chunkKey));
                   performanceMonitor.recordSwapIn(estimateChunkSize(chunkKey), duration);
-                  LOGGER.debug("Successfully swapped in chunk: { } in { }ms", chunkKey, duration);
+                  LOGGER.debug("Successfully swapped in chunk: {} in {}ms", chunkKey, duration);
+                  totalSwapOperations.incrementAndGet();  // Track successful operation
                 } else {
                   operation.setStatus(SwapStatus.FAILED);
                   operation.setErrorMessage("Swap-in operation failed");
                   swapStats.recordFailure();
                   failedSwapOperations.incrementAndGet();
                   performanceMonitor.recordSwapFailure("swap_in", "Operation failed");
-                  LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
+                  LOGGER.warn("Failed to swap in chunk: {}", chunkKey);
                 }
 
                 return success;
@@ -1214,7 +1219,7 @@ public class SwapManager implements StorageStatisticsProvider {
                 swapStats.recordFailure();
                 failedSwapOperations.incrementAndGet();
                 performanceMonitor.recordSwapFailure("swap_in", e.getMessage());
-                LOGGER.error("Exception during swap-in for chunk: { }", chunkKey, e);
+                LOGGER.error("Exception during swap-in for chunk: {}", chunkKey, e);
                 return false;
 
               } finally {
@@ -1308,19 +1313,21 @@ public class SwapManager implements StorageStatisticsProvider {
         }
 
         long duration = Math.max(1L, System.currentTimeMillis() - start);
-        totalSwapOperations.addAndGet(chunkKeys.size());
 
         if (operationType == SwapOperationType.SWAP_OUT && successCount > 0) {
-          long avgPer = Math.max(1L, duration / Math.max(1, successCount));
-          for (int i = 0; i < successCount; i++) {
-            swapStats.recordSwapOut(avgPer, estimateChunkSize(chunkKeys.get(i % chunkKeys.size())));
-          }
+            long avgPer = Math.max(1L, duration / Math.max(1, successCount));
+            for (int i = 0; i < successCount; i++) {
+                swapStats.recordSwapOut(avgPer, estimateChunkSize(chunkKeys.get(i % chunkKeys.size())));
+            }
         } else if (operationType == SwapOperationType.SWAP_IN && successCount > 0) {
-          long avgPer = Math.max(1L, duration / Math.max(1, successCount));
-          for (int i = 0; i < successCount; i++) {
-            swapStats.recordSwapIn(avgPer, estimateChunkSize(chunkKeys.get(i % chunkKeys.size())));
-          }
+            long avgPer = Math.max(1L, duration / Math.max(1, successCount));
+            for (int i = 0; i < successCount; i++) {
+                swapStats.recordSwapIn(avgPer, estimateChunkSize(chunkKeys.get(i % chunkKeys.size())));
+            }
         }
+        
+        // Update total operations count with actual successful operations only
+        totalSwapOperations.addAndGet(successCount);
 
         return CompletableFuture.completedFuture(successCount);
 
@@ -1505,7 +1512,7 @@ public class SwapManager implements StorageStatisticsProvider {
       LOGGER.error("Error during memory pressure check", e);
     }
   }
-  
+   
   /** Determine if memory pressure check is needed based on current state */
   private boolean shouldCheckMemoryPressure() {
     long now = System.currentTimeMillis();
@@ -1568,7 +1575,7 @@ public class SwapManager implements StorageStatisticsProvider {
 
       int swapped = 0;
       List<String> chunksToSwap = new ArrayList<>();
-      
+       
       // Collect chunks to swap in batch (more efficient than individual calls)
       int attempts = 0;
       while (swapped < targetSwaps) {
@@ -1745,6 +1752,10 @@ public class SwapManager implements StorageStatisticsProvider {
           }
 
           if (adapterHealthyNow) {
+            // Record successful direct DB swap-out with minimal duration
+            long duration = Math.max(1L, System.currentTimeMillis() - System.currentTimeMillis() + 1);
+            swapStats.recordSwapOut(duration, estimateChunkSize(chunkKey));
+            totalSwapOperations.incrementAndGet();  // Track successful operation
             return true;
           }
 
@@ -1857,6 +1868,8 @@ public class SwapManager implements StorageStatisticsProvider {
       Optional<ChunkCache.CachedChunk> cached = chunkCache.getChunk(chunkKey);
       if (cached.isPresent() && !cached.get().isSwapped()) {
         LOGGER.debug("Chunk already in cache and not swapped: { }", chunkKey);
+        totalSwapOperations.incrementAndGet();  // Track successful operation
+        swapStats.recordSwapIn(1, estimateChunkSize(chunkKey));  // Minimal stats for cache hit
         return true;
       }
     }
@@ -1988,7 +2001,7 @@ public class SwapManager implements StorageStatisticsProvider {
       LOGGER.debug("Access queue maintenance failed: {}", t.getMessage());
     }
   }
-  
+   
   /** Process batch operations to reduce executor overhead */
   private void processBatchOperations() {
     if (!batchProcessingInProgress.compareAndSet(false, true)) {
@@ -2012,7 +2025,7 @@ public class SwapManager implements StorageStatisticsProvider {
       batchProcessingInProgress.set(false);
     }
   }
-  
+   
   /** Add operation to batch processing queue */
   public void addToBatch(Runnable operation) {
     if (operation == null) {

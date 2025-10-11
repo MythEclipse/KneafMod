@@ -1,8 +1,7 @@
 package com.kneaf.core.unifiedbridge;
 
 import com.kneaf.core.config.ConfigurationManager;
-import com.kneaf.core.config.exception.ConfigurationException;
-import com.kneaf.core.config.performance.PerformanceConfig;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.EntityData;
 import com.kneaf.core.data.entity.MobData;
@@ -193,19 +192,13 @@ public final class BackwardCompatibilityAdapter {
      * @return PerformanceConfig instance with default values
      */
     private static PerformanceConfig createDefaultConfiguration() {
-        try {
-            return PerformanceConfig.builder()
-                    .enabled(true)
-                    .threadpoolSize(4)
-                    .tpsThresholdForAsync(19.0)
-                    .maxEntitiesToCollect(1000)
-                    .profilingEnabled(false)
-                    .build();
-        } catch (ConfigurationException e) {
-            // Last resort - log error and return null (caller should handle this case)
-            System.err.println("Failed to create default configuration: " + e.getMessage());
-            return null;
-        }
+        return new PerformanceConfig.Builder()
+                .enabled(true)
+                .threadpoolSize(4)
+                .tpsThresholdForAsync(19.0)
+                .maxEntitiesToCollect(1000)
+                .profilingEnabled(false)
+                .build();
     }
 
     /**

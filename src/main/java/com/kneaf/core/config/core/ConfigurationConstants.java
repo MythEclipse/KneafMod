@@ -48,9 +48,9 @@ public final class ConfigurationConstants {
   public static final int DEFAULT_SWAP_BATCH_SIZE = 50;
   public static final long DEFAULT_SWAP_TIMEOUT_MS = 30000; // 30 seconds
   public static final int DEFAULT_MIN_SWAP_CHUNK_AGE_MS = 60000; // 1 minute
-  public static final double DEFAULT_CRITICAL_MEMORY_THRESHOLD = 0.95; // 95% of max heap
-  public static final double DEFAULT_HIGH_MEMORY_THRESHOLD = 0.85; // 85% of max heap
-  public static final double DEFAULT_ELEVATED_MEMORY_THRESHOLD = 0.75; // 75% of max heap
+  public static final double DEFAULT_CRITICAL_MEMORY_THRESHOLD = 0.85; // 85% of max heap
+  public static final double DEFAULT_HIGH_MEMORY_THRESHOLD = 0.90; // 90% of max heap
+  public static final double DEFAULT_ELEVATED_MEMORY_THRESHOLD = 0.95; // 95% of max heap
 
   // Common resource constants
   public static final int DEFAULT_RESOURCE_CLEANUP_INTERVAL_SECONDS = 300; // 5 minutes

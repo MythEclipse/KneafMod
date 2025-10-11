@@ -47,12 +47,7 @@ public class NativeTask {
         try {
             return bridge.executeSync(taskName, parameters);
         } catch (BridgeException e) {
-            return new BridgeResult.Builder()
-                .taskId(taskId)
-                .startTimeNanos(System.nanoTime())
-                .endTimeNanos(System.nanoTime())
-                .failure(e.getMessage())
-                .build();
+            return BridgeResultFactory.createFailure(taskName, e);
         }
     }
 }

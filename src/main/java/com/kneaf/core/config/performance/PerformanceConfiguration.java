@@ -1,494 +1,540 @@
 package com.kneaf.core.config.performance;
 
-import com.kneaf.core.config.core.ConfigurationConstants;
-import com.kneaf.core.config.core.ConfigurationProvider;
-import com.kneaf.core.config.core.ConfigurationUtils;
-import java.util.Arrays;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 
-/** Unified performance configuration that consolidates all performance-related settings. */
-public class PerformanceConfiguration implements ConfigurationProvider {
-  private final boolean enabled;
-  private final int threadpoolSize;
-  private final int logIntervalTicks;
-  private final int scanIntervalTicks;
-  private final double tpsThresholdForAsync;
-  private final int maxEntitiesToCollect;
-  private final double entityDistanceCutoff;
-  private final long maxLogBytes;
-  private final boolean adaptiveThreadPool;
-  private final int maxThreadpoolSize;
-  private final String[] excludedEntityTypes;
-  private final int networkExecutorpoolSize;
-  private final boolean profilingEnabled;
-  private final long slowTickThresholdMs;
-  private final int profilingSampleRate;
+/**
+ * Centralized configuration for performance-related settings.
+ * Consolidates all performance configuration properties in one place.
+ */
+public class PerformanceConfiguration {
+    // Core performance settings
+    private int maxBatchSize = 100;
+    private int minBatchSize = 10;
+    private int bufferPoolSize = 32;
+    private int maxBufferSize = 1024 * 1024; // 1MB
+    private int connectionPoolSize = 8;
+    private int maxConnectionPoolSize = 32;
+    
+    // Timeout configuration
+    private long operationTimeoutMillis = TimeUnit.SECONDS.toMillis(30);
+    private long connectionAcquisitionTimeoutMillis = TimeUnit.SECONDS.toMillis(5);
+    private long bufferAcquisitionTimeoutMillis = TimeUnit.MILLISECONDS.toMillis(100);
+    
+    // Performance optimization
+    private int bufferThresholdForDirectAllocation = 4096; // 4KB
+    private boolean enableZeroCopy = true;
+    private boolean enableBufferPooling = true;
+    private boolean enableConnectionPooling = true;
+    private boolean enableBatching = true;
+    
+    // Monitoring and debugging
+    private boolean enableDetailedMetrics = false;
+    private boolean enableDebugLogging = false;
+    private String logPrefix = "[UnifiedBridge]";
+    
+    // Worker configuration
+    private int defaultWorkerConcurrency = 4;
+    private long workerKeepAliveMillis = TimeUnit.MINUTES.toMillis(5);
+    
+    // Memory pressure configuration
+    private double highMemoryPressureThreshold = 0.85;
+    private double criticalMemoryPressureThreshold = 0.95;
+    
+    // Resource leak detection configuration
+    private boolean enableResourceLeakDetection = true;
+    private long resourceLeakDetectionThresholdMs = 30000; // 30 seconds
+    private long resourceLeakDetectionIntervalMs = 60000; // 1 minute
+    
+    // Thread pool configuration
+    private int threadpoolSize = 4;
 
-  // Advanced parallelism configuration
-  private final int minThreadpoolSize;
-  private final boolean dynamicThreadScaling;
-  private final double threadScaleUpThreshold;
-  private final double threadScaleDownThreshold;
-  private final int threadScaleUpDelayTicks;
-  private final int threadScaleDownDelayTicks;
-  private final boolean workStealingEnabled;
-  private final int workStealingQueueSize;
-  private final boolean cpuAwareThreadSizing;
-  private final double cpuLoadThreshold;
-  private final int threadPoolKeepAliveSeconds;
-
-  // Distance & processing optimizations
-  private final int distanceCalculationInterval;
-  private final boolean distanceApproximationEnabled;
-  private final int distanceCacheSize;
-  private final int itemProcessingIntervalMultiplier;
-  private final int spatialGridUpdateInterval;
-  private final boolean incrementalSpatialUpdates;
-
-  private PerformanceConfiguration(Builder builder) {
-    this.enabled = builder.enabled;
-    this.threadpoolSize = builder.threadpoolSize;
-    this.logIntervalTicks = builder.logIntervalTicks;
-    this.scanIntervalTicks = builder.scanIntervalTicks;
-    this.tpsThresholdForAsync = builder.tpsThresholdForAsync;
-    this.maxEntitiesToCollect = builder.maxEntitiesToCollect;
-    this.entityDistanceCutoff = builder.entityDistanceCutoff;
-    this.maxLogBytes = builder.maxLogBytes;
-    this.adaptiveThreadPool = builder.adaptiveThreadPool;
-    this.maxThreadpoolSize = builder.maxThreadpoolSize;
-    this.excludedEntityTypes =
-        builder.excludedEntityTypes == null ? new String[0] : builder.excludedEntityTypes.clone();
-    this.networkExecutorpoolSize = builder.networkExecutorpoolSize;
-    this.profilingEnabled = builder.profilingEnabled;
-    this.slowTickThresholdMs = builder.slowTickThresholdMs;
-    this.profilingSampleRate = builder.profilingSampleRate;
-
-    // Advanced parallelism configuration
-    this.minThreadpoolSize = builder.minThreadpoolSize;
-    this.dynamicThreadScaling = builder.dynamicThreadScaling;
-    this.threadScaleUpThreshold = builder.threadScaleUpThreshold;
-    this.threadScaleDownThreshold = builder.threadScaleDownThreshold;
-    this.threadScaleUpDelayTicks = builder.threadScaleUpDelayTicks;
-    this.threadScaleDownDelayTicks = builder.threadScaleDownDelayTicks;
-    this.workStealingEnabled = builder.workStealingEnabled;
-    this.workStealingQueueSize = builder.workStealingQueueSize;
-    this.cpuAwareThreadSizing = builder.cpuAwareThreadSizing;
-    this.cpuLoadThreshold = builder.cpuLoadThreshold;
-    this.threadPoolKeepAliveSeconds = builder.threadPoolKeepAliveSeconds;
-
-    // Distance & processing optimizations
-    this.distanceCalculationInterval = builder.distanceCalculationInterval;
-    this.distanceApproximationEnabled = builder.distanceApproximationEnabled;
-    this.distanceCacheSize = builder.distanceCacheSize;
-    this.itemProcessingIntervalMultiplier = builder.itemProcessingIntervalMultiplier;
-    this.spatialGridUpdateInterval = builder.spatialGridUpdateInterval;
-    this.incrementalSpatialUpdates = builder.incrementalSpatialUpdates;
-
-    validate();
-  }
-
-  @Override
-  public void validate() {
-    ConfigurationUtils.validateMinMax(
-        minThreadpoolSize, maxThreadpoolSize, "minThreadpoolSize", "maxThreadpoolSize");
-    ConfigurationUtils.validateMinMax(
-        threadScaleDownThreshold,
-        threadScaleUpThreshold,
-        "threadScaleDownThreshold",
-        "threadScaleUpThreshold");
-    ConfigurationUtils.validateRange(scanIntervalTicks, 1, 100, "scanIntervalTicks");
-    ConfigurationUtils.validateRange(
-        tpsThresholdForAsync,
-        ConfigurationConstants.MIN_TPS_THRESHOLD,
-        ConfigurationConstants.MAX_TPS_THRESHOLD,
-        "tpsThresholdForAsync");
-  }
-
-  @Override
-  public boolean isEnabled() {
-    return enabled;
-  }
-
-  // Getters
-  public int getThreadpoolSize() {
-    return threadpoolSize;
-  }
-
-  public int getLogIntervalTicks() {
-    return logIntervalTicks;
-  }
-
-  public int getScanIntervalTicks() {
-    return scanIntervalTicks;
-  }
-
-  public double getTpsThresholdForAsync() {
-    return tpsThresholdForAsync;
-  }
-
-  public int getMaxEntitiesToCollect() {
-    return maxEntitiesToCollect;
-  }
-
-  public double getEntityDistanceCutoff() {
-    return entityDistanceCutoff;
-  }
-
-  public long getMaxLogBytes() {
-    return maxLogBytes;
-  }
-
-  public boolean isAdaptiveThreadPool() {
-    return adaptiveThreadPool;
-  }
-
-  public int getMaxThreadpoolSize() {
-    return maxThreadpoolSize;
-  }
-
-  public String[] getExcludedEntityTypes() {
-    return excludedEntityTypes.clone();
-  }
-
-  public int getNetworkExecutorpoolSize() {
-    return networkExecutorpoolSize;
-  }
-
-  public boolean isProfilingEnabled() {
-    return profilingEnabled;
-  }
-
-  public long getSlowTickThresholdMs() {
-    return slowTickThresholdMs;
-  }
-
-  public int getProfilingSampleRate() {
-    return profilingSampleRate;
-  }
-
-  // Advanced parallelism getters
-  public int getMinThreadpoolSize() {
-    return minThreadpoolSize;
-  }
-
-  public boolean isDynamicThreadScaling() {
-    return dynamicThreadScaling;
-  }
-
-  public double getThreadScaleUpThreshold() {
-    return threadScaleUpThreshold;
-  }
-
-  public double getThreadScaleDownThreshold() {
-    return threadScaleDownThreshold;
-  }
-
-  public int getThreadScaleUpDelayTicks() {
-    return threadScaleUpDelayTicks;
-  }
-
-  public int getThreadScaleDownDelayTicks() {
-    return threadScaleDownDelayTicks;
-  }
-
-  public boolean isWorkStealingEnabled() {
-    return workStealingEnabled;
-  }
-
-  public int getWorkStealingQueueSize() {
-    return workStealingQueueSize;
-  }
-
-  public boolean isCpuAwareThreadSizing() {
-    return cpuAwareThreadSizing;
-  }
-
-  public double getCpuLoadThreshold() {
-    return cpuLoadThreshold;
-  }
-
-  public int getThreadPoolKeepAliveSeconds() {
-    return threadPoolKeepAliveSeconds;
-  }
-
-  // Distance calculation optimization getters
-  public int getDistanceCalculationInterval() {
-    return distanceCalculationInterval;
-  }
-
-  public boolean isDistanceApproximationEnabled() {
-    return distanceApproximationEnabled;
-  }
-
-  public int getDistanceCacheSize() {
-    return distanceCacheSize;
-  }
-
-  // Item processing optimization getters
-  public int getItemProcessingIntervalMultiplier() {
-    return itemProcessingIntervalMultiplier;
-  }
-
-  // Spatial grid optimization getters
-  public int getSpatialGridUpdateInterval() {
-    return spatialGridUpdateInterval;
-  }
-
-  public boolean isIncrementalSpatialUpdates() {
-    return incrementalSpatialUpdates;
-  }
-
-  @Override
-  public String toString() {
-    return "PerformanceConfiguration{"
-        + "enabled="
-        + enabled
-        + ", threadpoolSize="
-        + threadpoolSize
-        + ", logIntervalTicks="
-        + logIntervalTicks
-        + ", scanIntervalTicks="
-        + scanIntervalTicks
-        + ", tpsThresholdForAsync="
-        + tpsThresholdForAsync
-        + ", maxEntitiesToCollect="
-        + maxEntitiesToCollect
-        + ", entityDistanceCutoff="
-        + entityDistanceCutoff
-        + ", maxLogBytes="
-        + maxLogBytes
-        + ", adaptiveThreadPool="
-        + adaptiveThreadPool
-        + ", maxThreadpoolSize="
-        + maxThreadpoolSize
-        + ", excludedEntityTypes="
-        + Arrays.toString(excludedEntityTypes)
-        + ", profilingEnabled="
-        + profilingEnabled
-        + ", slowTickThresholdMs="
-        + slowTickThresholdMs
-        + ", profilingSampleRate="
-        + profilingSampleRate
-        + '}';
-  }
-
-  public static Builder builder() {
-    return new Builder();
-  }
-
-  public static class Builder {
-    // Basic performance settings
-    private boolean enabled = ConfigurationConstants.DEFAULT_ENABLED;
-    private int threadpoolSize = ConfigurationConstants.DEFAULT_THREAD_POOL_SIZE;
-    private int logIntervalTicks = ConfigurationConstants.DEFAULT_LOG_INTERVAL_TICKS;
-    private int scanIntervalTicks = ConfigurationConstants.DEFAULT_SCAN_INTERVAL_TICKS;
-    private double tpsThresholdForAsync = ConfigurationConstants.DEFAULT_TPS_THRESHOLD;
-    private int maxEntitiesToCollect = ConfigurationConstants.DEFAULT_MAX_ENTITIES_TO_COLLECT;
-    private double entityDistanceCutoff = ConfigurationConstants.DEFAULT_DISTANCE_CUTOFF;
-    private long maxLogBytes = ConfigurationConstants.DEFAULT_MAX_LOG_BYTES;
-    private boolean adaptiveThreadPool = ConfigurationConstants.DEFAULT_ADAPTIVE_THREAD_POOL;
-    private int maxThreadpoolSize = ConfigurationConstants.DEFAULT_MAX_THREAD_POOL_SIZE;
-    private String[] excludedEntityTypes = new String[0];
-    private int networkExecutorpoolSize = ConfigurationConstants.DEFAULT_NETWORK_EXECUTOR_POOL_SIZE;
-    private boolean profilingEnabled = ConfigurationConstants.DEFAULT_PROFILING_ENABLED;
-    private long slowTickThresholdMs = ConfigurationConstants.DEFAULT_SLOW_TICK_THRESHOLD_MS;
-    private int profilingSampleRate = ConfigurationConstants.DEFAULT_PROFILING_SAMPLE_RATE;
-
-    // Advanced parallelism configuration
-    private int minThreadpoolSize = ConfigurationConstants.DEFAULT_MIN_THREAD_POOL_SIZE;
-    private boolean dynamicThreadScaling = ConfigurationConstants.DEFAULT_DYNAMIC_THREAD_SCALING;
-    private double threadScaleUpThreshold =
-        ConfigurationConstants.DEFAULT_THREAD_SCALE_UP_THRESHOLD;
-    private double threadScaleDownThreshold =
-        ConfigurationConstants.DEFAULT_THREAD_SCALE_DOWN_THRESHOLD;
-    private int threadScaleUpDelayTicks =
-        ConfigurationConstants.DEFAULT_THREAD_SCALE_UP_DELAY_TICKS;
-    private int threadScaleDownDelayTicks =
-        ConfigurationConstants.DEFAULT_THREAD_SCALE_DOWN_DELAY_TICKS;
-    private boolean workStealingEnabled = ConfigurationConstants.DEFAULT_WORK_STEALING_ENABLED;
-    private int workStealingQueueSize = ConfigurationConstants.DEFAULT_WORK_STEALING_QUEUE_SIZE;
-    private boolean cpuAwareThreadSizing = ConfigurationConstants.DEFAULT_CPU_AWARE_THREAD_SIZING;
-    private double cpuLoadThreshold = ConfigurationConstants.DEFAULT_CPU_LOAD_THRESHOLD;
-    private int threadPoolKeepAliveSeconds =
-        ConfigurationConstants.DEFAULT_THREAD_POOL_KEEP_ALIVE_SECONDS;
-
-    // Distance & processing optimizations
-    private int distanceCalculationInterval =
-        ConfigurationConstants.DEFAULT_DISTANCE_CALCULATION_INTERVAL;
-    private boolean distanceApproximationEnabled =
-        ConfigurationConstants.DEFAULT_DISTANCE_APPROXIMATION_ENABLED;
-    private int distanceCacheSize = ConfigurationConstants.DEFAULT_DISTANCE_CACHE_SIZE;
-    private int itemProcessingIntervalMultiplier =
-        ConfigurationConstants.DEFAULT_ITEM_PROCESSING_INTERVAL_MULTIPLIER;
-    private int spatialGridUpdateInterval =
-        ConfigurationConstants.DEFAULT_SPATIAL_GRID_UPDATE_INTERVAL;
-    private boolean incrementalSpatialUpdates =
-        ConfigurationConstants.DEFAULT_INCREMENTAL_SPATIAL_UPDATES;
-
-    // Basic performance setters
-    public Builder enabled(boolean v) {
-      this.enabled = v;
-      return this;
+    // Getters and setters for all configuration properties
+    
+    /**
+     * Get maximum batch size for batch operations.
+     * @return Maximum batch size
+     */
+    public int getMaxBatchSize() {
+        return maxBatchSize;
     }
 
-    public Builder threadpoolSize(int v) {
-      this.threadpoolSize = v;
-      return this;
+    /**
+     * Set maximum batch size for batch operations.
+     * @param maxBatchSize Maximum batch size
+     */
+    public void setMaxBatchSize(int maxBatchSize) {
+        this.maxBatchSize = maxBatchSize;
     }
 
-    public Builder logIntervalTicks(int v) {
-      this.logIntervalTicks = v;
-      return this;
+    /**
+     * Get minimum batch size for batch operations.
+     * @return Minimum batch size
+     */
+    public int getMinBatchSize() {
+        return minBatchSize;
     }
 
-    public Builder scanIntervalTicks(int v) {
-      this.scanIntervalTicks = v;
-      return this;
+    /**
+     * Set minimum batch size for batch operations.
+     * @param minBatchSize Minimum batch size
+     */
+    public void setMinBatchSize(int minBatchSize) {
+        this.minBatchSize = minBatchSize;
     }
 
-    public Builder tpsThresholdForAsync(double v) {
-      this.tpsThresholdForAsync = v;
-      return this;
+    /**
+     * Get buffer pool size.
+     * @return Buffer pool size
+     */
+    public int getBufferPoolSize() {
+        return bufferPoolSize;
     }
 
-    public Builder maxEntitiesToCollect(int v) {
-      this.maxEntitiesToCollect = v;
-      return this;
+    /**
+     * Set buffer pool size.
+     * @param bufferPoolSize Buffer pool size
+     */
+    public void setBufferPoolSize(int bufferPoolSize) {
+        this.bufferPoolSize = bufferPoolSize;
     }
 
-    public Builder entityDistanceCutoff(double v) {
-      this.entityDistanceCutoff = v;
-      return this;
+    /**
+     * Get maximum buffer size for pooling.
+     * @return Maximum buffer size
+     */
+    public int getMaxBufferSize() {
+        return maxBufferSize;
     }
 
-    public Builder maxLogBytes(long v) {
-      this.maxLogBytes = v;
-      return this;
+    /**
+     * Set maximum buffer size for pooling.
+     * @param maxBufferSize Maximum buffer size
+     */
+    public void setMaxBufferSize(int maxBufferSize) {
+        this.maxBufferSize = maxBufferSize;
     }
 
-    public Builder adaptiveThreadPool(boolean v) {
-      this.adaptiveThreadPool = v;
-      return this;
+    /**
+     * Get connection pool size.
+     * @return Connection pool size
+     */
+    public int getConnectionPoolSize() {
+        return connectionPoolSize;
     }
 
-    public Builder maxThreadpoolSize(int v) {
-      this.maxThreadpoolSize = v;
-      return this;
+    /**
+     * Set connection pool size.
+     * @param connectionPoolSize Connection pool size
+     */
+    public void setConnectionPoolSize(int connectionPoolSize) {
+        this.connectionPoolSize = connectionPoolSize;
     }
 
-    public Builder excludedEntityTypes(String[] v) {
-      this.excludedEntityTypes = v == null ? new String[0] : v.clone();
-      return this;
+    /**
+     * Get maximum connection pool size.
+     * @return Maximum connection pool size
+     */
+    public int getMaxConnectionPoolSize() {
+        return maxConnectionPoolSize;
     }
 
-    public Builder networkExecutorpoolSize(int v) {
-      this.networkExecutorpoolSize = v;
-      return this;
+    /**
+     * Set maximum connection pool size.
+     * @param maxConnectionPoolSize Maximum connection pool size
+     */
+    public void setMaxConnectionPoolSize(int maxConnectionPoolSize) {
+        this.maxConnectionPoolSize = maxConnectionPoolSize;
     }
 
-    public Builder profilingEnabled(boolean v) {
-      this.profilingEnabled = v;
-      return this;
+    /**
+     * Get operation timeout in milliseconds.
+     * @return Operation timeout
+     */
+    public long getOperationTimeoutMillis() {
+        return operationTimeoutMillis;
     }
 
-    public Builder slowTickThresholdMs(long v) {
-      this.slowTickThresholdMs = v;
-      return this;
+    /**
+     * Set operation timeout in milliseconds.
+     * @param operationTimeoutMillis Operation timeout
+     */
+    public void setOperationTimeoutMillis(long operationTimeoutMillis) {
+        this.operationTimeoutMillis = operationTimeoutMillis;
     }
 
-    public Builder profilingSampleRate(int v) {
-      this.profilingSampleRate = v;
-      return this;
+    /**
+     * Get connection acquisition timeout in milliseconds.
+     * @return Connection acquisition timeout
+     */
+    public long getConnectionAcquisitionTimeoutMillis() {
+        return connectionAcquisitionTimeoutMillis;
     }
 
-    // Advanced parallelism setters
-    public Builder minThreadpoolSize(int v) {
-      this.minThreadpoolSize = v;
-      return this;
+    /**
+     * Set connection acquisition timeout in milliseconds.
+     * @param connectionAcquisitionTimeoutMillis Connection acquisition timeout
+     */
+    public void setConnectionAcquisitionTimeoutMillis(long connectionAcquisitionTimeoutMillis) {
+        this.connectionAcquisitionTimeoutMillis = connectionAcquisitionTimeoutMillis;
     }
 
-    public Builder dynamicThreadScaling(boolean v) {
-      this.dynamicThreadScaling = v;
-      return this;
+    /**
+     * Get buffer acquisition timeout in milliseconds.
+     * @return Buffer acquisition timeout
+     */
+    public long getBufferAcquisitionTimeoutMillis() {
+        return bufferAcquisitionTimeoutMillis;
     }
 
-    public Builder threadScaleUpThreshold(double v) {
-      this.threadScaleUpThreshold = v;
-      return this;
+    /**
+     * Set buffer acquisition timeout in milliseconds.
+     * @param bufferAcquisitionTimeoutMillis Buffer acquisition timeout
+     */
+    public void setBufferAcquisitionTimeoutMillis(long bufferAcquisitionTimeoutMillis) {
+        this.bufferAcquisitionTimeoutMillis = bufferAcquisitionTimeoutMillis;
     }
 
-    public Builder threadScaleDownThreshold(double v) {
-      this.threadScaleDownThreshold = v;
-      return this;
+    /**
+     * Get buffer threshold for direct allocation (in bytes).
+     * @return Buffer threshold
+     */
+    public int getBufferThresholdForDirectAllocation() {
+        return bufferThresholdForDirectAllocation;
     }
 
-    public Builder threadScaleUpDelayTicks(int v) {
-      this.threadScaleUpDelayTicks = v;
-      return this;
+    /**
+     * Set buffer threshold for direct allocation (in bytes).
+     * @param bufferThresholdForDirectAllocation Buffer threshold
+     */
+    public void setBufferThresholdForDirectAllocation(int bufferThresholdForDirectAllocation) {
+        this.bufferThresholdForDirectAllocation = bufferThresholdForDirectAllocation;
     }
 
-    public Builder threadScaleDownDelayTicks(int v) {
-      this.threadScaleDownDelayTicks = v;
-      return this;
+    /**
+     * Check if zero-copy operations are enabled.
+     * @return true if zero-copy is enabled, false otherwise
+     */
+    public boolean isEnableZeroCopy() {
+        return enableZeroCopy;
     }
 
-    public Builder workStealingEnabled(boolean v) {
-      this.workStealingEnabled = v;
-      return this;
+    /**
+     * Enable or disable zero-copy operations.
+     * @param enableZeroCopy true to enable, false to disable
+     */
+    public void setEnableZeroCopy(boolean enableZeroCopy) {
+        this.enableZeroCopy = enableZeroCopy;
     }
 
-    public Builder workStealingQueueSize(int v) {
-      this.workStealingQueueSize = v;
-      return this;
+    /**
+     * Check if buffer pooling is enabled.
+     * @return true if buffer pooling is enabled, false otherwise
+     */
+    public boolean isEnableBufferPooling() {
+        return enableBufferPooling;
     }
 
-    public Builder cpuAwareThreadSizing(boolean v) {
-      this.cpuAwareThreadSizing = v;
-      return this;
+    /**
+     * Enable or disable buffer pooling.
+     * @param enableBufferPooling true to enable, false to disable
+     */
+    public void setEnableBufferPooling(boolean enableBufferPooling) {
+        this.enableBufferPooling = enableBufferPooling;
     }
 
-    public Builder cpuLoadThreshold(double v) {
-      this.cpuLoadThreshold = v;
-      return this;
+    /**
+     * Check if connection pooling is enabled.
+     * @return true if connection pooling is enabled, false otherwise
+     */
+    public boolean isEnableConnectionPooling() {
+        return enableConnectionPooling;
     }
 
-    public Builder threadPoolKeepAliveSeconds(int v) {
-      this.threadPoolKeepAliveSeconds = v;
-      return this;
+    /**
+     * Enable or disable connection pooling.
+     * @param enableConnectionPooling true to enable, false to disable
+     */
+    public void setEnableConnectionPooling(boolean enableConnectionPooling) {
+        this.enableConnectionPooling = enableConnectionPooling;
     }
 
-    // Distance & processing optimization setters
-    public Builder distanceCalculationInterval(int v) {
-      this.distanceCalculationInterval = v;
-      return this;
+    /**
+     * Check if batching is enabled.
+     * @return true if batching is enabled, false otherwise
+     */
+    public boolean isEnableBatching() {
+        return enableBatching;
     }
 
-    public Builder distanceApproximationEnabled(boolean v) {
-      this.distanceApproximationEnabled = v;
-      return this;
+    /**
+     * Enable or disable batching.
+     * @param enableBatching true to enable, false to disable
+     */
+    public void setEnableBatching(boolean enableBatching) {
+        this.enableBatching = enableBatching;
     }
 
-    public Builder distanceCacheSize(int v) {
-      this.distanceCacheSize = v;
-      return this;
+    /**
+     * Check if detailed metrics are enabled.
+     * @return true if detailed metrics are enabled, false otherwise
+     */
+    public boolean isEnableDetailedMetrics() {
+        return enableDetailedMetrics;
     }
 
-    public Builder itemProcessingIntervalMultiplier(int v) {
-      this.itemProcessingIntervalMultiplier = v;
-      return this;
+    /**
+     * Enable or disable detailed metrics.
+     * @param enableDetailedMetrics true to enable, false to disable
+     */
+    public void setEnableDetailedMetrics(boolean enableDetailedMetrics) {
+        this.enableDetailedMetrics = enableDetailedMetrics;
     }
 
-    public Builder spatialGridUpdateInterval(int v) {
-      this.spatialGridUpdateInterval = v;
-      return this;
+    /**
+     * Check if debug logging is enabled.
+     * @return true if debug logging is enabled, false otherwise
+     */
+    public boolean isEnableDebugLogging() {
+        return enableDebugLogging;
     }
 
-    public Builder incrementalSpatialUpdates(boolean v) {
-      this.incrementalSpatialUpdates = v;
-      return this;
+    /**
+     * Enable or disable debug logging.
+     * @param enableDebugLogging true to enable, false to disable
+     */
+    public void setEnableDebugLogging(boolean enableDebugLogging) {
+        this.enableDebugLogging = enableDebugLogging;
     }
 
-    public PerformanceConfiguration build() {
-      return new PerformanceConfiguration(this);
+    /**
+     * Get log prefix for bridge operations.
+     * @return Log prefix
+     */
+    public String getLogPrefix() {
+        return logPrefix;
     }
-  }
+
+    /**
+     * Set log prefix for bridge operations.
+     * @param logPrefix Log prefix string
+     */
+    public void setLogPrefix(String logPrefix) {
+        this.logPrefix = logPrefix;
+    }
+
+    /**
+     * Get default worker concurrency level.
+     * @return Default worker concurrency
+     */
+    public int getDefaultWorkerConcurrency() {
+        return defaultWorkerConcurrency;
+    }
+
+    /**
+     * Set default worker concurrency level.
+     * @param defaultWorkerConcurrency Concurrency level
+     */
+    public void setDefaultWorkerConcurrency(int defaultWorkerConcurrency) {
+        this.defaultWorkerConcurrency = defaultWorkerConcurrency;
+    }
+
+    /**
+     * Get worker keep-alive time in milliseconds.
+     * @return Worker keep-alive time
+     */
+    public long getWorkerKeepAliveMillis() {
+        return workerKeepAliveMillis;
+    }
+
+    /**
+     * Set worker keep-alive time in milliseconds.
+     * @param workerKeepAliveMillis Worker keep-alive time
+     */
+    public void setWorkerKeepAliveMillis(long workerKeepAliveMillis) {
+        this.workerKeepAliveMillis = workerKeepAliveMillis;
+    }
+
+    /**
+     * Get high memory pressure threshold (0.0-1.0).
+     * @return High memory pressure threshold
+     */
+    public double getHighMemoryPressureThreshold() {
+        return highMemoryPressureThreshold;
+    }
+
+    /**
+     * Set high memory pressure threshold (0.0-1.0).
+     * @param highMemoryPressureThreshold High memory pressure threshold
+     */
+    public void setHighMemoryPressureThreshold(double highMemoryPressureThreshold) {
+        this.highMemoryPressureThreshold = highMemoryPressureThreshold;
+    }
+
+    /**
+     * Get critical memory pressure threshold (0.0-1.0).
+     * @return Critical memory pressure threshold
+     */
+    public double getCriticalMemoryPressureThreshold() {
+        return criticalMemoryPressureThreshold;
+    }
+
+    /**
+     * Set critical memory pressure threshold (0.0-1.0).
+     * @param criticalMemoryPressureThreshold Critical memory pressure threshold
+     */
+    public void setCriticalMemoryPressureThreshold(double criticalMemoryPressureThreshold) {
+        this.criticalMemoryPressureThreshold = criticalMemoryPressureThreshold;
+    }
+
+    /**
+     * Check if resource leak detection is enabled.
+     * @return true if enabled, false otherwise
+     */
+    public boolean isEnableResourceLeakDetection() {
+        return enableResourceLeakDetection;
+    }
+
+    /**
+     * Enable or disable resource leak detection.
+     * @param enableResourceLeakDetection true to enable, false to disable
+     */
+    public void setEnableResourceLeakDetection(boolean enableResourceLeakDetection) {
+        this.enableResourceLeakDetection = enableResourceLeakDetection;
+    }
+
+    /**
+     * Get resource leak detection threshold in milliseconds.
+     * @return Threshold in milliseconds
+     */
+    public long getResourceLeakDetectionThresholdMs() {
+        return resourceLeakDetectionThresholdMs;
+    }
+
+    /**
+     * Set resource leak detection threshold in milliseconds.
+     * @param resourceLeakDetectionThresholdMs Threshold in milliseconds
+     */
+    public void setResourceLeakDetectionThresholdMs(long resourceLeakDetectionThresholdMs) {
+        this.resourceLeakDetectionThresholdMs = resourceLeakDetectionThresholdMs;
+    }
+
+    /**
+     * Get resource leak detection interval in milliseconds.
+     * @return Interval in milliseconds
+     */
+    public long getResourceLeakDetectionIntervalMs() {
+        return resourceLeakDetectionIntervalMs;
+    }
+
+    /**
+     * Set resource leak detection interval in milliseconds.
+     * @param resourceLeakDetectionIntervalMs Interval in milliseconds
+     */
+    public void setResourceLeakDetectionIntervalMs(long resourceLeakDetectionIntervalMs) {
+        this.resourceLeakDetectionIntervalMs = resourceLeakDetectionIntervalMs;
+    }
+
+    /**
+     * Get thread pool size.
+     * @return Thread pool size
+     */
+    public int getThreadpoolSize() {
+        return threadpoolSize;
+    }
+
+    /**
+     * Set thread pool size.
+     * @param threadpoolSize Thread pool size
+     */
+    public void setThreadpoolSize(int threadpoolSize) {
+        this.threadpoolSize = threadpoolSize;
+    }
+
+    /**
+     * Load configuration from properties.
+     * @param properties Properties to load from
+     * @return PerformanceConfiguration instance
+     */
+    public static PerformanceConfiguration fromProperties(Properties properties) {
+        PerformanceConfiguration config = new PerformanceConfiguration();
+        
+        // Load core performance settings
+        config.setMaxBatchSize(Integer.parseInt(properties.getProperty("maxBatchSize", "100")));
+        config.setMinBatchSize(Integer.parseInt(properties.getProperty("minBatchSize", "10")));
+        config.setBufferPoolSize(Integer.parseInt(properties.getProperty("bufferPoolSize", "32")));
+        config.setMaxBufferSize(Integer.parseInt(properties.getProperty("maxBufferSize", "1048576"))); // 1MB
+        config.setConnectionPoolSize(Integer.parseInt(properties.getProperty("connectionPoolSize", "8")));
+        config.setMaxConnectionPoolSize(Integer.parseInt(properties.getProperty("maxConnectionPoolSize", "32")));
+        
+        // Load timeout configuration
+        config.setOperationTimeoutMillis(Long.parseLong(properties.getProperty("operationTimeoutMillis", "30000")));
+        config.setConnectionAcquisitionTimeoutMillis(Long.parseLong(properties.getProperty("connectionAcquisitionTimeoutMillis", "5000")));
+        config.setBufferAcquisitionTimeoutMillis(Long.parseLong(properties.getProperty("bufferAcquisitionTimeoutMillis", "100")));
+        
+        // Load performance optimization settings
+        config.setBufferThresholdForDirectAllocation(Integer.parseInt(properties.getProperty("bufferThresholdForDirectAllocation", "4096")));
+        config.setEnableZeroCopy(Boolean.parseBoolean(properties.getProperty("enableZeroCopy", "true")));
+        config.setEnableBufferPooling(Boolean.parseBoolean(properties.getProperty("enableBufferPooling", "true")));
+        config.setEnableConnectionPooling(Boolean.parseBoolean(properties.getProperty("enableConnectionPooling", "true")));
+        config.setEnableBatching(Boolean.parseBoolean(properties.getProperty("enableBatching", "true")));
+        
+        // Load monitoring and debugging settings
+        config.setEnableDetailedMetrics(Boolean.parseBoolean(properties.getProperty("enableDetailedMetrics", "false")));
+        config.setEnableDebugLogging(Boolean.parseBoolean(properties.getProperty("enableDebugLogging", "false")));
+        config.setLogPrefix(properties.getProperty("logPrefix", "[UnifiedBridge]"));
+        
+        // Load worker configuration
+        config.setDefaultWorkerConcurrency(Integer.parseInt(properties.getProperty("defaultWorkerConcurrency", "4")));
+        config.setWorkerKeepAliveMillis(Long.parseLong(properties.getProperty("workerKeepAliveMillis", "300000")));
+        
+        // Load memory pressure configuration
+        config.setHighMemoryPressureThreshold(Double.parseDouble(properties.getProperty("highMemoryPressureThreshold", "0.85")));
+        config.setCriticalMemoryPressureThreshold(Double.parseDouble(properties.getProperty("criticalMemoryPressureThreshold", "0.95")));
+        
+        // Load resource leak detection configuration
+        config.setEnableResourceLeakDetection(Boolean.parseBoolean(properties.getProperty("enableResourceLeakDetection", "true")));
+        config.setResourceLeakDetectionThresholdMs(Long.parseLong(properties.getProperty("resourceLeakDetectionThresholdMs", "30000")));
+        config.setResourceLeakDetectionIntervalMs(Long.parseLong(properties.getProperty("resourceLeakDetectionIntervalMs", "60000")));
+        
+        // Load thread pool configuration
+        config.setThreadpoolSize(Integer.parseInt(properties.getProperty("threadpoolSize", "4")));
+        
+        return config;
+    }
+
+    /**
+     * Convert configuration to map for serialization.
+     * @return Map containing all configuration parameters
+     */
+    public Map<String, Object> toMap() {
+        java.util.Map<String, Object> configMap = new java.util.HashMap<>();
+        configMap.put("maxBatchSize", maxBatchSize);
+        configMap.put("minBatchSize", minBatchSize);
+        configMap.put("bufferPoolSize", bufferPoolSize);
+        configMap.put("maxBufferSize", maxBufferSize);
+        configMap.put("connectionPoolSize", connectionPoolSize);
+        configMap.put("maxConnectionPoolSize", maxConnectionPoolSize);
+        configMap.put("operationTimeoutMillis", operationTimeoutMillis);
+        configMap.put("connectionAcquisitionTimeoutMillis", connectionAcquisitionTimeoutMillis);
+        configMap.put("bufferAcquisitionTimeoutMillis", bufferAcquisitionTimeoutMillis);
+        configMap.put("bufferThresholdForDirectAllocation", bufferThresholdForDirectAllocation);
+        configMap.put("enableZeroCopy", enableZeroCopy);
+        configMap.put("enableBufferPooling", enableBufferPooling);
+        configMap.put("enableConnectionPooling", enableConnectionPooling);
+        configMap.put("enableBatching", enableBatching);
+        configMap.put("enableDetailedMetrics", enableDetailedMetrics);
+        configMap.put("enableDebugLogging", enableDebugLogging);
+        configMap.put("logPrefix", logPrefix);
+        configMap.put("defaultWorkerConcurrency", defaultWorkerConcurrency);
+        configMap.put("workerKeepAliveMillis", workerKeepAliveMillis);
+        configMap.put("highMemoryPressureThreshold", highMemoryPressureThreshold);
+        configMap.put("criticalMemoryPressureThreshold", criticalMemoryPressureThreshold);
+        configMap.put("enableResourceLeakDetection", enableResourceLeakDetection);
+        configMap.put("resourceLeakDetectionThresholdMs", resourceLeakDetectionThresholdMs);
+        configMap.put("resourceLeakDetectionIntervalMs", resourceLeakDetectionIntervalMs);
+        configMap.put("threadpoolSize", threadpoolSize);
+        return java.util.Collections.unmodifiableMap(configMap);
+    }
 }

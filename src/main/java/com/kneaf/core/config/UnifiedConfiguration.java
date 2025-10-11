@@ -1,7 +1,7 @@
 package com.kneaf.core.config;
 
 import com.kneaf.core.config.chunkstorage.ChunkStorageConfig;
-import com.kneaf.core.config.performance.PerformanceConfig;
+import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.config.resource.ResourceConfig;
 import com.kneaf.core.config.swap.SwapConfig;
 import com.kneaf.core.config.exception.ConfigurationException;
@@ -53,7 +53,6 @@ public final class UnifiedConfiguration {
         if (performanceConfig == null) {
             throw new ConfigurationException("Performance configuration must not be null");
         }
-        performanceConfig.validate();
 
         if (chunkStorageConfig == null) {
             throw new ConfigurationException("Chunk storage configuration must not be null");
@@ -116,6 +115,21 @@ public final class UnifiedConfiguration {
         private ChunkStorageConfig chunkStorageConfig;
         private SwapConfig swapConfig;
         private ResourceConfig resourceConfig;
+
+        /**
+         * Default constructor that initializes with default configurations.
+         */
+        public Builder() {
+            try {
+                this.performanceConfig = new PerformanceConfig.Builder().build();
+                this.chunkStorageConfig = ChunkStorageConfig.builder().build();
+                this.swapConfig = SwapConfig.builder().build();
+                this.resourceConfig = ResourceConfig.builder().build();
+            } catch (ConfigurationException e) {
+                // This should not happen with default values, but if it does, throw runtime exception
+                throw new RuntimeException("Failed to create default configuration", e);
+            }
+        }
 
         /**
          * Sets the performance configuration.

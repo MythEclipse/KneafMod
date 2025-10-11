@@ -3,6 +3,8 @@ package com.kneaf.core.unifiedbridge;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.HashMap;
+import java.util.Collections;
 
 /**
  * Configuration class for bridge behavior and optimization.
@@ -312,7 +314,7 @@ public class BridgeConfiguration {
      * @return Map containing all configuration parameters
      */
     public Map<String, Object> toMap() {
-        Map<String, Object> configMap = new java.util.HashMap<>();
+        Map<String, Object> configMap = new HashMap<>();
         configMap.put("maxBatchSize", maxBatchSize);
         configMap.put("minBatchSize", minBatchSize);
         configMap.put("bufferPoolSize", bufferPoolSize);
@@ -338,7 +340,7 @@ public class BridgeConfiguration {
         configMap.put("resourceLeakDetectionThresholdMs", resourceLeakDetectionThresholdMs);
         configMap.put("resourceLeakDetectionIntervalMs", resourceLeakDetectionIntervalMs);
         configMap.put("threadpoolSize", threadpoolSize);
-        return java.util.Collections.unmodifiableMap(configMap);
+        return Collections.unmodifiableMap(configMap);
     }
 
     /**
