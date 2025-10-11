@@ -5,7 +5,10 @@ import java.io.IOException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-/** Abstract base class for database adapters providing common functionality. */
+/**
+ * Abstract base class for database adapters providing common functionality.
+ * Consolidates validation logic and eliminates DRY violations across implementations.
+ */
 public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
   protected final String databaseName;
@@ -16,6 +19,54 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
       throw new IllegalArgumentException("Database name cannot be null or empty");
     }
     this.databaseName = databaseName;
+  }
+
+  /**
+   * Validates that a key is not null or empty.
+   *
+   * @param key The key to validate
+   * @throws IllegalArgumentException if key is null or empty
+   */
+  protected void validateKey(String key) {
+    if (key == null || key.isEmpty()) {
+      throw new IllegalArgumentException("Key cannot be null or empty");
+    }
+  }
+
+  /**
+   * Validates that data is not null.
+   *
+   * @param data The data to validate
+   * @throws IllegalArgumentException if data is null
+   */
+  protected void validateData(byte[] data) {
+    if (data == null) {
+      throw new IllegalArgumentException("Data cannot be null");
+    }
+  }
+
+  /**
+   * Validates that data is not null or empty.
+   *
+   * @param data The data to validate
+   * @throws IllegalArgumentException if data is null or empty
+   */
+  protected void validateDataNotEmpty(byte[] data) {
+    if (data == null || data.length == 0) {
+      throw new IllegalArgumentException("Data cannot be null or empty");
+    }
+  }
+
+  /**
+   * Validates that a backup path is not null or empty.
+   *
+   * @param backupPath The backup path to validate
+   * @throws IllegalArgumentException if backup path is null or empty
+   */
+  protected void validateBackupPath(String backupPath) {
+    if (backupPath == null || backupPath.isEmpty()) {
+      throw new IllegalArgumentException("Backup path cannot be null or empty");
+    }
   }
 
   @Override
