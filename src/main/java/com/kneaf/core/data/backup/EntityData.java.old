@@ -1,3 +1,0 @@
-package com.kneaf.core.data;
-
-public record EntityData(long id, double x, double y, double z, double distance, boolean isBlockEntity, String entityType) {}

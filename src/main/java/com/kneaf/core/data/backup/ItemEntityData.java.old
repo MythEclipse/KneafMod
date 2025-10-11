@@ -1,3 +1,0 @@
-package com.kneaf.core.data;
-
-public record ItemEntityData(long id, int chunkX, int chunkZ, String itemType, int count, int ageSeconds) {}

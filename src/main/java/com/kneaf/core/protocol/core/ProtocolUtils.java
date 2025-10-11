@@ -80,39 +80,6 @@ public final class ProtocolUtils {
   }
 
   /**
-   * Calculate SHA-256 hash of string.
-   *
-   * @param data the string to hash
-   * @return base64 encoded hash
-   * @throws NoSuchAlgorithmException if SHA-256 is not available
-   */
-  public static String calculateHash(String data) throws NoSuchAlgorithmException {
-    return calculateHash(data.getBytes(StandardCharsets.UTF_8));
-  }
-
-  /**
-   * Convert ByteBuffer to byte array.
-   *
-   * @param buffer the ByteBuffer
-   * @return byte array
-   */
-  public static byte[] toByteArray(ByteBuffer buffer) {
-    byte[] bytes = new byte[buffer.remaining()];
-    buffer.get(bytes);
-    return bytes;
-  }
-
-  /**
-   * Convert byte array to ByteBuffer.
-   *
-   * @param bytes the byte array
-   * @return ByteBuffer
-   */
-  public static ByteBuffer toByteBuffer(byte[] bytes) {
-    return ByteBuffer.wrap(bytes);
-  }
-
-  /**
    * Get size of data in bytes.
    *
    * @param data the data
@@ -139,52 +106,6 @@ public final class ProtocolUtils {
    */
   public static boolean exceedsSizeLimit(Object data, int maxSize) {
     return getSizeInBytes(data) > maxSize;
-  }
-
-  /**
-   * Sanitize string for protocol transmission.
-   *
-   * @param input the input string
-   * @return sanitized string
-   */
-  public static String sanitizeString(String input) {
-    if (input == null) {
-      return null;
-    }
-    // Remove control characters and trim
-    return input.replaceAll("[\\p{Cntrl}&&[^\r\n\t]]", "").trim();
-  }
-
-  /**
-   * Truncate string to maximum length.
-   *
-   * @param input the input string
-   * @param maxLength maximum length
-   * @return truncated string
-   */
-  public static String truncateString(String input, int maxLength) {
-    if (input == null || input.length() <= maxLength) {
-      return input;
-    }
-    return input.substring(0, maxLength);
-  }
-
-  /**
-   * Create error response with standard format.
-   *
-   * @param errorCode the error code
-   * @param errorMessage the error message
-   * @param traceId the trace ID
-   * @return error response map
-   */
-  public static Map<String, Object> createErrorResponse(
-      int errorCode, String errorMessage, String traceId) {
-    return Map.of(
-        "success", false,
-        "errorCode", errorCode,
-        "errorMessage", errorMessage,
-        "traceId", traceId,
-        "timestamp", System.currentTimeMillis());
   }
 
   /**

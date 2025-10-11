@@ -1,14 +1,16 @@
 package com.kneaf.core.config.core;
 
+import com.kneaf.core.config.exception.ConfigurationException;
+
 /** Interface for all configuration classes to provide common functionality. */
 public interface ConfigurationProvider {
 
   /**
    * Validate the configuration values.
    *
-   * @throws IllegalArgumentException if configuration is invalid
+   * @throws ConfigurationException if configuration is invalid
    */
-  void validate();
+  void validate() throws ConfigurationException;
 
   /**
    * Check if this configuration is enabled.
