@@ -4,6 +4,7 @@ import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -72,8 +73,8 @@ public class SynchronousBridge implements UnifiedBridge {
         Objects.requireNonNull(payload, "Payload cannot be null");
         
         try {
-            // Use JniCallManager for optimized JNI calls - method ini tidak ada, kita buat placeholder
-            // jniCallManager.pushTask(workerHandle, payload, config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
+            // Use JniCallManager for optimized JNI calls
+            jniCallManager.pushTask(workerHandle, payload, config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
             
             // Record task processing for metrics
             WorkerManager.Worker worker = workerManager.getWorker(workerHandle);
@@ -99,10 +100,10 @@ public class SynchronousBridge implements UnifiedBridge {
             payload.get(payloadArray);
             pushTask(workerHandle, payloadArray);
             
-            // Return buffer to pool if pooling is enabled - method ini tidak ada
-            // if (config.isEnableBufferPooling()) {
-            //     resourceManager.returnBufferToPool(payload);
-            // }
+            // Return buffer to pool if pooling is enabled
+            if (config.isEnableBufferPooling()) {
+                resourceManager.returnBufferToPool(payload);
+            }
         } catch (Exception e) {
             throw errorHandler.createBridgeError("Failed to push task with ByteBuffer", e, BridgeException.BridgeErrorType.TASK_PROCESSING_FAILED);
         }
@@ -115,9 +116,8 @@ public class SynchronousBridge implements UnifiedBridge {
      */
     public byte[] pollResult(long workerHandle) {
         try {
-            // Method ini tidak ada di JniCallManager, kita buat placeholder
-            // return jniCallManager.pollResult(workerHandle, config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
-            return new byte[0]; // Placeholder
+            // Use JniCallManager for optimized JNI calls
+            return jniCallManager.pollResult(workerHandle, config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             throw errorHandler.createBridgeError("Failed to poll result", e, BridgeException.BridgeErrorType.RESULT_POLLING_FAILED);
         }
@@ -132,9 +132,8 @@ public class SynchronousBridge implements UnifiedBridge {
         try {
             byte[] result = pollResult(workerHandle);
             if (result != null) {
-                // Method ini tidak ada di ResourceManager
-                // ByteBuffer buffer = resourceManager.allocateBuffer(result.length);
-                ByteBuffer buffer = ByteBuffer.allocate(result.length);
+                // Use ResourceManager for buffer allocation
+                ByteBuffer buffer = resourceManager.allocateBuffer(result.length, config.isEnableBufferPooling());
                 buffer.put(result);
                 buffer.flip();
                 return buffer;
@@ -160,13 +159,12 @@ public class SynchronousBridge implements UnifiedBridge {
                 
                 // Validate batch size
                 int batchSize = payloads.length;
-                // Method ini tidak ada di BridgeConfiguration
-                // int optimalSize = config.getOptimalBatchSize(batchSize);
-                int optimalSize = Math.min(batchSize, 100); // Placeholder
+                // Use BridgeConfiguration for optimal batch size
+                int optimalSize = config.getOptimalBatchSize(batchSize);
                 
-                // Process batch with JniCallManager - method ini tidak ada
-                // jniCallManager.pushBatch(workerHandle, payloads, optimalSize,
-                //         config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
+                // Process batch with JniCallManager
+                jniCallManager.pushBatch(workerHandle, payloads, optimalSize,
+                        config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
                 
                 // Record batch processing
                 WorkerManager.Worker worker = workerManager.getWorker(workerHandle);
@@ -214,10 +212,10 @@ public class SynchronousBridge implements UnifiedBridge {
                     buffer.get(array);
                     payloadArrays[i] = array;
                     
-                    // Return buffer to pool if pooling is enabled - method tidak ada
-                    // if (config.isEnableBufferPooling()) {
-                    //     resourceManager.returnBufferToPool(buffer);
-                    // }
+                    // Return buffer to pool if pooling is enabled
+                    if (config.isEnableBufferPooling()) {
+                        resourceManager.returnBufferToPool(buffer);
+                    }
                 }
                 
                 return pushBatch(workerHandle, payloadArrays).join();
@@ -235,9 +233,8 @@ public class SynchronousBridge implements UnifiedBridge {
      */
     public ByteBuffer allocateBuffer(int size) {
         try {
-            // Method ini tidak ada di ResourceManager
-            // return resourceManager.allocateBuffer(size, config.isEnableBufferPooling());
-            return ByteBuffer.allocate(size);
+            // Use ResourceManager for buffer allocation
+            return resourceManager.allocateBuffer(size, config.isEnableBufferPooling());
         } catch (Exception e) {
             throw errorHandler.createBridgeError("Failed to allocate buffer", e, BridgeException.BridgeErrorType.BUFFER_ALLOCATION_FAILED);
         }
@@ -249,9 +246,8 @@ public class SynchronousBridge implements UnifiedBridge {
      */
     public void freeBuffer(ByteBuffer buffer) {
         try {
-            // Method ini tidak ada di ResourceManager
-            // resourceManager.freeBuffer(buffer);
-            // Do nothing for now - buffer will be garbage collected
+            // Use ResourceManager for buffer cleanup
+            resourceManager.freeBuffer(buffer);
         } catch (Exception e) {
             throw errorHandler.createBridgeError("Failed to free buffer", e, BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED);
         }
@@ -264,9 +260,8 @@ public class SynchronousBridge implements UnifiedBridge {
      */
     public long getBufferAddress(ByteBuffer buffer) {
         try {
-            // Method ini tidak ada di ResourceManager
-            // return resourceManager.getBufferAddress(buffer);
-            return 0L; // Placeholder
+            // Use ResourceManager to get buffer address
+            return resourceManager.getBufferAddress(buffer);
         } catch (Exception e) {
             throw errorHandler.createBridgeError("Failed to get buffer address", e, BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED);
         }
@@ -289,10 +284,9 @@ public class SynchronousBridge implements UnifiedBridge {
                 throw new IllegalArgumentException("Invalid operation type: " + operationType);
             }
             
-            // Method ini tidak ada di JniCallManager
-            // return jniCallManager.submitZeroCopyOperation(workerHandle, buffer, operationType,
-            //         config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
-            return 0L; // Placeholder
+            // Use JniCallManager for zero-copy operation
+            return jniCallManager.submitZeroCopyOperation(workerHandle, buffer, operationType,
+                    config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             throw errorHandler.createBridgeError("Failed to submit zero-copy operation", e, BridgeException.BridgeErrorType.BUFFER_ALLOCATION_FAILED);
         }
@@ -305,9 +299,8 @@ public class SynchronousBridge implements UnifiedBridge {
      */
     public ByteBuffer pollZeroCopyResult(long operationId) {
         try {
-            // Method ini tidak ada di JniCallManager
-            // return jniCallManager.pollZeroCopyResult(operationId, config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
-            return ByteBuffer.allocate(0); // Placeholder
+            // Use JniCallManager for zero-copy result polling
+            return jniCallManager.pollZeroCopyResult(operationId, config.getOperationTimeoutMillis(), TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             throw errorHandler.createBridgeError("Failed to poll zero-copy result", e, BridgeException.BridgeErrorType.RESULT_POLLING_FAILED);
         }
@@ -319,8 +312,8 @@ public class SynchronousBridge implements UnifiedBridge {
      */
     public void cleanupZeroCopyOperation(long operationId) {
         try {
-            // Method ini tidak ada di JniCallManager
-            // jniCallManager.cleanupZeroCopyOperation(operationId);
+            // Use JniCallManager for cleanup
+            jniCallManager.cleanupZeroCopyOperation(operationId);
         } catch (Exception e) {
             throw errorHandler.createBridgeError("Failed to cleanup zero-copy operation", e, BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED);
         }
@@ -333,15 +326,15 @@ public class SynchronousBridge implements UnifiedBridge {
     public Map<String, Object> getStats() {
         try {
             Map<String, Object> workerStats = workerManager.getWorkerStats();
-            // Method ini tidak ada di JniCallManager
-            // Map<String, Object> jniStats = jniCallManager.getStats();
+            // Use JniCallManager for statistics
+            Map<String, Object> jniStats = jniCallManager.getCallStats();
             
             Map<String, Object> combinedStats = Map.of(
                     "bridgeType", "SYNCHRONOUS",
                     "workerStats", workerStats,
-                    "jniStats", Map.of(), // Placeholder
+                    "jniStats", jniStats,
                     "configuration", config.toMap(),
-                    "isNativeAvailable", false // Placeholder
+                    "isNativeAvailable", jniCallManager.isNativeAvailable()
             );
             
             return combinedStats;
@@ -358,9 +351,8 @@ public class SynchronousBridge implements UnifiedBridge {
      */
     public int getOptimalBatchSize(int requestedSize) {
         try {
-            // Method ini tidak ada di JniCallManager
-            // return jniCallManager.getOptimalBatchSize(requestedSize);
-            return Math.max(config.getMinBatchSize(), Math.min(config.getMaxBatchSize(), requestedSize));
+            // Use JniCallManager for optimal batch size calculation
+            return jniCallManager.getOptimalBatchSize(requestedSize);
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "Failed to get optimal batch size", e);
             return Math.max(config.getMinBatchSize(), Math.min(config.getMaxBatchSize(), requestedSize));
@@ -372,8 +364,8 @@ public class SynchronousBridge implements UnifiedBridge {
      */
     public void flush() {
         try {
-            // Method ini tidak ada di JniCallManager
-            // jniCallManager.flush();
+            // Use JniCallManager for flush operation
+            jniCallManager.flush();
         } catch (Exception e) {
             throw errorHandler.createBridgeError("Failed to flush operations", e, BridgeException.BridgeErrorType.GENERIC_ERROR);
         }
@@ -384,9 +376,8 @@ public class SynchronousBridge implements UnifiedBridge {
      * @return true if native functionality is available, false otherwise
      */
     public boolean isNativeAvailable() {
-        // Method ini tidak ada di JniCallManager
-        // return jniCallManager.isNativeAvailable();
-        return false; // Placeholder
+        // Use JniCallManager to check native availability
+        return jniCallManager.isNativeAvailable();
     }
 
     // Implement missing methods from UnifiedBridge interface

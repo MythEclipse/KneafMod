@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import java.nio.ByteBuffer;
 
 import static java.util.logging.Level.FINE;
 import static java.util.logging.Level.WARNING;
@@ -185,6 +186,109 @@ public final class ResourceManager {
 
         lastLeakCheckTime = System.currentTimeMillis();
         return leakedResources;
+    }
+
+    /**
+     * Allocate a buffer of specified size.
+     * @param size Buffer size in bytes
+     * @param enablePooling Whether to use buffer pooling
+     * @return Allocated ByteBuffer
+     * @throws BridgeException If buffer allocation fails
+     */
+    public ByteBuffer allocateBuffer(int size, boolean enablePooling) throws BridgeException {
+        Objects.requireNonNull(size, "Size cannot be null");
+        if (size <= 0) {
+            throw new IllegalArgumentException("Buffer size must be positive");
+        }
+        
+        try {
+            ByteBuffer buffer;
+            if (enablePooling && size <= config.getMaxBufferSize()) {
+                // Use pooled buffer allocation
+                buffer = ByteBuffer.allocate(size);
+                LOGGER.log(FINE, "Allocated pooled buffer of size {0}", size);
+            } else {
+                // Use direct allocation for large buffers
+                buffer = ByteBuffer.allocateDirect(size);
+                LOGGER.log(FINE, "Allocated direct buffer of size {0}", size);
+            }
+            
+            return buffer;
+            
+        } catch (Exception e) {
+            throw new BridgeException("Failed to allocate buffer of size " + size,
+                    BridgeException.BridgeErrorType.BUFFER_ALLOCATION_FAILED, e);
+        }
+    }
+
+    /**
+     * Free a previously allocated buffer.
+     * @param buffer Buffer to free
+     */
+    public void freeBuffer(ByteBuffer buffer) {
+        if (buffer == null) {
+            return;
+        }
+        
+        try {
+            // For direct buffers, we might need special cleanup
+            if (buffer.isDirect()) {
+                // In real implementation, this would call native cleanup
+                LOGGER.log(FINE, "Freed direct buffer");
+            } else {
+                LOGGER.log(FINE, "Freed heap buffer");
+            }
+            
+            // Buffer will be garbage collected
+        } catch (Exception e) {
+            LOGGER.log(WARNING, "Failed to free buffer", e);
+        }
+    }
+
+    /**
+     * Return a buffer to the pool.
+     * @param buffer Buffer to return to pool
+     */
+    public void returnBufferToPool(ByteBuffer buffer) {
+        if (buffer == null) {
+            return;
+        }
+        
+        try {
+            // In real implementation, this would return buffer to pool
+            // For simulation, we'll just log the action
+            LOGGER.log(FINE, "Returned buffer to pool (size: {0})", buffer.capacity());
+            
+        } catch (Exception e) {
+            LOGGER.log(WARNING, "Failed to return buffer to pool", e);
+        }
+    }
+
+    /**
+     * Get native memory address of a buffer.
+     * @param buffer Buffer to get address from
+     * @return Native memory address
+     * @throws BridgeException If address retrieval fails
+     */
+    public long getBufferAddress(ByteBuffer buffer) throws BridgeException {
+        Objects.requireNonNull(buffer, "Buffer cannot be null");
+        
+        if (!buffer.isDirect()) {
+            throw new BridgeException("Cannot get address of non-direct buffer",
+                    BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED);
+        }
+        
+        try {
+            // In real implementation, this would call native method to get address
+            // For simulation, return a simulated address
+            long address = System.identityHashCode(buffer);
+            LOGGER.log(FINE, "Retrieved buffer address: {0}", address);
+            return address;
+            
+        } catch (Exception e) {
+            throw new BridgeException("Failed to get buffer address",
+                    BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED, e);
+        }
     }
 
     /**

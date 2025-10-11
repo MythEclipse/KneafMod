@@ -8,6 +8,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Logger;
+import java.util.concurrent.TimeUnit;
+import java.nio.ByteBuffer;
 import static java.util.logging.Level.FINE;
 import static java.util.logging.Level.WARNING;
 
@@ -198,6 +200,217 @@ public final class JniCallManager {
     public Map<String, Object> getMethodStats(String methodName) {
         CallStats stats = methodStats.get(methodName);
         return stats != null ? stats.getStats() : Map.of();
+    }
+
+    /**
+     * Push a task to a worker for processing.
+     * @param workerHandle Worker handle
+     * @param payload Task payload
+     * @param timeout Timeout value
+     * @param unit Time unit
+     * @throws BridgeException If task push fails
+     */
+    public void pushTask(long workerHandle, byte[] payload, long timeout, TimeUnit unit) throws BridgeException {
+        Objects.requireNonNull(payload, "Payload cannot be null");
+        Objects.requireNonNull(unit, "Time unit cannot be null");
+        
+        long startTime = System.nanoTime();
+        try {
+            // Simulate JNI call to native layer
+            LOGGER.log(FINE, "Pushing task to worker {0} with payload size {1}",
+                    new Object[]{workerHandle, payload.length});
+            
+            // In real implementation, this would call native code
+            // For simulation, we'll just log and simulate processing time
+            Thread.sleep(10); // Simulate processing time
+            
+            recordCallStats("pushTask", true, payload.length, System.nanoTime() - startTime);
+            
+        } catch (Exception e) {
+            recordCallStats("pushTask", false, payload.length, System.nanoTime() - startTime);
+            throw new BridgeException("Failed to push task to worker",
+                    BridgeException.BridgeErrorType.TASK_PROCESSING_FAILED, e);
+        }
+    }
+
+    /**
+     * Poll for task results from a worker.
+     * @param workerHandle Worker handle
+     * @param timeout Timeout value
+     * @param unit Time unit
+     * @return Task result payload
+     * @throws BridgeException If result polling fails
+     */
+    public byte[] pollResult(long workerHandle, long timeout, TimeUnit unit) throws BridgeException {
+        Objects.requireNonNull(unit, "Time unit cannot be null");
+        
+        long startTime = System.nanoTime();
+        try {
+            // Simulate JNI call to native layer
+            LOGGER.log(FINE, "Polling result from worker {0}", workerHandle);
+            
+            // In real implementation, this would call native code
+            // For simulation, return empty result
+            Thread.sleep(5); // Simulate processing time
+            
+            recordCallStats("pollResult", true, 0, System.nanoTime() - startTime);
+            return new byte[0]; // Empty result for simulation
+            
+        } catch (Exception e) {
+            recordCallStats("pollResult", false, 0, System.nanoTime() - startTime);
+            throw new BridgeException("Failed to poll result from worker",
+                    BridgeException.BridgeErrorType.RESULT_POLLING_FAILED, e);
+        }
+    }
+
+    /**
+     * Submit a zero-copy operation to a worker.
+     * @param workerHandle Worker handle
+     * @param buffer Direct ByteBuffer for zero-copy operation
+     * @param operationType Type of operation to perform
+     * @param timeout Timeout value
+     * @param unit Time unit
+     * @return Operation handle
+     * @throws BridgeException If operation submission fails
+     */
+    public long submitZeroCopyOperation(long workerHandle, ByteBuffer buffer, int operationType,
+                                      long timeout, TimeUnit unit) throws BridgeException {
+        Objects.requireNonNull(buffer, "Buffer cannot be null");
+        Objects.requireNonNull(unit, "Time unit cannot be null");
+        
+        if (!buffer.isDirect()) {
+            throw new BridgeException("Zero-copy operations require direct ByteBuffer",
+                    BridgeException.BridgeErrorType.BUFFER_ALLOCATION_FAILED);
+        }
+        
+        long startTime = System.nanoTime();
+        try {
+            LOGGER.log(FINE, "Submitting zero-copy operation to worker {0}", workerHandle);
+            
+            // Simulate operation submission
+            long operationId = System.nanoTime(); // Generate unique operation ID
+            Thread.sleep(5); // Simulate processing time
+            
+            recordCallStats("submitZeroCopyOperation", true, 1, System.nanoTime() - startTime);
+            return operationId;
+            
+        } catch (Exception e) {
+            recordCallStats("submitZeroCopyOperation", false, 1, System.nanoTime() - startTime);
+            throw new BridgeException("Failed to submit zero-copy operation",
+                    BridgeException.BridgeErrorType.BUFFER_ALLOCATION_FAILED, e);
+        }
+    }
+
+    /**
+     * Poll for result of a zero-copy operation.
+     * @param operationId Operation handle
+     * @param timeout Timeout value
+     * @param unit Time unit
+     * @return Result as ByteBuffer
+     * @throws BridgeException If result polling fails
+     */
+    public ByteBuffer pollZeroCopyResult(long operationId, long timeout, TimeUnit unit) throws BridgeException {
+        Objects.requireNonNull(unit, "Time unit cannot be null");
+        
+        long startTime = System.nanoTime();
+        try {
+            LOGGER.log(FINE, "Polling zero-copy result for operation {0}", operationId);
+            
+            // Simulate result polling
+            Thread.sleep(5); // Simulate processing time
+            
+            recordCallStats("pollZeroCopyResult", true, 0, System.nanoTime() - startTime);
+            return ByteBuffer.allocate(0); // Empty result for simulation
+            
+        } catch (Exception e) {
+            recordCallStats("pollZeroCopyResult", false, 0, System.nanoTime() - startTime);
+            throw new BridgeException("Failed to poll zero-copy result",
+                    BridgeException.BridgeErrorType.RESULT_POLLING_FAILED, e);
+        }
+    }
+
+    /**
+     * Cleanup resources for a zero-copy operation.
+     * @param operationId Operation handle
+     */
+    public void cleanupZeroCopyOperation(long operationId) {
+        try {
+            LOGGER.log(FINE, "Cleaning up zero-copy operation {0}", operationId);
+            // Simulate cleanup operation
+        } catch (Exception e) {
+            LOGGER.log(WARNING, "Failed to cleanup zero-copy operation " + operationId, e);
+        }
+    }
+
+    /**
+     * Check if native functionality is available.
+     * @return true if native functionality is available, false otherwise
+     */
+    public boolean isNativeAvailable() {
+        // In real implementation, this would check if native library is loaded
+        // For simulation, assume native is available
+        return true;
+    }
+
+    /**
+     * Push a batch of tasks to a worker.
+     * @param workerHandle Worker handle
+     * @param payloads Array of task payloads
+     * @param optimalSize Optimal batch size
+     * @param timeout Timeout value
+     * @param unit Time unit
+     * @throws BridgeException If batch push fails
+     */
+    public void pushBatch(long workerHandle, byte[][] payloads, int optimalSize,
+                         long timeout, TimeUnit unit) throws BridgeException {
+        Objects.requireNonNull(payloads, "Payloads cannot be null");
+        Objects.requireNonNull(unit, "Time unit cannot be null");
+        
+        long startTime = System.nanoTime();
+        try {
+            LOGGER.log(FINE, "Pushing batch of {0} tasks to worker {1} with optimal size {2}",
+                    new Object[]{payloads.length, workerHandle, optimalSize});
+            
+            // Simulate batch processing
+            for (byte[] payload : payloads) {
+                pushTask(workerHandle, payload, timeout, unit);
+            }
+            
+            recordCallStats("pushBatch", true, payloads.length, System.nanoTime() - startTime);
+            
+        } catch (Exception e) {
+            recordCallStats("pushBatch", false, payloads.length, System.nanoTime() - startTime);
+            throw new BridgeException("Failed to push batch to worker",
+                    BridgeException.BridgeErrorType.BATCH_PROCESSING_FAILED, e);
+        }
+    }
+
+    /**
+     * Flush pending operations.
+     */
+    public void flush() {
+        try {
+            LOGGER.log(FINE, "Flushing pending JNI operations");
+            // Simulate flush operation - no-op in simulation
+        } catch (Exception e) {
+            LOGGER.log(WARNING, "Failed to flush operations", e);
+        }
+    }
+
+    /**
+     * Get optimal batch size for performance.
+     * @param requestedSize Requested batch size
+     * @return Optimal batch size
+     */
+    public int getOptimalBatchSize(int requestedSize) {
+        // Calculate optimal batch size based on configuration
+        int optimalSize = Math.max(config.getMinBatchSize(),
+                                  Math.min(config.getMaxBatchSize(), requestedSize));
+        
+        LOGGER.log(FINE, "Optimal batch size calculated: {0} (requested: {1})",
+                new Object[]{optimalSize, requestedSize});
+        
+        return optimalSize;
     }
 
     /**

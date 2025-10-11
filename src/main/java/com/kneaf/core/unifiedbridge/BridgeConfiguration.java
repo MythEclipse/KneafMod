@@ -294,6 +294,30 @@ public class BridgeConfiguration {
     }
     
     /**
+     * Get optimal batch size for performance.
+     * @param requestedSize Requested batch size
+     * @return Optimal batch size
+     */
+    public int getOptimalBatchSize(int requestedSize) {
+        if (requestedSize <= 0) {
+            return minBatchSize;
+        }
+        
+        int optimalSize = Math.max(minBatchSize, Math.min(maxBatchSize, requestedSize));
+        
+        // Adjust based on performance optimization
+        if (optimalSize > maxBatchSize / 2) {
+            // For large batches, use maximum allowed size
+            optimalSize = maxBatchSize;
+        } else if (optimalSize < minBatchSize * 2) {
+            // For small batches, use minimum size
+            optimalSize = minBatchSize;
+        }
+        
+        return optimalSize;
+    }
+    
+    /**
      * Check if migration support is enabled.
      * @return true if enabled, false otherwise
      */

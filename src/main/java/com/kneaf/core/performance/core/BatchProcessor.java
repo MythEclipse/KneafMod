@@ -21,7 +21,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CompletionException;
 import com.kneaf.core.performance.RustPerformance;
-import com.kneaf.core.performance.monitoring.PerformanceConfig;
 
 /** Handles batch processing of performance operations with optimized memory management. */
 @SuppressWarnings({"deprecation"})

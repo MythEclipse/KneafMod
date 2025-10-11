@@ -2,7 +2,6 @@ package com.kneaf.core.performance.integration;
 
 import com.kneaf.core.data.entity.VillagerData;
 import com.kneaf.core.performance.RustPerformance;
-import com.kneaf.core.performance.monitoring.PerformanceConfig;
 import com.kneaf.core.performance.monitoring.PerformanceManager;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
