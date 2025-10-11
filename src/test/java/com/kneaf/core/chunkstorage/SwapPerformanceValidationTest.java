@@ -15,6 +15,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.kneaf.core.chunkstorage.cache.ChunkCache;
+
 /**
  * Comprehensive performance validation testing for swap operations. Tests timing, throughput,
  * latency, and performance metrics accuracy.

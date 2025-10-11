@@ -295,4 +295,209 @@ public final class ExceptionHandlerUtils {
     public static void logException(Throwable e, Logger logger) {
         logException(e, logger, "Exception occurred");
     }
+    
+    /**
+     * Executes a task with fallback strategy.
+     *
+     * @param task The primary task to execute
+     * @param fallbackTask The fallback task to execute if primary fails
+     * @param logger The logger to use for error logging
+     * @param taskName The name of the task for logging purposes
+     * @return The result of the primary task or fallback task
+     */
+    public static <T> T executeWithFallback(Supplier<T> task, Supplier<T> fallbackTask,
+                                           Logger logger, String taskName) {
+        try {
+            return task.get();
+        } catch (Exception e) {
+            logger.warn("Primary task '{}' failed, executing fallback", taskName, e);
+            try {
+                return fallbackTask.get();
+            } catch (Exception fallbackException) {
+                logger.error("Fallback task '{}' also failed", taskName, fallbackException);
+                throw fallbackException;
+            }
+        }
+    }
+    
+    /**
+     * Executes a task with fallback strategy and default value.
+     *
+     * @param task The primary task to execute
+     * @param fallbackTask The fallback task to execute if primary fails
+     * @param defaultValue The default value to return if both primary and fallback fail
+     * @param logger The logger to use for error logging
+     * @param taskName The name of the task for logging purposes
+     * @return The result of the primary task, fallback task, or defaultValue
+     */
+    public static <T> T executeWithFallback(Supplier<T> task, Supplier<T> fallbackTask,
+                                           T defaultValue, Logger logger, String taskName) {
+        try {
+            return task.get();
+        } catch (Exception e) {
+            logger.warn("Primary task '{}' failed, executing fallback", taskName, e);
+            try {
+                return fallbackTask.get();
+            } catch (Exception fallbackException) {
+                logger.error("Fallback task '{}' also failed, returning default value", taskName, fallbackException);
+                return defaultValue;
+            }
+        }
+    }
+    
+    /**
+     * Executes a void task with fallback strategy.
+     *
+     * @param task The primary task to execute
+     * @param fallbackTask The fallback task to execute if primary fails
+     * @param logger The logger to use for error logging
+     * @param taskName The name of the task for logging purposes
+     */
+    public static void executeWithFallback(Runnable task, Runnable fallbackTask,
+                                          Logger logger, String taskName) {
+        try {
+            task.run();
+        } catch (Exception e) {
+            logger.warn("Primary task '{}' failed, executing fallback", taskName, e);
+            try {
+                fallbackTask.run();
+            } catch (Exception fallbackException) {
+                logger.error("Fallback task '{}' also failed", taskName, fallbackException);
+                throw fallbackException;
+            }
+        }
+    }
+    
+    /**
+     * Executes a task with retry mechanism.
+     *
+     * @param task The task to execute
+     * @param maxRetries Maximum number of retries
+     * @param retryDelayMs Delay between retries in milliseconds
+     * @param logger The logger to use for error logging
+     * @param taskName The name of the task for logging purposes
+     * @return The result of the task
+     * @throws Exception If all retries fail
+     */
+    public static <T> T executeWithRetry(Supplier<T> task, int maxRetries, long retryDelayMs,
+                                        Logger logger, String taskName) throws Exception {
+        int attempts = 0;
+        while (true) {
+            try {
+                return task.get();
+            } catch (Exception e) {
+                attempts++;
+                if (attempts > maxRetries) {
+                    logger.error("Task '{}' failed after {} attempts", taskName, attempts, e);
+                    throw e;
+                }
+                
+                logger.warn("Task '{}' failed on attempt {}, retrying in {}ms",
+                           taskName, attempts, retryDelayMs, e);
+                
+                try {
+                    Thread.sleep(retryDelayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    logger.error("Task '{}' interrupted during retry", taskName, ie);
+                    throw ie;
+                }
+            }
+        }
+    }
+    
+    /**
+     * Executes a task with exponential backoff retry.
+     *
+     * @param task The task to execute
+     * @param maxRetries Maximum number of retries
+     * @param initialDelayMs Initial delay between retries in milliseconds
+     * @param maxDelayMs Maximum delay between retries in milliseconds
+     * @param logger The logger to use for error logging
+     * @param taskName The name of the task for logging purposes
+     * @return The result of the task
+     * @throws Exception If all retries fail
+     */
+    public static <T> T executeWithExponentialBackoff(Supplier<T> task, int maxRetries,
+                                                     long initialDelayMs, long maxDelayMs,
+                                                     Logger logger, String taskName) throws Exception {
+        int attempts = 0;
+        long delay = initialDelayMs;
+        
+        while (true) {
+            try {
+                return task.get();
+            } catch (Exception e) {
+                attempts++;
+                if (attempts > maxRetries) {
+                    logger.error("Task '{}' failed after {} attempts with exponential backoff",
+                               taskName, attempts, e);
+                    throw e;
+                }
+                
+                logger.warn("Task '{}' failed on attempt {}, retrying in {}ms",
+                           taskName, attempts, delay, e);
+                
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    logger.error("Task '{}' interrupted during exponential backoff retry", taskName, ie);
+                    throw ie;
+                }
+                
+                // Exponential backoff with maximum limit
+                delay = Math.min(delay * 2, maxDelayMs);
+            }
+        }
+    }
+    
+    /**
+     * Executes multiple tasks and returns the first successful result.
+     *
+     * @param tasks Array of tasks to execute
+     * @param logger The logger to use for error logging
+     * @param taskName The name of the task for logging purposes
+     * @return The result of the first successful task
+     * @throws Exception If all tasks fail
+     */
+    @SafeVarargs
+    public static <T> T executeFirstSuccessful(Logger logger, String taskName, Supplier<T>... tasks) throws Exception {
+        Exception lastException = null;
+        
+        for (int i = 0; i < tasks.length; i++) {
+            try {
+                return tasks[i].get();
+            } catch (Exception e) {
+                logger.warn("Task '{}' attempt {} failed", taskName, i + 1, e);
+                lastException = e;
+            }
+        }
+        
+        logger.error("All attempts for task '{}' failed", taskName, lastException);
+        throw lastException;
+    }
+    
+    /**
+     * Executes multiple tasks and returns the first successful result or default value.
+     *
+     * @param defaultValue Default value to return if all tasks fail
+     * @param logger The logger to use for error logging
+     * @param taskName The name of the task for logging purposes
+     * @param tasks Array of tasks to execute
+     * @return The result of the first successful task or defaultValue
+     */
+    @SafeVarargs
+    public static <T> T executeFirstSuccessful(T defaultValue, Logger logger, String taskName, Supplier<T>... tasks) {
+        for (int i = 0; i < tasks.length; i++) {
+            try {
+                return tasks[i].get();
+            } catch (Exception e) {
+                logger.warn("Task '{}' attempt {} failed", taskName, i + 1, e);
+            }
+        }
+        
+        logger.error("All attempts for task '{}' failed, returning default value", taskName);
+        return defaultValue;
+    }
 }

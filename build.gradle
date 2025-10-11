@@ -170,6 +170,22 @@ dependencies {
 // Tests enabled for compatibility testing
 tasks.withType(Test).configureEach {
     enabled = true
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
+}
+
+// Configure test source set
+sourceSets {
+    test {
+        java {
+            srcDirs = ['src/test/java']
+        }
+        resources {
+            srcDirs = ['src/test/resources']
+        }
+    }
 }
 
 // JaCoCo configuration

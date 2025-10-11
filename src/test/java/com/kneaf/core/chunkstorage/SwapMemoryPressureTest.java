@@ -12,6 +12,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.kneaf.core.chunkstorage.cache.ChunkCache;
+
 /**
  * Comprehensive testing for memory pressure simulation and automatic swap triggering. Tests the
  * system's response to different memory pressure levels and swap behavior.

@@ -8,6 +8,9 @@ import com.kneaf.core.chunkstorage.database.RustDatabaseAdapter;
 import com.kneaf.core.chunkstorage.serialization.ChunkSerializer;
 import com.kneaf.core.chunkstorage.serialization.NbtChunkSerializer;
 import com.kneaf.core.chunkstorage.swap.SwapManager;
+import com.kneaf.core.utils.AsyncUtils;
+import com.kneaf.core.utils.ExceptionHandlerUtils;
+import com.kneaf.core.utils.MemoryPoolManager;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -109,6 +112,9 @@ public class ChunkStorageManager {
   private final SwapManager swapManager;
   private final SubmissionPublisher<ChunkOperation> savePipeline;
   private final SubmissionPublisher<ChunkOperation> loadPipeline;
+  
+  // Memory pool manager for lazy initialization of heavy components
+  private static final MemoryPoolManager MEMORY_POOL_MANAGER = MemoryPoolManager.getInstance();
 
   private volatile boolean shutdown = false;
 
@@ -223,18 +229,33 @@ public class ChunkStorageManager {
       savePipeline.subscribe(new SaveChunkProcessor());
       loadPipeline.subscribe(new LoadChunkProcessor());
 
-      // Initialize swap manager if enabled
+      // Initialize swap manager if enabled with lazy initialization
       SwapManager tempSwapManager = null;
       if (config.isEnableSwapManager()
           && config.isUseRustDatabase()
           && this.database instanceof RustDatabaseAdapter) {
         try {
-          SwapManager.SwapConfig swapConfig = createSwapConfig(config);
-          tempSwapManager = new SwapManager(swapConfig);
-          LOGGER.info("Initialized SwapManager for world '{ }'", worldName);
-
+          // Use lazy initialization for heavy SwapManager component
+          tempSwapManager = (SwapManager) MEMORY_POOL_MANAGER.getLazyComponent("swap-manager-" + worldName);
+          if (tempSwapManager == null) {
+            // Register lazy initializer if not already registered
+            MEMORY_POOL_MANAGER.registerLazyInitializer("swap-manager-" + worldName, () -> {
+              SwapManager.SwapConfig swapConfig = createSwapConfig(config);
+              SwapManager manager = new SwapManager(swapConfig);
+              LOGGER.info("Lazy initialized SwapManager for world '{ }'", worldName);
+              return manager;
+            });
+            
+            // Get the lazily initialized component
+            tempSwapManager = (SwapManager) MEMORY_POOL_MANAGER.getLazyComponent("swap-manager-" + worldName);
+          }
+          
           // Initialize swap manager components after database is ready
-          tempSwapManager.initializeComponents(this.cache, (RustDatabaseAdapter) this.database);
+          if (tempSwapManager != null) {
+            tempSwapManager.initializeComponents(this.cache, (RustDatabaseAdapter) this.database);
+          } else {
+            LOGGER.warn("Failed to lazy initialize SwapManager for world '{ }'", worldName);
+          }
         } catch (Exception e) {
           LOGGER.warn(
               "Failed to initialize SwapManager, disabling swap functionality: { }",
@@ -330,7 +351,7 @@ public class ChunkStorageManager {
       return CompletableFuture.completedFuture(Optional.empty());
     }
 
-    return CompletableFuture.supplyAsync(() -> loadChunk(level, chunkX, chunkZ), asyncExecutor);
+    return AsyncUtils.runAsync(() -> loadChunk(level, chunkX, chunkZ), asyncExecutor);
   }
 
   /**
@@ -430,7 +451,7 @@ public class ChunkStorageManager {
             writeLatency = (long) STATS_GET_WRITE_LATENCY_MS.invoke(dbStatsObj);
           }
         } catch (Throwable e) {
-          LOGGER.warn("Failed to extract database statistics", e);
+          ExceptionHandlerUtils.logException(e, LOGGER, "Failed to extract database statistics");
         }
       }
 
@@ -444,7 +465,7 @@ public class ChunkStorageManager {
             cacheHitRate = (double) STATS_GET_HIT_RATE.invoke(cacheStatsObj);
           }
         } catch (Throwable e) {
-          LOGGER.warn("Failed to extract cache statistics", e);
+          ExceptionHandlerUtils.logException(e, LOGGER, "Failed to extract cache statistics");
         }
       }
 
@@ -538,15 +559,7 @@ public class ChunkStorageManager {
 
   /** Shutdown the async executor. */
   private void shutdownExecutor() {
-    asyncExecutor.shutdown();
-    try {
-      if (!asyncExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-        asyncExecutor.shutdownNow();
-      }
-    } catch (InterruptedException e) {
-      asyncExecutor.shutdownNow();
-      Thread.currentThread().interrupt();
-    }
+    AsyncUtils.shutdownExecutor(asyncExecutor, 30, TimeUnit.SECONDS);
   }
 
   /**
@@ -839,7 +852,7 @@ public class ChunkStorageManager {
 
   /** Perform async save operation for reactive pipeline. */
   private CompletableFuture<Void> performAsyncSave(String chunkKey, Object chunk) {
-    return CompletableFuture.supplyAsync(() -> {
+    return AsyncUtils.runAsync(() -> {
       try {
         // Serialize the chunk asynchronously
         byte[] serializedData = serializer.serialize(chunk);
@@ -880,7 +893,7 @@ public class ChunkStorageManager {
 
   /** Perform async load operation for reactive pipeline. */
   private CompletableFuture<Optional<Object>> performAsyncLoad(String chunkKey) {
-    return CompletableFuture.supplyAsync(() -> {
+    return AsyncUtils.runAsync(() -> {
       try {
         // Try cache first
         Optional<ChunkCache.CachedChunk> cached = cache.getChunk(chunkKey);

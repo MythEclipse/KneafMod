@@ -5,6 +5,7 @@ import com.kneaf.core.binary.ManualSerializers;
 import com.kneaf.core.data.block.BlockEntityData;
 import com.kneaf.core.data.entity.MobData;
 import com.kneaf.core.data.item.ItemEntityData;
+import com.kneaf.core.utils.MemoryPoolManager;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -29,6 +30,9 @@ public class EnhancedNativeBridge {
   private static final int MAX_BUFFERS = 16;
   private static final List<ByteBuffer> SHARED_BUFFERS = new ArrayList<>();
   private static final AtomicLong BUFFER_USAGE_COUNT = new AtomicLong(0);
+  
+  // Memory pool manager for sharing resources across bridge implementations
+  private static final MemoryPoolManager MEMORY_POOL_MANAGER = MemoryPoolManager.getInstance();
 
   // Performance metrics
   private static final AtomicLong TOTAL_BATCHES_PROCESSED = new AtomicLong(0);
@@ -56,6 +60,19 @@ public class EnhancedNativeBridge {
         KneafCore.LOGGER.warn("Failed to allocate shared buffer {}: {}", i, e.getMessage());
       }
     }
+    
+    // Register memory pool for ByteBuffer sharing
+    MEMORY_POOL_MANAGER.registerPool("enhanced-bridge-buffers", MAX_BUFFERS, () -> {
+      try {
+        ByteBuffer buffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
+        return buffer;
+      } catch (Exception e) {
+        KneafCore.LOGGER.warn("Failed to allocate buffer for memory pool: {}", e.getMessage());
+        return null;
+      }
+    });
+    
     KneafCore.LOGGER.info("EnhancedNativeBridge initialized with {} shared buffers", SHARED_BUFFERS.size());
   }
 
@@ -157,12 +174,21 @@ public class EnhancedNativeBridge {
 
   /**
    * Acquire shared buffer for zero-copy operations.
+   * Uses memory pool manager for better resource sharing.
    */
   private ByteBuffer acquireSharedBuffer() {
-    for (ByteBuffer buffer : SHARED_BUFFERS) {
-      if (buffer.position() == 0) { // Simple lock-free check
+    // Try to acquire from memory pool first
+    ByteBuffer buffer = MEMORY_POOL_MANAGER.acquireFromPool("enhanced-bridge-buffers");
+    if (buffer != null) {
+      BUFFER_USAGE_COUNT.incrementAndGet();
+      return buffer;
+    }
+    
+    // Fallback to original logic
+    for (ByteBuffer sharedBuffer : SHARED_BUFFERS) {
+      if (sharedBuffer.position() == 0) { // Simple lock-free check
         BUFFER_USAGE_COUNT.incrementAndGet();
-        return buffer;
+        return sharedBuffer;
       }
     }
     return null; // All buffers in use
@@ -170,11 +196,15 @@ public class EnhancedNativeBridge {
 
   /**
    * Release shared buffer back to pool.
+   * Uses memory pool manager for better resource sharing.
    */
   private void releaseSharedBuffer(ByteBuffer buffer) {
     if (buffer != null) {
       buffer.clear();
       BUFFER_USAGE_COUNT.decrementAndGet();
+      
+      // Try to release to memory pool
+      MEMORY_POOL_MANAGER.releaseToPool("enhanced-bridge-buffers", buffer);
     }
   }
 
@@ -337,6 +367,10 @@ public class EnhancedNativeBridge {
     metrics.put("currentBufferUsage", BUFFER_USAGE_COUNT.get());
     metrics.put("maxBuffers", MAX_BUFFERS);
     metrics.put("bufferSize", BUFFER_SIZE);
+    
+    // Add memory pool manager statistics
+    metrics.put("memoryPoolStats", MEMORY_POOL_MANAGER.getStatistics());
+    
     return metrics;
   }
 

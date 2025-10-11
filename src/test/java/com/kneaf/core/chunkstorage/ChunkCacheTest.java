@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.kneaf.core.chunkstorage.cache.ChunkCache;
+
 /**
  * Test class for ChunkCache functionality, specifically focusing on the distance calculation fix.
  * This test works without Minecraft dependencies by testing the core logic in isolation.

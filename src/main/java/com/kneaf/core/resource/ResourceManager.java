@@ -1,6 +1,7 @@
 package com.kneaf.core.resource;
 
 import com.kneaf.core.exceptions.core.KneafCoreException;
+import com.kneaf.core.utils.ValidationUtils;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -165,11 +166,15 @@ public class ResourceManager implements Closeable {
 
   /** Register a managed resource. */
   public void registerResource(ManagedResource resource) throws Exception {
+    ValidationUtils.notNull(resource, "ManagedResource cannot be null");
+    
     if (shutdown.get()) {
       throw new IllegalStateException("ResourceManager " + managerName + " is shutdown");
     }
 
     String resourceName = resource.getResourceName();
+    ValidationUtils.notEmptyString(resourceName, "Resource name cannot be null or empty");
+    
     ResourceWrapper existing = resources.putIfAbsent(resourceName, new ResourceWrapper(resource));
     if (existing != null) {
       throw new IllegalArgumentException(
@@ -195,6 +200,8 @@ public class ResourceManager implements Closeable {
 
   /** Start a specific resource. */
   public void startResource(String resourceName) throws Exception {
+    ValidationUtils.notEmptyString(resourceName, "Resource name cannot be null or empty");
+    
     ResourceWrapper wrapper = resources.get(resourceName);
     if (wrapper == null) {
       throw new IllegalArgumentException("Resource not found: " + resourceName);
@@ -217,6 +224,8 @@ public class ResourceManager implements Closeable {
 
   /** Stop a specific resource. */
   public void stopResource(String resourceName) throws Exception {
+    ValidationUtils.notEmptyString(resourceName, "Resource name cannot be null or empty");
+    
     ResourceWrapper wrapper = resources.get(resourceName);
     if (wrapper == null) {
       return; // Resource not found, already stopped or never registered
@@ -295,6 +304,10 @@ public class ResourceManager implements Closeable {
 
   /** Perform health check on all resources. */
   public ResourceHealthReport checkHealth() {
+    if (shutdown.get()) {
+      return new ResourceHealthReport(Collections.emptyMap(), Collections.emptyMap());
+    }
+
     Map<String, Boolean> healthStatus = new HashMap<>();
     Map<String, ResourceState> stateStatus = new HashMap<>();
 
@@ -311,6 +324,8 @@ public class ResourceManager implements Closeable {
 
   /** Get resource by name. */
   public ManagedResource getResource(String resourceName) {
+    ValidationUtils.notEmptyString(resourceName, "Resource name cannot be null or empty");
+    
     ResourceWrapper wrapper = resources.get(resourceName);
     return wrapper != null ? wrapper.getResource() : null;
   }

@@ -16,6 +16,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.kneaf.core.chunkstorage.cache.ChunkCache;
+
 /**
  * Comprehensive testing for concurrent swap operations. Tests thread safety, concurrent access
  * patterns, and performance under load.

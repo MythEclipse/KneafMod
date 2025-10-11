@@ -14,6 +14,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.kneaf.core.chunkstorage.cache.ChunkCache;
+
 /**
  * Comprehensive error handling and recovery testing for swap operations. Tests failure scenarios,
  * error propagation, and recovery mechanisms.

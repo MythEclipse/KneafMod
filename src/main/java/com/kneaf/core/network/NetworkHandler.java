@@ -1,6 +1,7 @@
 package com.kneaf.core.network;
 
 import com.kneaf.core.KneafCore;
+import com.kneaf.core.utils.ValidationUtils;
 import com.mojang.logging.LogUtils;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.FriendlyByteBuf;
@@ -38,6 +39,9 @@ public final class NetworkHandler {
    * single UTF-8 string written via FriendlyByteBuf.writeUtf.
    */
   public static void sendPerformanceLineToPlayer(ServerPlayer player, String line) {
+    ValidationUtils.notNull(player, "ServerPlayer cannot be null");
+    ValidationUtils.notEmptyString(line, "Performance line cannot be null or empty");
+    
     // Prepare buffer
     FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
     buf.writeUtf(line);
@@ -98,7 +102,9 @@ public final class NetworkHandler {
 
   /** Broadcast a performance line to all connected players on the server. */
   public static void broadcastPerformanceLine(MinecraftServer server, String line) {
-    if (server == null) return;
+    ValidationUtils.notNull(server, "MinecraftServer cannot be null");
+    ValidationUtils.notEmptyString(line, "Performance line cannot be null or empty");
+    
     try {
       for (var level : server.getAllLevels()) {
         for (ServerPlayer player : level.players()) {

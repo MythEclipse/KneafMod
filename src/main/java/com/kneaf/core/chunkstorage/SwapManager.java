@@ -33,6 +33,8 @@ import net.jpountz.lz4.LZ4Compressor;
 import net.jpountz.lz4.LZ4Factory;
 import net.jpountz.lz4.LZ4FastDecompressor;
 
+import com.kneaf.core.chunkstorage.cache.ChunkCache;
+
 /**
  * Manages virtual memory operations including swap-in/swap-out and memory pressure detection.
  * Coordinates between cache, database, and memory pools to optimize memory usage.
