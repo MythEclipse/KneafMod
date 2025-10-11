@@ -250,10 +250,13 @@ public final class ExceptionHandlerUtils {
      */
     public static boolean isRecoverable(Throwable e) {
         // Define recoverable exceptions - adjust as needed for your application
+        // ThreadDeath has been deprecated/marked-for-removal in newer Java versions.
+        // Avoid compile-time reference to ThreadDeath and detect it by class name at runtime.
+        String className = (e != null) ? e.getClass().getName() : "";
         return !(e instanceof OutOfMemoryError) &&
                !(e instanceof StackOverflowError) &&
                !(e instanceof VirtualMachineError) &&
-               !(e instanceof ThreadDeath) &&
+               !"java.lang.ThreadDeath".equals(className) &&
                !(e instanceof LinkageError);
     }
 
@@ -474,8 +477,16 @@ public final class ExceptionHandlerUtils {
             }
         }
         
-        logger.error("All attempts for task '{}' failed", taskName, lastException);
-        throw lastException;
+        // If we reached here and lastException is non-null, rethrow it.
+        // If no tasks were provided (lastException == null), throw a clear IllegalArgumentException
+        if (lastException != null) {
+            logger.error("All attempts for task '{}' failed", taskName, lastException);
+            throw lastException;
+        } else {
+            IllegalArgumentException iae = new IllegalArgumentException("No tasks provided for task '" + taskName + "'");
+            logger.error("No tasks provided for task '{}'", taskName, iae);
+            throw iae;
+        }
     }
     
     /**
