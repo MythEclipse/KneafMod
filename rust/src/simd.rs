@@ -1,13 +1,13 @@
+use crate::performance_monitoring::{record_operation, PERFORMANCE_MONITOR};
+use log::{debug, info, trace};
+use serde::{Deserialize, Serialize};
 use std::arch::{is_x86_feature_detected, x86_64};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
-use log::{info, debug, trace};
-use crate::performance_monitoring::{PERFORMANCE_MONITOR, record_operation};
-use serde::{Serialize, Deserialize};
 
-use jni::JNIEnv;
 use jni::objects::JClass;
 use jni::sys::{jint, jstring};
+use jni::JNIEnv;
 
 /// Custom error type for SIMD operations
 #[derive(Debug, Clone, PartialEq)]
@@ -24,10 +24,7 @@ pub enum SimdError {
         available: String,
     },
     /// Memory allocation failed
-    MemoryAllocationFailed {
-        size: usize,
-        reason: String,
-    },
+    MemoryAllocationFailed { size: usize, reason: String },
     /// JNI operation failed
     JniError {
         operation: &'static str,
@@ -38,11 +35,26 @@ pub enum SimdError {
 impl std::fmt::Display for SimdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SimdError::InvalidInputLength { expected, actual, operation } => {
-                write!(f, "Invalid input length for {}: expected {}, got {}", operation, expected, actual)
+            SimdError::InvalidInputLength {
+                expected,
+                actual,
+                operation,
+            } => {
+                write!(
+                    f,
+                    "Invalid input length for {}: expected {}, got {}",
+                    operation, expected, actual
+                )
             }
-            SimdError::UnsupportedInstructionSet { required, available } => {
-                write!(f, "Required SIMD instruction set '{}' not supported. Available: {}", required, available)
+            SimdError::UnsupportedInstructionSet {
+                required,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Required SIMD instruction set '{}' not supported. Available: {}",
+                    required, available
+                )
             }
             SimdError::MemoryAllocationFailed { size, reason } => {
                 write!(f, "Memory allocation failed for size {}: {}", size, reason)
@@ -243,8 +255,16 @@ pub fn init_simd(config: SimdConfig) {
 pub trait SimdOperations {
     fn dot_product(&self, a: &[f32], b: &[f32]) -> SimdResult<f32>;
     fn vector_add(&self, a: &mut [f32], b: &[f32], scale: f32) -> SimdResult<()>;
-    fn calculate_chunk_distances(&self, chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32>;
-    fn batch_aabb_intersections(&self, aabbs: &[crate::spatial::Aabb], queries: &[crate::spatial::Aabb]) -> Vec<Vec<bool>>;
+    fn calculate_chunk_distances(
+        &self,
+        chunk_coords: &[(i32, i32)],
+        center_chunk: (i32, i32),
+    ) -> Vec<f32>;
+    fn batch_aabb_intersections(
+        &self,
+        aabbs: &[crate::spatial::Aabb],
+        queries: &[crate::spatial::Aabb],
+    ) -> Vec<Vec<bool>>;
 }
 
 /// SIMD processor implementation with architecture-specific optimizations
@@ -290,7 +310,7 @@ impl SimdProcessor {
             SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { self.process_sse(data, operation) },
             SimdLevel::Scalar => operation(data),
         };
-        
+
         record_operation(start, data.len(), 1);
         result
     }
@@ -440,7 +460,11 @@ impl SimdOperations for SimdProcessor {
         result
     }
 
-    fn calculate_chunk_distances(&self, chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
+    fn calculate_chunk_distances(
+        &self,
+        chunk_coords: &[(i32, i32)],
+        center_chunk: (i32, i32),
+    ) -> Vec<f32> {
         let start = Instant::now();
         let result = chunk_coords
             .iter()
@@ -455,9 +479,16 @@ impl SimdOperations for SimdProcessor {
         result
     }
 
-    fn batch_aabb_intersections(&self, aabbs: &[crate::spatial::Aabb], queries: &[crate::spatial::Aabb]) -> Vec<Vec<bool>> {
+    fn batch_aabb_intersections(
+        &self,
+        aabbs: &[crate::spatial::Aabb],
+        queries: &[crate::spatial::Aabb],
+    ) -> Vec<Vec<bool>> {
         let start = Instant::now();
-        let result = queries.iter().map(|q| aabbs.iter().map(|a| a.intersects(q)).collect()).collect();
+        let result = queries
+            .iter()
+            .map(|q| aabbs.iter().map(|a| a.intersects(q)).collect())
+            .collect();
 
         record_operation(start, aabbs.len() * queries.len(), 1);
         result
@@ -496,7 +527,10 @@ pub mod vector_ops {
     }
 
     /// Chunk distances (2D) - scalar implementation using sequential processing
-    pub fn calculate_chunk_distances(chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
+    pub fn calculate_chunk_distances(
+        chunk_coords: &[(i32, i32)],
+        center_chunk: (i32, i32),
+    ) -> Vec<f32> {
         chunk_coords
             .iter()
             .map(|(x, z)| {
@@ -508,177 +542,212 @@ pub mod vector_ops {
     }
 
     /// Batch AABB intersections - scalar implementation
-    pub fn batch_aabb_intersections(aabbs: &[crate::spatial::Aabb], queries: &[crate::spatial::Aabb]) -> Vec<Vec<bool>> {
-        queries.iter().map(|q| aabbs.iter().map(|a| a.intersects(q)).collect()).collect()
+    pub fn batch_aabb_intersections(
+        aabbs: &[crate::spatial::Aabb],
+        queries: &[crate::spatial::Aabb],
+    ) -> Vec<Vec<bool>> {
+        queries
+            .iter()
+            .map(|q| aabbs.iter().map(|a| a.intersects(q)).collect())
+            .collect()
     }
 }
 
 /// SIMD-accelerated entity processing
 pub mod entity_processing {
     use crate::simd::{get_simd_manager, SimdLevel};
-    use std::arch::x86_64::*;
     use rayon::prelude::*;
+    use std::arch::x86_64::*;
 
     /// SIMD-accelerated distance calculation for entities
-    pub fn calculate_entity_distances(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+    pub fn calculate_entity_distances(
+        positions: &[(f32, f32, f32)],
+        center: (f32, f32, f32),
+    ) -> Vec<f32> {
         let level = get_simd_manager().get_level();
 
         match level {
             SimdLevel::Avx2 => unsafe { calculate_distances_avx2(positions, center) },
-            SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { calculate_distances_sse(positions, center) },
+            SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe {
+                calculate_distances_sse(positions, center)
+            },
             SimdLevel::Scalar => calculate_distances_scalar(positions, center),
             SimdLevel::Avx512 => unsafe { calculate_distances_avx512(positions, center) },
         }
     }
 
     #[target_feature(enable = "avx2")]
-    unsafe fn calculate_distances_avx2(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+    unsafe fn calculate_distances_avx2(
+        positions: &[(f32, f32, f32)],
+        center: (f32, f32, f32),
+    ) -> Vec<f32> {
         let cx = _mm256_set1_ps(center.0);
         let cy = _mm256_set1_ps(center.1);
         let cz = _mm256_set1_ps(center.2);
 
-    positions.chunks(8).flat_map(|chunk| {
-            let mut distances = [0.0f32; 8];
+        positions
+            .chunks(8)
+            .flat_map(|chunk| {
+                let mut distances = [0.0f32; 8];
 
-            let px = _mm256_set_ps(
-                chunk.get(7).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.0).unwrap_or(0.0)
-            );
-            let py = _mm256_set_ps(
-                chunk.get(7).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.1).unwrap_or(0.0)
-            );
-            let pz = _mm256_set_ps(
-                chunk.get(7).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.2).unwrap_or(0.0)
-            );
+                let px = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.0).unwrap_or(0.0),
+                );
+                let py = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.1).unwrap_or(0.0),
+                );
+                let pz = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.2).unwrap_or(0.0),
+                );
 
-            let dx = _mm256_sub_ps(px, cx);
-            let dy = _mm256_sub_ps(py, cy);
-            let dz = _mm256_sub_ps(pz, cz);
+                let dx = _mm256_sub_ps(px, cx);
+                let dy = _mm256_sub_ps(py, cy);
+                let dz = _mm256_sub_ps(pz, cz);
 
-            let dx2 = _mm256_mul_ps(dx, dx);
-            let dy2 = _mm256_mul_ps(dy, dy);
-            let dz2 = _mm256_mul_ps(dz, dz);
+                let dx2 = _mm256_mul_ps(dx, dx);
+                let dy2 = _mm256_mul_ps(dy, dy);
+                let dz2 = _mm256_mul_ps(dz, dz);
 
-            let sum = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
-            let dist = _mm256_sqrt_ps(sum);
+                let sum = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
+                let dist = _mm256_sqrt_ps(sum);
 
-            _mm256_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
+                _mm256_storeu_ps(distances.as_mut_ptr(), dist);
+                distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     #[target_feature(enable = "sse4.1")]
-    unsafe fn calculate_distances_sse(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+    unsafe fn calculate_distances_sse(
+        positions: &[(f32, f32, f32)],
+        center: (f32, f32, f32),
+    ) -> Vec<f32> {
         let cx = _mm_set1_ps(center.0);
         let cy = _mm_set1_ps(center.1);
         let cz = _mm_set1_ps(center.2);
 
-    positions.chunks(4).flat_map(|chunk| {
-            let mut distances = [0.0f32; 4];
+        positions
+            .chunks(4)
+            .flat_map(|chunk| {
+                let mut distances = [0.0f32; 4];
 
-            let px = _mm_set_ps(
-                chunk.get(3).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.0).unwrap_or(0.0)
-            );
-            let py = _mm_set_ps(
-                chunk.get(3).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.1).unwrap_or(0.0)
-            );
-            let pz = _mm_set_ps(
-                chunk.get(3).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.2).unwrap_or(0.0)
-            );
+                let px = _mm_set_ps(
+                    chunk.get(3).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.0).unwrap_or(0.0),
+                );
+                let py = _mm_set_ps(
+                    chunk.get(3).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.1).unwrap_or(0.0),
+                );
+                let pz = _mm_set_ps(
+                    chunk.get(3).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.2).unwrap_or(0.0),
+                );
 
-            let dx = _mm_sub_ps(px, cx);
-            let dy = _mm_sub_ps(py, cy);
-            let dz = _mm_sub_ps(pz, cz);
+                let dx = _mm_sub_ps(px, cx);
+                let dy = _mm_sub_ps(py, cy);
+                let dz = _mm_sub_ps(pz, cz);
 
-            let dx2 = _mm_mul_ps(dx, dx);
-            let dy2 = _mm_mul_ps(dy, dy);
-            let dz2 = _mm_mul_ps(dz, dz);
+                let dx2 = _mm_mul_ps(dx, dx);
+                let dy2 = _mm_mul_ps(dy, dy);
+                let dz2 = _mm_mul_ps(dz, dz);
 
-            let sum = _mm_add_ps(_mm_add_ps(dx2, dy2), dz2);
-            let dist = _mm_sqrt_ps(sum);
+                let sum = _mm_add_ps(_mm_add_ps(dx2, dy2), dz2);
+                let dist = _mm_sqrt_ps(sum);
 
-            _mm_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
+                _mm_storeu_ps(distances.as_mut_ptr(), dist);
+                distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+            })
+            .collect()
     }
 
-    fn calculate_distances_scalar(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
-        positions.iter().map(|(x, y, z)| {
-            let dx = x - center.0;
-            let dy = y - center.1;
-            let dz = z - center.2;
-            (dx * dx + dy * dy + dz * dz).sqrt()
-        }).collect()
+    fn calculate_distances_scalar(
+        positions: &[(f32, f32, f32)],
+        center: (f32, f32, f32),
+    ) -> Vec<f32> {
+        positions
+            .iter()
+            .map(|(x, y, z)| {
+                let dx = x - center.0;
+                let dy = y - center.1;
+                let dz = z - center.2;
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            })
+            .collect()
     }
 
     #[target_feature(enable = "avx512f")]
-    unsafe fn calculate_distances_avx512(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+    unsafe fn calculate_distances_avx512(
+        positions: &[(f32, f32, f32)],
+        center: (f32, f32, f32),
+    ) -> Vec<f32> {
         // Implement AVX-512 path: process up to 16 lanes per iteration and handle remainder safely.
         let cx = _mm512_set1_ps(center.0);
         let cy = _mm512_set1_ps(center.1);
         let cz = _mm512_set1_ps(center.2);
 
-        positions.chunks(16).flat_map(|chunk| {
-            let mut distances = [0.0f32; 16];
+        positions
+            .chunks(16)
+            .flat_map(|chunk| {
+                let mut distances = [0.0f32; 16];
 
-            // Prepare position arrays (pad with 0.0 for lanes beyond chunk.len())
-            let mut px_arr = [0.0f32; 16];
-            let mut py_arr = [0.0f32; 16];
-            let mut pz_arr = [0.0f32; 16];
+                // Prepare position arrays (pad with 0.0 for lanes beyond chunk.len())
+                let mut px_arr = [0.0f32; 16];
+                let mut py_arr = [0.0f32; 16];
+                let mut pz_arr = [0.0f32; 16];
 
-            for (i, p) in chunk.iter().enumerate() {
-                px_arr[i] = p.0;
-                py_arr[i] = p.1;
-                pz_arr[i] = p.2;
-            }
+                for (i, p) in chunk.iter().enumerate() {
+                    px_arr[i] = p.0;
+                    py_arr[i] = p.1;
+                    pz_arr[i] = p.2;
+                }
 
-            let px = _mm512_loadu_ps(px_arr.as_ptr());
-            let py = _mm512_loadu_ps(py_arr.as_ptr());
-            let pz = _mm512_loadu_ps(pz_arr.as_ptr());
+                let px = _mm512_loadu_ps(px_arr.as_ptr());
+                let py = _mm512_loadu_ps(py_arr.as_ptr());
+                let pz = _mm512_loadu_ps(pz_arr.as_ptr());
 
-            let dx = _mm512_sub_ps(px, cx);
-            let dy = _mm512_sub_ps(py, cy);
-            let dz = _mm512_sub_ps(pz, cz);
+                let dx = _mm512_sub_ps(px, cx);
+                let dy = _mm512_sub_ps(py, cy);
+                let dz = _mm512_sub_ps(pz, cz);
 
-            let dx2 = _mm512_mul_ps(dx, dx);
-            let dy2 = _mm512_mul_ps(dy, dy);
-            let dz2 = _mm512_mul_ps(dz, dz);
+                let dx2 = _mm512_mul_ps(dx, dx);
+                let dy2 = _mm512_mul_ps(dy, dy);
+                let dz2 = _mm512_mul_ps(dz, dz);
 
-            let sum = _mm512_add_ps(_mm512_add_ps(dx2, dy2), dz2);
-            let dist = _mm512_sqrt_ps(sum);
+                let sum = _mm512_add_ps(_mm512_add_ps(dx2, dy2), dz2);
+                let dist = _mm512_sqrt_ps(sum);
 
-            _mm512_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
+                _mm512_storeu_ps(distances.as_mut_ptr(), dist);
+                distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     /// SIMD-accelerated entity filtering by distance threshold
@@ -690,10 +759,16 @@ pub mod entity_processing {
         let level = get_simd_manager().get_level();
 
         match level {
-            SimdLevel::Avx2 => unsafe { filter_entities_by_distance_avx2(entities, center, max_distance) },
-            SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { filter_entities_by_distance_sse(entities, center, max_distance) },
+            SimdLevel::Avx2 => unsafe {
+                filter_entities_by_distance_avx2(entities, center, max_distance)
+            },
+            SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe {
+                filter_entities_by_distance_sse(entities, center, max_distance)
+            },
             SimdLevel::Scalar => filter_entities_by_distance_scalar(entities, center, max_distance),
-            SimdLevel::Avx512 => unsafe { filter_entities_by_distance_avx512(entities, center, max_distance) },
+            SimdLevel::Avx512 => unsafe {
+                filter_entities_by_distance_avx512(entities, center, max_distance)
+            },
         }
     }
 
@@ -708,45 +783,48 @@ pub mod entity_processing {
         let center_z = _mm256_set1_ps(center[2] as f32);
         let max_dist_sq = _mm256_set1_ps((max_distance * max_distance) as f32);
 
-        entities.par_chunks(8).flat_map(|chunk| {
-            let mut results = Vec::new();
+        entities
+            .par_chunks(8)
+            .flat_map(|chunk| {
+                let mut results = Vec::new();
 
-            // Extract positions for SIMD processing
-            let mut positions_x = [0.0f32; 8];
-            let mut positions_y = [0.0f32; 8];
-            let mut positions_z = [0.0f32; 8];
+                // Extract positions for SIMD processing
+                let mut positions_x = [0.0f32; 8];
+                let mut positions_y = [0.0f32; 8];
+                let mut positions_z = [0.0f32; 8];
 
-            for (i, (_, pos)) in chunk.iter().enumerate() {
-                positions_x[i] = pos[0] as f32;
-                positions_y[i] = pos[1] as f32;
-                positions_z[i] = pos[2] as f32;
-            }
-
-            let px = _mm256_loadu_ps(positions_x.as_ptr());
-            let py = _mm256_loadu_ps(positions_y.as_ptr());
-            let pz = _mm256_loadu_ps(positions_z.as_ptr());
-
-            let dx = _mm256_sub_ps(px, center_x);
-            let dy = _mm256_sub_ps(py, center_y);
-            let dz = _mm256_sub_ps(pz, center_z);
-
-            let dx2 = _mm256_mul_ps(dx, dx);
-            let dy2 = _mm256_mul_ps(dy, dy);
-            let dz2 = _mm256_mul_ps(dz, dz);
-
-            let dist_sq = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
-            let within_range = _mm256_cmp_ps(dist_sq, max_dist_sq, _CMP_LE_OQ);
-
-            let mask = _mm256_movemask_ps(within_range);
-
-            for (i, (entity, pos)) in chunk.iter().enumerate() {
-                    if (mask & (1 << i)) != 0 {
-                    results.push(((*entity).clone(), *pos));
+                for (i, (_, pos)) in chunk.iter().enumerate() {
+                    positions_x[i] = pos[0] as f32;
+                    positions_y[i] = pos[1] as f32;
+                    positions_z[i] = pos[2] as f32;
                 }
-            }
 
-            results
-        }).collect()
+                let px = _mm256_loadu_ps(positions_x.as_ptr());
+                let py = _mm256_loadu_ps(positions_y.as_ptr());
+                let pz = _mm256_loadu_ps(positions_z.as_ptr());
+
+                let dx = _mm256_sub_ps(px, center_x);
+                let dy = _mm256_sub_ps(py, center_y);
+                let dz = _mm256_sub_ps(pz, center_z);
+
+                let dx2 = _mm256_mul_ps(dx, dx);
+                let dy2 = _mm256_mul_ps(dy, dy);
+                let dz2 = _mm256_mul_ps(dz, dz);
+
+                let dist_sq = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
+                let within_range = _mm256_cmp_ps(dist_sq, max_dist_sq, _CMP_LE_OQ);
+
+                let mask = _mm256_movemask_ps(within_range);
+
+                for (i, (entity, pos)) in chunk.iter().enumerate() {
+                    if (mask & (1 << i)) != 0 {
+                        results.push(((*entity).clone(), *pos));
+                    }
+                }
+
+                results
+            })
+            .collect()
     }
 
     #[target_feature(enable = "sse4.1")]
@@ -760,45 +838,48 @@ pub mod entity_processing {
         let center_z = _mm_set1_ps(center[2] as f32);
         let max_dist_sq = _mm_set1_ps((max_distance * max_distance) as f32);
 
-        entities.par_chunks(4).flat_map(|chunk| {
-            let mut results = Vec::new();
+        entities
+            .par_chunks(4)
+            .flat_map(|chunk| {
+                let mut results = Vec::new();
 
-            // Extract positions for SIMD processing
-            let mut positions_x = [0.0f32; 4];
-            let mut positions_y = [0.0f32; 4];
-            let mut positions_z = [0.0f32; 4];
+                // Extract positions for SIMD processing
+                let mut positions_x = [0.0f32; 4];
+                let mut positions_y = [0.0f32; 4];
+                let mut positions_z = [0.0f32; 4];
 
-            for (i, (_, pos)) in chunk.iter().enumerate() {
-                positions_x[i] = pos[0] as f32;
-                positions_y[i] = pos[1] as f32;
-                positions_z[i] = pos[2] as f32;
-            }
-
-            let px = _mm_loadu_ps(positions_x.as_ptr());
-            let py = _mm_loadu_ps(positions_y.as_ptr());
-            let pz = _mm_loadu_ps(positions_z.as_ptr());
-
-            let dx = _mm_sub_ps(px, center_x);
-            let dy = _mm_sub_ps(py, center_y);
-            let dz = _mm_sub_ps(pz, center_z);
-
-            let dx2 = _mm_mul_ps(dx, dx);
-            let dy2 = _mm_mul_ps(dy, dy);
-            let dz2 = _mm_mul_ps(dz, dz);
-
-            let dist_sq = _mm_add_ps(_mm_add_ps(dx2, dy2), dz2);
-            let within_range = _mm_cmple_ps(dist_sq, max_dist_sq);
-
-            let mask = _mm_movemask_ps(within_range);
-
-            for (i, (entity, pos)) in chunk.iter().enumerate() {
-                    if (mask & (1 << i)) != 0 {
-                    results.push(((*entity).clone(), *pos));
+                for (i, (_, pos)) in chunk.iter().enumerate() {
+                    positions_x[i] = pos[0] as f32;
+                    positions_y[i] = pos[1] as f32;
+                    positions_z[i] = pos[2] as f32;
                 }
-            }
 
-            results
-        }).collect()
+                let px = _mm_loadu_ps(positions_x.as_ptr());
+                let py = _mm_loadu_ps(positions_y.as_ptr());
+                let pz = _mm_loadu_ps(positions_z.as_ptr());
+
+                let dx = _mm_sub_ps(px, center_x);
+                let dy = _mm_sub_ps(py, center_y);
+                let dz = _mm_sub_ps(pz, center_z);
+
+                let dx2 = _mm_mul_ps(dx, dx);
+                let dy2 = _mm_mul_ps(dy, dy);
+                let dz2 = _mm_mul_ps(dz, dz);
+
+                let dist_sq = _mm_add_ps(_mm_add_ps(dx2, dy2), dz2);
+                let within_range = _mm_cmple_ps(dist_sq, max_dist_sq);
+
+                let mask = _mm_movemask_ps(within_range);
+
+                for (i, (entity, pos)) in chunk.iter().enumerate() {
+                    if (mask & (1 << i)) != 0 {
+                        results.push(((*entity).clone(), *pos));
+                    }
+                }
+
+                results
+            })
+            .collect()
     }
 
     fn filter_entities_by_distance_scalar<T: Clone + Send + Sync>(
@@ -806,7 +887,8 @@ pub mod entity_processing {
         center: [f64; 3],
         max_distance: f64,
     ) -> Vec<(T, [f64; 3])> {
-        entities.par_iter()
+        entities
+            .par_iter()
             .filter(|(_, pos)| {
                 let dx = pos[0] - center[0];
                 let dy = pos[1] - center[1];
@@ -829,43 +911,46 @@ pub mod entity_processing {
         let center_z = _mm512_set1_ps(center[2] as f32);
         let max_dist_sq = _mm512_set1_ps((max_distance * max_distance) as f32);
 
-        entities.par_chunks(16).flat_map(|chunk| {
-            let mut results = Vec::new();
+        entities
+            .par_chunks(16)
+            .flat_map(|chunk| {
+                let mut results = Vec::new();
 
-            // Extract positions for SIMD processing
-            let mut positions_x = [0.0f32; 16];
-            let mut positions_y = [0.0f32; 16];
-            let mut positions_z = [0.0f32; 16];
+                // Extract positions for SIMD processing
+                let mut positions_x = [0.0f32; 16];
+                let mut positions_y = [0.0f32; 16];
+                let mut positions_z = [0.0f32; 16];
 
-            for (i, (_, pos)) in chunk.iter().enumerate() {
-                positions_x[i] = pos[0] as f32;
-                positions_y[i] = pos[1] as f32;
-                positions_z[i] = pos[2] as f32;
-            }
-
-            let px = _mm512_loadu_ps(positions_x.as_ptr());
-            let py = _mm512_loadu_ps(positions_y.as_ptr());
-            let pz = _mm512_loadu_ps(positions_z.as_ptr());
-
-            let dx = _mm512_sub_ps(px, center_x);
-            let dy = _mm512_sub_ps(py, center_y);
-            let dz = _mm512_sub_ps(pz, center_z);
-
-            let dx2 = _mm512_mul_ps(dx, dx);
-            let dy2 = _mm512_mul_ps(dy, dy);
-            let dz2 = _mm512_mul_ps(dz, dz);
-
-            let dist_sq = _mm512_add_ps(_mm512_add_ps(dx2, dy2), dz2);
-            let within_range = _mm512_cmp_ps_mask(dist_sq, max_dist_sq, _MM_CMPINT_LE);
-
-            for (i, (entity, pos)) in chunk.iter().enumerate() {
-                if (within_range & (1 << i)) != 0 {
-                    results.push(((*entity).clone(), *pos));
+                for (i, (_, pos)) in chunk.iter().enumerate() {
+                    positions_x[i] = pos[0] as f32;
+                    positions_y[i] = pos[1] as f32;
+                    positions_z[i] = pos[2] as f32;
                 }
-            }
 
-            results
-        }).collect()
+                let px = _mm512_loadu_ps(positions_x.as_ptr());
+                let py = _mm512_loadu_ps(positions_y.as_ptr());
+                let pz = _mm512_loadu_ps(positions_z.as_ptr());
+
+                let dx = _mm512_sub_ps(px, center_x);
+                let dy = _mm512_sub_ps(py, center_y);
+                let dz = _mm512_sub_ps(pz, center_z);
+
+                let dx2 = _mm512_mul_ps(dx, dx);
+                let dy2 = _mm512_mul_ps(dy, dy);
+                let dz2 = _mm512_mul_ps(dz, dz);
+
+                let dist_sq = _mm512_add_ps(_mm512_add_ps(dx2, dy2), dz2);
+                let within_range = _mm512_cmp_ps_mask(dist_sq, max_dist_sq, _MM_CMPINT_LE);
+
+                for (i, (entity, pos)) in chunk.iter().enumerate() {
+                    if (within_range & (1 << i)) != 0 {
+                        results.push(((*entity).clone(), *pos));
+                    }
+                }
+
+                results
+            })
+            .collect()
     }
 }
 
@@ -951,11 +1036,7 @@ mod tests {
 
     #[test]
     fn test_entity_distance_calculation() {
-        let positions = vec![
-            (0.0, 0.0, 0.0),
-            (3.0, 4.0, 0.0),
-            (6.0, 8.0, 0.0),
-        ];
+        let positions = vec![(0.0, 0.0, 0.0), (3.0, 4.0, 0.0), (6.0, 8.0, 0.0)];
         let center = (0.0, 0.0, 0.0);
 
         let distances = super::entity_processing::calculate_entity_distances(&positions, center);

@@ -2,14 +2,14 @@ use std::collections::{BinaryHeap, HashMap};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use lazy_static::lazy_static;
 use crate::logging::{generate_trace_id, PerformanceLogger};
+use lazy_static::lazy_static;
 
 // Cache eviction policy types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvictionPolicy {
     LRU,      // Least Recently Used
-    LFU,      // Least Frequently Used  
+    LFU,      // Least Frequently Used
     FIFO,     // First-In-First-Out
     Priority, // Custom priority-based
 }
@@ -76,7 +76,7 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
         if let Some(entry) = entries.get_mut(key) {
             // Update access statistics based on policy
             stats.hits += 1;
-            
+
             match self.policy {
                 EvictionPolicy::LRU => {
                     entry.last_access = Instant::now();
@@ -125,7 +125,7 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
         };
 
         entries.insert(key.clone(), entry.clone());
-        
+
         stats.insertions += 1;
         stats.current_size = entries.len();
 
@@ -194,9 +194,15 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
                     }
                 }
 
-                lowest_priority_entries.iter().min_by_key(|&key| {
-                    entries.get(key).map(|e| e.last_access).unwrap_or(Instant::now())
-                }).cloned()
+                lowest_priority_entries
+                    .iter()
+                    .min_by_key(|&key| {
+                        entries
+                            .get(key)
+                            .map(|e| e.last_access)
+                            .unwrap_or(Instant::now())
+                    })
+                    .cloned()
             }
         };
 
@@ -237,7 +243,7 @@ impl<T: Clone + std::fmt::Debug + Ord> PriorityCache<T> {
 
         entries.clear();
         stats.current_size = 0;
-        
+
         // Only lock access_queue for minimal time
         let mut access_queue = self.access_queue.lock().unwrap();
         access_queue.clear();
@@ -292,23 +298,23 @@ impl Default for CacheFeatureFlags {
 // Initialize cache with feature flags
 pub fn initialize_cache(flags: CacheFeatureFlags) {
     let trace_id = generate_trace_id();
-    
+
     // Validate configuration parameters
     if flags.max_capacity == 0 {
         eprintln!("Invalid cache configuration: max_capacity must be greater than 0");
         return;
     }
-    
+
     // Create a new cache with the specified configuration
     let new_cache: PriorityCache<Vec<u8>> = PriorityCache::new(
         flags.max_capacity,
         flags.eviction_policy,
-        flags.cache_enabled
+        flags.cache_enabled,
     );
-    
+
     // Update global cache with proper reconfiguration handling
     let mut global_cache = GLOBAL_CACHE.clone();
-    
+
     // Use compare-and-swap pattern for thread-safe reconfiguration
     match Arc::get_mut(&mut global_cache) {
         Some(cache) => {
@@ -320,29 +326,31 @@ pub fn initialize_cache(flags: CacheFeatureFlags) {
                 stats.hits = 0;
                 stats.misses = 0;
             }
-            
+
             // 2. Clear existing entries
             cache.clear();
-            
+
             // 3. Update cache capacity and policy
             let mut entries = cache.entries.write().unwrap();
             entries.clear();
-            
+
             // 4. Update feature flags
             entries.drain().collect::<Vec<_>>(); // Clear entries first
-            
+
             // Release the entries lock before calling set_feature_enabled
             drop(entries);
-            
+
             cache.set_feature_enabled(flags.cache_enabled);
-            
+
             // 5. Log configuration change
-            eprintln!("Cache reconfigured successfully: enabled={}, policy={:?}, capacity={}, stats={}",
+            eprintln!(
+                "Cache reconfigured successfully: enabled={}, policy={:?}, capacity={}, stats={}",
                 flags.cache_enabled,
                 flags.eviction_policy,
                 flags.max_capacity,
-                flags.stats_collection);
-                
+                flags.stats_collection
+            );
+
             // 6. Update internal state for new configuration
             if flags.stats_collection {
                 if let Ok(mut stats) = cache.stats.lock() {
@@ -356,26 +364,30 @@ pub fn initialize_cache(flags: CacheFeatureFlags) {
             return;
         }
     }
-    
+
     // For JNI compatibility, we also update the global static reference
     // This ensures all threads see the new configuration
     lazy_static::initialize(&GLOBAL_CACHE);
-    
+
     // Log successful reconfiguration
     let logger = PerformanceLogger::new("cache_eviction");
-    logger.log_info("initialize_cache", &trace_id, &format!(
-        "Successfully reconfigured cache: enabled={}, policy={:?}, capacity={}",
-        flags.cache_enabled, flags.eviction_policy, flags.max_capacity
-    ));
+    logger.log_info(
+        "initialize_cache",
+        &trace_id,
+        &format!(
+            "Successfully reconfigured cache: enabled={}, policy={:?}, capacity={}",
+            flags.cache_enabled, flags.eviction_policy, flags.max_capacity
+        ),
+    );
 }
 
 // JNI-compatible functions
 #[cfg(feature = "jni")]
 pub mod jni_bindings {
     use super::*;
+    use jni::objects::{JByteArray, JClass};
+    use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring};
     use jni::JNIEnv;
-    use jni::objects::{JClass, JByteArray};
-    use jni::sys::{jbyteArray, jstring, jlong, jint, jboolean};
 
     // Convert JString to Rust String
     fn jstring_to_string(env: &JNIEnv, jstr: jstring) -> Result<String, String> {
@@ -386,7 +398,9 @@ pub mod jni_bindings {
 
     // Convert Rust String to JString
     fn string_to_jstring(env: &JNIEnv, s: &str) -> Result<jstring, String> {
-        env.new_string(s).map_err(|e| e.to_string()).map(|s| s.into_raw())
+        env.new_string(s)
+            .map_err(|e| e.to_string())
+            .map(|s| s.into_raw())
     }
 
     // Convert JByteArray to Vec<u8>
@@ -397,7 +411,9 @@ pub mod jni_bindings {
 
     // Convert Vec<u8> to JByteArray
     fn vec_to_jbyte_array(env: &JNIEnv, vec: &[u8]) -> Result<jbyteArray, String> {
-        env.byte_array_from_slice(vec).map_err(|e| e.to_string()).map(|a| a.into_raw())
+        env.byte_array_from_slice(vec)
+            .map_err(|e| e.to_string())
+            .map(|a| a.into_raw())
     }
 
     // Convert CacheStats to JSON string
@@ -462,7 +478,7 @@ pub mod jni_bindings {
         };
 
         let result = GLOBAL_CACHE.insert(key_str, value_vec, priority as u32);
-        
+
         match result {
             Some(evicted) => match vec_to_jbyte_array(env, &evicted) {
                 Ok(array) => array,
@@ -485,7 +501,7 @@ pub mod jni_bindings {
         };
 
         let result = GLOBAL_CACHE.get(&key_str);
-        
+
         match result {
             Some(value) => match vec_to_jbyte_array(env, &value) {
                 Ok(array) => array,
@@ -508,7 +524,7 @@ pub mod jni_bindings {
         };
 
         let result = GLOBAL_CACHE.remove(&key_str);
-        
+
         match result {
             Some(value) => match vec_to_jbyte_array(env, &value) {
                 Ok(array) => array,
@@ -536,7 +552,7 @@ pub mod jni_bindings {
     ) -> jstring {
         let stats = GLOBAL_CACHE.get_stats();
         let json = cache_stats_to_json(&stats);
-        
+
         match string_to_jstring(env, &json) {
             Ok(jstr) => jstr,
             Err(_) => std::ptr::null_mut(),
@@ -550,7 +566,11 @@ pub mod jni_bindings {
         _class: JClass,
     ) -> jboolean {
         let enabled = GLOBAL_CACHE.is_feature_enabled();
-        if enabled { 1 } else { 0 }
+        if enabled {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -561,19 +581,19 @@ mod tests {
     #[test]
     fn test_cache_basic_operations() {
         let cache = PriorityCache::new(2, EvictionPolicy::LRU, true);
-        
+
         // Test insertions
         assert!(cache.insert("key1".to_string(), vec![1, 2, 3], 1).is_none());
         assert!(cache.insert("key2".to_string(), vec![4, 5, 6], 1).is_none());
-        
+
         // Test get operations
         assert_eq!(cache.get("key1"), Some(vec![1, 2, 3]));
         assert_eq!(cache.get("key2"), Some(vec![4, 5, 6]));
-        
+
         // Test eviction
         let evicted = cache.insert("key3".to_string(), vec![7, 1, 9], 1);
         assert_eq!(evicted, Some(vec![1, 2, 3])); // LRU evicts key1
-        
+
         // Test that evicted key is no longer accessible
         assert!(cache.get("key1").is_none());
         assert_eq!(cache.get("key2"), Some(vec![4, 5, 6]));
@@ -583,11 +603,11 @@ mod tests {
     #[test]
     fn test_cache_feature_disabled() {
         let cache = PriorityCache::new(2, EvictionPolicy::LRU, false);
-        
+
         // Insert should return the value (bypass cache)
         let result = cache.insert("key1".to_string(), vec![1, 2, 3], 1);
         assert_eq!(result, Some(vec![1, 2, 3]));
-        
+
         // Get should return None
         assert!(cache.get("key1").is_none());
     }
@@ -596,24 +616,24 @@ mod tests {
     fn test_cache_eviction_policies() {
         // Test LFU policy
         let lfu_cache = PriorityCache::new(2, EvictionPolicy::LFU, true);
-        
+
         lfu_cache.insert("key1".to_string(), vec![1], 1);
         lfu_cache.insert("key2".to_string(), vec![2], 1);
-        
+
         // Access key1 multiple times to make it more frequent
         lfu_cache.get("key1");
         lfu_cache.get("key1");
-        
+
         // Key2 should be evicted since it has lower access count
         let evicted = lfu_cache.insert("key3".to_string(), vec![3], 1);
         assert_eq!(evicted, Some(vec![2]));
 
         // Test FIFO policy
         let fifo_cache = PriorityCache::new(2, EvictionPolicy::FIFO, true);
-        
+
         fifo_cache.insert("key1".to_string(), vec![1], 1);
         fifo_cache.insert("key2".to_string(), vec![2], 1);
-        
+
         // Key1 should be evicted since it was inserted first
         let evicted = fifo_cache.insert("key3".to_string(), vec![3], 1);
         assert_eq!(evicted, Some(vec![1]));
@@ -622,7 +642,7 @@ mod tests {
     #[test]
     fn test_cache_stats() {
         let cache = PriorityCache::new(1, EvictionPolicy::LRU, true);
-        
+
         // Initial stats
         let stats = cache.get_stats();
         assert_eq!(stats.hits, 0);
@@ -631,19 +651,19 @@ mod tests {
         assert_eq!(stats.insertions, 0);
         assert_eq!(stats.current_size, 0);
         assert_eq!(stats.max_size, 1);
-        
+
         // Insert (miss -> insertion)
         cache.insert("key1".to_string(), vec![1], 1);
         let stats = cache.get_stats();
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.insertions, 1);
         assert_eq!(stats.current_size, 1);
-        
+
         // Get (hit)
         cache.get("key1");
         let stats = cache.get_stats();
         assert_eq!(stats.hits, 1);
-        
+
         // Insert again (should evict, miss -> insertion -> eviction)
         cache.insert("key2".to_string(), vec![2], 1);
         let stats = cache.get_stats();

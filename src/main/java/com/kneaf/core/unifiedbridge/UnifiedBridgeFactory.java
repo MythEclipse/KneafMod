@@ -173,9 +173,8 @@ public final class UnifiedBridgeFactory {
      */
     private static boolean isNativeLibraryAvailable() {
         try {
-            // Try to load native library (will throw if not available)
-            System.loadLibrary("rustperf");
-            return true;
+            // Delegate to centralized loader which caches result
+            return com.kneaf.core.performance.bridge.NativeLibraryLoader.loadNativeLibrary();
         } catch (UnsatisfiedLinkError | SecurityException e) {
             KneafCore.LOGGER.debug("Native library not available", e);
             return false;

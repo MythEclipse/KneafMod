@@ -1,20 +1,20 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use crate::CompressionStats;
+use crate::logging::generate_trace_id;
 use crate::logging::PerformanceLogger;
 use crate::memory_pool::object_pool::MemoryPressureLevel;
-use crate::logging::generate_trace_id;
+use crate::CompressionStats;
 
 /// Configuration for swap memory pool
 #[derive(Debug, Clone)]
 pub struct SwapPoolConfig {
     pub swap_file_path: PathBuf,
-    pub max_swap_size: usize, // Maximum swap file size in bytes
-    pub page_size: usize,     // Size of each swap page (typically 4KB)
+    pub max_swap_size: usize,       // Maximum swap file size in bytes
+    pub page_size: usize,           // Size of each swap page (typically 4KB)
     pub max_pages_in_memory: usize, // Maximum pages to keep in memory
     pub compression_enabled: bool,
     pub prefetch_enabled: bool,
@@ -26,8 +26,8 @@ impl Default for SwapPoolConfig {
         Self {
             swap_file_path: PathBuf::from("./swap_memory.dat"),
             max_swap_size: 1_073_741_824, // 1GB default
-            page_size: 4096, // 4KB pages
-            max_pages_in_memory: 1000, // Keep 1000 pages in memory
+            page_size: 4096,              // 4KB pages
+            max_pages_in_memory: 1000,    // Keep 1000 pages in memory
             compression_enabled: true,
             prefetch_enabled: true,
             prefetch_threshold: 0.7, // Prefetch when 70% of memory is used
@@ -40,8 +40,8 @@ impl Default for SwapPoolConfig {
 #[allow(dead_code)]
 struct SwapPage {
     id: u64,
-    offset: u64, // Offset in swap file
-    size: usize, // Size of data in page
+    offset: u64,            // Offset in swap file
+    size: usize,            // Size of data in page
     compressed_size: usize, // Size after compression (if enabled)
     last_access: std::time::SystemTime,
     is_compressed: bool,
@@ -94,7 +94,14 @@ impl SwapMemoryPool {
 
         let logger = PerformanceLogger::new("swap_memory_pool");
 
-        logger.log_info("new", &trace_id, &format!("Initialized swap memory pool with {} MB max size", config.max_swap_size / 1_048_576));
+        logger.log_info(
+            "new",
+            &trace_id,
+            &format!(
+                "Initialized swap memory pool with {} MB max size",
+                config.max_swap_size / 1_048_576
+            ),
+        );
 
         Ok(Self {
             config,
@@ -114,7 +121,9 @@ impl SwapMemoryPool {
         // Check if we need to swap out some pages first
         self.check_memory_pressure()?;
 
-        let page_id = self.page_id_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let page_id = self
+            .page_id_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Create new page metadata
         let page = SwapPage {
@@ -134,7 +143,11 @@ impl SwapMemoryPool {
         let mut vec = Vec::with_capacity(size);
         vec.resize(size, 0u8);
 
-        self.logger.log_info("allocate", &trace_id, &format!("Allocated {} bytes in swap pool (page {})", size, page_id));
+        self.logger.log_info(
+            "allocate",
+            &trace_id,
+            &format!("Allocated {} bytes in swap pool (page {})", size, page_id),
+        );
 
         Ok(SwapPooledVec {
             data: vec,
@@ -155,10 +168,17 @@ impl SwapMemoryPool {
             return Ok(());
         }
 
-        self.logger.log_info("check_memory_pressure", &trace_id, &format!("Memory pressure detected: {} pages in memory", memory_usage));
+        self.logger.log_info(
+            "check_memory_pressure",
+            &trace_id,
+            &format!("Memory pressure detected: {} pages in memory", memory_usage),
+        );
 
         // Find least recently used pages to swap out
-        let mut pages_to_swap: Vec<(u64, std::time::SystemTime)> = self.pages.read().unwrap()
+        let mut pages_to_swap: Vec<(u64, std::time::SystemTime)> = self
+            .pages
+            .read()
+            .unwrap()
             .iter()
             .filter_map(|(&id, page)| {
                 if self.memory_cache.read().unwrap().contains_key(&id) {
@@ -218,7 +238,8 @@ impl SwapMemoryPool {
 
         // Write to swap file
         let mut file = self.swap_file.write().unwrap();
-        let offset = file.seek(SeekFrom::End(0))
+        let offset = file
+            .seek(SeekFrom::End(0))
             .map_err(|e| format!("Failed to seek swap file: {}", e))?;
 
         file.write_all(&compressed_data)
@@ -233,7 +254,16 @@ impl SwapMemoryPool {
 
         self.pages.write().unwrap().insert(page_id, page);
 
-        self.logger.log_info("swap_out_page", &trace_id, &format!("Swapped out page {} ({} bytes, compressed: {})", page_id, compressed_data.len(), is_compressed));
+        self.logger.log_info(
+            "swap_out_page",
+            &trace_id,
+            &format!(
+                "Swapped out page {} ({} bytes, compressed: {})",
+                page_id,
+                compressed_data.len(),
+                is_compressed
+            ),
+        );
 
         Ok(())
     }
@@ -265,7 +295,10 @@ impl SwapMemoryPool {
         // Verify checksum
         let calculated_checksum = crc32fast::hash(&compressed_data);
         if calculated_checksum != page.checksum {
-            return Err(format!("Checksum mismatch for page {}: expected {}, got {}", page_id, page.checksum, calculated_checksum));
+            return Err(format!(
+                "Checksum mismatch for page {}: expected {}, got {}",
+                page_id, page.checksum, calculated_checksum
+            ));
         }
 
         // Decompress if necessary
@@ -276,14 +309,21 @@ impl SwapMemoryPool {
         };
 
         // Store in memory cache
-        self.memory_cache.write().unwrap().insert(page_id, data.clone());
+        self.memory_cache
+            .write()
+            .unwrap()
+            .insert(page_id, data.clone());
 
         // Update last access time
         if let Some(page) = self.pages.write().unwrap().get_mut(&page_id) {
             page.last_access = std::time::SystemTime::now();
         }
 
-        self.logger.log_info("swap_in_page", &trace_id, &format!("Swapped in page {} ({} bytes)", page_id, data.len()));
+        self.logger.log_info(
+            "swap_in_page",
+            &trace_id,
+            &format!("Swapped in page {} ({} bytes)", page_id, data.len()),
+        );
 
         Ok(data)
     }
@@ -305,7 +345,8 @@ impl SwapMemoryPool {
         stats.compression_time_ms += elapsed.as_millis() as u64;
 
         if stats.total_uncompressed > 0 {
-            stats.compression_ratio = stats.total_compressed as f64 / stats.total_uncompressed as f64;
+            stats.compression_ratio =
+                stats.total_compressed as f64 / stats.total_uncompressed as f64;
         }
 
         Ok(compressed)
@@ -358,17 +399,18 @@ impl SwapMemoryPool {
     /// Write data synchronously to swap file
     pub fn write_data_sync(&self, data: Vec<u8>) -> Result<u64, String> {
         let trace_id = generate_trace_id();
-        
+
         // Allocate memory for the data
         let allocation = self.allocate(data.len())?;
         let page_id = allocation.page_id;
-        
+
         // Get page metadata and ensure it's updated
         let mut page = self.pages.write().unwrap();
-        let page = page.get_mut(&page_id)
+        let page = page
+            .get_mut(&page_id)
             .ok_or_else(|| format!("Page {} not found", page_id))?
             .clone();
-        
+
         // Compress data if enabled
         let (compressed_data, is_compressed) = if self.config.compression_enabled {
             match self.compress_data(&data) {
@@ -380,17 +422,22 @@ impl SwapMemoryPool {
                     }
                 }
                 Err(e) => {
-                    self.logger.log_error("write_data_sync", &trace_id, &format!("Compression failed: {}", e), "COMPRESSION_ERROR");
+                    self.logger.log_error(
+                        "write_data_sync",
+                        &trace_id,
+                        &format!("Compression failed: {}", e),
+                        "COMPRESSION_ERROR",
+                    );
                     (data, false) // Use original data if compression fails
                 }
             }
         } else {
             (data, false)
         };
-        
+
         // Calculate checksum
         let checksum = crc32fast::hash(&compressed_data);
-        
+
         // Write to swap file
         let swap_file_path = self.config.swap_file_path.clone();
         let write_result: Result<u64, String> = {
@@ -399,55 +446,70 @@ impl SwapMemoryPool {
                 .write(true)
                 .open(&swap_file_path)
                 .map_err(|e| format!("Failed to open swap file: {}", e))?;
-            
-            let offset = file.seek(SeekFrom::End(0))
+
+            let offset = file
+                .seek(SeekFrom::End(0))
                 .map_err(|e| format!("Failed to seek swap file: {}", e))?;
-            
+
             file.write_all(&compressed_data)
                 .map_err(|e| format!("Failed to write to swap file: {}", e))?;
-            
+
             Ok(offset)
         };
-        
+
         let offset = write_result?;
-        
+
         // Update page metadata
         let mut page = self.pages.write().unwrap();
-        let page = page.get_mut(&page_id)
+        let page = page
+            .get_mut(&page_id)
             .ok_or_else(|| format!("Page {} not found", page_id))?;
-        
+
         page.offset = offset;
         page.compressed_size = compressed_data.len();
         page.is_compressed = is_compressed;
         page.checksum = checksum;
         page.last_access = std::time::SystemTime::now();
-        
-        self.logger.log_info("write_data_sync", &trace_id, &format!(
-            "Wrote {} bytes to swap file (page {}), compressed: {}",
-            compressed_data.len(), page_id, is_compressed
-        ));
-        
+
+        self.logger.log_info(
+            "write_data_sync",
+            &trace_id,
+            &format!(
+                "Wrote {} bytes to swap file (page {}), compressed: {}",
+                compressed_data.len(),
+                page_id,
+                is_compressed
+            ),
+        );
+
         Ok(page_id)
     }
 
     /// Read data asynchronously from swap file
     pub async fn read_data_async(&self, page_id: u64, size: usize) -> Result<Vec<u8>, String> {
         let trace_id = generate_trace_id();
-        
+
         // Get page metadata
-        let page = self.pages.read().unwrap()
+        let page = self
+            .pages
+            .read()
+            .unwrap()
             .get(&page_id)
             .ok_or_else(|| format!("Page {} not found", page_id))?
             .clone();
-        
+
         // Check if already in memory cache
         if let Some(cached_data) = self.memory_cache.read().unwrap().get(&page_id) {
             if cached_data.len() == size {
-                self.logger.log_info("read_data_async", &trace_id, &format!("Cache hit for page {}", page_id));
+                self.logger.log_info(
+                    "read_data_async",
+                    &trace_id,
+                    &format!("Cache hit for page {}", page_id),
+                );
                 return Ok(cached_data.clone());
             }
         }
-        
+
         // Read from swap file asynchronously
         let swap_file_path = self.config.swap_file_path.clone();
         let read_result: Result<Vec<u8>, String> = {
@@ -455,19 +517,19 @@ impl SwapMemoryPool {
                 .read(true)
                 .open(&swap_file_path)
                 .map_err(|e| format!("Failed to open swap file: {}", e))?;
-            
+
             file.seek(SeekFrom::Start(page.offset))
                 .map_err(|e| format!("Failed to seek to page offset: {}", e))?;
-            
+
             let mut compressed_data = vec![0u8; page.compressed_size];
             file.read_exact(&mut compressed_data)
                 .map_err(|e| format!("Failed to read from swap file: {}", e))?;
-            
+
             Ok(compressed_data)
         };
-        
+
         let compressed_data = read_result?;
-        
+
         // Verify checksum
         let calculated_checksum = crc32fast::hash(&compressed_data);
         if calculated_checksum != page.checksum {
@@ -476,42 +538,55 @@ impl SwapMemoryPool {
                 page_id, page.checksum, calculated_checksum
             ));
         }
-        
+
         // Decompress if necessary
         let data = if page.is_compressed {
             self.decompress_data(&compressed_data).map_err(|e| {
-                self.logger.log_error("read_data_async", &trace_id, &format!("Decompression failed: {}", e), "DECOMPRESSION_ERROR");
+                self.logger.log_error(
+                    "read_data_async",
+                    &trace_id,
+                    &format!("Decompression failed: {}", e),
+                    "DECOMPRESSION_ERROR",
+                );
                 format!("Decompression failed: {}", e)
             })?
         } else {
             compressed_data
         };
-        
+
         // Update memory cache
         if data.len() == size {
-            self.memory_cache.write().unwrap().insert(page_id, data.clone());
-            
+            self.memory_cache
+                .write()
+                .unwrap()
+                .insert(page_id, data.clone());
+
             // Update last access time
             if let Some(page) = self.pages.write().unwrap().get_mut(&page_id) {
                 page.last_access = std::time::SystemTime::now();
             }
         }
-        
-        self.logger.log_info("read_data_async", &trace_id, &format!(
-            "Asynchronously read {} bytes from swap file (page {})",
-            data.len(), page_id
-        ));
-        
+
+        self.logger.log_info(
+            "read_data_async",
+            &trace_id,
+            &format!(
+                "Asynchronously read {} bytes from swap file (page {})",
+                data.len(),
+                page_id
+            ),
+        );
+
         Ok(data)
     }
 
     /// Async wrapper for compress_data to support async operations
     async fn compress_data_async(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         let start_time = std::time::Instant::now();
-        
+
         // Use LZ4 compression for speed
         let compressed = lz4_flex::compress_prepend_size(data);
-        
+
         let elapsed = start_time.elapsed();
         let mut stats = self.compression_stats.write().unwrap();
         stats.original_size += data.len();
@@ -522,9 +597,10 @@ impl SwapMemoryPool {
         stats.compression_time_ms += elapsed.as_millis() as u64;
 
         if stats.total_uncompressed > 0 {
-            stats.compression_ratio = stats.total_compressed as f64 / stats.total_uncompressed as f64;
+            stats.compression_ratio =
+                stats.total_compressed as f64 / stats.total_uncompressed as f64;
         }
-        
+
         Ok(compressed)
     }
 
@@ -536,7 +612,11 @@ impl SwapMemoryPool {
             return Ok(());
         }
 
-        self.logger.log_info("prefetch_pages", &trace_id, &format!("Prefetching {} pages", page_ids.len()));
+        self.logger.log_info(
+            "prefetch_pages",
+            &trace_id,
+            &format!("Prefetching {} pages", page_ids.len()),
+        );
 
         for &page_id in page_ids {
             if !self.memory_cache.read().unwrap().contains_key(&page_id) {
@@ -581,7 +661,8 @@ impl SwapMemoryPool {
         file.set_len(0)
             .map_err(|e| format!("Failed to truncate swap file: {}", e))?;
 
-        self.logger.log_info("cleanup", &trace_id, "Swap memory pool cleaned up");
+        self.logger
+            .log_info("cleanup", &trace_id, "Swap memory pool cleaned up");
 
         Ok(())
     }
@@ -631,41 +712,49 @@ impl SwapPooledVec {
     pub fn ensure_in_memory(&mut self) -> Result<(), String> {
         if self.is_swapped {
             let trace_id = generate_trace_id();
-            
+
             // Get the page from the pool
             let pool = unsafe { &*self.pool };
             let page = match pool.pages.read().unwrap().get(&self.page_id) {
                 Some(page) => page.clone(),
                 None => return Err(format!("Page {} not found in metadata", self.page_id)),
             };
-            
+
             // Read data from swap file with proper type conversion
             let data = {
                 let pool = unsafe { &*self.pool };
                 pool.swap_in_page(self.page_id)
-            }.map_err(|e| e.to_string())?;
-            
+            }
+            .map_err(|e| e.to_string())?;
+
             // Convert the read data to the appropriate type (u8 in this case)
             // For other types, this would involve deserialization or type conversion logic
             if data.len() != page.size {
                 return Err(format!(
                     "Data size mismatch for page {}: expected {}, got {}",
-                    self.page_id, page.size, data.len()
+                    self.page_id,
+                    page.size,
+                    data.len()
                 ));
             }
-            
+
             // Replace the internal data with the swapped-in data
             self.data = data;
-            
+
             // Mark as not swapped and not dirty (data is now in memory)
             self.is_swapped = false;
             self.dirty = false;
-            
+
             let pool = unsafe { &*self.pool };
-            pool.logger.log_info("ensure_in_memory", &trace_id, &format!(
-                "Successfully swapped in page {} with {} bytes of data",
-                self.page_id, self.data.len()
-            ));
+            pool.logger.log_info(
+                "ensure_in_memory",
+                &trace_id,
+                &format!(
+                    "Successfully swapped in page {} with {} bytes of data",
+                    self.page_id,
+                    self.data.len()
+                ),
+            );
         }
         Ok(())
     }

@@ -26,25 +26,52 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
     this.maxWorkers = Runtime.getRuntime().availableProcessors(); // Maximum workers based on available cores
   }
 
+  /**
+   * Try to load the native library from several likely locations. This will attempt
+   * System.loadLibrary first, then attempt to load from an environment-specified
+   * path (KNEAF_NATIVE_PATH), then try common folders like 'natives' and 'run/libs'.
+   * Returns true if the library was loaded.
+   */
+  private static boolean tryLoadNativeLibrary() {
+    // Delegate to the centralized loader to keep logic in one place
+    try {
+      return com.kneaf.core.performance.bridge.NativeLibraryLoader.loadNativeLibrary();
+    } catch (Throwable t) {
+      KneafCore.LOGGER.debug("Central NativeLibraryLoader failed: " + t.getMessage());
+      return false;
+    }
+  }
+
   /** Initialize native integration manager. */
   @Override
   public boolean initialize() {
     if (initialized.compareAndSet(false, true)) {
       try {
-        // Attempt to initialize the native allocator. If this fails we must
-        // mark nativeAvailable as false so higher-level code chooses the
-        // pure-Java execution paths (which are faster for our unit tests)
-        NativeResourceManager.nativeInitAllocator();
-        nativeAvailable.set(true);
-        KneafCore.LOGGER.info("Native allocator initialized successfully");
-        KneafCore.LOGGER.info("Native integration manager initialized successfully");
-        return true;
+        // Ensure native library is loaded (tryLoadNativeLibrary will attempt several strategies)
+        if (!NativeResourceManager.isNativeLibraryLoaded()) {
+          boolean loaded = tryLoadNativeLibrary();
+          if (!loaded) {
+            nativeAvailable.set(false);
+            KneafCore.LOGGER.warn("Native library not available; falling back to Java implementation.");
+            return false;
+          }
+        }
+
+        // Now initialize the native allocator. If this fails we fall back to Java.
+        try {
+          NativeResourceManager.nativeInitAllocator();
+          nativeAvailable.set(true);
+          KneafCore.LOGGER.info("Native allocator initialized successfully");
+          KneafCore.LOGGER.info("Native integration manager initialized successfully");
+          return true;
+        } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
+          nativeAvailable.set(false);
+          KneafCore.LOGGER.warn("Native allocator init failed; native integration unavailable, using Java fallback: " + e.getMessage());
+          return false;
+        }
       } catch (Throwable t) {
-        // Native init failed - do not advertise native availability. Use Java fallback.
         nativeAvailable.set(false);
-    KneafCore.LOGGER.warn(
-      "Native allocator init failed; native integration unavailable, using Java fallback: {}",
-      t.getMessage());
+        KneafCore.LOGGER.warn("Native allocator init failed and threw an unexpected error; native integration unavailable, using Java fallback: " + t.getMessage(), t);
         return false;
       }
     }
@@ -562,7 +589,10 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   /** Worker information holder. */
   // Native bridge for actual resource management
   private static class NativeResourceManager {
-      // Native method declarations for resource management
+    // Track whether native library was successfully loaded for this class
+    private static volatile boolean NATIVE_LIBRARY_LOADED = false;
+
+    // Native method declarations for resource management
       public static native void nativeInitAllocator();
       public static native void nativeShutdownAllocator();
       public static native long nativeCreateWorker(int concurrency);
@@ -581,13 +611,18 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
       public static native String nativeGetResourceStats(long resourceHandle);
       
       // Load native library
-      static {
-          try {
-              System.loadLibrary("rustperf");
-          } catch (UnsatisfiedLinkError e) {
-              KneafCore.LOGGER.warn("Failed to load native library rustperf: " + e.getMessage());
-          }
+    static {
+      try {
+        NATIVE_LIBRARY_LOADED = tryLoadNativeLibrary();
+      } catch (Throwable t) {
+        NATIVE_LIBRARY_LOADED = false;
+        KneafCore.LOGGER.warn("Error while attempting to load native library: " + t.getMessage(), t);
       }
+    }
+
+    public static boolean isNativeLibraryLoaded() {
+      return NATIVE_LIBRARY_LOADED;
+    }
       
       // Prevent direct instantiation
       private NativeResourceManager() {}

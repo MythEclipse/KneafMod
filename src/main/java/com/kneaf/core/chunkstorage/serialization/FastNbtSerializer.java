@@ -33,12 +33,16 @@ public class FastNbtSerializer implements ChunkSerializer {
     // Load native library with status tracking
     static {
       try {
-        System.loadLibrary("rustperf");
-        isLibraryLoaded = true;
-        LOGGER.info("FastNBT native library (rustperf) loaded successfully");
-      } catch (UnsatisfiedLinkError e) {
+        if (com.kneaf.core.performance.bridge.NativeLibraryLoader.loadNativeLibrary()) {
+          isLibraryLoaded = true;
+          LOGGER.info("FastNBT native library (rustperf) loaded successfully via NativeLibraryLoader");
+        } else {
+          isLibraryLoaded = false;
+          LOGGER.log(Level.WARNING, "FastNBT native library not available via NativeLibraryLoader");
+        }
+      } catch (Throwable t) {
         isLibraryLoaded = false;
-        LOGGER.log(Level.WARNING, "Failed to load FastNBT native library: " + e.getMessage());
+        LOGGER.log(Level.WARNING, "Failed to load FastNBT native library via NativeLibraryLoader: " + t.getMessage(), t);
       }
     }
     

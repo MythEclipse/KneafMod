@@ -1,8 +1,8 @@
 use super::types::*;
-use std::collections::HashMap;
+use jni::{objects::JClass, JNIEnv};
 use rayon::prelude::*;
-use serde::{Serialize, Deserialize};
-use jni::{JNIEnv, objects::JClass};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct PathfindingCache {
@@ -28,7 +28,7 @@ impl PathfindingCache {
 
     pub fn should_pathfind(&self, current_tick: u64, config: &VillagerConfig) -> bool {
         let ticks_since_last = current_tick.saturating_sub(self.last_pathfind_tick);
-        
+
         // Don't pathfind if we have a valid cached path
         if self.cached_path_validity > 0 {
             return false;
@@ -46,10 +46,15 @@ impl PathfindingCache {
         ticks_since_last >= pathfind_interval as u64
     }
 
-    pub fn update_pathfind_result(&mut self, current_tick: u64, success: bool, target_position: (f32, f32, f32)) {
+    pub fn update_pathfind_result(
+        &mut self,
+        current_tick: u64,
+        success: bool,
+        target_position: (f32, f32, f32),
+    ) {
         self.last_pathfind_tick = current_tick;
         self.target_position = target_position;
-        
+
         if success {
             self.consecutive_failures = 0;
             self.path_success_rate = (self.path_success_rate * 0.9 + 1.0 * 0.1).min(1.0);
@@ -83,16 +88,21 @@ impl PathfindingOptimizer {
 
     pub fn update_tick(&mut self, current_tick: u64) {
         self.current_tick = current_tick;
-        
+
         // Decrement cache validity for all villagers
         for cache in self.cache.values_mut() {
             cache.decrement_cache_validity();
         }
     }
 
-    pub fn optimize_villager_pathfinding(&mut self, villagers: &mut [VillagerData], config: &VillagerConfig) -> Vec<u64> {
+    pub fn optimize_villager_pathfinding(
+        &mut self,
+        villagers: &mut [VillagerData],
+        config: &VillagerConfig,
+    ) -> Vec<u64> {
         // First pass: determine which villagers should have reduced pathfinding
-        let villager_ids_to_reduce: Vec<u64> = villagers.par_iter()
+        let villager_ids_to_reduce: Vec<u64> = villagers
+            .par_iter()
             .filter_map(|villager| {
                 if villager.distance > config.reduce_pathfinding_distance {
                     Some(villager.id)
@@ -104,8 +114,11 @@ impl PathfindingOptimizer {
 
         // Second pass: update cache and villager frequencies
         for villager in villagers.iter_mut() {
-            let cache = self.cache.entry(villager.id).or_insert_with(|| PathfindingCache::new(villager.id));
-            
+            let cache = self
+                .cache
+                .entry(villager.id)
+                .or_insert_with(|| PathfindingCache::new(villager.id));
+
             if villager.distance > config.reduce_pathfinding_distance {
                 if !cache.should_pathfind(self.current_tick, config) {
                     villager.pathfind_frequency = 15; // Reduce frequency
@@ -114,7 +127,7 @@ impl PathfindingOptimizer {
                     cache.update_pathfind_result(
                         self.current_tick,
                         true, // Assume success for now
-                        (villager.x, villager.y, villager.z)
+                        (villager.x, villager.y, villager.z),
                     );
                     villager.pathfind_frequency = config.pathfinding_tick_interval;
                 }
@@ -124,7 +137,7 @@ impl PathfindingOptimizer {
                 cache.update_pathfind_result(
                     self.current_tick,
                     true,
-                    (villager.x, villager.y, villager.z)
+                    (villager.x, villager.y, villager.z),
                 );
             }
         }
@@ -132,7 +145,11 @@ impl PathfindingOptimizer {
         villager_ids_to_reduce
     }
 
-    pub fn batch_optimize_pathfinding(&mut self, groups: &[VillagerGroup], config: &VillagerConfig) -> Vec<u64> {
+    pub fn batch_optimize_pathfinding(
+        &mut self,
+        groups: &[VillagerGroup],
+        config: &VillagerConfig,
+    ) -> Vec<u64> {
         let mut all_villagers_to_reduce = Vec::new();
 
         // Process groups based on their AI tick rate
@@ -175,9 +192,12 @@ impl PathfindingOptimizer {
         }
 
         if total_villagers > 0 {
-            average_pathfind_interval = self.cache.values()
+            average_pathfind_interval = self
+                .cache
+                .values()
                 .map(|cache| cache.last_pathfind_tick)
-                .sum::<u64>() as f32 / total_villagers as f32;
+                .sum::<u64>() as f32
+                / total_villagers as f32;
         }
 
         PathfindingCacheStats {
@@ -211,7 +231,11 @@ impl AdvancedPathfindingOptimizer {
         }
     }
 
-    pub fn optimize_large_villager_groups(&mut self, groups: &mut [VillagerGroup], config: &VillagerConfig) -> Vec<u64> {
+    pub fn optimize_large_villager_groups(
+        &mut self,
+        groups: &mut [VillagerGroup],
+        config: &VillagerConfig,
+    ) -> Vec<u64> {
         let mut villagers_to_reduce = Vec::new();
 
         // Process groups sequentially to avoid closure borrowing issues
@@ -222,12 +246,18 @@ impl AdvancedPathfindingOptimizer {
             }
 
             // Get or create group cache
-            let group_cache = self.group_pathfind_cache.entry(group.group_id)
+            let group_cache = self
+                .group_pathfind_cache
+                .entry(group.group_id)
                 .or_insert_with(|| GroupPathfindingCache::new(group.group_id));
 
             // Optimize pathfinding for the entire group
-            let should_reduce = group_cache.optimize_group_pathfinding(group, config, self.base_optimizer.current_tick);
-            
+            let should_reduce = group_cache.optimize_group_pathfinding(
+                group,
+                config,
+                self.base_optimizer.current_tick,
+            );
+
             if should_reduce {
                 villagers_to_reduce.extend(&group.villager_ids);
             }
@@ -253,28 +283,37 @@ impl GroupPathfindingCache {
         }
     }
 
-    fn optimize_group_pathfinding(&mut self, group: &VillagerGroup, config: &VillagerConfig, current_tick: u64) -> bool {
+    fn optimize_group_pathfinding(
+        &mut self,
+        group: &VillagerGroup,
+        config: &VillagerConfig,
+        current_tick: u64,
+    ) -> bool {
         // For large groups, we can optimize by having them share pathfinding results
         if group.villager_ids.len() >= 8 {
             let ticks_since_last = current_tick.saturating_sub(self.last_group_pathfind_tick);
-            
+
             if ticks_since_last >= (config.pathfinding_tick_interval * 2) as u64 {
                 // Update group pathfinding cache
                 self.last_group_pathfind_tick = current_tick;
                 self.shared_target_position = (group.center_x, group.center_y, group.center_z);
-                self.group_path_success_rate = (self.group_path_success_rate * 0.9 + 1.0 * 0.1).min(1.0);
-                
+                self.group_path_success_rate =
+                    (self.group_path_success_rate * 0.9 + 1.0 * 0.1).min(1.0);
+
                 // Return true to indicate we should reduce individual villager pathfinding
                 return true;
             }
         }
-        
+
         false
     }
 }
 /// SIMD-accelerated heuristic distance calculation for A* pathfinding
 /// Calculates Manhattan distance heuristic for multiple target positions
-pub fn calculate_heuristic_distances_simd(start: (f32, f32, f32), targets: &[(f32, f32, f32)]) -> Vec<f32> {
+pub fn calculate_heuristic_distances_simd(
+    start: (f32, f32, f32),
+    targets: &[(f32, f32, f32)],
+) -> Vec<f32> {
     #[cfg(target_feature = "avx2")]
     {
         use std::arch::x86_64::*;
@@ -283,65 +322,74 @@ pub fn calculate_heuristic_distances_simd(start: (f32, f32, f32), targets: &[(f3
         let start_y = _mm256_set1_ps(start.1);
         let start_z = _mm256_set1_ps(start.2);
 
-        targets.par_chunks(8).flat_map(|chunk| {
-            let mut distances = [0.0f32; 8];
+        targets
+            .par_chunks(8)
+            .flat_map(|chunk| {
+                let mut distances = [0.0f32; 8];
 
-            let target_x = _mm256_set_ps(
-                chunk.get(7).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.0).unwrap_or(0.0)
-            );
-            let target_y = _mm256_set_ps(
-                chunk.get(7).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.1).unwrap_or(0.0)
-            );
-            let target_z = _mm256_set_ps(
-                chunk.get(7).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.2).unwrap_or(0.0)
-            );
+                let target_x = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.0).unwrap_or(0.0),
+                );
+                let target_y = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.1).unwrap_or(0.0),
+                );
+                let target_z = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.2).unwrap_or(0.0),
+                );
 
-            let dx = _mm256_sub_ps(target_x, start_x);
-            let dy = _mm256_sub_ps(target_y, start_y);
-            let dz = _mm256_sub_ps(target_z, start_z);
+                let dx = _mm256_sub_ps(target_x, start_x);
+                let dy = _mm256_sub_ps(target_y, start_y);
+                let dz = _mm256_sub_ps(target_z, start_z);
 
-            // Manhattan distance: |dx| + |dy| + |dz|
-            let abs_dx = _mm256_andnot_ps(_mm256_set1_ps(-0.0), dx);
-            let abs_dy = _mm256_andnot_ps(_mm256_set1_ps(-0.0), dy);
-            let abs_dz = _mm256_andnot_ps(_mm256_set1_ps(-0.0), dz);
+                // Manhattan distance: |dx| + |dy| + |dz|
+                let abs_dx = _mm256_andnot_ps(_mm256_set1_ps(-0.0), dx);
+                let abs_dy = _mm256_andnot_ps(_mm256_set1_ps(-0.0), dy);
+                let abs_dz = _mm256_andnot_ps(_mm256_set1_ps(-0.0), dz);
 
-            let sum = _mm256_add_ps(_mm256_add_ps(abs_dx, abs_dy), abs_dz);
+                let sum = _mm256_add_ps(_mm256_add_ps(abs_dx, abs_dy), abs_dz);
 
-            _mm256_storeu_ps(distances.as_mut_ptr(), sum);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
+                _mm256_storeu_ps(distances.as_mut_ptr(), sum);
+                distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+            })
+            .collect()
     }
     #[cfg(not(target_feature = "avx2"))]
     {
-        targets.iter().map(|target| {
-            (target.0 - start.0).abs() + (target.1 - start.1).abs() + (target.2 - start.2).abs()
-        }).collect()
+        targets
+            .iter()
+            .map(|target| {
+                (target.0 - start.0).abs() + (target.1 - start.1).abs() + (target.2 - start.2).abs()
+            })
+            .collect()
     }
 }
 
 /// SIMD-accelerated Euclidean distance calculation for pathfinding
-pub fn calculate_euclidean_distances_simd(start: (f32, f32, f32), targets: &[(f32, f32, f32)]) -> Vec<f32> {
+pub fn calculate_euclidean_distances_simd(
+    start: (f32, f32, f32),
+    targets: &[(f32, f32, f32)],
+) -> Vec<f32> {
     #[cfg(target_feature = "avx2")]
     {
         use std::arch::x86_64::*;
@@ -350,103 +398,121 @@ pub fn calculate_euclidean_distances_simd(start: (f32, f32, f32), targets: &[(f3
         let start_y = _mm256_set1_ps(start.1);
         let start_z = _mm256_set1_ps(start.2);
 
-        targets.par_chunks(8).flat_map(|chunk| {
-            let mut distances = [0.0f32; 8];
+        targets
+            .par_chunks(8)
+            .flat_map(|chunk| {
+                let mut distances = [0.0f32; 8];
 
-            let target_x = _mm256_set_ps(
-                chunk.get(7).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.0).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.0).unwrap_or(0.0)
-            );
-            let target_y = _mm256_set_ps(
-                chunk.get(7).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.1).unwrap_or(0.0)
-            );
-            let target_z = _mm256_set_ps(
-                chunk.get(7).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(6).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(5).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(4).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(3).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(2).map(|p| p.2).unwrap_or(0.0),
-                chunk.get(1).map(|p| p.1).unwrap_or(0.0),
-                chunk.get(0).map(|p| p.0).unwrap_or(0.0)
-            );
+                let target_x = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.0).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.0).unwrap_or(0.0),
+                );
+                let target_y = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.1).unwrap_or(0.0),
+                );
+                let target_z = _mm256_set_ps(
+                    chunk.get(7).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(6).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(5).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(4).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(3).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(2).map(|p| p.2).unwrap_or(0.0),
+                    chunk.get(1).map(|p| p.1).unwrap_or(0.0),
+                    chunk.get(0).map(|p| p.0).unwrap_or(0.0),
+                );
 
-            let dx = _mm256_sub_ps(target_x, start_x);
-            let dy = _mm256_sub_ps(target_y, start_y);
-            let dz = _mm256_sub_ps(target_z, start_z);
+                let dx = _mm256_sub_ps(target_x, start_x);
+                let dy = _mm256_sub_ps(target_y, start_y);
+                let dz = _mm256_sub_ps(target_z, start_z);
 
-            let dx2 = _mm256_mul_ps(dx, dx);
-            let dy2 = _mm256_mul_ps(dy, dy);
-            let dz2 = _mm256_mul_ps(dz, dz);
+                let dx2 = _mm256_mul_ps(dx, dx);
+                let dy2 = _mm256_mul_ps(dy, dy);
+                let dz2 = _mm256_mul_ps(dz, dz);
 
-            let sum = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
-            let dist = _mm256_sqrt_ps(sum);
+                let sum = _mm256_add_ps(_mm256_add_ps(dx2, dy2), dz2);
+                let dist = _mm256_sqrt_ps(sum);
 
-            _mm256_storeu_ps(distances.as_mut_ptr(), dist);
-            distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
-        }).collect()
+                _mm256_storeu_ps(distances.as_mut_ptr(), dist);
+                distances.into_iter().take(chunk.len()).collect::<Vec<_>>()
+            })
+            .collect()
     }
     #[cfg(not(target_feature = "avx2"))]
     {
-        targets.iter().map(|target| {
-            let dx = target.0 - start.0;
-            let dy = target.1 - start.1;
-            let dz = target.2 - start.2;
-            (dx * dx + dy * dy + dz * dz).sqrt()
-        }).collect()
+        targets
+            .iter()
+            .map(|target| {
+                let dx = target.0 - start.0;
+                let dy = target.1 - start.1;
+                let dz = target.2 - start.2;
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            })
+            .collect()
     }
 }
 
 /// SIMD-accelerated collision checking for pathfinding waypoints
 /// Checks if multiple positions are blocked by obstacles
-pub fn check_path_obstacles_simd(positions: &[(f32, f32, f32)], obstacles: &[crate::spatial::Aabb]) -> Vec<bool> {
+pub fn check_path_obstacles_simd(
+    positions: &[(f32, f32, f32)],
+    obstacles: &[crate::spatial::Aabb],
+) -> Vec<bool> {
     #[cfg(target_feature = "avx2")]
     {
         use std::arch::x86_64::*;
 
-        positions.par_iter().map(|pos| {
-            let pos_vec = glam::Vec3::new(pos.0, pos.1, pos.2);
+        positions
+            .par_iter()
+            .map(|pos| {
+                let pos_vec = glam::Vec3::new(pos.0, pos.1, pos.2);
 
-            // Check against all obstacles
-            for obstacle in obstacles {
-                if obstacle.contains_point(pos_vec) {
-                    return true; // Position is blocked
+                // Check against all obstacles
+                for obstacle in obstacles {
+                    if obstacle.contains_point(pos_vec) {
+                        return true; // Position is blocked
+                    }
                 }
-            }
-            false // Position is clear
-        }).collect()
+                false // Position is clear
+            })
+            .collect()
     }
     #[cfg(not(target_feature = "avx2"))]
     {
-        positions.iter().map(|pos| {
-            let pos_vec = glam::Vec3::new(pos.0, pos.1, pos.2);
+        positions
+            .iter()
+            .map(|pos| {
+                let pos_vec = glam::Vec3::new(pos.0, pos.1, pos.2);
 
-            // Check against all obstacles
-            for obstacle in obstacles {
-                if obstacle.contains_point(pos_vec) {
-                    return true; // Position is blocked
+                // Check against all obstacles
+                for obstacle in obstacles {
+                    if obstacle.contains_point(pos_vec) {
+                        return true; // Position is blocked
+                    }
                 }
-            }
-            false // Position is clear
-        }).collect()
+                false // Position is clear
+            })
+            .collect()
     }
 }
 
 /// SIMD-accelerated path smoothing - removes unnecessary waypoints
-pub fn smooth_path_simd(waypoints: &[(f32, f32, f32)], obstacles: &[crate::spatial::Aabb]) -> Vec<(f32, f32, f32)> {
+pub fn smooth_path_simd(
+    waypoints: &[(f32, f32, f32)],
+    obstacles: &[crate::spatial::Aabb],
+) -> Vec<(f32, f32, f32)> {
     if waypoints.len() <= 2 {
         return waypoints.to_vec();
     }
@@ -481,12 +547,12 @@ pub fn smooth_path_simd(waypoints: &[(f32, f32, f32)], obstacles: &[crate::spati
 }
 
 /// Helper function to check if line segment between two points is clear
-fn is_line_clear_simd(start: (f32, f32, f32), end: (f32, f32, f32), obstacles: &[crate::spatial::Aabb]) -> bool {
-    let direction = (
-        end.0 - start.0,
-        end.1 - start.1,
-        end.2 - start.2
-    );
+fn is_line_clear_simd(
+    start: (f32, f32, f32),
+    end: (f32, f32, f32),
+    obstacles: &[crate::spatial::Aabb],
+) -> bool {
+    let direction = (end.0 - start.0, end.1 - start.1, end.2 - start.2);
 
     // Check ray intersection with all obstacles
     for obstacle in obstacles {

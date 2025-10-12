@@ -1,16 +1,16 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
-use std::thread;
 use std::fmt::Debug;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossbeam_utils::CachePadded;
 
-use crate::logging::{PerformanceLogger, generate_trace_id};
-use crate::memory_pressure_config::GLOBAL_MEMORY_PRESSURE_CONFIG;
+use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::memory_pool::atomic_state::AtomicPoolState;
+use crate::memory_pressure_config::GLOBAL_MEMORY_PRESSURE_CONFIG;
 
 /// Enhanced wrapper for pooled objects with LRU access tracking and swap tracking
 #[allow(dead_code)]
@@ -105,14 +105,18 @@ impl<T> Drop for PooledObject<T> {
             if current_time - last_check > 30 {
                 let leak_count = LEAK_COUNTER.load(Ordering::Relaxed);
                 if leak_count > 0 {
-                    log::warn!("Memory leak detected: {} objects not returned to pool in last 30 seconds", leak_count);
+                    log::warn!(
+                        "Memory leak detected: {} objects not returned to pool in last 30 seconds",
+                        leak_count
+                    );
                     LEAK_COUNTER.store(0, Ordering::Relaxed);
                 }
                 LAST_LEAK_CHECK.store(current_time, Ordering::Relaxed);
             }
 
             // Use a more robust approach to handle pool capacity issues
-            let object_returned = if usage_ratio < 0.80 { // Reduced threshold from 95% to 80%
+            let object_returned = if usage_ratio < 0.80 {
+                // Reduced threshold from 95% to 80%
                 if current_pool_size < self.max_size {
                     // Safe to add directly - no eviction needed
                     pool_guard.insert(self.id, (obj, now));
@@ -139,7 +143,8 @@ impl<T> Drop for PooledObject<T> {
 use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref POOL_CLEANUP_THREAD: Arc<Mutex<Option<thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+    static ref POOL_CLEANUP_THREAD: Arc<Mutex<Option<thread::JoinHandle<()>>>> =
+        Arc::new(Mutex::new(None));
 }
 
 pub fn start_pool_cleanup_thread(pool: Arc<ObjectPool<u8>>, interval: Duration) {
@@ -197,10 +202,12 @@ where
             logger: PerformanceLogger::new("memory_pool"),
             high_water_mark: CachePadded::new(AtomicUsize::new(0)),
             allocation_count: CachePadded::new(AtomicUsize::new(0)),
-            last_cleanup_time: CachePadded::new(AtomicUsize::new(SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as usize)),
+            last_cleanup_time: CachePadded::new(AtomicUsize::new(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as usize,
+            )),
             is_monitoring: AtomicBool::new(false),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             pressure_monitor: Arc::new(RwLock::new(MemoryPressureMonitor::new())),
@@ -216,9 +223,15 @@ where
             next_id: CachePadded::new(AtomicU64::new(self.next_id.load(Ordering::Relaxed))),
             max_size: self.max_size,
             logger: self.logger.clone(),
-            high_water_mark: CachePadded::new(AtomicUsize::new(self.high_water_mark.load(Ordering::Relaxed))),
-            allocation_count: CachePadded::new(AtomicUsize::new(self.allocation_count.load(Ordering::Relaxed))),
-            last_cleanup_time: CachePadded::new(AtomicUsize::new(self.last_cleanup_time.load(Ordering::Relaxed))),
+            high_water_mark: CachePadded::new(AtomicUsize::new(
+                self.high_water_mark.load(Ordering::Relaxed),
+            )),
+            allocation_count: CachePadded::new(AtomicUsize::new(
+                self.allocation_count.load(Ordering::Relaxed),
+            )),
+            last_cleanup_time: CachePadded::new(AtomicUsize::new(
+                self.last_cleanup_time.load(Ordering::Relaxed),
+            )),
             is_monitoring: AtomicBool::new(self.is_monitoring.load(Ordering::Relaxed)),
             shutdown_flag: Arc::clone(&self.shutdown_flag),
             pressure_monitor: Arc::clone(&self.pressure_monitor),
@@ -235,7 +248,10 @@ where
 
         let obj = self.get_lockfree().unwrap_or_else(|| {
             self.logger.log_operation("pool_miss", &trace_id, || {
-                log::debug!("Pool miss for type {}, creating new object", std::any::type_name::<T>());
+                log::debug!(
+                    "Pool miss for type {}, creating new object",
+                    std::any::type_name::<T>()
+                );
                 T::default()
             })
         });
@@ -262,7 +278,7 @@ where
     fn get_lockfree(&self) -> Option<T> {
         let mut pool_guard = self.pool.lock().unwrap();
         let mut access_order_guard = self.access_order.lock().unwrap();
-        
+
         if let Some((&lru_time, &lru_id)) = access_order_guard.iter().next() {
             // Remove from access order
             access_order_guard.remove(&lru_time);
@@ -294,16 +310,22 @@ where
         let mut pool_guard = self.pool.lock().unwrap();
         let mut access_order_guard = self.access_order.lock().unwrap();
 
-        let obj = if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
+        let obj = if let Some((lru_time, lru_id)) =
+            access_order_guard.iter().next().map(|(&t, &id)| (t, id))
+        {
             // Remove from access order
             access_order_guard.remove(&lru_time);
             // Remove from pool and get the object
             pool_guard.remove(&lru_id).map(|(obj, _)| obj).unwrap()
         } else {
-            self.logger.log_operation("pool_miss_tracked", &trace_id, || {
-                log::debug!("Pool miss for tracked type {}, creating new object", std::any::type_name::<T>());
-                T::default()
-            })
+            self.logger
+                .log_operation("pool_miss_tracked", &trace_id, || {
+                    log::debug!(
+                        "Pool miss for tracked type {}, creating new object",
+                        std::any::type_name::<T>()
+                    );
+                    T::default()
+                })
         };
 
         // Record allocation for monitoring
@@ -330,18 +352,19 @@ where
     /// Get pool statistics with additional monitoring data
     pub fn get_monitoring_stats(&self) -> ObjectPoolMonitoringStats {
         let trace_id = generate_trace_id();
-        self.logger.log_operation("get_monitoring_stats", &trace_id, || {
-            let pool_len = self.pool.lock().unwrap().len();
-            let usage_ratio = self.atomic_state.get_usage_ratio();
-            ObjectPoolMonitoringStats {
-                available_objects: pool_len,
-                max_size: self.max_size,
-                high_water_mark: self.high_water_mark.load(Ordering::Relaxed),
-                allocation_count: self.allocation_count.load(Ordering::Relaxed),
-                current_usage_ratio: usage_ratio,
-                last_cleanup_time: self.last_cleanup_time.load(Ordering::Relaxed),
-            }
-        })
+        self.logger
+            .log_operation("get_monitoring_stats", &trace_id, || {
+                let pool_len = self.pool.lock().unwrap().len();
+                let usage_ratio = self.atomic_state.get_usage_ratio();
+                ObjectPoolMonitoringStats {
+                    available_objects: pool_len,
+                    max_size: self.max_size,
+                    high_water_mark: self.high_water_mark.load(Ordering::Relaxed),
+                    allocation_count: self.allocation_count.load(Ordering::Relaxed),
+                    current_usage_ratio: usage_ratio,
+                    last_cleanup_time: self.last_cleanup_time.load(Ordering::Relaxed),
+                }
+            })
     }
 
     /// Get current pool size atomically
@@ -372,11 +395,11 @@ where
     /// Record allocation for monitoring with atomic state updates (thread-safe version)
     fn record_allocation_lockfree(&self) {
         let _count = self.allocation_count.fetch_add(1, Ordering::Relaxed);
-        
+
         // Get current pool size thread-safely
         let pool_guard = self.pool.lock().unwrap();
         let current = pool_guard.len();
-        
+
         if current > self.high_water_mark.load(Ordering::Relaxed) {
             self.high_water_mark.store(current, Ordering::Relaxed);
         }
@@ -417,7 +440,11 @@ where
         let usage_ratio = pool_guard.len() as f64 / self.max_size as f64;
 
         if usage_ratio > threshold {
-            self.logger.log_info("lazy_cleanup", &trace_id, &format!("Performing lazy cleanup - usage ratio: {:.2}", usage_ratio));
+            self.logger.log_info(
+                "lazy_cleanup",
+                &trace_id,
+                &format!("Performing lazy cleanup - usage ratio: {:.2}", usage_ratio),
+            );
 
             // Remove excess objects: evict LRU objects beyond high water mark
             let target_size = (self.high_water_mark.load(Ordering::Relaxed) as f64 * 0.7) as usize;
@@ -428,14 +455,29 @@ where
             let mut iterations = 0;
             let mut objects_removed = 0;
 
-            while pool_guard.len() > target_size && pool_guard.len() > 5 && iterations < MAX_ITERATIONS { // Keep at least 5 objects
+            while pool_guard.len() > target_size
+                && pool_guard.len() > 5
+                && iterations < MAX_ITERATIONS
+            {
+                // Keep at least 5 objects
                 // Check timeout
-                if cleanup_start_time.elapsed().unwrap_or_default().as_millis() > MAX_CLEANUP_TIME_MS {
-                    self.logger.log_warning("lazy_cleanup", &trace_id, &format!("Cleanup timed out after {}ms, removed {} objects", MAX_CLEANUP_TIME_MS, objects_removed));
+                if cleanup_start_time.elapsed().unwrap_or_default().as_millis()
+                    > MAX_CLEANUP_TIME_MS
+                {
+                    self.logger.log_warning(
+                        "lazy_cleanup",
+                        &trace_id,
+                        &format!(
+                            "Cleanup timed out after {}ms, removed {} objects",
+                            MAX_CLEANUP_TIME_MS, objects_removed
+                        ),
+                    );
                     break;
                 }
 
-                if let Some((lru_time, lru_id)) = access_order_guard.iter().next().map(|(&t, &id)| (t, id)) {
+                if let Some((lru_time, lru_id)) =
+                    access_order_guard.iter().next().map(|(&t, &id)| (t, id))
+                {
                     access_order_guard.remove(&lru_time);
                     if pool_guard.remove(&lru_id).is_some() {
                         objects_removed += 1;
@@ -448,14 +490,26 @@ where
 
                 // Safety check: if we've iterated too many times without progress, break
                 if iterations > 0 && iterations % 100 == 0 && objects_removed == 0 {
-                    self.logger.log_warning("lazy_cleanup", &trace_id, "No progress made in cleanup loop, breaking to prevent infinite loop");
+                    self.logger.log_warning(
+                        "lazy_cleanup",
+                        &trace_id,
+                        "No progress made in cleanup loop, breaking to prevent infinite loop",
+                    );
                     break;
                 }
             }
 
-            self.last_cleanup_time.store(current_time, Ordering::Relaxed);
+            self.last_cleanup_time
+                .store(current_time, Ordering::Relaxed);
             let final_pool_size = pool_guard.len();
-            self.logger.log_info("lazy_cleanup", &trace_id, &format!("Reduced pool from {} to {} (removed {} objects, {} iterations)", initial_pool_size, final_pool_size, objects_removed, iterations));
+            self.logger.log_info(
+                "lazy_cleanup",
+                &trace_id,
+                &format!(
+                    "Reduced pool from {} to {} (removed {} objects, {} iterations)",
+                    initial_pool_size, final_pool_size, objects_removed, iterations
+                ),
+            );
             return objects_removed > 0;
         }
 
@@ -533,7 +587,8 @@ impl SwapAllocationMetrics {
             0.0
         };
 
-        if usage_ratio < 0.3 { // If usage is below 30%, reset high water mark
+        if usage_ratio < 0.3 {
+            // If usage is below 30%, reset high water mark
             self.high_water_mark_bytes = self.current_usage_bytes;
         }
     }
@@ -618,7 +673,12 @@ impl MemoryPressureMonitor {
 
         // Keep only last 60 seconds of data
         while let Some(&(_, _)) = checks.first() {
-            if now.duration_since(checks[0].0).unwrap_or(Duration::from_secs(61)).as_secs() > 60 {
+            if now
+                .duration_since(checks[0].0)
+                .unwrap_or(Duration::from_secs(61))
+                .as_secs()
+                > 60
+            {
                 checks.remove(0);
             } else {
                 break;
@@ -630,7 +690,12 @@ impl MemoryPressureMonitor {
         let now = SystemTime::now();
         let mut last_log = self.last_log_time.lock().unwrap();
 
-        if now.duration_since(*last_log).unwrap_or(Duration::from_secs(0)).as_secs() > 60 {
+        if now
+            .duration_since(*last_log)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs()
+            > 60
+        {
             *last_log = now;
             return true;
         }
@@ -654,13 +719,30 @@ impl MemoryPressureMonitor {
             };
         }
 
-        let normal_checks = checks.iter().filter(|&&(_, p)| p == MemoryPressureLevel::Normal).count();
-        let moderate_checks = checks.iter().filter(|&&(_, p)| p == MemoryPressureLevel::Moderate).count();
-        let high_checks = checks.iter().filter(|&&(_, p)| p == MemoryPressureLevel::High).count();
-        let critical_checks = checks.iter().filter(|&&(_, p)| p == MemoryPressureLevel::Critical).count();
+        let normal_checks = checks
+            .iter()
+            .filter(|&&(_, p)| p == MemoryPressureLevel::Normal)
+            .count();
+        let moderate_checks = checks
+            .iter()
+            .filter(|&&(_, p)| p == MemoryPressureLevel::Moderate)
+            .count();
+        let high_checks = checks
+            .iter()
+            .filter(|&&(_, p)| p == MemoryPressureLevel::High)
+            .count();
+        let critical_checks = checks
+            .iter()
+            .filter(|&&(_, p)| p == MemoryPressureLevel::Critical)
+            .count();
 
         let avg_checks_per_minute = if total_checks > 0 {
-            let duration = checks.last().unwrap().0.duration_since(checks.first().unwrap().0).unwrap_or(Duration::from_secs(60));
+            let duration = checks
+                .last()
+                .unwrap()
+                .0
+                .duration_since(checks.first().unwrap().0)
+                .unwrap_or(Duration::from_secs(60));
             let minutes = duration.as_secs() as f64 / 60.0;
             (total_checks as f64 / minutes).max(0.0)
         } else {

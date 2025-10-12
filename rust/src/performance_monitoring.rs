@@ -1,12 +1,16 @@
-use std::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use crate::logging::{generate_trace_id, PerformanceLogger};
+use crate::simd_enhanced::{detect_simd_capability, SimdCapability};
 use jni::objects::GlobalRef;
-use jni::{JNIEnv, objects::{JString, JClass}, sys::jlong};
-use std::collections::HashMap;
-use crate::logging::{PerformanceLogger, generate_trace_id};
+use jni::{
+    objects::{JClass, JString},
+    sys::jlong,
+    JNIEnv,
+};
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use crate::simd_enhanced::{SimdCapability, detect_simd_capability};
 
 #[derive(Debug, Default, Clone)]
 pub struct JniCallMetrics {
@@ -72,7 +76,7 @@ pub struct PerformanceMonitor {
     pub is_monitoring: Arc<AtomicBool>,
     pub last_alert_time_ns: Arc<AtomicU64>, // Store as nanoseconds since epoch
     pub alert_cooldown: Arc<AtomicU64>,
-    
+
     // JNI reference tracking to prevent leaks
     pub jni_global_refs: Arc<Mutex<HashMap<jlong, GlobalRef>>>,
 }
@@ -114,7 +118,7 @@ impl PerformanceMonitor {
             is_monitoring: Arc::new(AtomicBool::new(true)),
             last_alert_time_ns: Arc::new(AtomicU64::new(now_ns)),
             alert_cooldown: Arc::new(AtomicU64::new(3000)), // 3 seconds cooldown
-            
+
             // JNI reference tracking to prevent leaks
             jni_global_refs: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -127,13 +131,17 @@ impl PerformanceMonitor {
 
         // Update atomic counters
         self.jni_calls_total.fetch_add(1, Ordering::Relaxed);
-        self.jni_call_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        self.jni_call_duration_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
 
         // Update max call duration with compare-and-swap
         let current_max = self.jni_max_call_duration_ms.load(Ordering::Relaxed);
         if duration_ms > current_max {
             let _ = self.jni_max_call_duration_ms.compare_exchange_weak(
-                current_max, duration_ms, Ordering::Relaxed, Ordering::Relaxed
+                current_max,
+                duration_ms,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
             );
         }
 
@@ -141,9 +149,11 @@ impl PerformanceMonitor {
         let threshold = self.jni_call_threshold_ms.load(Ordering::Relaxed);
         if duration_ms > threshold {
             self.trigger_threshold_alert(
-                "JNI_CALL", 
-                &format!("JNI call exceeded threshold: {}ms > {}ms (type: {})",
-                    duration_ms, threshold, call_type)
+                "JNI_CALL",
+                &format!(
+                    "JNI call exceeded threshold: {}ms > {}ms (type: {})",
+                    duration_ms, threshold, call_type
+                ),
             );
         }
     }
@@ -155,13 +165,17 @@ impl PerformanceMonitor {
 
         // Update atomic counters
         self.lock_waits_total.fetch_add(1, Ordering::Relaxed);
-        self.lock_wait_time_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        self.lock_wait_time_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
 
         // Update max lock wait time with compare-and-swap
         let current_max = self.lock_max_wait_time_ms.load(Ordering::Relaxed);
         if duration_ms > current_max {
             let _ = self.lock_max_wait_time_ms.compare_exchange_weak(
-                current_max, duration_ms, Ordering::Relaxed, Ordering::Relaxed
+                current_max,
+                duration_ms,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
             );
         }
 
@@ -172,9 +186,11 @@ impl PerformanceMonitor {
         let threshold = self.lock_wait_threshold_ms.load(Ordering::Relaxed);
         if duration_ms > threshold {
             self.trigger_threshold_alert(
-                "LOCK_WAIT", 
-                &format!("Lock wait exceeded threshold: {}ms > {}ms (lock: {})",
-                    duration_ms, threshold, lock_name)
+                "LOCK_WAIT",
+                &format!(
+                    "Lock wait exceeded threshold: {}ms > {}ms (lock: {})",
+                    duration_ms, threshold, lock_name
+                ),
             );
         }
     }
@@ -193,7 +209,10 @@ impl PerformanceMonitor {
         let current_peak = self.memory_peak_heap.load(Ordering::Relaxed);
         if used_bytes > current_peak {
             let _ = self.memory_peak_heap.compare_exchange_weak(
-                current_peak, used_bytes, Ordering::Relaxed, Ordering::Relaxed
+                current_peak,
+                used_bytes,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
             );
         }
 
@@ -207,9 +226,11 @@ impl PerformanceMonitor {
         let threshold = self.memory_usage_threshold_pct.load(Ordering::Relaxed) as f64;
         if used_percent > threshold {
             self.trigger_threshold_alert(
-                "MEMORY_USAGE", 
-                &format!("Memory usage exceeded threshold: {:.1}% > {:.1}%",
-                    used_percent, threshold)
+                "MEMORY_USAGE",
+                &format!(
+                    "Memory usage exceeded threshold: {:.1}% > {:.1}%",
+                    used_percent, threshold
+                ),
             );
         }
     }
@@ -221,15 +242,18 @@ impl PerformanceMonitor {
 
         // Update GC metrics
         self.memory_gc_count.fetch_add(1, Ordering::Relaxed);
-        self.memory_gc_time_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        self.memory_gc_time_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
 
         // Check threshold and trigger alert if needed
         let threshold = self.gc_duration_threshold_ms.load(Ordering::Relaxed);
         if duration_ms > threshold {
             self.trigger_threshold_alert(
-                "GC_DURATION", 
-                &format!("GC duration exceeded threshold: {}ms > {}ms",
-                    duration_ms, threshold)
+                "GC_DURATION",
+                &format!(
+                    "GC duration exceeded threshold: {}ms > {}ms",
+                    duration_ms, threshold
+                ),
             );
         }
     }
@@ -251,11 +275,19 @@ impl PerformanceMonitor {
 
         // Log the alert and update last alert time atomically
         let trace_id = generate_trace_id();
-        self.logger.log_error("threshold_alert", &trace_id, &format!("[ALERT] {}", message), "THRESHOLD_ALERT");
+        self.logger.log_error(
+            "threshold_alert",
+            &trace_id,
+            &format!("[ALERT] {}", message),
+            "THRESHOLD_ALERT",
+        );
 
         // Use compare_exchange to update atomically
         let _ = self.last_alert_time_ns.compare_exchange(
-            last_alert_ns, now_ns, Ordering::Relaxed, Ordering::Relaxed
+            last_alert_ns,
+            now_ns,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
         );
     }
 
@@ -266,12 +298,16 @@ impl PerformanceMonitor {
         // Update metrics with current counter values
         metrics.jni_calls.total_calls = self.jni_calls_total.load(Ordering::Relaxed);
         metrics.jni_calls.call_duration_ms = self.jni_call_duration_ms.load(Ordering::Relaxed);
-        metrics.jni_calls.max_call_duration_ms = self.jni_max_call_duration_ms.load(Ordering::Relaxed);
+        metrics.jni_calls.max_call_duration_ms =
+            self.jni_max_call_duration_ms.load(Ordering::Relaxed);
 
         metrics.lock_wait_metrics.total_lock_waits = self.lock_waits_total.load(Ordering::Relaxed);
-        metrics.lock_wait_metrics.total_lock_wait_time_ms = self.lock_wait_time_ms.load(Ordering::Relaxed);
-        metrics.lock_wait_metrics.max_lock_wait_time_ms = self.lock_max_wait_time_ms.load(Ordering::Relaxed);
-        metrics.lock_wait_metrics.current_lock_contention = self.current_lock_contention.load(Ordering::Relaxed);
+        metrics.lock_wait_metrics.total_lock_wait_time_ms =
+            self.lock_wait_time_ms.load(Ordering::Relaxed);
+        metrics.lock_wait_metrics.max_lock_wait_time_ms =
+            self.lock_max_wait_time_ms.load(Ordering::Relaxed);
+        metrics.lock_wait_metrics.current_lock_contention =
+            self.current_lock_contention.load(Ordering::Relaxed);
 
         metrics.memory_metrics.total_heap_bytes = self.memory_total_heap.load(Ordering::Relaxed);
         metrics.memory_metrics.used_heap_bytes = self.memory_used_heap.load(Ordering::Relaxed);
@@ -280,7 +316,9 @@ impl PerformanceMonitor {
         metrics.memory_metrics.gc_count = self.memory_gc_count.load(Ordering::Relaxed);
         metrics.memory_metrics.gc_time_ms = self.memory_gc_time_ms.load(Ordering::Relaxed);
         metrics.memory_metrics.used_heap_percent = if metrics.memory_metrics.total_heap_bytes > 0 {
-            (metrics.memory_metrics.used_heap_bytes as f64 / metrics.memory_metrics.total_heap_bytes as f64) * 100.0
+            (metrics.memory_metrics.used_heap_bytes as f64
+                / metrics.memory_metrics.total_heap_bytes as f64)
+                * 100.0
         } else {
             0.0
         };
@@ -314,7 +352,12 @@ pub struct SwapPerformanceSummary {
     pub swap_cleanup_operations: u64,
 }
 
-pub fn report_swap_operation(_direction: &str, _bytes: u64, _duration: std::time::Duration, _success: bool) {
+pub fn report_swap_operation(
+    _direction: &str,
+    _bytes: u64,
+    _duration: std::time::Duration,
+    _success: bool,
+) {
     // Lightweight stub - real implementation records stats
 }
 
@@ -334,7 +377,11 @@ pub fn report_swap_pool_metrics(_used_bytes: u64, _capacity_bytes: u64) {
     // stub
 }
 
-pub fn report_swap_component_health(_component: &str, _status: SwapHealthStatus, _reason: Option<&str>) {
+pub fn report_swap_component_health(
+    _component: &str,
+    _status: SwapHealthStatus,
+    _reason: Option<&str>,
+) {
     // stub
 }
 
@@ -361,14 +408,21 @@ pub fn get_swap_performance_summary() -> SwapPerformanceSummary {
 pub fn record_operation(start: std::time::Instant, items_processed: usize, thread_count: usize) {
     let duration = start.elapsed().as_millis() as u64;
     let trace_id = generate_trace_id();
-    PERFORMANCE_MONITOR.logger.log_info("operation", &trace_id, &format!("processed {} items on {} threads in {} ms", items_processed, thread_count, duration));
+    PERFORMANCE_MONITOR.logger.log_info(
+        "operation",
+        &trace_id,
+        &format!(
+            "processed {} items on {} threads in {} ms",
+            items_processed, thread_count, duration
+        ),
+    );
 }
 
 /// Get comprehensive system status information for logging
 pub fn get_system_status() -> String {
     let simd_capability = detect_simd_capability();
     let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
-    
+
     format!(
         "CPU Capabilities: {:?}, Memory: {:.1}% used, GC Events: {}, Lock Contention: {}",
         simd_capability,
@@ -382,14 +436,16 @@ pub fn get_system_status() -> String {
 pub fn log_periodic_status() {
     let trace_id = generate_trace_id();
     let status = get_system_status();
-    PERFORMANCE_MONITOR.logger.log_info("system_status", &trace_id, &status);
+    PERFORMANCE_MONITOR
+        .logger
+        .log_info("system_status", &trace_id, &status);
 }
 
 /// Log startup information with comprehensive system details
 pub fn log_startup_info() {
     let trace_id = generate_trace_id();
     let simd_capability = detect_simd_capability();
-    
+
     // Get CPU capabilities string
     let cpu_capabilities = match simd_capability {
         SimdCapability::Avx512Extreme => "AVX-512 Extreme ✓ AVX-512 ✓ AVX2 ✓ SSE4.2 ✓",
@@ -398,7 +454,7 @@ pub fn log_startup_info() {
         SimdCapability::Sse => "SSE4.2 ✓",
         SimdCapability::Scalar => "Scalar (no SIMD)",
     };
-    
+
     PERFORMANCE_MONITOR.logger.log_info("startup", &trace_id,
         &format!("=== KNEAF MOD STARTUP ===\nCPU Capabilities: {}\nSIMD Level: {:?}\nRust Performance Monitoring: ACTIVE",
         cpu_capabilities, simd_capability));
@@ -408,21 +464,39 @@ pub fn log_startup_info() {
 pub fn log_real_time_status() {
     let trace_id = generate_trace_id();
     let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
-    
+
     // Check thresholds and log warnings if exceeded
     if metrics.memory_metrics.used_heap_percent > 90.0 {
-        PERFORMANCE_MONITOR.logger.log_warning("memory_threshold", &trace_id,
-            &format!("Memory usage high: {:.1}%", metrics.memory_metrics.used_heap_percent));
+        PERFORMANCE_MONITOR.logger.log_warning(
+            "memory_threshold",
+            &trace_id,
+            &format!(
+                "Memory usage high: {:.1}%",
+                metrics.memory_metrics.used_heap_percent
+            ),
+        );
     }
-    
+
     if metrics.lock_wait_metrics.current_lock_contention > 10 {
-        PERFORMANCE_MONITOR.logger.log_warning("lock_contention", &trace_id,
-            &format!("High lock contention: {}", metrics.lock_wait_metrics.current_lock_contention));
+        PERFORMANCE_MONITOR.logger.log_warning(
+            "lock_contention",
+            &trace_id,
+            &format!(
+                "High lock contention: {}",
+                metrics.lock_wait_metrics.current_lock_contention
+            ),
+        );
     }
-    
+
     if metrics.jni_calls.max_call_duration_ms > 100 {
-        PERFORMANCE_MONITOR.logger.log_warning("jni_threshold", &trace_id,
-            &format!("Slow JNI call: {}ms", metrics.jni_calls.max_call_duration_ms));
+        PERFORMANCE_MONITOR.logger.log_warning(
+            "jni_threshold",
+            &trace_id,
+            &format!(
+                "Slow JNI call: {}ms",
+                metrics.jni_calls.max_call_duration_ms
+            ),
+        );
     }
 }
 
@@ -430,13 +504,18 @@ pub fn log_real_time_status() {
 pub fn log_performance_summary() {
     let trace_id = generate_trace_id();
     let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
-    
-    PERFORMANCE_MONITOR.logger.log_info("performance_summary", &trace_id,
-        &format!("Performance Summary: {} JNI calls, {} lock waits, {:.1}% memory used, {} GC events",
-        metrics.jni_calls.total_calls,
-        metrics.lock_wait_metrics.total_lock_waits,
-        metrics.memory_metrics.used_heap_percent,
-        metrics.memory_metrics.gc_count));
+
+    PERFORMANCE_MONITOR.logger.log_info(
+        "performance_summary",
+        &trace_id,
+        &format!(
+            "Performance Summary: {} JNI calls, {} lock waits, {:.1}% memory used, {} GC events",
+            metrics.jni_calls.total_calls,
+            metrics.lock_wait_metrics.total_lock_waits,
+            metrics.memory_metrics.used_heap_percent,
+            metrics.memory_metrics.gc_count
+        ),
+    );
 }
 
 pub static PERFORMANCE_MONITOR: Lazy<PerformanceMonitor> = Lazy::new(|| {
@@ -460,9 +539,22 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordJniCallN
         }
         Err(e) => {
             let trace_id = generate_trace_id();
-                        PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to get JNI call type: {}", e), "JNI_ERROR");
-            if let Err(throw_err) = env.throw_new("java/lang/IllegalStateException", &format!("Failed to get JNI call type: {}", e)) {
-                PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to throw exception: {}", throw_err), "JNI_ERROR");
+            PERFORMANCE_MONITOR.logger.log_error(
+                "jni_exception",
+                &trace_id,
+                &format!("Failed to get JNI call type: {}", e),
+                "JNI_ERROR",
+            );
+            if let Err(throw_err) = env.throw_new(
+                "java/lang/IllegalStateException",
+                &format!("Failed to get JNI call type: {}", e),
+            ) {
+                PERFORMANCE_MONITOR.logger.log_error(
+                    "jni_exception",
+                    &trace_id,
+                    &format!("Failed to throw exception: {}", throw_err),
+                    "JNI_ERROR",
+                );
             }
             -1 // Error
         }
@@ -485,9 +577,22 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordLockWait
         }
         Err(e) => {
             let trace_id = generate_trace_id();
-            PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to get lock name: {}", e), "JNI_ERROR");
-            if let Err(throw_err) = env.throw_new("java/lang/IllegalStateException", &format!("Failed to get lock name: {}", e)) {
-                PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to throw exception: {}", throw_err), "JNI_ERROR");
+            PERFORMANCE_MONITOR.logger.log_error(
+                "jni_exception",
+                &trace_id,
+                &format!("Failed to get lock name: {}", e),
+                "JNI_ERROR",
+            );
+            if let Err(throw_err) = env.throw_new(
+                "java/lang/IllegalStateException",
+                &format!("Failed to get lock name: {}", e),
+            ) {
+                PERFORMANCE_MONITOR.logger.log_error(
+                    "jni_exception",
+                    &trace_id,
+                    &format!("Failed to throw exception: {}", throw_err),
+                    "JNI_ERROR",
+                );
             }
             -1 // Error
         }
@@ -550,8 +655,16 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getPerformance
         Ok(jni_string) => jni_string.into_raw(),
         Err(e) => {
             let trace_id = generate_trace_id();
-            PERFORMANCE_MONITOR.logger.log_error("jni_exception", &trace_id, &format!("Failed to create JSON string: {}", e), "JNI_ERROR");
-            let _ = env.throw_new("java/lang/IllegalStateException", &format!("Failed to create JSON string: {}", e));
+            PERFORMANCE_MONITOR.logger.log_error(
+                "jni_exception",
+                &trace_id,
+                &format!("Failed to create JSON string: {}", e),
+                "JNI_ERROR",
+            );
+            let _ = env.throw_new(
+                "java/lang/IllegalStateException",
+                &format!("Failed to create JSON string: {}", e),
+            );
             std::ptr::null_mut()
         }
     }

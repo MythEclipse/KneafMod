@@ -1,11 +1,11 @@
 //! JNI batch processing utilities and types
-//! 
+//!
 //! This module provides shared types and utilities for batch processing operations
 //! across different JNI interfaces.
 
-use std::time::{SystemTime, Instant};
 use once_cell::sync::OnceCell;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::time::{Instant, SystemTime};
 
 // JNI zero-copy imports
 use jni::objects::JByteBuffer;
@@ -18,9 +18,9 @@ use crate::jni_batch_processor::EnhancedBatchProcessor;
 use std::marker::PhantomData;
 
 // Thread safety imports
-use std::sync::{Arc, Mutex};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Batch operation types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,7 +32,7 @@ pub enum BatchOperationType {
 
 impl TryFrom<u8> for BatchOperationType {
     type Error = String;
-    
+
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0x01 => Ok(BatchOperationType::Echo),
@@ -103,7 +103,7 @@ impl ZeroCopyBufferTracker {
     /// Unregister a buffer when no longer needed
     pub fn unregister_buffer(&self, buffer_id: u64) -> Result<(), String> {
         let mut buffers = self.active_buffers.lock().unwrap();
-        
+
         if buffers.remove(&buffer_id).is_some() {
             self.buffer_count.fetch_sub(1, Ordering::SeqCst);
             Ok(())
@@ -118,18 +118,25 @@ pub static GLOBAL_BUFFER_TRACKER: OnceCell<ZeroCopyBufferTracker> = OnceCell::ne
 
 /// Initialize global buffer tracker
 pub fn init_global_buffer_tracker(max_active_buffers: usize) -> Result<(), String> {
-    GLOBAL_BUFFER_TRACKER.set(ZeroCopyBufferTracker::new(max_active_buffers))
+    GLOBAL_BUFFER_TRACKER
+        .set(ZeroCopyBufferTracker::new(max_active_buffers))
         .map_err(|_| "Global buffer tracker already initialized".to_string())
 }
 
 /// Get global buffer tracker instance
 pub fn get_global_buffer_tracker() -> &'static ZeroCopyBufferTracker {
-    GLOBAL_BUFFER_TRACKER.get().expect("Buffer tracker not initialized")
+    GLOBAL_BUFFER_TRACKER
+        .get()
+        .expect("Buffer tracker not initialized")
 }
 
 impl ZeroCopyBufferRef {
     /// Create new zero-copy buffer reference from Java DirectByteBuffer
-    pub fn from_java_buffer(env: &JNIEnv, buffer: JByteBuffer<'static>, operation_type: BatchOperationType) -> Result<Arc<Self>, String> {
+    pub fn from_java_buffer(
+        env: &JNIEnv,
+        buffer: JByteBuffer<'static>,
+        operation_type: BatchOperationType,
+    ) -> Result<Arc<Self>, String> {
         // Get direct buffer address using JNI methods
         let address = match env.get_direct_buffer_address(&buffer) {
             Ok(addr) => addr as u64,
@@ -146,14 +153,14 @@ impl ZeroCopyBufferRef {
         let ref_count = AtomicUsize::new(1);
 
         let buffer_ref = Arc::new(Self {
-                    buffer_id,
-                    java_buffer: buffer,
-                    address,
-                    size: capacity,
-                    operation_type,
-                    creation_time,
-                    ref_count,
-                });
+            buffer_id,
+            java_buffer: buffer,
+            address,
+            size: capacity,
+            operation_type,
+            creation_time,
+            ref_count,
+        });
 
         // Register buffer with global tracker for memory safety
         get_global_buffer_tracker().register_buffer(buffer_ref.clone())?;
@@ -205,19 +212,25 @@ impl ZeroCopyBufferPool {
         static INSTANCE: OnceCell<Arc<ZeroCopyBufferPool>> = OnceCell::new();
         INSTANCE.get_or_init(|| {
             let pool = Arc::new(Self::new(200)); // Increased pool size for better reuse
-            // Pre-allocate common buffers for hot paths
+                                                 // Pre-allocate common buffers for hot paths
             pool.pre_allocate_common_buffers();
             pool
         })
     }
 
     /// Acquire buffer from pool or create new one (optimized for hot paths)
-    pub fn acquire(&self, operation_type: BatchOperationType, required_size: usize) -> ZeroCopyBuffer {
+    pub fn acquire(
+        &self,
+        operation_type: BatchOperationType,
+        required_size: usize,
+    ) -> ZeroCopyBuffer {
         let mut pools = self.buffer_pools.lock().unwrap();
-        
+
         // Get or create pool for this operation type
-        let pool = pools.entry(operation_type).or_insert_with(|| VecDeque::new());
-        
+        let pool = pools
+            .entry(operation_type)
+            .or_insert_with(|| VecDeque::new());
+
         // Try to reuse existing buffer if available and sufficient size
         if let Some(pos) = pool.iter().position(|b| b.size >= required_size) {
             pool.remove(pos).expect("Buffer not found in pool")
@@ -229,18 +242,22 @@ impl ZeroCopyBufferPool {
     }
 
     /// Allocate buffer from memory arena (slab allocation optimization)
-    fn allocate_from_arena(&self, operation_type: BatchOperationType, required_size: usize) -> ZeroCopyBuffer {
+    fn allocate_from_arena(
+        &self,
+        operation_type: BatchOperationType,
+        required_size: usize,
+    ) -> ZeroCopyBuffer {
         let mut arena = self.memory_arena.lock().unwrap();
-        
+
         // Round up to next 8-byte boundary for alignment
         let aligned_size = (required_size + 7) & !7;
-        
+
         // Check if we have enough space in the arena
         if arena.len() + aligned_size <= arena.capacity() {
             let start_address = arena.len() as u64;
             let new_len = arena.len() + aligned_size;
             arena.resize(new_len, 0);
-            
+
             ZeroCopyBuffer {
                 buffer_id: AtomicU64::new(1).fetch_add(1, Ordering::SeqCst),
                 address: start_address,
@@ -251,13 +268,13 @@ impl ZeroCopyBufferPool {
         } else {
             // When arena is full, try to consolidate memory first
             self.consolidate_memory();
-            
+
             // Check again after consolidation
             if arena.len() + aligned_size <= arena.capacity() {
                 let start_address = arena.len() as u64;
                 let new_len = arena.len() + aligned_size;
                 arena.resize(new_len, 0);
-                
+
                 ZeroCopyBuffer {
                     buffer_id: AtomicU64::new(1).fetch_add(1, Ordering::SeqCst),
                     address: start_address,
@@ -273,13 +290,17 @@ impl ZeroCopyBufferPool {
     }
 
     /// Allocate buffer from system memory (fallback)
-    fn allocate_from_system(&self, operation_type: BatchOperationType, required_size: usize) -> ZeroCopyBuffer {
+    fn allocate_from_system(
+        &self,
+        operation_type: BatchOperationType,
+        required_size: usize,
+    ) -> ZeroCopyBuffer {
         // Use proper system allocation with alignment (8-byte boundary for performance)
         let aligned_size = (required_size + 7) & !7;
-        
+
         // Allocate memory using system allocator with proper alignment
         let buffer = unsafe { libc::malloc(aligned_size) };
-        
+
         ZeroCopyBuffer {
             buffer_id: AtomicU64::new(1).fetch_add(1, Ordering::SeqCst),
             address: buffer as u64,
@@ -292,9 +313,11 @@ impl ZeroCopyBufferPool {
     /// Release buffer back to pool (optimized for hot paths)
     pub fn release(&self, buffer: ZeroCopyBuffer) {
         let mut pools = self.buffer_pools.lock().unwrap();
-        
-        let pool = pools.entry(buffer.operation_type).or_insert_with(|| VecDeque::new());
-        
+
+        let pool = pools
+            .entry(buffer.operation_type)
+            .or_insert_with(|| VecDeque::new());
+
         // Only add buffer back if it's not already at maximum size
         if pool.len() < self.max_pool_size {
             pool.push_back(buffer);
@@ -307,13 +330,13 @@ impl ZeroCopyBufferPool {
     /// Consolidate memory by defragmenting the memory arena
     fn consolidate_memory(&self) {
         let mut arena = self.memory_arena.lock().unwrap();
-        
+
         // Real implementation would:
         // 1. Track all active buffer allocations in the arena
         // 2. Scan for contiguous free blocks
         // 3. Move active blocks to eliminate fragmentation
         // 4. Shrink the arena capacity if possible
-        
+
         // For demonstration, we'll just trim excess capacity
         let target_capacity = (arena.len() + 1023) & !1023; // Round up to next 1KB boundary
         if arena.capacity() > target_capacity {
@@ -328,7 +351,7 @@ impl ZeroCopyBufferPool {
     /// Pre-allocate buffers for common operation types (hot path optimization)
     pub fn pre_allocate_common_buffers(&self) {
         let operation_types = BatchOperationType::all_operation_types();
-        
+
         for &op_type in &operation_types {
             for &size in &self.common_buffer_sizes {
                 let buffer = self.acquire(op_type, size);
@@ -338,10 +361,17 @@ impl ZeroCopyBufferPool {
     }
 
     /// Get buffer for exact size (for performance-critical paths)
-    pub fn get_exact_size_buffer(&self, operation_type: BatchOperationType, exact_size: usize) -> Option<ZeroCopyBuffer> {
+    pub fn get_exact_size_buffer(
+        &self,
+        operation_type: BatchOperationType,
+        exact_size: usize,
+    ) -> Option<ZeroCopyBuffer> {
         let pools = self.buffer_pools.lock().unwrap();
-        
-        pools.get(&operation_type)?.iter().find(|b| b.size == exact_size)
+
+        pools
+            .get(&operation_type)?
+            .iter()
+            .find(|b| b.size == exact_size)
             .cloned()
     }
 }
@@ -353,7 +383,11 @@ pub trait BatchOperationTypeExt {
 
 impl BatchOperationTypeExt for BatchOperationType {
     fn all_operation_types() -> Vec<BatchOperationType> {
-        vec![BatchOperationType::Echo, BatchOperationType::Heavy, BatchOperationType::PanicTest]
+        vec![
+            BatchOperationType::Echo,
+            BatchOperationType::Heavy,
+            BatchOperationType::PanicTest,
+        ]
     }
 }
 
@@ -423,31 +457,31 @@ impl Drop for ZeroCopyBufferRef {
 
 impl BatchOperation {
     /// Create new batch operation with regular payload (hot path optimized)
-        pub fn new(operation_type: BatchOperationType, payload: Vec<u8>) -> Self {
-            static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
+    pub fn new(operation_type: BatchOperationType, payload: Vec<u8>) -> Self {
+        static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
-            // Try zero-copy conversion for hot paths
-            let zero_copy_buffer = Self::try_zero_copy_conversion_for_payload(operation_type, &payload);
-            let final_payload = if zero_copy_buffer.is_some() {
-                Vec::new() // Data is in zero_copy_buffer
-            } else {
-                payload
-            };
+        // Try zero-copy conversion for hot paths
+        let zero_copy_buffer = Self::try_zero_copy_conversion_for_payload(operation_type, &payload);
+        let final_payload = if zero_copy_buffer.is_some() {
+            Vec::new() // Data is in zero_copy_buffer
+        } else {
+            payload
+        };
 
-            Self {
-                operation_id: NEXT_OPERATION_ID.fetch_add(1, Ordering::SeqCst),
-                operation_type,
-                payload: final_payload,
-                timestamp: Instant::now(),
-                zero_copy_buffer,
-            }
+        Self {
+            operation_id: NEXT_OPERATION_ID.fetch_add(1, Ordering::SeqCst),
+            operation_type,
+            payload: final_payload,
+            timestamp: Instant::now(),
+            zero_copy_buffer,
         }
+    }
 
     /// Process operation with zero-copy optimization (hot path)
     pub fn process_zero_copy(&self) -> Result<BatchResult, String> {
         let payload = self.get_payload_slice();
         let start_time = Instant::now();
-          
+
         // Actual processing logic based on operation type
         let processed_payload = match self.operation_type {
             BatchOperationType::Echo => {
@@ -467,12 +501,12 @@ impl BatchOperation {
                 vec![0xFF, 0x01, 0x00, 0x00] // Panic test response
             }
         };
-          
+
         let processing_time = start_time.elapsed().as_millis() as u64;
         Ok(BatchResult::success(
             self.operation_id,
             processed_payload,
-            processing_time
+            processing_time,
         ))
     }
 
@@ -480,12 +514,12 @@ impl BatchOperation {
     pub fn process_zero_copy_v2(&self) -> Result<BatchResult, String> {
         let payload = self.get_payload_slice();
         let start_time = Instant::now();
-         
+
         // Optimized processing path using SIMD for data transformation when available
         let processed_payload = if let Some(buffer_ref) = &self.zero_copy_buffer {
             // For zero-copy operations with direct buffer access
             let mut result = Vec::with_capacity(buffer_ref.size);
-            
+
             // Use SIMD-accelerated operations when available
             #[cfg(target_arch = "x86_64")]
             {
@@ -493,21 +527,28 @@ impl BatchOperation {
                     // Use AVX2 for 128-bit chunks when available
                     #[cfg(target_feature = "avx2")]
                     {
-                        use std::arch::x86_64::_mm256_set1_epi8;
                         use std::arch::x86_64::_mm256_loadu_si256;
+                        use std::arch::x86_64::_mm256_set1_epi8;
                         use std::arch::x86_64::_mm256_storeu_si256;
-                        
+
                         let mut i = 0;
                         while i + 32 <= buffer_ref.size {
-                            let src = _mm256_loadu_si256(unsafe { buffer_ref.as_slice().as_ptr().add(i) as *const _ });
+                            let src = _mm256_loadu_si256(unsafe {
+                                buffer_ref.as_slice().as_ptr().add(i) as *const _
+                            });
                             let mask = _mm256_set1_epi8(0x01);
                             let res = src ^ mask; // Simple XOR operation as example
-                            _mm256_storeu_si256(unsafe { result.as_mut_ptr().add(i) as *mut _ }, res);
+                            _mm256_storeu_si256(
+                                unsafe { result.as_mut_ptr().add(i) as *mut _ },
+                                res,
+                            );
                             i += 32;
                         }
-                        
+
                         // Handle remaining bytes
-                        result.extend_from_slice(unsafe { buffer_ref.as_slice() }.get(i..).unwrap_or(&[]));
+                        result.extend_from_slice(
+                            unsafe { buffer_ref.as_slice() }.get(i..).unwrap_or(&[]),
+                        );
                     }
                     #[cfg(not(target_feature = "avx2"))]
                     {
@@ -522,18 +563,18 @@ impl BatchOperation {
             {
                 result.extend_from_slice(unsafe { buffer_ref.as_slice() });
             }
-            
+
             result
         } else {
             // Regular payload processing
             payload.to_vec()
         };
-         
+
         let processing_time = start_time.elapsed().as_millis() as u64;
         Ok(BatchResult::success(
             self.operation_id,
             processed_payload,
-            processing_time
+            processing_time,
         ))
     }
 
@@ -541,7 +582,7 @@ impl BatchOperation {
     pub fn process_zero_copy_v3(&self) -> Result<BatchResult, String> {
         let payload = self.get_payload_slice();
         let start_time = Instant::now();
-        
+
         // Example processing logic - replace with actual implementation
         let processed_payload = if payload.starts_with(&[0x01]) {
             // Special case handling for hot path operations
@@ -549,12 +590,12 @@ impl BatchOperation {
         } else {
             payload.to_vec()
         };
-        
+
         let processing_time = start_time.elapsed().as_millis() as u64;
         Ok(BatchResult::success(
             self.operation_id,
             processed_payload,
-            processing_time
+            processing_time,
         ))
     }
 
@@ -575,78 +616,91 @@ impl BatchOperation {
     }
 
     /// Create batch operation directly from Java DirectByteBuffer (true zero-copy)
-    pub fn from_direct_byte_buffer(env: &JNIEnv, buffer: JByteBuffer<'static>, operation_type: BatchOperationType) -> Result<Self, String> {
+    pub fn from_direct_byte_buffer(
+        env: &JNIEnv,
+        buffer: JByteBuffer<'static>,
+        operation_type: BatchOperationType,
+    ) -> Result<Self, String> {
         let buffer_ref = ZeroCopyBufferRef::from_java_buffer(env, buffer, operation_type)?;
 
         Ok(Self::from_zero_copy(operation_type, buffer_ref))
     }
 
-        /// Try to convert regular payload to zero-copy buffer (for hot paths)
-        fn try_zero_copy_conversion_for_payload(operation_type: BatchOperationType, payload: &[u8]) -> Option<Arc<ZeroCopyBufferRef>> {
-            // Enable zero-copy for payloads larger than 1KB to benefit from direct memory access
-            if payload.len() >= 1024 {
-                // Create a zero-copy buffer reference for large payloads
-                // In a real JNI environment, this would allocate direct memory in Java
-                // For now, we'll simulate with a mock buffer reference
-                let buffer_id = AtomicU64::new(1).fetch_add(1, Ordering::SeqCst);
-                let address = payload.as_ptr() as u64; // Use payload address directly
-                let size = payload.len();
-
-                let buffer_ref = Arc::new(ZeroCopyBufferRef {
-                    buffer_id,
-                    java_buffer: unsafe { JByteBuffer::from_raw(0 as *mut jni::sys::_jobject) }, // Mock buffer
-                    address,
-                    size,
-                    operation_type,
-                    creation_time: SystemTime::now(),
-                    ref_count: AtomicUsize::new(1),
-                });
-
-                // Register with global tracker for memory safety
-                if let Err(e) = get_global_buffer_tracker().register_buffer(Arc::clone(&buffer_ref)) {
-                    log::warn!("Failed to register zero-copy buffer: {}", e);
-                    return None;
-                }
-
-                Some(buffer_ref)
-            } else {
-                None
-            }
-        }
-
-        /// Try to convert regular payload to zero-copy buffer (for hot paths)
-        #[allow(dead_code)]
-        fn try_zero_copy_conversion(operation_type: BatchOperationType, payload: &[u8]) -> Result<Arc<ZeroCopyBufferRef>, String> {
-            // 1. Allocate direct memory in Java using JNI
-            // In real implementation, get from JNI call context - this is just a placeholder
-            let mut env = unsafe { jni::JNIEnv::from_raw(std::ptr::null_mut()) }.map_err(|e| e.to_string())?;
-            
-            // 2. Create direct buffer with proper alignment
-            let buffer = unsafe { env.new_direct_byte_buffer(payload.as_ptr() as *mut u8, payload.len()) }
-                .map_err(|e| format!("Failed to create direct buffer: {}", e))?;
-            
-            // 3. Get buffer address and capacity
-            let address = env.get_direct_buffer_address(&buffer)
-                .map_err(|e| format!("Failed to get buffer address: {}", e))? as u64;
-            
+    /// Try to convert regular payload to zero-copy buffer (for hot paths)
+    fn try_zero_copy_conversion_for_payload(
+        operation_type: BatchOperationType,
+        payload: &[u8],
+    ) -> Option<Arc<ZeroCopyBufferRef>> {
+        // Enable zero-copy for payloads larger than 1KB to benefit from direct memory access
+        if payload.len() >= 1024 {
+            // Create a zero-copy buffer reference for large payloads
+            // In a real JNI environment, this would allocate direct memory in Java
+            // For now, we'll simulate with a mock buffer reference
             let buffer_id = AtomicU64::new(1).fetch_add(1, Ordering::SeqCst);
-            
-            // 4. Create and register proper ZeroCopyBufferRef
+            let address = payload.as_ptr() as u64; // Use payload address directly
+            let size = payload.len();
+
             let buffer_ref = Arc::new(ZeroCopyBufferRef {
                 buffer_id,
-                java_buffer: buffer,
+                java_buffer: unsafe { JByteBuffer::from_raw(0 as *mut jni::sys::_jobject) }, // Mock buffer
                 address,
-                size: payload.len(),
+                size,
                 operation_type,
                 creation_time: SystemTime::now(),
                 ref_count: AtomicUsize::new(1),
             });
-            
-            // 5. Register with global tracker for memory safety
-            get_global_buffer_tracker().register_buffer(Arc::clone(&buffer_ref))?;
-            
-            Ok(buffer_ref)
+
+            // Register with global tracker for memory safety
+            if let Err(e) = get_global_buffer_tracker().register_buffer(Arc::clone(&buffer_ref)) {
+                log::warn!("Failed to register zero-copy buffer: {}", e);
+                return None;
+            }
+
+            Some(buffer_ref)
+        } else {
+            None
         }
+    }
+
+    /// Try to convert regular payload to zero-copy buffer (for hot paths)
+    #[allow(dead_code)]
+    fn try_zero_copy_conversion(
+        operation_type: BatchOperationType,
+        payload: &[u8],
+    ) -> Result<Arc<ZeroCopyBufferRef>, String> {
+        // 1. Allocate direct memory in Java using JNI
+        // In real implementation, get from JNI call context - this is just a placeholder
+        let mut env =
+            unsafe { jni::JNIEnv::from_raw(std::ptr::null_mut()) }.map_err(|e| e.to_string())?;
+
+        // 2. Create direct buffer with proper alignment
+        let buffer =
+            unsafe { env.new_direct_byte_buffer(payload.as_ptr() as *mut u8, payload.len()) }
+                .map_err(|e| format!("Failed to create direct buffer: {}", e))?;
+
+        // 3. Get buffer address and capacity
+        let address =
+            env.get_direct_buffer_address(&buffer)
+                .map_err(|e| format!("Failed to get buffer address: {}", e))? as u64;
+
+        let buffer_id = AtomicU64::new(1).fetch_add(1, Ordering::SeqCst);
+
+        // 4. Create and register proper ZeroCopyBufferRef
+        let buffer_ref = Arc::new(ZeroCopyBufferRef {
+            buffer_id,
+            java_buffer: buffer,
+            address,
+            size: payload.len(),
+            operation_type,
+            creation_time: SystemTime::now(),
+            ref_count: AtomicUsize::new(1),
+        });
+
+        // 5. Register with global tracker for memory safety
+        get_global_buffer_tracker().register_buffer(Arc::clone(&buffer_ref))?;
+
+        Ok(buffer_ref)
+    }
 
     /// Serialize operation to bytes (fallback for non-zero-copy paths)
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -677,18 +731,17 @@ impl BatchOperation {
             Ok(unsafe { jni::objects::JByteBuffer::from_raw(zero_copy_ref.java_buffer.as_raw()) })
         } else {
             // For regular operations, use direct buffer for better performance
-            let _byte_array = env.byte_array_from_slice(&self.payload).map_err(|e| {
-                format!("Failed to create byte array: {}", e)
-            })?;
+            let _byte_array = env
+                .byte_array_from_slice(&self.payload)
+                .map_err(|e| format!("Failed to create byte array: {}", e))?;
 
             let java_buffer = unsafe {
-               env.new_direct_byte_buffer(
-                   self.payload.as_ptr() as *mut u8,
-                   self.payload.len() as usize
-               ).map_err(|e| {
-                   format!("Failed to create direct buffer: {}", e)
-               })?
-           };
+                env.new_direct_byte_buffer(
+                    self.payload.as_ptr() as *mut u8,
+                    self.payload.len() as usize,
+                )
+                .map_err(|e| format!("Failed to create direct buffer: {}", e))?
+            };
 
             Ok(java_buffer)
         }
@@ -710,7 +763,9 @@ impl BatchOperation {
         if let Some(zero_copy_ref) = &self.zero_copy_buffer {
             // Zero-copy mutable access to native memory
             // Use as_mut_ptr and get_mut_unchecked for proper mutable access
-            unsafe { std::slice::from_raw_parts_mut(zero_copy_ref.address as *mut u8, zero_copy_ref.size) }
+            unsafe {
+                std::slice::from_raw_parts_mut(zero_copy_ref.address as *mut u8, zero_copy_ref.size)
+            }
         } else {
             // Regular vector access
             &mut self.payload
@@ -718,8 +773,12 @@ impl BatchOperation {
     }
 
     /// Deserialize operation from JNI ByteBuffer (zero-copy, hot path)
-    pub fn from_jni_byte_buffer(env: &JNIEnv, buffer: JByteBuffer<'static>) -> Result<Self, String> {
-        let buffer_ref = ZeroCopyBufferRef::from_java_buffer(env, buffer, BatchOperationType::Echo)?;
+    pub fn from_jni_byte_buffer(
+        env: &JNIEnv,
+        buffer: JByteBuffer<'static>,
+    ) -> Result<Self, String> {
+        let buffer_ref =
+            ZeroCopyBufferRef::from_java_buffer(env, buffer, BatchOperationType::Echo)?;
 
         // Read operation type from buffer header (first byte)
         let operation_type = if buffer_ref.size >= 1 {
@@ -737,17 +796,17 @@ impl BatchOperation {
         if bytes.len() < 21 {
             return Err("Batch operation envelope too short".to_string());
         }
-        
+
         let operation_id = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
         let operation_type = BatchOperationType::try_from(bytes[8])?;
         let payload_len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
-        
+
         if bytes.len() < 13 + payload_len {
             return Err("Batch operation payload length mismatch".to_string());
         }
-        
+
         let payload = bytes[13..13 + payload_len].to_vec();
-        
+
         Ok(Self {
             operation_id,
             operation_type,
@@ -773,7 +832,9 @@ impl BatchOperation {
         if let Some(zero_copy_ref) = &self.zero_copy_buffer {
             // Zero-copy mutable access to native memory
             // Use as_mut_ptr and get_mut_unchecked for proper mutable access
-            unsafe { std::slice::from_raw_parts_mut(zero_copy_ref.address as *mut u8, zero_copy_ref.size) }
+            unsafe {
+                std::slice::from_raw_parts_mut(zero_copy_ref.address as *mut u8, zero_copy_ref.size)
+            }
         } else {
             // Regular vector access
             &mut self.payload
@@ -808,7 +869,7 @@ impl BatchResult {
             processing_time_ms,
         }
     }
-    
+
     pub fn error(operation_id: u64, error_message: String, processing_time_ms: u64) -> Self {
         Self {
             operation_id,
@@ -817,7 +878,7 @@ impl BatchResult {
             processing_time_ms,
         }
     }
-    
+
     /// Serialize result to bytes
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(21 + self.payload.len());
@@ -857,11 +918,11 @@ impl ZeroCopyBuffer {
     pub fn as_mut_ptr(&self) -> *mut u8 {
         self.address as *mut u8
     }
-    
+
     pub fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.address as *const u8, self.size) }
     }
-    
+
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.address as *mut u8, self.size) }
     }
@@ -870,7 +931,7 @@ impl ZeroCopyBuffer {
 impl ZeroCopyBuffer {
     pub fn new(address: u64, size: usize, operation_type: BatchOperationType) -> Self {
         static NEXT_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
-        
+
         Self {
             buffer_id: NEXT_BUFFER_ID.fetch_add(1, Ordering::SeqCst),
             address,
@@ -893,35 +954,41 @@ impl BatchUtils {
     ) -> usize {
         let memory_based_limit = available_memory_bytes / avg_operation_size_bytes.max(1);
         let optimal_size = operation_count.min(memory_based_limit).min(1000);
-        
+
         // Round to nearest multiple of 25 for alignment
         ((optimal_size + 12) / 25) * 25
     }
-    
+
     /// Estimate memory usage for a batch of operations
     pub fn estimate_batch_memory_usage(operations: &[Vec<u8>]) -> usize {
         operations.iter().map(|op| op.len() + 32).sum::<usize>() + 1024 // overhead
     }
-    
+
     /// Compress batch data if beneficial
     pub fn compress_batch_data(data: &[u8]) -> Result<Vec<u8>, String> {
         use flate2::write::ZlibEncoder;
         use flate2::Compression;
         use std::io::Write;
-        
+
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
-        encoder.write_all(data).map_err(|e| format!("Compression failed: {}", e))?;
-        encoder.finish().map_err(|e| format!("Compression finalization failed: {}", e))
+        encoder
+            .write_all(data)
+            .map_err(|e| format!("Compression failed: {}", e))?;
+        encoder
+            .finish()
+            .map_err(|e| format!("Compression finalization failed: {}", e))
     }
-    
+
     /// Decompress batch data
     pub fn decompress_batch_data(compressed_data: &[u8]) -> Result<Vec<u8>, String> {
         use flate2::read::ZlibDecoder;
         use std::io::Read;
-        
+
         let mut decoder = ZlibDecoder::new(compressed_data);
         let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed).map_err(|e| format!("Decompression failed: {}", e))?;
+        decoder
+            .read_to_end(&mut decompressed)
+            .map_err(|e| format!("Decompression failed: {}", e))?;
         Ok(decompressed)
     }
 }
@@ -941,7 +1008,9 @@ impl BatchOperationQueue {
     }
 
     pub fn push(&self, operation: BatchOperation) -> Result<bool, String> {
-        let mut ops = self.operations.lock()
+        let mut ops = self
+            .operations
+            .lock()
             .map_err(|e| format!("Failed to lock operations queue: {}", e))?;
 
         if ops.len() >= self.max_size {
@@ -953,26 +1022,32 @@ impl BatchOperationQueue {
     }
 
     pub fn pop_batch(&self, batch_size: usize) -> Result<Vec<BatchOperation>, String> {
-        let mut ops = self.operations.lock()
+        let mut ops = self
+            .operations
+            .lock()
             .map_err(|e| format!("Failed to lock operations queue: {}", e))?;
 
         let batch_size = batch_size.min(ops.len());
         let batch: Vec<_> = ops.drain(0..batch_size).collect();
         Ok(batch)
     }
-    
+
     pub fn len(&self) -> Result<usize, String> {
-        let ops = self.operations.lock()
+        let ops = self
+            .operations
+            .lock()
             .map_err(|e| format!("Failed to lock operations queue: {}", e))?;
         Ok(ops.len())
     }
-    
+
     pub fn is_empty(&self) -> Result<bool, String> {
         Ok(self.len()? == 0)
     }
-    
+
     pub fn clear(&self) -> Result<(), String> {
-        let mut ops = self.operations.lock()
+        let mut ops = self
+            .operations
+            .lock()
             .map_err(|e| format!("Failed to lock operations queue: {}", e))?;
         ops.clear();
         Ok(())
@@ -985,59 +1060,52 @@ mod tests {
 
     #[test]
     fn test_batch_operation_serialization() {
-        let operation = BatchOperation::new(
-            BatchOperationType::Echo,
-            b"test payload".to_vec()
-        );
-        
+        let operation = BatchOperation::new(BatchOperationType::Echo, b"test payload".to_vec());
+
         let bytes = operation.to_bytes();
         let deserialized = BatchOperation::from_bytes(&bytes).unwrap();
-        
+
         assert_eq!(operation.operation_id, deserialized.operation_id);
         assert_eq!(operation.operation_type, deserialized.operation_type);
         assert_eq!(operation.payload, deserialized.payload);
     }
-    
+
     #[test]
     fn test_batch_result_serialization() {
-        let result = BatchResult::success(
-            12345,
-            b"result payload".to_vec(),
-            150
-        );
-        
+        let result = BatchResult::success(12345, b"result payload".to_vec(), 150);
+
         let bytes = result.to_bytes();
         assert!(bytes.len() > 0);
         assert_eq!(bytes[8], BatchResultStatus::Success as u8);
     }
-    
+
     #[test]
     fn test_batch_operation_queue() {
         let queue = BatchOperationQueue::new(10);
-        
+
         for i in 0..5 {
             let operation = BatchOperation::new(
                 BatchOperationType::Echo,
-                format!("operation {}", i).into_bytes()
+                format!("operation {}", i).into_bytes(),
             );
             assert!(queue.push(operation).unwrap());
         }
-        
+
         assert_eq!(queue.len().unwrap(), 5);
-        
+
         let batch = queue.pop_batch(3).unwrap();
         assert_eq!(batch.len(), 3);
         assert_eq!(queue.len().unwrap(), 2);
     }
-    
+
     #[test]
     fn test_batch_utils_optimal_size() {
         let optimal_size = BatchUtils::calculate_optimal_batch_size(
             1000,
             1024 * 1024, // 1MB available
-            1024, // 1KB average operation size
+            1024,        // 1KB average operation size
         );
-        
+
         assert!(optimal_size <= 1000);
         assert!(optimal_size % 25 == 0);
     }

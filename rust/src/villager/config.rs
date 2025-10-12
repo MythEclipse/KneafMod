@@ -18,7 +18,9 @@ lazy_static::lazy_static! {
 }
 
 pub fn update_villager_config(new_config: VillagerConfig) -> Result<(), String> {
-    let mut config = VILLAGER_CONFIG.write().map_err(|e| format!("Failed to acquire config lock: {}", e))?;
+    let mut config = VILLAGER_CONFIG
+        .write()
+        .map_err(|e| format!("Failed to acquire config lock: {}", e))?;
     *config = new_config;
     Ok(())
 }

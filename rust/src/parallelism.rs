@@ -1,4 +1,3 @@
-
 use num_cpus;
 
 pub mod work_stealing;
@@ -10,12 +9,16 @@ pub use work_stealing::WorkStealingScheduler;
 pub struct AdaptiveThreadPool;
 
 impl AdaptiveThreadPool {
-    pub fn new() -> Self { AdaptiveThreadPool }
+    pub fn new() -> Self {
+        AdaptiveThreadPool
+    }
 
     /// Execute a closure in-place (no custom thread pool here). This keeps the
     /// API stable for callers that provide their own Rayon-based parallelism.
     pub fn execute<F, R>(&self, f: F) -> R
-    where F: FnOnce() -> R {
+    where
+        F: FnOnce() -> R,
+    {
         f()
     }
 

@@ -6,7 +6,15 @@ package com.kneaf.core.performance;
  */
 public final class CacheNativeBridge {
     static {
-        System.loadLibrary("rustperf");
+        try {
+            if (!com.kneaf.core.performance.bridge.NativeLibraryLoader.loadNativeLibrary()) {
+                // It's acceptable for CacheNativeBridge to be unavailable; callers should handle nulls
+                // but log at info so users know native features are disabled
+                System.out.println("CacheNativeBridge: Native library 'rustperf' not available via NativeLibraryLoader");
+            }
+        } catch (Throwable t) {
+            System.out.println("CacheNativeBridge: Error while attempting to load native library: " + t.getMessage());
+        }
     }
 
     // Cache eviction policies

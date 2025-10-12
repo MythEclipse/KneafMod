@@ -1,11 +1,11 @@
 use rand::Rng;
-use std::alloc::{alloc, Layout, dealloc};
+use std::alloc::{alloc, dealloc, Layout};
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex, RwLock};
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::slice;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Safe wrapper for memory chunk operations
 #[derive(Debug)]
@@ -32,7 +32,7 @@ impl SafeChunk {
             }
             NonNull::new(raw_ptr).unwrap()
         };
-        
+
         Self {
             ptr,
             current_offset: 0,
@@ -115,7 +115,7 @@ impl BumpArena {
         let chunk_size = chunk_size.max(1024); // Minimum 1KB chunks
         let chunk = SafeChunk::new(chunk_size, 8);
         let pressure_monitor = Arc::new(RwLock::new(ArenaPressureMonitor::new()));
-        
+
         Self {
             current: Mutex::new(chunk),
             chunk_size,
@@ -123,16 +123,18 @@ impl BumpArena {
             total_used: AtomicUsize::new(0),
             pressure_monitor,
             high_water_mark: AtomicUsize::new(0),
-            last_cleanup_time: AtomicUsize::new(SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as usize),
+            last_cleanup_time: AtomicUsize::new(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as usize,
+            ),
             is_monitoring: AtomicBool::new(false),
             is_critical_operation: AtomicBool::new(false),
             lazy_cleanup_threshold: 0.9, // Start lazy cleanup when 90% used
             aggressive_cleanup_threshold: 0.95, // Aggressive cleanup at 95%
             critical_cleanup_threshold: 0.98, // Critical threshold at 98%
-            min_allocation_guard: 0.05, // Minimum allocation guard to prevent thrashing
+            min_allocation_guard: 0.05,  // Minimum allocation guard to prevent thrashing
             shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -150,7 +152,7 @@ impl BumpArena {
 
         // Fast path: try allocation without locking first
         let result = self.try_fast_allocate(size, align);
-        
+
         // If fast path failed, use slow path with locking
         if let Some(ptr) = result {
             ptr
@@ -183,7 +185,7 @@ impl BumpArena {
     /// Slow allocation path with full locking and chunk creation
     fn slow_allocate(&self, size: usize, align: usize) -> *mut u8 {
         let mut chunk = self.current.lock().expect("Arena mutex poisoned");
-        
+
         // Try allocation again now that we have the lock
         if let Some(ptr) = chunk.allocate(size, align) {
             self.total_used.fetch_add(size, Ordering::Relaxed);
@@ -194,18 +196,20 @@ impl BumpArena {
         // Need a new chunk
         let chunk_size = size.max(self.chunk_size);
         let mut new_chunk = Self::allocate_safe_chunk(chunk_size, align);
-        
+
         // Allocate from new chunk
-        let result = new_chunk.allocate(size, align)
+        let result = new_chunk
+            .allocate(size, align)
             .expect("New chunk should have enough space");
 
         // Replace the current chunk
         let old_chunk = std::mem::replace(&mut *chunk, new_chunk);
-        
+
         // Deallocate the old chunk to free memory
         old_chunk.deallocate();
 
-        self.total_allocated.fetch_add(chunk_size, Ordering::Relaxed);
+        self.total_allocated
+            .fetch_add(chunk_size, Ordering::Relaxed);
         self.total_used.fetch_add(size, Ordering::Relaxed);
         self.record_allocation(size);
 
@@ -222,172 +226,179 @@ impl BumpArena {
             false
         }
     }
-    
-        #[allow(dead_code)]
-        fn allocate_new_chunk(&self, min_size: usize, align: usize) -> *mut u8 {
-            let chunk_size = min_size.max(self.chunk_size);
-                let mut new_chunk = Self::allocate_safe_chunk(chunk_size, align);
-            
-                // Try to allocate from the new chunk
-                let result = new_chunk.allocate(min_size, align)
-                    .expect("New chunk should have enough space");
-            
-            // Replace the current chunk
-            let mut old_chunk = self.current.lock().expect("Arena mutex poisoned");
-            let old_chunk = std::mem::replace(&mut *old_chunk, new_chunk);
-            
-            // Deallocate the old chunk to free memory
-            old_chunk.deallocate();
-            
-            self.total_allocated.fetch_add(chunk_size, Ordering::Relaxed);
-            self.total_used.fetch_add(min_size, Ordering::Relaxed);
-            self.record_allocation(min_size);
-            
-            result
+
+    #[allow(dead_code)]
+    fn allocate_new_chunk(&self, min_size: usize, align: usize) -> *mut u8 {
+        let chunk_size = min_size.max(self.chunk_size);
+        let mut new_chunk = Self::allocate_safe_chunk(chunk_size, align);
+
+        // Try to allocate from the new chunk
+        let result = new_chunk
+            .allocate(min_size, align)
+            .expect("New chunk should have enough space");
+
+        // Replace the current chunk
+        let mut old_chunk = self.current.lock().expect("Arena mutex poisoned");
+        let old_chunk = std::mem::replace(&mut *old_chunk, new_chunk);
+
+        // Deallocate the old chunk to free memory
+        old_chunk.deallocate();
+
+        self.total_allocated
+            .fetch_add(chunk_size, Ordering::Relaxed);
+        self.total_used.fetch_add(min_size, Ordering::Relaxed);
+        self.record_allocation(min_size);
+
+        result
+    }
+
+    /// Start background monitoring
+    pub fn start_monitoring(&self, check_interval_ms: u64) {
+        if self.is_monitoring.load(Ordering::Relaxed) {
+            return;
         }
-    
-        /// Start background monitoring
-        pub fn start_monitoring(&self, check_interval_ms: u64) {
-            if self.is_monitoring.load(Ordering::Relaxed) {
-                return;
-            }
 
-            self.is_monitoring.store(true, Ordering::Relaxed);
-            self.shutdown_flag.store(false, Ordering::Relaxed);
-            
-            let pressure_monitor = Arc::clone(&self.pressure_monitor);
-            let shutdown_flag = Arc::clone(&self.shutdown_flag);
+        self.is_monitoring.store(true, Ordering::Relaxed);
+        self.shutdown_flag.store(false, Ordering::Relaxed);
 
-            thread::spawn(move || {
-                let mut consecutive_errors = 0;
-                const MAX_CONSECUTIVE_ERRORS: u32 = 5;
-                
-                while !shutdown_flag.load(Ordering::Relaxed) {
-                    // Perform a lightweight pressure check using the monitor only
-                    match std::panic::catch_unwind(|| {
-                        if let Ok(monitor) = pressure_monitor.write() {
-                            monitor.record_pressure_check(MemoryPressureLevel::Normal);
-                        }
-                    }) {
-                        Ok(_) => {
-                            consecutive_errors = 0; // Reset error counter on success
-                        },
-                        Err(e) => {
-                            log::error!("Panic occurred in monitoring thread: {:?}", e);
-                            consecutive_errors += 1;
-                            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                                log::error!("Too many consecutive errors, shutting down monitoring thread");
-                                return;
-                            }
-                        }
+        let pressure_monitor = Arc::clone(&self.pressure_monitor);
+        let shutdown_flag = Arc::clone(&self.shutdown_flag);
+
+        thread::spawn(move || {
+            let mut consecutive_errors = 0;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+            while !shutdown_flag.load(Ordering::Relaxed) {
+                // Perform a lightweight pressure check using the monitor only
+                match std::panic::catch_unwind(|| {
+                    if let Ok(monitor) = pressure_monitor.write() {
+                        monitor.record_pressure_check(MemoryPressureLevel::Normal);
                     }
-
-                    // Wait for next check with periodic shutdown check
-                    let sleep_duration = Duration::from_millis(check_interval_ms);
-                    let start_time = SystemTime::now();
-                    
-                    while SystemTime::now().duration_since(start_time).unwrap() < sleep_duration {
-                        if shutdown_flag.load(Ordering::Relaxed) {
-                            log::info!("Monitoring thread shutting down gracefully");
+                }) {
+                    Ok(_) => {
+                        consecutive_errors = 0; // Reset error counter on success
+                    }
+                    Err(e) => {
+                        log::error!("Panic occurred in monitoring thread: {:?}", e);
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            log::error!(
+                                "Too many consecutive errors, shutting down monitoring thread"
+                            );
                             return;
                         }
-                        // Check every 50ms for shutdown signal
-                        thread::sleep(Duration::from_millis(50));
                     }
                 }
-                log::info!("Monitoring thread shut down gracefully");
-            });
-        }
-    
-        /// Stop background monitoring with timeout
-        pub fn stop_monitoring(&self, timeout_ms: Option<u64>) -> bool {
-            self.is_monitoring.store(false, Ordering::Relaxed);
-            self.shutdown_flag.store(true, Ordering::Relaxed);
-            
-            // If timeout is specified, wait for thread to stop
-            if let Some(timeout) = timeout_ms {
-                let start_time = SystemTime::now();
-                let timeout_duration = Duration::from_millis(timeout);
-                
-                while self.is_monitoring.load(Ordering::Relaxed) {
-                    if SystemTime::now().duration_since(start_time).unwrap() > timeout_duration {
-                        log::warn!("Monitoring thread did not stop within timeout period");
-                        return false;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-            }
-            
-            true
-        }
-        
-        /// Force stop monitoring thread (use as last resort)
-        pub fn force_stop_monitoring(&self) {
-            self.is_monitoring.store(false, Ordering::Relaxed);
-            self.shutdown_flag.store(true, Ordering::Relaxed);
-            log::warn!("Force stopping monitoring thread");
-        }
-        
-        /// Check if monitoring is active
-        pub fn is_monitoring_active(&self) -> bool {
-            self.is_monitoring.load(Ordering::Relaxed)
-        }
-        
-        /// Check if shutdown flag is set
-        pub fn is_shutdown_requested(&self) -> bool {
-            self.shutdown_flag.load(Ordering::Relaxed)
-        }
-    
-        /// Record allocation for monitoring
-        fn record_allocation(&self, size: usize) {
-            let current_used = self.total_used.load(Ordering::Relaxed);
-            self.high_water_mark.fetch_max(current_used, Ordering::Relaxed);
 
-            if let Ok(monitor) = self.pressure_monitor.write() {
-                monitor.record_allocation(size);
+                // Wait for next check with periodic shutdown check
+                let sleep_duration = Duration::from_millis(check_interval_ms);
+                let start_time = SystemTime::now();
+
+                while SystemTime::now().duration_since(start_time).unwrap() < sleep_duration {
+                    if shutdown_flag.load(Ordering::Relaxed) {
+                        log::info!("Monitoring thread shutting down gracefully");
+                        return;
+                    }
+                    // Check every 50ms for shutdown signal
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+            log::info!("Monitoring thread shut down gracefully");
+        });
+    }
+
+    /// Stop background monitoring with timeout
+    pub fn stop_monitoring(&self, timeout_ms: Option<u64>) -> bool {
+        self.is_monitoring.store(false, Ordering::Relaxed);
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+
+        // If timeout is specified, wait for thread to stop
+        if let Some(timeout) = timeout_ms {
+            let start_time = SystemTime::now();
+            let timeout_duration = Duration::from_millis(timeout);
+
+            while self.is_monitoring.load(Ordering::Relaxed) {
+                if SystemTime::now().duration_since(start_time).unwrap() > timeout_duration {
+                    log::warn!("Monitoring thread did not stop within timeout period");
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(10));
             }
         }
-    
-        /// Perform lazy cleanup (free small amounts periodically)
-        pub fn perform_lazy_cleanup(&self) {
-            let current_time = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as usize;
-            let last_cleanup = self.last_cleanup_time.load(Ordering::Relaxed);
-            
-            // Only cleanup if enough time has passed (5 seconds)
-            if current_time - last_cleanup < 5 {
-                return;
-            }
-    
-            let mut chunk = self.current.lock().expect("Arena mutex poisoned");
-            
-            // Free a small amount (1KB) if possible
-            const SMALL_FREE_AMOUNT: usize = 1024;
-            if chunk.current_offset > SMALL_FREE_AMOUNT {
-                chunk.current_offset -= SMALL_FREE_AMOUNT;
-                self.total_used.fetch_sub(SMALL_FREE_AMOUNT, Ordering::Relaxed);
-                
-                self.last_cleanup_time.store(current_time, Ordering::Relaxed);
-                
-                let monitor = self.pressure_monitor.write().unwrap();
-                monitor.record_cleanup_event(ArenaCleanupType::Lazy);
-                
-                log::debug!("Freed {} bytes in lazy cleanup", SMALL_FREE_AMOUNT);
-            }
+
+        true
+    }
+
+    /// Force stop monitoring thread (use as last resort)
+    pub fn force_stop_monitoring(&self) {
+        self.is_monitoring.store(false, Ordering::Relaxed);
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        log::warn!("Force stopping monitoring thread");
+    }
+
+    /// Check if monitoring is active
+    pub fn is_monitoring_active(&self) -> bool {
+        self.is_monitoring.load(Ordering::Relaxed)
+    }
+
+    /// Check if shutdown flag is set
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_flag.load(Ordering::Relaxed)
+    }
+
+    /// Record allocation for monitoring
+    fn record_allocation(&self, size: usize) {
+        let current_used = self.total_used.load(Ordering::Relaxed);
+        self.high_water_mark
+            .fetch_max(current_used, Ordering::Relaxed);
+
+        if let Ok(monitor) = self.pressure_monitor.write() {
+            monitor.record_allocation(size);
         }
-    
-        /// Get memory pressure monitoring statistics
-        pub fn get_pressure_stats(&self) -> ArenaPressureStats {
-            self.pressure_monitor.read().unwrap().get_stats()
+    }
+
+    /// Perform lazy cleanup (free small amounts periodically)
+    pub fn perform_lazy_cleanup(&self) {
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as usize;
+        let last_cleanup = self.last_cleanup_time.load(Ordering::Relaxed);
+
+        // Only cleanup if enough time has passed (5 seconds)
+        if current_time - last_cleanup < 5 {
+            return;
         }
+
+        let mut chunk = self.current.lock().expect("Arena mutex poisoned");
+
+        // Free a small amount (1KB) if possible
+        const SMALL_FREE_AMOUNT: usize = 1024;
+        if chunk.current_offset > SMALL_FREE_AMOUNT {
+            chunk.current_offset -= SMALL_FREE_AMOUNT;
+            self.total_used
+                .fetch_sub(SMALL_FREE_AMOUNT, Ordering::Relaxed);
+
+            self.last_cleanup_time
+                .store(current_time, Ordering::Relaxed);
+
+            let monitor = self.pressure_monitor.write().unwrap();
+            monitor.record_cleanup_event(ArenaCleanupType::Lazy);
+
+            log::debug!("Freed {} bytes in lazy cleanup", SMALL_FREE_AMOUNT);
+        }
+    }
+
+    /// Get memory pressure monitoring statistics
+    pub fn get_pressure_stats(&self) -> ArenaPressureStats {
+        self.pressure_monitor.read().unwrap().get_stats()
+    }
 
     /// Get usage statistics
     pub fn stats(&self) -> ArenaStats {
         let allocated = self.total_allocated.load(Ordering::Relaxed);
         let used = self.total_used.load(Ordering::Relaxed);
-        
+
         ArenaStats {
             total_allocated: allocated,
             total_used: used,
@@ -407,7 +418,9 @@ impl BumpArena {
                 let stats = self.stats();
                 let usage_ratio = if stats.total_allocated > 0 {
                     stats.total_used as f64 / stats.total_allocated as f64
-                } else { 0.0 };
+                } else {
+                    0.0
+                };
 
                 let level = MemoryPressureLevel::from_usage_ratio(usage_ratio);
                 monitor.record_pressure_check(level);
@@ -476,28 +489,39 @@ impl ArenaPressureMonitor {
         let now = SystemTime::now();
         let mut history = self.allocation_history.lock().unwrap();
         history.push((now, size));
-        
+
         // Keep only last 5 minutes of data
         while let Some(&(_, _)) = history.first() {
-            if now.duration_since(history[0].0).unwrap_or(Duration::from_secs(301)).as_secs() > 300 {
+            if now
+                .duration_since(history[0].0)
+                .unwrap_or(Duration::from_secs(301))
+                .as_secs()
+                > 300
+            {
                 history.remove(0);
             } else {
                 break;
             }
         }
-        
+
         self.total_allocations.fetch_add(1, Ordering::Relaxed);
-        self.total_bytes_allocated.fetch_add(size, Ordering::Relaxed);
+        self.total_bytes_allocated
+            .fetch_add(size, Ordering::Relaxed);
     }
 
     pub fn record_pressure_check(&self, pressure: MemoryPressureLevel) {
         let now = SystemTime::now();
         let mut checks = self.pressure_checks.lock().unwrap();
         checks.push((now, pressure));
-        
+
         // Keep only last 60 seconds of data
         while let Some(&(_, _)) = checks.first() {
-            if now.duration_since(checks[0].0).unwrap_or(Duration::from_secs(61)).as_secs() > 60 {
+            if now
+                .duration_since(checks[0].0)
+                .unwrap_or(Duration::from_secs(61))
+                .as_secs()
+                > 60
+            {
                 checks.remove(0);
             } else {
                 break;
@@ -509,10 +533,15 @@ impl ArenaPressureMonitor {
         let now = SystemTime::now();
         let mut events = self.cleanup_events.lock().unwrap();
         events.push((now, cleanup_type));
-        
+
         // Keep only last 60 seconds of data
         while let Some(&(_, _)) = events.first() {
-            if now.duration_since(events[0].0).unwrap_or(Duration::from_secs(61)).as_secs() > 60 {
+            if now
+                .duration_since(events[0].0)
+                .unwrap_or(Duration::from_secs(61))
+                .as_secs()
+                > 60
+            {
                 events.remove(0);
             } else {
                 break;
@@ -524,43 +553,56 @@ impl ArenaPressureMonitor {
         let allocation_history = self.allocation_history.lock().unwrap();
         let pressure_checks = self.pressure_checks.lock().unwrap();
         let cleanup_events = self.cleanup_events.lock().unwrap();
-        
+
         let total_allocations = self.total_allocations.load(Ordering::Relaxed);
         let total_bytes_allocated = self.total_bytes_allocated.load(Ordering::Relaxed);
-        
+
         let recent_allocations: Vec<&(SystemTime, usize)> = allocation_history
             .iter()
             .filter(|&&(time, _)| {
                 let now = SystemTime::now();
-                now.duration_since(time).unwrap_or(Duration::from_secs(0)).as_secs() <= 60
+                now.duration_since(time)
+                    .unwrap_or(Duration::from_secs(0))
+                    .as_secs()
+                    <= 60
             })
             .collect();
-        
+
         let recent_pressure_checks: Vec<&(SystemTime, MemoryPressureLevel)> = pressure_checks
             .iter()
             .filter(|&&(time, _)| {
                 let now = SystemTime::now();
-                now.duration_since(time).unwrap_or(Duration::from_secs(0)).as_secs() <= 60
+                now.duration_since(time)
+                    .unwrap_or(Duration::from_secs(0))
+                    .as_secs()
+                    <= 60
             })
             .collect();
-        
+
         let recent_cleanup_events: Vec<&(SystemTime, ArenaCleanupType)> = cleanup_events
             .iter()
             .filter(|&&(time, _)| {
                 let now = SystemTime::now();
-                now.duration_since(time).unwrap_or(Duration::from_secs(0)).as_secs() <= 60
+                now.duration_since(time)
+                    .unwrap_or(Duration::from_secs(0))
+                    .as_secs()
+                    <= 60
             })
             .collect();
-        
+
         let avg_allocation_size = if !recent_allocations.is_empty() {
-            recent_allocations.iter().map(|&&(_, size)| size).sum::<usize>() as f64 / recent_allocations.len() as f64
+            recent_allocations
+                .iter()
+                .map(|&&(_, size)| size)
+                .sum::<usize>() as f64
+                / recent_allocations.len() as f64
         } else {
             0.0
         };
-        
+
         let pressure_distribution = self.calculate_pressure_distribution(recent_pressure_checks);
         let cleanup_distribution = self.calculate_cleanup_distribution(recent_cleanup_events);
-        
+
         ArenaPressureStats {
             total_allocations,
             total_bytes_allocated,
@@ -568,23 +610,47 @@ impl ArenaPressureMonitor {
             avg_allocation_size,
             pressure_distribution,
             cleanup_distribution,
-            last_allocation_time: allocation_history.last().map(|&(t, _)| t).unwrap_or(SystemTime::now()),
-            last_pressure_check_time: pressure_checks.last().map(|&(t, _)| t).unwrap_or(SystemTime::now()),
-            last_cleanup_time: cleanup_events.last().map(|&(t, _)| t).unwrap_or(SystemTime::now()),
+            last_allocation_time: allocation_history
+                .last()
+                .map(|&(t, _)| t)
+                .unwrap_or(SystemTime::now()),
+            last_pressure_check_time: pressure_checks
+                .last()
+                .map(|&(t, _)| t)
+                .unwrap_or(SystemTime::now()),
+            last_cleanup_time: cleanup_events
+                .last()
+                .map(|&(t, _)| t)
+                .unwrap_or(SystemTime::now()),
         }
     }
 
-    fn calculate_pressure_distribution(&self, checks: Vec<&(SystemTime, MemoryPressureLevel)>) -> PressureDistribution {
+    fn calculate_pressure_distribution(
+        &self,
+        checks: Vec<&(SystemTime, MemoryPressureLevel)>,
+    ) -> PressureDistribution {
         let total = checks.len();
         if total == 0 {
             return PressureDistribution::default();
         }
-        
-    let normal = checks.iter().filter(|&&(_, p)| *p == MemoryPressureLevel::Normal).count();
-    let moderate = checks.iter().filter(|&&(_, p)| *p == MemoryPressureLevel::Moderate).count();
-    let high = checks.iter().filter(|&&(_, p)| *p == MemoryPressureLevel::High).count();
-    let critical = checks.iter().filter(|&&(_, p)| *p == MemoryPressureLevel::Critical).count();
-        
+
+        let normal = checks
+            .iter()
+            .filter(|&&(_, p)| *p == MemoryPressureLevel::Normal)
+            .count();
+        let moderate = checks
+            .iter()
+            .filter(|&&(_, p)| *p == MemoryPressureLevel::Moderate)
+            .count();
+        let high = checks
+            .iter()
+            .filter(|&&(_, p)| *p == MemoryPressureLevel::High)
+            .count();
+        let critical = checks
+            .iter()
+            .filter(|&&(_, p)| *p == MemoryPressureLevel::Critical)
+            .count();
+
         PressureDistribution {
             normal: normal as f64 / total as f64,
             moderate: moderate as f64 / total as f64,
@@ -593,16 +659,28 @@ impl ArenaPressureMonitor {
         }
     }
 
-    fn calculate_cleanup_distribution(&self, events: Vec<&(SystemTime, ArenaCleanupType)>) -> CleanupDistribution {
+    fn calculate_cleanup_distribution(
+        &self,
+        events: Vec<&(SystemTime, ArenaCleanupType)>,
+    ) -> CleanupDistribution {
         let total = events.len();
         if total == 0 {
             return CleanupDistribution::default();
         }
-        
-    let light = events.iter().filter(|&&(_, t)| *t == ArenaCleanupType::Light).count();
-    let aggressive = events.iter().filter(|&&(_, t)| *t == ArenaCleanupType::Aggressive).count();
-    let lazy = events.iter().filter(|&&(_, t)| *t == ArenaCleanupType::Lazy).count();
-        
+
+        let light = events
+            .iter()
+            .filter(|&&(_, t)| *t == ArenaCleanupType::Light)
+            .count();
+        let aggressive = events
+            .iter()
+            .filter(|&&(_, t)| *t == ArenaCleanupType::Aggressive)
+            .count();
+        let lazy = events
+            .iter()
+            .filter(|&&(_, t)| *t == ArenaCleanupType::Lazy)
+            .count();
+
         CleanupDistribution {
             light: light as f64 / total as f64,
             aggressive: aggressive as f64 / total as f64,
@@ -653,7 +731,7 @@ impl ArenaPool {
     /// Create a new arena pool
     pub fn new(default_chunk_size: usize, max_arenas: usize) -> Self {
         let pressure_monitor = Arc::new(RwLock::new(ArenaPoolPressureMonitor::new()));
-        
+
         Self {
             arenas: Mutex::new(Vec::new()),
             default_chunk_size,
@@ -672,7 +750,7 @@ impl ArenaPool {
 
         self.is_monitoring.store(true, Ordering::Relaxed);
         self.shutdown_flag.store(false, Ordering::Relaxed);
-        
+
         let pressure_monitor = Arc::clone(&self.pressure_monitor);
         // Clone only the data we need into the thread: a handle to the pool (Arc)
         let arenas_handle = Arc::new(Mutex::new(self.arenas.lock().unwrap().clone()));
@@ -680,7 +758,7 @@ impl ArenaPool {
         thread::spawn(move || {
             let mut consecutive_errors = 0;
             const MAX_CONSECUTIVE_ERRORS: u32 = 5;
-            
+
             while !shutdown_flag.load(Ordering::Relaxed) {
                 // Check pool pressure
                 match std::panic::catch_unwind(|| {
@@ -693,7 +771,11 @@ impl ArenaPool {
                         total_allocated += s.total_allocated;
                         total_used += s.total_used;
                     }
-                    let usage_ratio = if total_allocated > 0 { total_used as f64 / total_allocated as f64 } else { 0.0 };
+                    let usage_ratio = if total_allocated > 0 {
+                        total_used as f64 / total_allocated as f64
+                    } else {
+                        0.0
+                    };
 
                     let pressure_level = MemoryPressureLevel::from_usage_ratio(usage_ratio);
 
@@ -702,28 +784,32 @@ impl ArenaPool {
                         arena_count: arenas_guard.len(),
                         total_allocated,
                         total_used,
-                        utilization: if total_allocated > 0 { total_used as f64 / total_allocated as f64 } else { 0.0 },
+                        utilization: if total_allocated > 0 {
+                            total_used as f64 / total_allocated as f64
+                        } else {
+                            0.0
+                        },
                     };
 
                     // Update monitoring stats
                     let monitor = pressure_monitor.write().unwrap();
                     monitor.record_pressure_check(pressure_level, stats_snapshot);
-                    
+
                     // Perform cleanup if needed (no direct calls into pool to avoid borrowing self)
                     match pressure_level {
                         MemoryPressureLevel::High | MemoryPressureLevel::Critical => {
                             log::warn!("High memory pressure in arena pool - performing cleanup (deferred)");
                             // In this simplified background thread we avoid mutating the real pool; production code would signal the pool to cleanup
-                        },
+                        }
                         MemoryPressureLevel::Moderate => {
                             log::info!("Moderate memory pressure in arena pool");
-                        },
+                        }
                         _ => {}
                     }
                 }) {
                     Ok(_) => {
                         consecutive_errors = 0; // Reset error counter on success
-                    },
+                    }
                     Err(e) => {
                         log::error!("Panic occurred in arena pool monitoring thread: {:?}", e);
                         consecutive_errors += 1;
@@ -737,7 +823,7 @@ impl ArenaPool {
                 // Wait for next check with periodic shutdown check
                 let sleep_duration = Duration::from_millis(check_interval_ms);
                 let start_time = SystemTime::now();
-                
+
                 while SystemTime::now().duration_since(start_time).unwrap() < sleep_duration {
                     if shutdown_flag.load(Ordering::Relaxed) {
                         log::info!("Arena pool monitoring thread shutting down gracefully");
@@ -755,12 +841,12 @@ impl ArenaPool {
     pub fn stop_monitoring(&self, timeout_ms: Option<u64>) -> bool {
         self.is_monitoring.store(false, Ordering::Relaxed);
         self.shutdown_flag.store(true, Ordering::Relaxed);
-        
+
         // If timeout is specified, wait for thread to stop
         if let Some(timeout) = timeout_ms {
             let start_time = SystemTime::now();
             let timeout_duration = Duration::from_millis(timeout);
-            
+
             while self.is_monitoring.load(Ordering::Relaxed) {
                 if SystemTime::now().duration_since(start_time).unwrap() > timeout_duration {
                     log::warn!("Monitoring thread did not stop within timeout period");
@@ -769,22 +855,22 @@ impl ArenaPool {
                 thread::sleep(Duration::from_millis(10));
             }
         }
-        
+
         true
     }
-    
+
     /// Force stop monitoring thread (use as last resort)
     pub fn force_stop_monitoring(&self) {
         self.is_monitoring.store(false, Ordering::Relaxed);
         self.shutdown_flag.store(true, Ordering::Relaxed);
         log::warn!("Force stopping monitoring thread");
     }
-    
+
     /// Check if monitoring is active
     pub fn is_monitoring_active(&self) -> bool {
         self.is_monitoring.load(Ordering::Relaxed)
     }
-    
+
     /// Check if shutdown flag is set
     pub fn is_shutdown_requested(&self) -> bool {
         self.shutdown_flag.load(Ordering::Relaxed)
@@ -793,13 +879,13 @@ impl ArenaPool {
     /// Get an arena from the pool (create if necessary)
     pub fn get_arena(&self) -> Arc<BumpArena> {
         let mut arenas = self.arenas.lock().expect("ArenaPool arenas mutex poisoned");
-        
+
         // Try to reuse an existing arena
         if let Some(arena) = arenas.pop() {
             self.record_arena_event(ArenaPoolEvent::Reuse);
             return arena;
         }
-        
+
         // Create a new arena if we haven't reached the limit
         if arenas.len() < self.max_arenas {
             let arena = Arc::new(BumpArena::new(self.default_chunk_size));
@@ -864,13 +950,16 @@ impl ArenaPool {
             let util_a = stats_a.utilization;
             let util_b = stats_b.utilization;
 
-            util_b.partial_cmp(&util_a).unwrap_or(std::cmp::Ordering::Equal)
+            util_b
+                .partial_cmp(&util_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Determine arenas to remove, but don't call methods on them while holding the lock
         let target_count = (arenas.len() as f64 * 0.7) as usize; // Keep 70% of arenas
         let mut removed_arenas: Vec<Arc<BumpArena>> = Vec::new();
-        while arenas.len() > target_count && arenas.len() > 2 { // Keep at least 2 arenas
+        while arenas.len() > target_count && arenas.len() > 2 {
+            // Keep at least 2 arenas
             if let Some(arena) = arenas.pop() {
                 log::info!("Removed least used arena from pool");
                 removed_arenas.push(arena);
@@ -882,7 +971,7 @@ impl ArenaPool {
         for arena in removed_arenas {
             arena.perform_lazy_cleanup();
         }
-        
+
         let monitor = self.pressure_monitor.write().unwrap();
         monitor.record_cleanup_event(ArenaPoolCleanupType::PoolLevel);
     }
@@ -940,10 +1029,15 @@ impl ArenaPoolPressureMonitor {
         let now = SystemTime::now();
         let mut checks = self.pressure_checks.lock().unwrap();
         checks.push((now, pressure, stats));
-        
+
         // Keep only last 5 minutes of data
         while let Some(&(_, _, _)) = checks.first() {
-            if now.duration_since(checks[0].0).unwrap_or(Duration::from_secs(301)).as_secs() > 300 {
+            if now
+                .duration_since(checks[0].0)
+                .unwrap_or(Duration::from_secs(301))
+                .as_secs()
+                > 300
+            {
                 checks.remove(0);
             } else {
                 break;
@@ -955,26 +1049,31 @@ impl ArenaPoolPressureMonitor {
         let now = SystemTime::now();
         let mut events = self.arena_events.lock().unwrap();
         events.push((now, event));
-        
+
         // Keep only last 5 minutes of data
         while let Some(&(_, _)) = events.first() {
-            if now.duration_since(events[0].0).unwrap_or(Duration::from_secs(301)).as_secs() > 300 {
+            if now
+                .duration_since(events[0].0)
+                .unwrap_or(Duration::from_secs(301))
+                .as_secs()
+                > 300
+            {
                 events.remove(0);
             } else {
                 break;
             }
         }
-        
+
         match event {
             ArenaPoolEvent::Creation => {
                 self.total_arenas_created.fetch_add(1, Ordering::Relaxed);
-            },
+            }
             ArenaPoolEvent::Reuse => {
                 self.total_arenas_reused.fetch_add(1, Ordering::Relaxed);
-            },
+            }
             ArenaPoolEvent::Return => {
                 self.total_arenas_returned.fetch_add(1, Ordering::Relaxed);
-            },
+            }
             _ => {}
         }
     }
@@ -983,10 +1082,15 @@ impl ArenaPoolPressureMonitor {
         let now = SystemTime::now();
         let mut events = self.cleanup_events.lock().unwrap();
         events.push((now, cleanup_type));
-        
+
         // Keep only last 5 minutes of data
         while let Some(&(_, _)) = events.first() {
-            if now.duration_since(events[0].0).unwrap_or(Duration::from_secs(301)).as_secs() > 300 {
+            if now
+                .duration_since(events[0].0)
+                .unwrap_or(Duration::from_secs(301))
+                .as_secs()
+                > 300
+            {
                 events.remove(0);
             } else {
                 break;
@@ -998,36 +1102,42 @@ impl ArenaPoolPressureMonitor {
         let pressure_checks = self.pressure_checks.lock().unwrap();
         let arena_events = self.arena_events.lock().unwrap();
         let cleanup_events = self.cleanup_events.lock().unwrap();
-        
+
         let total_arenas_created = self.total_arenas_created.load(Ordering::Relaxed);
         let total_arenas_reused = self.total_arenas_reused.load(Ordering::Relaxed);
         let total_arenas_returned = self.total_arenas_returned.load(Ordering::Relaxed);
-        
+
         let recent_events: Vec<&(SystemTime, ArenaPoolEvent)> = arena_events
             .iter()
             .filter(|&&(time, _)| {
                 let now = SystemTime::now();
-                now.duration_since(time).unwrap_or(Duration::from_secs(0)).as_secs() <= 60
+                now.duration_since(time)
+                    .unwrap_or(Duration::from_secs(0))
+                    .as_secs()
+                    <= 60
             })
             .collect();
-        
+
         let recent_cleanup_events: Vec<&(SystemTime, ArenaPoolCleanupType)> = cleanup_events
             .iter()
             .filter(|&&(time, _)| {
                 let now = SystemTime::now();
-                now.duration_since(time).unwrap_or(Duration::from_secs(0)).as_secs() <= 60
+                now.duration_since(time)
+                    .unwrap_or(Duration::from_secs(0))
+                    .as_secs()
+                    <= 60
             })
             .collect();
-        
-    let event_distribution = self.calculate_event_distribution(&recent_events);
-    let cleanup_distribution = self.calculate_cleanup_distribution(&recent_cleanup_events);
-        
+
+        let event_distribution = self.calculate_event_distribution(&recent_events);
+        let cleanup_distribution = self.calculate_cleanup_distribution(&recent_cleanup_events);
+
         let current_stats = if let Some((_, _, stats)) = pressure_checks.last() {
             Some(stats.clone())
         } else {
             None
         };
-        
+
         ArenaPoolPressureStats {
             total_arenas_created,
             total_arenas_reused,
@@ -1036,23 +1146,47 @@ impl ArenaPoolPressureMonitor {
             event_distribution,
             cleanup_distribution,
             current_pool_stats: current_stats,
-            last_pressure_check_time: pressure_checks.last().map(|&(t, _, _)| t).unwrap_or(SystemTime::now()),
-            last_arena_event_time: arena_events.last().map(|&(t, _)| t).unwrap_or(SystemTime::now()),
-            last_cleanup_time: cleanup_events.last().map(|&(t, _)| t).unwrap_or(SystemTime::now()),
+            last_pressure_check_time: pressure_checks
+                .last()
+                .map(|&(t, _, _)| t)
+                .unwrap_or(SystemTime::now()),
+            last_arena_event_time: arena_events
+                .last()
+                .map(|&(t, _)| t)
+                .unwrap_or(SystemTime::now()),
+            last_cleanup_time: cleanup_events
+                .last()
+                .map(|&(t, _)| t)
+                .unwrap_or(SystemTime::now()),
         }
     }
 
-    fn calculate_event_distribution(&self, events: &Vec<&(SystemTime, ArenaPoolEvent)>) -> ArenaPoolEventDistribution {
+    fn calculate_event_distribution(
+        &self,
+        events: &Vec<&(SystemTime, ArenaPoolEvent)>,
+    ) -> ArenaPoolEventDistribution {
         let total = events.len();
         if total == 0 {
             return ArenaPoolEventDistribution::default();
         }
-        
-    let creation = events.iter().filter(|&&(_, e)| *e == ArenaPoolEvent::Creation).count();
-    let acquisition = events.iter().filter(|&&(_, e)| *e == ArenaPoolEvent::Acquisition).count();
-    let reuse = events.iter().filter(|&&(_, e)| *e == ArenaPoolEvent::Reuse).count();
-    let returned = events.iter().filter(|&&(_, e)| *e == ArenaPoolEvent::Return).count();
-        
+
+        let creation = events
+            .iter()
+            .filter(|&&(_, e)| *e == ArenaPoolEvent::Creation)
+            .count();
+        let acquisition = events
+            .iter()
+            .filter(|&&(_, e)| *e == ArenaPoolEvent::Acquisition)
+            .count();
+        let reuse = events
+            .iter()
+            .filter(|&&(_, e)| *e == ArenaPoolEvent::Reuse)
+            .count();
+        let returned = events
+            .iter()
+            .filter(|&&(_, e)| *e == ArenaPoolEvent::Return)
+            .count();
+
         ArenaPoolEventDistribution {
             creation: creation as f64 / total as f64,
             acquisition: acquisition as f64 / total as f64,
@@ -1061,15 +1195,24 @@ impl ArenaPoolPressureMonitor {
         }
     }
 
-    fn calculate_cleanup_distribution(&self, events: &Vec<&(SystemTime, ArenaPoolCleanupType)>) -> ArenaPoolCleanupDistribution {
+    fn calculate_cleanup_distribution(
+        &self,
+        events: &Vec<&(SystemTime, ArenaPoolCleanupType)>,
+    ) -> ArenaPoolCleanupDistribution {
         let total = events.len();
         if total == 0 {
             return ArenaPoolCleanupDistribution::default();
         }
-        
-    let pool_level = events.iter().filter(|&&(_, t)| *t == ArenaPoolCleanupType::PoolLevel).count();
-    let individual = events.iter().filter(|&&(_, t)| *t == ArenaPoolCleanupType::Individual).count();
-        
+
+        let pool_level = events
+            .iter()
+            .filter(|&&(_, t)| *t == ArenaPoolCleanupType::PoolLevel)
+            .count();
+        let individual = events
+            .iter()
+            .filter(|&&(_, t)| *t == ArenaPoolCleanupType::Individual)
+            .count();
+
         ArenaPoolCleanupDistribution {
             pool_level: pool_level as f64 / total as f64,
             individual: individual as f64 / total as f64,
@@ -1253,12 +1396,16 @@ impl<T> ArenaVec<T> {
 
     pub fn push(&mut self, value: T) {
         // Check if we need to grow first
-        let needs_grow = self.memory.as_ref().map(|m| m.len >= m.capacity).unwrap_or(true);
-        
+        let needs_grow = self
+            .memory
+            .as_ref()
+            .map(|m| m.len >= m.capacity)
+            .unwrap_or(true);
+
         if needs_grow {
             self.grow_and_repush();
         }
-        
+
         // Now we should have space
         if let Some(ref mut memory) = self.memory {
             if memory.push(value).is_err() {
@@ -1271,14 +1418,18 @@ impl<T> ArenaVec<T> {
 
     fn grow_and_repush(&mut self) {
         let current_capacity = self.memory.as_ref().map(|m| m.capacity).unwrap_or(0);
-        let new_capacity = if current_capacity == 0 { 4 } else { current_capacity * 2 };
-        
+        let new_capacity = if current_capacity == 0 {
+            4
+        } else {
+            current_capacity * 2
+        };
+
         let new_size = new_capacity * std::mem::size_of::<T>();
         let align = std::mem::align_of::<T>();
         let new_ptr = self.arena.alloc(new_size, align) as *mut T;
-        
+
         let mut new_memory = SafeMemoryRegion::new(new_ptr, new_capacity);
-        
+
         // Copy existing elements
         if let Some(ref mut old_memory) = self.memory {
             for i in 0..old_memory.len {
@@ -1291,7 +1442,7 @@ impl<T> ArenaVec<T> {
             }
             old_memory.len = 0; // Prevent double drop
         }
-        
+
         self.memory = Some(new_memory);
     }
 
@@ -1308,7 +1459,10 @@ impl<T> ArenaVec<T> {
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        self.memory.as_mut().map(|m| m.as_mut_slice()).unwrap_or(&mut [])
+        self.memory
+            .as_mut()
+            .map(|m| m.as_mut_slice())
+            .unwrap_or(&mut [])
     }
 }
 
@@ -1366,14 +1520,14 @@ mod tests {
     #[test]
     fn test_bump_arena_allocation() {
         let arena = BumpArena::new(1024);
-        
+
         let ptr1 = arena.alloc(10, 8);
         assert!(!ptr1.is_null());
-        
+
         let ptr2 = arena.alloc(20, 8);
         assert!(!ptr2.is_null());
         assert_ne!(ptr1, ptr2);
-        
+
         let stats = arena.stats();
         assert!(stats.total_used >= 30);
         assert!(stats.utilization > 0.0);
@@ -1383,11 +1537,11 @@ mod tests {
     fn test_arena_vec() {
         let arena = Arc::new(BumpArena::new(1024));
         let mut vec = ArenaVec::with_capacity(arena, 4);
-        
+
         vec.push(1);
         vec.push(2);
         vec.push(3);
-        
+
         assert_eq!(vec.len(), 3);
         assert_eq!(vec.as_slice(), &[1, 2, 3]);
     }
@@ -1395,17 +1549,17 @@ mod tests {
     #[test]
     fn test_arena_pool() {
         let pool = Arc::new(ArenaPool::new(1024, 2));
-        
+
         let arena1 = pool.get_arena();
         let arena2 = pool.get_arena();
-        
+
         // Third arena should reuse one of the first two
         let arena3 = pool.get_arena();
-        
+
         pool.return_arena(arena1);
         pool.return_arena(arena2);
         pool.return_arena(arena3);
-        
+
         let stats = pool.stats();
         assert_eq!(stats.arena_count, 2);
     }

@@ -1,17 +1,17 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock, Mutex};
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
 
-use crate::logging::PerformanceLogger;
-use crate::memory_pool::object_pool::MemoryPressureLevel;
-use crate::memory_pool::hierarchical::HierarchicalMemoryPool;
-use crate::memory_pool::swap::SwapMemoryPool;
-use crate::memory_pool::specialized_pools::{VecPool, StringPool};
 use crate::logging::generate_trace_id;
+use crate::logging::PerformanceLogger;
+use crate::memory_pool::hierarchical::HierarchicalMemoryPool;
+use crate::memory_pool::object_pool::MemoryPressureLevel;
+use crate::memory_pool::specialized_pools::{StringPool, VecPool};
+use crate::memory_pool::swap::SwapMemoryPool;
 
 // Global counters for memory leak detection and statistics
 lazy_static! {
@@ -106,11 +106,13 @@ impl PerformanceMonitor {
     }
 
     fn record_pool_hit(&self) {
-        self.pool_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.pool_hits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn record_pool_miss(&self) {
-        self.pool_misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.pool_misses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn get_hit_ratio(&self) -> f64 {
@@ -153,7 +155,8 @@ impl PerformanceMonitor {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        self.last_cleanup.store(now, std::sync::atomic::Ordering::Relaxed);
+        self.last_cleanup
+            .store(now, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -201,7 +204,11 @@ impl EnhancedMemoryPoolManager {
 
         let result = if pressure == MemoryPressureLevel::Critical && self.swap_pool.is_some() {
             // Use swap pool for critical pressure
-            self.logger.log_info("allocate", &trace_id, &format!("Using swap pool for {} bytes (critical pressure)", size));
+            self.logger.log_info(
+                "allocate",
+                &trace_id,
+                &format!("Using swap pool for {} bytes (critical pressure)", size),
+            );
             self.performance_monitor.record_pool_miss();
 
             let swap_vec = self.swap_pool.as_ref().unwrap().allocate(size)?;
@@ -212,7 +219,11 @@ impl EnhancedMemoryPoolManager {
                 // Very small allocations - try string pool first
                 match self.string_pool.get_string(size) {
                     pooled if pooled.object.is_some() => {
-                        self.logger.log_info("allocate", &trace_id, &format!("Using string pool for {} bytes", size));
+                        self.logger.log_info(
+                            "allocate",
+                            &trace_id,
+                            &format!("Using string pool for {} bytes", size),
+                        );
                         self.performance_monitor.record_pool_hit();
                         let mut vec = Vec::with_capacity(size);
                         vec.resize(size, 0u8);
@@ -225,15 +236,25 @@ impl EnhancedMemoryPoolManager {
                         // Fall back to vec pool
                         match self.vec_pool.get_vec(size) {
                             pooled if pooled.object.is_some() => {
-                                self.logger.log_info("allocate", &trace_id, &format!("Using vec pool for {} bytes", size));
+                                self.logger.log_info(
+                                    "allocate",
+                                    &trace_id,
+                                    &format!("Using vec pool for {} bytes", size),
+                                );
                                 self.performance_monitor.record_pool_hit();
                                 Ok(SmartPooledVec::Vec(pooled))
                             }
                             _ => {
                                 // Fall back to hierarchical pool
-                                self.logger.log_info("allocate", &trace_id, &format!("Using hierarchical pool for {} bytes", size));
+                                self.logger.log_info(
+                                    "allocate",
+                                    &trace_id,
+                                    &format!("Using hierarchical pool for {} bytes", size),
+                                );
                                 self.performance_monitor.record_pool_miss();
-                                Ok(SmartPooledVec::Hierarchical(self.hierarchical_pool.allocate(size)))
+                                Ok(SmartPooledVec::Hierarchical(
+                                    self.hierarchical_pool.allocate(size),
+                                ))
                             }
                         }
                     }
@@ -242,22 +263,38 @@ impl EnhancedMemoryPoolManager {
                 // Small allocations - use vec pool
                 match self.vec_pool.get_vec(size) {
                     pooled if pooled.object.is_some() => {
-                        self.logger.log_info("allocate", &trace_id, &format!("Using vec pool for {} bytes", size));
+                        self.logger.log_info(
+                            "allocate",
+                            &trace_id,
+                            &format!("Using vec pool for {} bytes", size),
+                        );
                         self.performance_monitor.record_pool_hit();
                         Ok(SmartPooledVec::Vec(pooled))
                     }
                     _ => {
                         // Fall back to hierarchical pool
-                        self.logger.log_info("allocate", &trace_id, &format!("Using hierarchical pool for {} bytes", size));
+                        self.logger.log_info(
+                            "allocate",
+                            &trace_id,
+                            &format!("Using hierarchical pool for {} bytes", size),
+                        );
                         self.performance_monitor.record_pool_miss();
-                        Ok(SmartPooledVec::Hierarchical(self.hierarchical_pool.allocate(size)))
+                        Ok(SmartPooledVec::Hierarchical(
+                            self.hierarchical_pool.allocate(size),
+                        ))
                     }
                 }
             } else {
                 // Large allocations - use hierarchical pool directly
-                self.logger.log_info("allocate", &trace_id, &format!("Using hierarchical pool for {} bytes", size));
+                self.logger.log_info(
+                    "allocate",
+                    &trace_id,
+                    &format!("Using hierarchical pool for {} bytes", size),
+                );
                 self.performance_monitor.record_pool_miss();
-                Ok(SmartPooledVec::Hierarchical(self.hierarchical_pool.allocate(size)))
+                Ok(SmartPooledVec::Hierarchical(
+                    self.hierarchical_pool.allocate(size),
+                ))
             };
 
             result
@@ -281,12 +318,23 @@ impl EnhancedMemoryPoolManager {
     }
 
     /// Allocate SIMD-aligned memory
-    pub fn allocate_simd_aligned(&self, size: usize, alignment: usize) -> Result<SmartPooledVec<u8>, String> {
+    pub fn allocate_simd_aligned(
+        &self,
+        size: usize,
+        alignment: usize,
+    ) -> Result<SmartPooledVec<u8>, String> {
         let trace_id = generate_trace_id();
 
-        self.logger.log_info("allocate_simd_aligned", &trace_id, &format!("Allocating {} bytes with {} alignment", size, alignment));
+        self.logger.log_info(
+            "allocate_simd_aligned",
+            &trace_id,
+            &format!("Allocating {} bytes with {} alignment", size, alignment),
+        );
 
-        match self.hierarchical_pool.allocate_simd_aligned(size, alignment) {
+        match self
+            .hierarchical_pool
+            .allocate_simd_aligned(size, alignment)
+        {
             Ok(pooled) => {
                 self.performance_monitor.record_pool_hit();
                 Ok(SmartPooledVec::Hierarchical(pooled))
@@ -305,7 +353,11 @@ impl EnhancedMemoryPoolManager {
         }
 
         let trace_id = generate_trace_id();
-        self.logger.log_info("prefetch", &trace_id, &format!("Prefetching {} size patterns", sizes.len()));
+        self.logger.log_info(
+            "prefetch",
+            &trace_id,
+            &format!("Prefetching {} size patterns", sizes.len()),
+        );
 
         // Prefetch from hierarchical pool
         for &size in sizes {
@@ -343,7 +395,11 @@ impl EnhancedMemoryPoolManager {
         let trace_id = generate_trace_id();
         let start_time = Instant::now();
 
-        self.logger.log_info("perform_maintenance", &trace_id, "Starting maintenance operations");
+        self.logger.log_info(
+            "perform_maintenance",
+            &trace_id,
+            "Starting maintenance operations",
+        );
 
         let mut result = MaintenanceResult::default();
 
@@ -386,7 +442,11 @@ impl EnhancedMemoryPoolManager {
             let queue_size = queue.len();
             if queue_size > 0 {
                 queue.clear();
-                self.logger.log_info("perform_maintenance", &trace_id, &format!("Cleared allocation queue with {} entries", queue_size));
+                self.logger.log_info(
+                    "perform_maintenance",
+                    &trace_id,
+                    &format!("Cleared allocation queue with {} entries", queue_size),
+                );
                 true
             } else {
                 false
@@ -397,7 +457,11 @@ impl EnhancedMemoryPoolManager {
         let elapsed = start_time.elapsed();
         result.duration = elapsed;
 
-        self.logger.log_info("perform_maintenance", &trace_id, &format!("Maintenance completed in {:?}", elapsed));
+        self.logger.log_info(
+            "perform_maintenance",
+            &trace_id,
+            &format!("Maintenance completed in {:?}", elapsed),
+        );
 
         Ok(result)
     }
@@ -448,11 +512,15 @@ impl EnhancedMemoryPoolManager {
         let trace_id = generate_trace_id();
         let start_time = Instant::now();
 
-        self.logger.log_info("cleanup_all_resources", &trace_id, "Starting comprehensive resource cleanup");
+        self.logger.log_info(
+            "cleanup_all_resources",
+            &trace_id,
+            "Starting comprehensive resource cleanup",
+        );
 
         // Clean up hierarchical pool
         let hierarchical_cleanup = self.hierarchical_pool.cleanup_all();
-        
+
         // Clean up swap pool if available
         let swap_cleanup = if let Some(swap_pool) = &mut self.swap_pool {
             swap_pool.cleanup()?;
@@ -463,7 +531,7 @@ impl EnhancedMemoryPoolManager {
 
         // Clean up vec pool
         let vec_cleanup = self.vec_pool.cleanup();
-        
+
         // Clean up string pool
         let string_cleanup = self.string_pool.cleanup();
 
@@ -475,7 +543,7 @@ impl EnhancedMemoryPoolManager {
         queue.clear();
 
         let elapsed = start_time.elapsed();
-        
+
         self.logger.log_info("cleanup_all_resources", &trace_id, &format!(
             "Comprehensive cleanup completed in {:?}. Results: hierarchical={}, swap={}, vec={}, string={}",
             elapsed, hierarchical_cleanup, swap_cleanup, vec_cleanup, string_cleanup
@@ -491,13 +559,13 @@ impl EnhancedMemoryPoolManager {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-            
+
         let last_leak_check = self.leak_detection_timer.load(Ordering::Relaxed);
         const LEAK_CHECK_INTERVAL: u64 = 60; // Check every 60 seconds
 
         if now - last_leak_check > LEAK_CHECK_INTERVAL {
             let allocation_stats = self.get_allocation_stats();
-            
+
             // Check for allocation/deallocation imbalance
             if allocation_stats.total_allocations > allocation_stats.total_deallocations * 2 {
                 leaks.push(format!(
@@ -507,7 +575,8 @@ impl EnhancedMemoryPoolManager {
             }
 
             // Check for high memory usage
-            if allocation_stats.current_memory_usage > 1_000_000_000 { // 1GB threshold
+            if allocation_stats.current_memory_usage > 1_000_000_000 {
+                // 1GB threshold
                 leaks.push(format!(
                     "High memory usage detected: {} bytes ({}MB)",
                     allocation_stats.current_memory_usage,
@@ -570,7 +639,10 @@ impl EnhancedMemoryPoolManager {
     }
 
     /// Zero-copy allocation for small batches - returns direct pooled reference
-    pub fn allocate_small_batch_zero_copy(&self, size: usize) -> Result<SmartPooledVec<u8>, String> {
+    pub fn allocate_small_batch_zero_copy(
+        &self,
+        size: usize,
+    ) -> Result<SmartPooledVec<u8>, String> {
         if size > 1024 {
             return Err("Small batch allocation limited to 1KB".to_string());
         }
@@ -578,11 +650,18 @@ impl EnhancedMemoryPoolManager {
     }
 
     /// Zero-copy SIMD-aligned allocation
-    pub fn allocate_simd_zero_copy(&self, size: usize, alignment: usize) -> Result<SmartPooledVec<u8>, String> {
+    pub fn allocate_simd_zero_copy(
+        &self,
+        size: usize,
+        alignment: usize,
+    ) -> Result<SmartPooledVec<u8>, String> {
         self.allocate_simd_aligned(size, alignment)
     }
     /// Zero-copy vector allocation for spatial operations
-    pub fn allocate_zero_copy_vec<T: Default + Clone + Send + 'static>(&self, capacity: usize) -> Vec<T> {
+    pub fn allocate_zero_copy_vec<T: Default + Clone + Send + 'static>(
+        &self,
+        capacity: usize,
+    ) -> Vec<T> {
         // Use specialized pools for small allocations to avoid heap allocations
         if capacity <= 64 && std::mem::size_of::<T>() <= 8 {
             // For small primitive types, use pre-allocated buffers
@@ -607,31 +686,51 @@ impl EnhancedMemoryPoolManager {
         // Scale vec pool based on hit ratio with more granular control
         if stats.pool_hit_ratio > 0.9 {
             // Very high hit ratio - significantly expand pools
-            self.logger.log_info("adaptive_scale", &trace_id, "Very high hit ratio detected - expanding pools");
+            self.logger.log_info(
+                "adaptive_scale",
+                &trace_id,
+                "Very high hit ratio detected - expanding pools",
+            );
             // Note: Uncomment when pool expansion is implemented
             // self.vec_pool.expand(200);
             // self.string_pool.expand(100);
         } else if stats.pool_hit_ratio > 0.8 {
             // High hit ratio - moderately expand pools
-            self.logger.log_info("adaptive_scale", &trace_id, "High hit ratio detected - moderately expanding pools");
+            self.logger.log_info(
+                "adaptive_scale",
+                &trace_id,
+                "High hit ratio detected - moderately expanding pools",
+            );
             // Note: Uncomment when pool expansion is implemented
             // self.vec_pool.expand(100);
             // self.string_pool.expand(50);
         } else if stats.pool_hit_ratio < 0.2 {
             // Very low hit ratio - significantly contract pools
-            self.logger.log_info("adaptive_scale", &trace_id, "Very low hit ratio detected - significantly contracting pools");
+            self.logger.log_info(
+                "adaptive_scale",
+                &trace_id,
+                "Very low hit ratio detected - significantly contracting pools",
+            );
             // Note: Uncomment when pool contraction is implemented
             // self.vec_pool.contract(150);
             // self.string_pool.contract(75);
         } else if stats.pool_hit_ratio < 0.3 {
             // Low hit ratio - moderately contract pools
-            self.logger.log_info("adaptive_scale", &trace_id, "Low hit ratio detected - moderately contracting pools");
+            self.logger.log_info(
+                "adaptive_scale",
+                &trace_id,
+                "Low hit ratio detected - moderately contracting pools",
+            );
             // Note: Uncomment when pool contraction is implemented
             // self.vec_pool.contract(50);
             // self.string_pool.contract(25);
         } else {
             // Maintain current size - no action needed
-            self.logger.log_info("adaptive_scale", &trace_id, "Balanced hit ratio detected - maintaining pool sizes");
+            self.logger.log_info(
+                "adaptive_scale",
+                &trace_id,
+                "Balanced hit ratio detected - maintaining pool sizes",
+            );
         }
 
         Ok(())
@@ -642,14 +741,38 @@ impl EnhancedMemoryPoolManager {
         let mut metrics = HashMap::new();
         let stats = self.get_allocation_stats();
 
-        metrics.insert("total_allocations".to_string(), stats.total_allocations.to_string());
-        metrics.insert("total_deallocations".to_string(), stats.total_deallocations.to_string());
-        metrics.insert("peak_memory_usage".to_string(), format!("{} bytes", stats.peak_memory_usage));
-        metrics.insert("current_memory_usage".to_string(), format!("{} bytes", stats.current_memory_usage));
-        metrics.insert("allocation_failures".to_string(), stats.allocation_failures.to_string());
-        metrics.insert("average_allocation_time".to_string(), format!("{:?}", stats.average_allocation_time));
-        metrics.insert("pool_hit_ratio".to_string(), format!("{:.2}%", stats.pool_hit_ratio * 100.0));
-        metrics.insert("swap_usage_ratio".to_string(), format!("{:.2}%", stats.swap_usage_ratio * 100.0));
+        metrics.insert(
+            "total_allocations".to_string(),
+            stats.total_allocations.to_string(),
+        );
+        metrics.insert(
+            "total_deallocations".to_string(),
+            stats.total_deallocations.to_string(),
+        );
+        metrics.insert(
+            "peak_memory_usage".to_string(),
+            format!("{} bytes", stats.peak_memory_usage),
+        );
+        metrics.insert(
+            "current_memory_usage".to_string(),
+            format!("{} bytes", stats.current_memory_usage),
+        );
+        metrics.insert(
+            "allocation_failures".to_string(),
+            stats.allocation_failures.to_string(),
+        );
+        metrics.insert(
+            "average_allocation_time".to_string(),
+            format!("{:?}", stats.average_allocation_time),
+        );
+        metrics.insert(
+            "pool_hit_ratio".to_string(),
+            format!("{:.2}%", stats.pool_hit_ratio * 100.0),
+        );
+        metrics.insert(
+            "swap_usage_ratio".to_string(),
+            format!("{:.2}%", stats.swap_usage_ratio * 100.0),
+        );
 
         metrics
     }
@@ -712,7 +835,7 @@ where
                     panic!("Cannot convert SwapPooledVec to non-u8 type");
                 }
                 unsafe { std::slice::from_raw_parts(u8_slice.as_ptr() as *const T, u8_slice.len()) }
-            },
+            }
             SmartPooledVec::Vec(v) => v.as_slice(),
             SmartPooledVec::String(v) => &v.data,
         }
@@ -728,8 +851,10 @@ where
                 if std::mem::size_of::<T>() != std::mem::size_of::<u8>() {
                     panic!("Cannot convert SwapPooledVec to non-u8 type");
                 }
-                unsafe { std::slice::from_raw_parts_mut(u8_slice.as_mut_ptr() as *mut T, u8_slice.len()) }
-            },
+                unsafe {
+                    std::slice::from_raw_parts_mut(u8_slice.as_mut_ptr() as *mut T, u8_slice.len())
+                }
+            }
             SmartPooledVec::Vec(v) => v.as_mut(),
             SmartPooledVec::String(v) => &mut v.data,
         }
@@ -834,54 +959,56 @@ mod tests {
         // Check alignment (pointer should be 32-byte aligned)
         let ptr = aligned_vec.as_slice().as_ptr() as usize;
         assert_eq!(ptr % 32, 0, "Pointer should be 32-byte aligned");
-        }
-    
-        /// RAII wrapper for enhanced memory pool allocations
-        pub struct PooledAllocationGuard<T> {
-            allocation: SmartPooledVec<T>,
-            manager: Arc<EnhancedMemoryPoolManager>,
-        }
-    
-        impl<T> PooledAllocationGuard<T> {
-            /// Create a new allocation guard
-            pub fn new(manager: Arc<EnhancedMemoryPoolManager>, allocation: SmartPooledVec<T>) -> Self {
-                Self {
-                    allocation,
-                    manager,
-                }
-            }
-    
-            /// Get immutable reference to the allocated data
-            pub fn as_slice(&self) -> &[T] {
-                self.allocation.as_slice()
-            }
-    
-            /// Get mutable reference to the allocated data
-            pub fn as_mut_slice(&mut self) -> &mut [T] {
-                self.allocation.as_mut_slice()
-            }
-    
-            /// Get length of the allocated data
-            pub fn len(&self) -> usize {
-                self.allocation.len()
+    }
+
+    /// RAII wrapper for enhanced memory pool allocations
+    pub struct PooledAllocationGuard<T> {
+        allocation: SmartPooledVec<T>,
+        manager: Arc<EnhancedMemoryPoolManager>,
+    }
+
+    impl<T> PooledAllocationGuard<T> {
+        /// Create a new allocation guard
+        pub fn new(manager: Arc<EnhancedMemoryPoolManager>, allocation: SmartPooledVec<T>) -> Self {
+            Self {
+                allocation,
+                manager,
             }
         }
-    
-        impl<T> Drop for PooledAllocationGuard<T> {
-            fn drop(&mut self) {
-                // Automatically return allocation to pool when guard is dropped
-                // This ensures proper cleanup even if exceptions occur
-                let _ = self.allocation; // Explicitly drop the allocation
-                
-                // Update leak detection timer
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-                    
-                self.manager.leak_detection_timer.store(now, Ordering::Relaxed);
-            }
+
+        /// Get immutable reference to the allocated data
+        pub fn as_slice(&self) -> &[T] {
+            self.allocation.as_slice()
         }
+
+        /// Get mutable reference to the allocated data
+        pub fn as_mut_slice(&mut self) -> &mut [T] {
+            self.allocation.as_mut_slice()
+        }
+
+        /// Get length of the allocated data
+        pub fn len(&self) -> usize {
+            self.allocation.len()
+        }
+    }
+
+    impl<T> Drop for PooledAllocationGuard<T> {
+        fn drop(&mut self) {
+            // Automatically return allocation to pool when guard is dropped
+            // This ensures proper cleanup even if exceptions occur
+            let _ = self.allocation; // Explicitly drop the allocation
+
+            // Update leak detection timer
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            self.manager
+                .leak_detection_timer
+                .store(now, Ordering::Relaxed);
+        }
+    }
 
     #[test]
     fn test_performance_monitoring() {

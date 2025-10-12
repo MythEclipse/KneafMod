@@ -13,9 +13,11 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class PerformanceManager {
     public static final String SYSTEM_VERSION = "1.0.0";
-    private static final PerformanceManager INSTANCE = new PerformanceManager();
+    // Make the singleton lazy to avoid triggering ConfigurationManager static init during class load
+    private static volatile PerformanceManager INSTANCE;
 
-    private static final ConfigurationManager CONFIG_MANAGER = ConfigurationManager.getInstance();
+    // Lazily obtain a safe ConfigurationManager to avoid NPE during early startup
+    private static final ConfigurationManager CONFIG_MANAGER = ConfigurationManager.getSafeInstance();
     private final PerformancePluginRegistry pluginRegistry;
     private final Map<String, MetricsProvider> metricsProviders = new ConcurrentHashMap<>();
     private final Map<String, AlertHandler> alertHandlers = new ConcurrentHashMap<>();
@@ -64,6 +66,13 @@ public class PerformanceManager {
      * @return singleton instance
      */
     public static PerformanceManager getInstance() {
+        if (INSTANCE == null) {
+            synchronized (PerformanceManager.class) {
+                if (INSTANCE == null) {
+                    INSTANCE = new PerformanceManager();
+                }
+            }
+        }
         return INSTANCE;
     }
 

@@ -1,27 +1,27 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
-use std::fmt::Debug;
 
 use crate::logging::PerformanceLogger;
 
 /// Size class definitions for hierarchical memory pooling with better fragmentation reduction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum SizeClass {
-    Tiny64B,      // 64 bytes
-    Small256B,    // 256 bytes
-    Medium1KB,    // 1KB
-    Medium2KB,    // 2KB
-    Medium4KB,    // 4KB
-    Medium8KB,    // 8KB
-    Large16KB,    // 16KB
-    Large32KB,    // 32KB
-    Large64KB,    // 64KB
-    Huge128KB,    // 128KB
-    Huge256KB,    // 256KB
-    Huge512KB,    // 512KB
-    Huge1MBPlus,  // 1MB+ (dynamic)
+    Tiny64B,     // 64 bytes
+    Small256B,   // 256 bytes
+    Medium1KB,   // 1KB
+    Medium2KB,   // 2KB
+    Medium4KB,   // 4KB
+    Medium8KB,   // 8KB
+    Large16KB,   // 16KB
+    Large32KB,   // 32KB
+    Large64KB,   // 64KB
+    Huge128KB,   // 128KB
+    Huge256KB,   // 256KB
+    Huge512KB,   // 512KB
+    Huge1MBPlus, // 1MB+ (dynamic)
 }
 
 impl SizeClass {
@@ -340,11 +340,19 @@ impl<T> SlabAllocator<T> {
         let size_class = SizeClass::find_smallest_fit(size);
 
         // Ensure we have slabs for this size class (thread-safe now)
-        Self::ensure_slabs_for_size_class(&mut self.slabs, &mut self.current_slab, &self.config, &size_class);
+        Self::ensure_slabs_for_size_class(
+            &mut self.slabs,
+            &mut self.current_slab,
+            &self.config,
+            &size_class,
+        );
 
         let slabs = self.slabs.get_mut(&size_class)?;
-        let current_slab_idx = self.current_slab.get(&size_class)?
-            .fetch_add(1, Ordering::Relaxed) % slabs.len();
+        let current_slab_idx = self
+            .current_slab
+            .get(&size_class)?
+            .fetch_add(1, Ordering::Relaxed)
+            % slabs.len();
 
         // Try to allocate from current slab
         if let Some(slot_idx) = slabs[current_slab_idx].allocate() {
@@ -379,7 +387,12 @@ impl<T> SlabAllocator<T> {
                 slab_index: slab_idx,
                 slot_index: slot_idx,
                 size_class,
-                ptr: self.slabs.get(&size_class)?.last()?.get_slot_ptr(slot_idx).unwrap(),
+                ptr: self
+                    .slabs
+                    .get(&size_class)?
+                    .last()?
+                    .get_slot_ptr(slot_idx)
+                    .unwrap(),
             });
         }
 
@@ -389,7 +402,7 @@ impl<T> SlabAllocator<T> {
     /// Deallocate memory
     pub fn deallocate(&mut self, allocation: SlabAllocation) {
         let _global_guard = self.lock.write().unwrap();
-        
+
         if let Some(slabs) = self.slabs.get_mut(&allocation.size_class) {
             if let Some(slab) = slabs.get_mut(allocation.slab_index) {
                 slab.deallocate(allocation.slot_index);
@@ -398,7 +411,12 @@ impl<T> SlabAllocator<T> {
     }
 
     /// Ensure slabs exist for a size class
-    fn ensure_slabs_for_size_class(slabs_map: &mut HashMap<SizeClass, Vec<Slab>>, current_slab_map: &mut HashMap<SizeClass, AtomicUsize>, config: &SlabAllocatorConfig, size_class: &SizeClass) {
+    fn ensure_slabs_for_size_class(
+        slabs_map: &mut HashMap<SizeClass, Vec<Slab>>,
+        current_slab_map: &mut HashMap<SizeClass, AtomicUsize>,
+        config: &SlabAllocatorConfig,
+        size_class: &SizeClass,
+    ) {
         if !slabs_map.contains_key(size_class) {
             let mut slabs = Vec::new();
 
@@ -415,7 +433,11 @@ impl<T> SlabAllocator<T> {
     }
 
     /// Allocate a new slab for a size class
-    fn allocate_new_slab(slabs_map: &mut HashMap<SizeClass, Vec<Slab>>, config: &SlabAllocatorConfig, size_class: &SizeClass) {
+    fn allocate_new_slab(
+        slabs_map: &mut HashMap<SizeClass, Vec<Slab>>,
+        config: &SlabAllocatorConfig,
+        size_class: &SizeClass,
+    ) {
         if let Some(slabs) = slabs_map.get_mut(size_class) {
             if slabs.len() < config.max_slabs_per_class {
                 slabs.push(Slab::new(size_class.exact_size(), config.slab_size));
@@ -443,11 +465,14 @@ impl<T> SlabAllocator<T> {
             total_memory += class_memory;
             total_allocated += class_allocated;
 
-            size_class_stats.insert(*size_class, SizeClassStats {
-                memory_usage: class_memory,
-                allocated_slots: class_allocated,
-                total_slots: slabs.len() * self.config.slab_size,
-            });
+            size_class_stats.insert(
+                *size_class,
+                SizeClassStats {
+                    memory_usage: class_memory,
+                    allocated_slots: class_allocated,
+                    total_slots: slabs.len() * self.config.slab_size,
+                },
+            );
         }
 
         SlabAllocatorStats {
@@ -474,7 +499,7 @@ pub struct SlabAllocatorConfig {
 impl Default for SlabAllocatorConfig {
     fn default() -> Self {
         Self {
-            slab_size: 1024,       // 1024 objects per slab by default
+            slab_size: 1024,        // 1024 objects per slab by default
             max_slabs_per_class: 8, // Max 8 slabs per size class
             pre_allocate: true,
             allow_overcommit: false,
@@ -516,7 +541,10 @@ mod tests {
         assert_eq!(SizeClass::from_allocation_size(64), SizeClass::Tiny64B);
         assert_eq!(SizeClass::from_allocation_size(256), SizeClass::Small256B);
         assert_eq!(SizeClass::from_allocation_size(1024), SizeClass::Medium1KB);
-        assert_eq!(SizeClass::from_allocation_size(2000000), SizeClass::Huge1MBPlus);
+        assert_eq!(
+            SizeClass::from_allocation_size(2000000),
+            SizeClass::Huge1MBPlus
+        );
     }
 
     #[test]

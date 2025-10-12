@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::logging::PerformanceLogger;
-use crate::memory_pool::object_pool::{ObjectPool, PooledObject, MemoryPressureLevel};
-use crate::memory_pool::slab_allocator::{SizeClass, SlabAllocator, SlabAllocatorConfig};
 use crate::logging::generate_trace_id;
+use crate::logging::PerformanceLogger;
+use crate::memory_pool::object_pool::{MemoryPressureLevel, ObjectPool, PooledObject};
+use crate::memory_pool::slab_allocator::{SizeClass, SlabAllocator, SlabAllocatorConfig};
 
 /// Size class definitions for hierarchical memory pooling with better fragmentation reduction
 #[derive(Debug, Clone)]
@@ -17,19 +17,19 @@ pub struct HierarchicalPoolConfig {
 impl Default for HierarchicalPoolConfig {
     fn default() -> Self {
         let mut max_sizes = HashMap::new();
-        max_sizes.insert(SizeClass::Tiny64B, 10000);    // 10k tiny objects
-        max_sizes.insert(SizeClass::Small256B, 5000);   // 5k small objects
-        max_sizes.insert(SizeClass::Medium1KB, 2000);   // 2k medium objects
-        max_sizes.insert(SizeClass::Medium2KB, 1500);   // 1.5k medium objects
-        max_sizes.insert(SizeClass::Medium4KB, 1000);   // 1k medium objects
-        max_sizes.insert(SizeClass::Medium8KB, 750);    // 750 medium objects
-        max_sizes.insert(SizeClass::Large16KB, 500);    // 500 large objects
-        max_sizes.insert(SizeClass::Large32KB, 300);    // 300 large objects
-        max_sizes.insert(SizeClass::Large64KB, 200);    // 200 large objects
-        max_sizes.insert(SizeClass::Huge128KB, 100);    // 100 huge objects
-        max_sizes.insert(SizeClass::Huge256KB, 50);     // 50 huge objects
-        max_sizes.insert(SizeClass::Huge512KB, 25);     // 25 huge objects
-        max_sizes.insert(SizeClass::Huge1MBPlus, 10);    // 10 huge+ objects
+        max_sizes.insert(SizeClass::Tiny64B, 10000); // 10k tiny objects
+        max_sizes.insert(SizeClass::Small256B, 5000); // 5k small objects
+        max_sizes.insert(SizeClass::Medium1KB, 2000); // 2k medium objects
+        max_sizes.insert(SizeClass::Medium2KB, 1500); // 1.5k medium objects
+        max_sizes.insert(SizeClass::Medium4KB, 1000); // 1k medium objects
+        max_sizes.insert(SizeClass::Medium8KB, 750); // 750 medium objects
+        max_sizes.insert(SizeClass::Large16KB, 500); // 500 large objects
+        max_sizes.insert(SizeClass::Large32KB, 300); // 300 large objects
+        max_sizes.insert(SizeClass::Large64KB, 200); // 200 large objects
+        max_sizes.insert(SizeClass::Huge128KB, 100); // 100 huge objects
+        max_sizes.insert(SizeClass::Huge256KB, 50); // 50 huge objects
+        max_sizes.insert(SizeClass::Huge512KB, 25); // 25 huge objects
+        max_sizes.insert(SizeClass::Huge1MBPlus, 10); // 10 huge+ objects
 
         Self {
             max_size_per_class: max_sizes,
@@ -82,13 +82,19 @@ impl<T: Default + Clone> FastObjectPool<T> {
 
     /// Get object from pool using lock-free round-robin
     pub fn get(&self) -> T {
-        let index = self.index.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % self.pool.len();
+        let index = self
+            .index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % self.pool.len();
         self.pool[index].clone()
     }
 
     /// Return object to pool (overwrites oldest entry)
     pub fn return_object(&mut self, obj: T) {
-        let index = self.index.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % self.pool.len();
+        let index = self
+            .index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % self.pool.len();
         self.pool[index] = obj;
     }
 }
@@ -125,7 +131,9 @@ impl HierarchicalMemoryPool {
         size_class_order.push(SizeClass::Huge1MBPlus);
 
         for size_class in &size_class_order {
-            let max_size = config.max_size_per_class.get(size_class)
+            let max_size = config
+                .max_size_per_class
+                .get(size_class)
                 .copied()
                 .unwrap_or(1000); // Default to 1000 if not specified
 
@@ -147,10 +155,19 @@ impl HierarchicalMemoryPool {
 
         // Find the best-fit size class using our ordered list
         let size_class = self.find_best_fit_size_class(size);
-        let pool = self.pools.get(&size_class)
+        let pool = self
+            .pools
+            .get(&size_class)
             .expect("Failed to find pool for size class");
 
-        self.logger.log_info("allocate", &trace_id, &format!("Allocating {} bytes from {} pool (best-fit)", size, size_class));
+        self.logger.log_info(
+            "allocate",
+            &trace_id,
+            &format!(
+                "Allocating {} bytes from {} pool (best-fit)",
+                size, size_class
+            ),
+        );
 
         let mut pooled = pool.get();
         let vec = pooled.as_mut();
@@ -168,13 +185,16 @@ impl HierarchicalMemoryPool {
         }
 
         // 2. Binary search for smallest fit (O(log n) vs O(n) linear search)
-        let index = self.size_class_order.binary_search_by(|&sc| {
-            if sc.max_size() < size {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            }
-        }).unwrap_or_else(|i| i);
+        let index = self
+            .size_class_order
+            .binary_search_by(|&sc| {
+                if sc.max_size() < size {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            })
+            .unwrap_or_else(|i| i);
 
         if index < self.size_class_order.len() {
             self.size_class_order[index]
@@ -212,11 +232,16 @@ impl HierarchicalMemoryPool {
         // Only defragment during low memory pressure
         let pressure = self.get_memory_pressure();
         if pressure != MemoryPressureLevel::Normal {
-            self.logger.log_info("defragment", &trace_id, "Skipping defragmentation - not in low pressure mode");
+            self.logger.log_info(
+                "defragment",
+                &trace_id,
+                "Skipping defragmentation - not in low pressure mode",
+            );
             return false;
         }
 
-        self.logger.log_info("defragment", &trace_id, "Starting memory defragmentation");
+        self.logger
+            .log_info("defragment", &trace_id, "Starting memory defragmentation");
 
         for (size_class, pool) in &self.pools {
             let stats = pool.get_monitoring_stats();
@@ -227,15 +252,24 @@ impl HierarchicalMemoryPool {
                 let result = self.defragment_pool(pool);
                 if result {
                     defragmented = true;
-                    self.logger.log_info("defragment", &trace_id, &format!("Defragmented {} pool", size_class));
+                    self.logger.log_info(
+                        "defragment",
+                        &trace_id,
+                        &format!("Defragmented {} pool", size_class),
+                    );
                 }
             }
         }
 
         if defragmented {
-            self.logger.log_info("defragment", &trace_id, "Memory defragmentation completed successfully");
+            self.logger.log_info(
+                "defragment",
+                &trace_id,
+                "Memory defragmentation completed successfully",
+            );
         } else {
-            self.logger.log_info("defragment", &trace_id, "No defragmentation needed");
+            self.logger
+                .log_info("defragment", &trace_id, "No defragmentation needed");
         }
 
         defragmented
@@ -271,24 +305,34 @@ impl HierarchicalMemoryPool {
             return false;
         }
 
-        self.logger.log_info("defragment_pool", &trace_id, &format!(
-            "Found {} fragmented objects ({:.1}KB total fragmentation)",
-            fragmented_objects.len(),
-            total_fragmentation as f64 / 1024.0
-        ));
+        self.logger.log_info(
+            "defragment_pool",
+            &trace_id,
+            &format!(
+                "Found {} fragmented objects ({:.1}KB total fragmentation)",
+                fragmented_objects.len(),
+                total_fragmentation as f64 / 1024.0
+            ),
+        );
 
         // Remove fragmented objects
         for id in &fragmented_objects {
             pool_guard.remove(&id);
 
             // Also remove from access order
-            if let Some((&time, &_obj_id)) = access_order_guard.iter().find(|&(_, obj_id)| *obj_id == *id) {
+            if let Some((&time, &_obj_id)) = access_order_guard
+                .iter()
+                .find(|&(_, obj_id)| *obj_id == *id)
+            {
                 access_order_guard.remove(&time);
             }
         }
 
         // Reallocate surviving objects to consolidate memory
-        let surviving_objects: Vec<_> = pool_guard.drain().map(|(id, (obj, time))| (id, obj, time)).collect();
+        let surviving_objects: Vec<_> = pool_guard
+            .drain()
+            .map(|(id, (obj, time))| (id, obj, time))
+            .collect();
         access_order_guard.clear();
 
         for (id, obj, _time) in surviving_objects {
@@ -297,28 +341,49 @@ impl HierarchicalMemoryPool {
             access_order_guard.insert(now, id);
         }
 
-        self.logger.log_info("defragment_pool", &trace_id, &format!(
-            "Defragmented pool: removed {} fragmented objects, recovered {} KB",
-            fragmented_objects.len(), total_fragmentation as f64 / 1024.0
-        ));
+        self.logger.log_info(
+            "defragment_pool",
+            &trace_id,
+            &format!(
+                "Defragmented pool: removed {} fragmented objects, recovered {} KB",
+                fragmented_objects.len(),
+                total_fragmentation as f64 / 1024.0
+            ),
+        );
 
         changed
     }
 
     /// Allocate memory with SIMD alignment requirements (for AVX-512 compatible buffers)
-    pub fn allocate_simd_aligned(&self, size: usize, alignment: usize) -> Result<PooledVec<u8>, String> {
+    pub fn allocate_simd_aligned(
+        &self,
+        size: usize,
+        alignment: usize,
+    ) -> Result<PooledVec<u8>, String> {
         let trace_id = generate_trace_id();
 
         // Ensure alignment is power of 2 (required for SIMD operations)
         if alignment == 0 || (alignment & (alignment - 1)) != 0 {
-            return Err(format!("Invalid alignment: {} (must be power of 2)", alignment));
+            return Err(format!(
+                "Invalid alignment: {} (must be power of 2)",
+                alignment
+            ));
         }
 
         let size_class = self.find_best_fit_size_class(size);
-        let pool = self.pools.get(&size_class)
+        let pool = self
+            .pools
+            .get(&size_class)
             .ok_or_else(|| format!("Failed to find pool for size class: {:?}", size_class))?;
 
-        self.logger.log_info("allocate_simd_aligned", &trace_id, &format!("Allocating {} bytes (aligned to {}) from {} pool (best-fit)", size, alignment, size_class));
+        self.logger.log_info(
+            "allocate_simd_aligned",
+            &trace_id,
+            &format!(
+                "Allocating {} bytes (aligned to {}) from {} pool (best-fit)",
+                size, alignment, size_class
+            ),
+        );
 
         let mut pooled = pool.get();
         let vec = pooled.as_mut();
@@ -334,26 +399,34 @@ impl HierarchicalMemoryPool {
 
         // Ensure we have enough space for alignment
         if offset + size > vec.capacity() {
-            return Err(format!("Not enough space for alignment: requested {}, available {}", offset + size, vec.capacity()));
+            return Err(format!(
+                "Not enough space for alignment: requested {}, available {}",
+                offset + size,
+                vec.capacity()
+            ));
         }
 
         // Create a new vector with aligned memory
-        let aligned_vec = unsafe { Vec::from_raw_parts(aligned_ptr as *mut u8, size, size + alignment - offset) };
+        let aligned_vec =
+            unsafe { Vec::from_raw_parts(aligned_ptr as *mut u8, size, size + alignment - offset) };
         *vec = aligned_vec;
 
         Ok(pooled)
     }
 
     /// Get statistics for all size classes
-    pub fn get_size_class_stats(&self) -> HashMap<SizeClass, crate::memory_pool::object_pool::ObjectPoolMonitoringStats> {
+    pub fn get_size_class_stats(
+        &self,
+    ) -> HashMap<SizeClass, crate::memory_pool::object_pool::ObjectPoolMonitoringStats> {
         let trace_id = generate_trace_id();
-        self.logger.log_operation("get_size_class_stats", &trace_id, || {
-            let mut stats = HashMap::new();
-            for (size_class, pool) in &self.pools {
-                stats.insert(*size_class, pool.get_monitoring_stats());
-            }
-            stats
-        })
+        self.logger
+            .log_operation("get_size_class_stats", &trace_id, || {
+                let mut stats = HashMap::new();
+                for (size_class, pool) in &self.pools {
+                    stats.insert(*size_class, pool.get_monitoring_stats());
+                }
+                stats
+            })
     }
 
     /// Perform cleanup across all size classes
@@ -364,7 +437,11 @@ impl HierarchicalMemoryPool {
         for (size_class, pool) in &self.pools {
             if pool.lazy_cleanup(self.config.cleanup_threshold) {
                 cleaned_up = true;
-                self.logger.log_info("cleanup", &trace_id, &format!("Cleaned up {} pool", size_class));
+                self.logger.log_info(
+                    "cleanup",
+                    &trace_id,
+                    &format!("Cleaned up {} pool", size_class),
+                );
             }
         }
 
@@ -384,7 +461,10 @@ impl Clone for HierarchicalMemoryPool {
             logger: self.logger.clone(),
             config: self.config.clone(),
             size_class_order: self.size_class_order.clone(),
-            slab_allocator: self.slab_allocator.as_ref().map(|_| SlabAllocator::new(SlabAllocatorConfig::default())),
+            slab_allocator: self
+                .slab_allocator
+                .as_ref()
+                .map(|_| SlabAllocator::new(SlabAllocatorConfig::default())),
         }
     }
 }

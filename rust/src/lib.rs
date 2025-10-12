@@ -1,6 +1,12 @@
 // Core modules
+pub mod allocator;
+pub mod arena;
+pub mod cache_eviction;
+pub mod checksum_monitor;
+pub mod chunk;
+pub mod compression;
+pub mod database;
 pub mod logging;
-pub mod types;
 pub mod memory_pool;
 pub mod memory_pressure_config;
 pub mod performance_monitoring;
@@ -8,13 +14,7 @@ pub mod simd;
 pub mod simd_enhanced;
 pub mod spatial;
 pub mod spatial_optimized;
-pub mod compression;
-pub mod cache_eviction;
-pub mod checksum_monitor;
-pub mod allocator;
-pub mod database;
-pub mod chunk;
-pub mod arena;
+pub mod types;
 
 // Binary serialization modules
 pub mod binary {
@@ -24,43 +24,44 @@ pub mod binary {
 
 // Block processing modules
 pub mod block {
-    pub mod types;
+    pub mod bindings;
     pub mod config;
     pub mod processing;
-    pub mod bindings;
+    pub mod types;
 }
 
 // Entity processing modules
 pub mod entity {
-    pub mod types;
+    pub mod bindings;
     pub mod config;
     pub mod processing;
-    pub mod bindings;
+    pub mod types;
 }
 
 // Mob processing modules
 pub mod mob {
-    pub mod types;
+    pub mod bindings;
     pub mod config;
     pub mod processing;
-    pub mod bindings;
+    pub mod types;
 }
 
 // Villager processing modules
 pub mod villager {
-    pub mod types;
+    pub mod bindings;
     pub mod config;
+    pub mod pathfinding;
     pub mod processing;
     pub mod spatial;
-    pub mod pathfinding;
-    pub mod bindings;
+    pub mod types;
 }
 
 // JNI bridge modules
-pub mod jni_bridge;
+pub mod jni_async_bridge;
 pub mod jni_batch;
 pub mod jni_batch_processor;
-pub mod jni_async_bridge;
+pub mod jni_bridge;
+pub mod jni_exports;
 pub mod jni_raii;
 
 // Parallelism modules
@@ -74,39 +75,67 @@ pub mod test_extreme_performance;
 
 // Re-export commonly used types from memory_pool module
 pub use memory_pool::{
-    // Core types
-    ObjectPool, PooledObject, MemoryPressureLevel,
-
-    // Specialized pools
-    VecPool, StringPool,
-    specialized_pools::PooledVec,
-    specialized_pools::PooledString,
-
-    // Hierarchical pool
-    HierarchicalMemoryPool, HierarchicalPoolConfig, FastObjectPool,
+    // Global pool functions
+    get_global_enhanced_pool,
+    get_global_enhanced_pool_mut,
     hierarchical::PooledVec as HierarchicalPooledVec,
 
-    // Swap pool
-    SwapMemoryPool, SwapPoolConfig, SwapPooledVec,
+    specialized_pools::PooledString,
 
-    // Enhanced manager
-    EnhancedMemoryPoolManager, EnhancedManagerConfig, SmartPooledVec, MaintenanceResult, AllocationStats,
+    specialized_pools::PooledVec,
+    with_thread_local_pool,
+    with_thread_local_pool_mut,
 
-    // Lightweight pool
-    LightweightMemoryPool, LightweightPooledObject, ThreadLocalLightweightPool, FastArena, ArenaHandle, ScopedArena, LightweightPoolStats, ArenaStats,
+    AllocationStats,
 
-    // Slab allocator
-    SlabAllocator, SlabAllocation, SlabAllocatorConfig, Slab, SizeClass, SlabStats, SlabAllocatorStats, SizeClassStats,
+    ArenaHandle,
+    ArenaStats,
+
+    AtomicCounter,
 
     // Atomic state
-    AtomicPoolState, AtomicCounter,
-
-    // Global pool functions
-    get_global_enhanced_pool, get_global_enhanced_pool_mut,
-    with_thread_local_pool, with_thread_local_pool_mut,
-
+    AtomicPoolState,
+    EnhancedManagerConfig,
+    // Enhanced manager
+    EnhancedMemoryPoolManager,
+    FastArena,
+    FastObjectPool,
+    // Hierarchical pool
+    HierarchicalMemoryPool,
+    HierarchicalPoolConfig,
+    // Lightweight pool
+    LightweightMemoryPool,
+    LightweightPoolStats,
+    LightweightPooledObject,
+    MaintenanceResult,
     // Legacy compatibility
     MemoryPoolManager,
+    MemoryPressureLevel,
+
+    // Core types
+    ObjectPool,
+    PooledObject,
+    ScopedArena,
+    SizeClass,
+    SizeClassStats,
+
+    Slab,
+    SlabAllocation,
+    // Slab allocator
+    SlabAllocator,
+    SlabAllocatorConfig,
+    SlabAllocatorStats,
+    SlabStats,
+    SmartPooledVec,
+    StringPool,
+    // Swap pool
+    SwapMemoryPool,
+    SwapPoolConfig,
+    SwapPooledVec,
+
+    ThreadLocalLightweightPool,
+    // Specialized pools
+    VecPool,
 };
 
 // Initialize global buffer tracker for zero-copy operations
@@ -119,10 +148,10 @@ fn init_globals() {
 }
 
 // Re-export other commonly used types
-pub use logging::{PerformanceLogger, generate_trace_id};
-pub use types::{RustPerformanceError, Result};
+pub use compression::{CompressionEngine, CompressionStats};
+pub use database::RustDatabaseAdapter;
+pub use logging::{generate_trace_id, PerformanceLogger};
 pub use memory_pressure_config::MemoryPressureConfig;
 pub use simd::{SimdOperations, SimdProcessor};
 pub use simd_enhanced::{EnhancedSimdProcessor, SimdCapability, SimdPerformanceStats};
-pub use compression::{CompressionEngine, CompressionStats};
-pub use database::RustDatabaseAdapter;
+pub use types::{Result, RustPerformanceError};

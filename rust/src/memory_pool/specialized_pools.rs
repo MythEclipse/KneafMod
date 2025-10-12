@@ -1,10 +1,10 @@
-use std::sync::{RwLock, Arc, Mutex};
 use std::collections::HashMap;
-use std::time::SystemTime;
 use std::fmt::Debug;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::SystemTime;
 
-use crate::memory_pool::object_pool::{ObjectPool, PooledObject};
 use crate::logging::PerformanceLogger;
+use crate::memory_pool::object_pool::{ObjectPool, PooledObject};
 
 /// Specialized pool for vectors
 #[derive(Debug)]
@@ -23,7 +23,7 @@ where
     fn clone(&self) -> Self {
         VecPool {
             pool: self.pool.clone_shallow(),
-            logger: PerformanceLogger::new("vec_pool")
+            logger: PerformanceLogger::new("vec_pool"),
         }
     }
 }
@@ -47,14 +47,16 @@ where
         let high_water_mark = self.pool.get_high_water_mark();
         let load_factor = if high_water_mark > 0 {
             current_size as f64 / high_water_mark as f64
-        } else { 0.0 };
-         
+        } else {
+            0.0
+        };
+
         // 2. Trim excess capacity if load is low (below 30%)
         let mut excess = 0;
         if load_factor < 0.3 {
             let target_size = (current_size as f64 * 0.5) as usize; // Keep 50% of current objects
             excess = current_size.saturating_sub(target_size);
-             
+
             if excess > 0 {
                 // Remove excess objects from the pool
                 let mut pool = self.pool.pool.lock().unwrap();
@@ -65,7 +67,7 @@ where
                 cleaned = true;
             }
         }
-         
+
         // 3. Free unused memory buffers by shrinking the underlying storage
         let mut pool = self.pool.pool.lock().unwrap();
         if let Some((_, obj)) = pool.iter_mut().next() {
@@ -74,26 +76,31 @@ where
                 cleaned = true;
             }
         }
-        
+
         // 4. Log cleanup operation
-        self.logger.log_info("cleanup", "vec_pool", &format!(
-            "Cleaned up VecPool: removed {} objects, load factor: {:.1}%, capacity trimmed",
-            excess, load_factor * 100.0
-        ));
-        
+        self.logger.log_info(
+            "cleanup",
+            "vec_pool",
+            &format!(
+                "Cleaned up VecPool: removed {} objects, load factor: {:.1}%, capacity trimmed",
+                excess,
+                load_factor * 100.0
+            ),
+        );
+
         cleaned
     }
 
     pub fn get_vec(&self, capacity: usize) -> PooledVec<T> {
         let mut pooled = self.pool.get();
         let vec = pooled.as_mut();
-        
+
         // Fast path: reuse existing vector if it has sufficient capacity
         if vec.capacity() >= capacity {
             vec.clear();
             return pooled;
         }
-        
+
         // Slow path: create new vector with exact capacity
         *vec = Vec::with_capacity(capacity);
         pooled
@@ -104,10 +111,14 @@ where
         &self,
         capacity: usize,
         size_bytes: u64,
-        allocation_tracker: std::sync::Arc<RwLock<crate::memory_pool::object_pool::SwapAllocationMetrics>>,
+        allocation_tracker: std::sync::Arc<
+            RwLock<crate::memory_pool::object_pool::SwapAllocationMetrics>,
+        >,
         allocation_type: &str,
     ) -> PooledVec<T> {
-        let mut pooled = self.pool.get_with_tracking(size_bytes, allocation_tracker, allocation_type);
+        let mut pooled =
+            self.pool
+                .get_with_tracking(size_bytes, allocation_tracker, allocation_type);
         let vec = pooled.as_mut();
         vec.clear();
         vec.reserve(capacity);
@@ -132,7 +143,7 @@ impl Clone for StringPool {
     fn clone(&self) -> Self {
         StringPool {
             pool: self.pool.clone_shallow(),
-            logger: PerformanceLogger::new("string_pool")
+            logger: PerformanceLogger::new("string_pool"),
         }
     }
 }
@@ -153,14 +164,16 @@ impl StringPool {
         let high_water_mark = self.pool.get_high_water_mark();
         let load_factor = if high_water_mark > 0 {
             current_size as f64 / high_water_mark as f64
-        } else { 0.0 };
-         
+        } else {
+            0.0
+        };
+
         // 2. Trim excess capacity if load is low (below 30%)
         let mut excess = 0;
         if load_factor < 0.3 {
             let target_size = (current_size as f64 * 0.5) as usize; // Keep 50% of current objects
             excess = current_size.saturating_sub(target_size);
-             
+
             if excess > 0 {
                 // Remove excess objects from the pool
                 let mut pool = self.pool.pool.lock().unwrap();
@@ -171,7 +184,7 @@ impl StringPool {
                 cleaned = true;
             }
         }
-         
+
         // 3. Free unused memory buffers by shrinking the underlying storage
         let mut pool = self.pool.pool.lock().unwrap();
         if let Some((_, obj)) = pool.iter_mut().next() {
@@ -180,25 +193,30 @@ impl StringPool {
                 cleaned = true;
             }
         }
-        
+
         // 4. Log cleanup operation
-        self.logger.log_info("cleanup", "string_pool", &format!(
-            "Cleaned up StringPool: removed {} objects, load factor: {:.1}%, capacity trimmed",
-            excess, load_factor * 100.0
-        ));
-        
+        self.logger.log_info(
+            "cleanup",
+            "string_pool",
+            &format!(
+                "Cleaned up StringPool: removed {} objects, load factor: {:.1}%, capacity trimmed",
+                excess,
+                load_factor * 100.0
+            ),
+        );
+
         cleaned
     }
 
     pub fn get_string(&self, capacity: usize) -> PooledString {
         let mut pooled = self.pool.get();
-        
+
         // Fast path: reuse existing string if it has sufficient capacity
         if pooled.capacity() >= capacity {
             pooled.clear();
             return pooled;
         }
-        
+
         // Slow path: create new string with exact capacity
         *pooled = String::with_capacity(capacity);
         pooled
@@ -209,10 +227,14 @@ impl StringPool {
         &self,
         capacity: usize,
         size_bytes: u64,
-        allocation_tracker: std::sync::Arc<RwLock<crate::memory_pool::object_pool::SwapAllocationMetrics>>,
+        allocation_tracker: std::sync::Arc<
+            RwLock<crate::memory_pool::object_pool::SwapAllocationMetrics>,
+        >,
         allocation_type: &str,
     ) -> PooledString {
-        let mut pooled = self.pool.get_with_tracking(size_bytes, allocation_tracker, allocation_type);
+        let mut pooled =
+            self.pool
+                .get_with_tracking(size_bytes, allocation_tracker, allocation_type);
         pooled.clear();
         pooled.reserve(capacity);
         pooled

@@ -9,40 +9,59 @@
 //! - **LightweightMemoryPool**: Single-threaded pool with minimal overhead
 //! - **SlabAllocator**: Fixed-size block allocation with size classes
 
-pub mod object_pool;
-pub mod specialized_pools;
-pub mod hierarchical;
-pub mod swap;
-pub mod enhanced_manager;
-pub mod lightweight;
-pub mod slab_allocator;
 pub mod atomic_state;
+pub mod enhanced_manager;
+pub mod hierarchical;
+pub mod lightweight;
+pub mod object_pool;
+pub mod slab_allocator;
+pub mod specialized_pools;
+pub mod swap;
 
 // Re-export commonly used types for convenience
-pub use object_pool::{ObjectPool, PooledObject, MemoryPressureLevel};
-pub use specialized_pools::{VecPool, StringPool, PooledVec, PooledString};
-pub use hierarchical::{HierarchicalMemoryPool, HierarchicalPoolConfig, FastObjectPool, PooledVec as HierarchicalPooledVec};
+pub use atomic_state::{AtomicCounter, AtomicPoolState};
+pub use enhanced_manager::{
+    AllocationStats, EnhancedManagerConfig, EnhancedMemoryPoolManager, MaintenanceResult,
+    SmartPooledVec,
+};
+pub use hierarchical::{
+    FastObjectPool, HierarchicalMemoryPool, HierarchicalPoolConfig,
+    PooledVec as HierarchicalPooledVec,
+};
+pub use lightweight::{
+    ArenaHandle, ArenaStats, FastArena, LightweightMemoryPool, LightweightPoolStats,
+    LightweightPooledObject, ScopedArena, ThreadLocalLightweightPool,
+};
+pub use object_pool::{MemoryPressureLevel, ObjectPool, PooledObject};
+pub use slab_allocator::{
+    SizeClass, SizeClassStats, Slab, SlabAllocation, SlabAllocator, SlabAllocatorConfig,
+    SlabAllocatorStats, SlabStats,
+};
+pub use specialized_pools::{PooledString, PooledVec, StringPool, VecPool};
 pub use swap::{SwapMemoryPool, SwapPoolConfig, SwapPooledVec};
-pub use enhanced_manager::{EnhancedMemoryPoolManager, EnhancedManagerConfig, SmartPooledVec, MaintenanceResult, AllocationStats};
-pub use lightweight::{LightweightMemoryPool, LightweightPooledObject, ThreadLocalLightweightPool, FastArena, ArenaHandle, ScopedArena, LightweightPoolStats, ArenaStats};
-pub use slab_allocator::{SlabAllocator, SlabAllocation, SlabAllocatorConfig, Slab, SizeClass, SlabStats, SlabAllocatorStats, SizeClassStats};
-pub use atomic_state::{AtomicPoolState, AtomicCounter};
 
 /// Global memory pool manager instance (thread-safe singleton)
-static GLOBAL_MEMORY_POOL: std::sync::OnceLock<std::sync::RwLock<EnhancedMemoryPoolManager>> = std::sync::OnceLock::new();
+static GLOBAL_MEMORY_POOL: std::sync::OnceLock<std::sync::RwLock<EnhancedMemoryPoolManager>> =
+    std::sync::OnceLock::new();
 
 /// Get the global enhanced memory pool manager
-pub fn get_global_enhanced_pool() -> std::sync::RwLockReadGuard<'static, EnhancedMemoryPoolManager> {
+pub fn get_global_enhanced_pool() -> std::sync::RwLockReadGuard<'static, EnhancedMemoryPoolManager>
+{
     let pool = GLOBAL_MEMORY_POOL.get_or_init(|| {
-        std::sync::RwLock::new(EnhancedMemoryPoolManager::new(None).expect("Failed to initialize global memory pool"))
+        std::sync::RwLock::new(
+            EnhancedMemoryPoolManager::new(None).expect("Failed to initialize global memory pool"),
+        )
     });
     pool.read().unwrap()
 }
 
 /// Get the global enhanced memory pool manager (mutable)
-pub fn get_global_enhanced_pool_mut() -> std::sync::RwLockWriteGuard<'static, EnhancedMemoryPoolManager> {
+pub fn get_global_enhanced_pool_mut(
+) -> std::sync::RwLockWriteGuard<'static, EnhancedMemoryPoolManager> {
     let pool = GLOBAL_MEMORY_POOL.get_or_init(|| {
-        std::sync::RwLock::new(EnhancedMemoryPoolManager::new(None).expect("Failed to initialize global memory pool"))
+        std::sync::RwLock::new(
+            EnhancedMemoryPoolManager::new(None).expect("Failed to initialize global memory pool"),
+        )
     });
     pool.write().unwrap()
 }

@@ -157,12 +157,12 @@ public class RustPerformance {
           }
         }
 
-        // First try unified bridge
-        BridgeResult result = UNIFIED_BRIDGE.executeSync(
-            "get_entities_to_tick",
-            entities.stream().map(EntityData::getId).collect(Collectors.toList()),
-            players.stream().map(PlayerData::getId).collect(Collectors.toList())
-        );
+    // First try unified bridge via safeExecute (throws BridgeException if not available)
+    BridgeResult result = safeExecute(
+      "get_entities_to_tick",
+      entities.stream().map(EntityData::getId).collect(Collectors.toList()),
+      players.stream().map(PlayerData::getId).collect(Collectors.toList())
+    );
 
         return extractLongListResult(result);
       } catch (BridgeException e) {
@@ -295,11 +295,11 @@ public class RustPerformance {
           }
         }
 
-        // First try unified bridge
-        BridgeResult result = UNIFIED_BRIDGE.executeSync(
-            "get_block_entities_to_tick",
-            blockEntities.stream().map(BlockEntityData::getId).collect(Collectors.toList())
-        );
+    // First try unified bridge via safeExecute (throws BridgeException if not available)
+    BridgeResult result = safeExecute(
+      "get_block_entities_to_tick",
+      blockEntities.stream().map(BlockEntityData::getId).collect(Collectors.toList())
+    );
 
         return extractLongListResult(result);
       } catch (BridgeException e) {
@@ -438,12 +438,12 @@ public class RustPerformance {
           }
         }
 
-        BridgeResult result = UNIFIED_BRIDGE.executeSync(
-            "pre_generate_nearby_chunks",
-            centerX,
-            centerZ,
-            radius
-        );
+    BridgeResult result = safeExecute(
+      "pre_generate_nearby_chunks",
+      centerX,
+      centerZ,
+      radius
+    );
         return result.getResultInteger();
       } catch (BridgeException e) {
         KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -854,8 +854,12 @@ public class RustPerformance {
       if (UNIFIED_BRIDGE == null) {
         return false;
       }
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("is_native_available");
-      return result.getResultBoolean();
+      try {
+        BridgeResult result = safeExecute("is_native_available");
+        return result.getResultBoolean();
+      } catch (BridgeException be) {
+        return false;
+      }
     } catch (Throwable t) {
       // Any exception means native library is not available
       return false;

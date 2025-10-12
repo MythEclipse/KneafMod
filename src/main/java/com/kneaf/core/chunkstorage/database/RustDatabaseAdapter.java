@@ -78,45 +78,15 @@ public class RustDatabaseAdapter extends AbstractDatabaseAdapter {
   // Load native library with proper error handling
   static {
     try {
-      System.loadLibrary("rustperf");
-      nativeLibraryAvailable = true;
-      LOGGER.info("Rust database library loaded successfully");
-    } catch (UnsatisfiedLinkError e) {
-      // Attempt a few fallback locations for the native library so tests running in
-      // different working directories or forked JVMs can still find the binary.
-      boolean loaded = false;
-      String[] fallbackPaths =
-          new String[] {
-            "run/rustperf.dll",
-            "run/librustperf.dll",
-            "rust/target/release/librustperf.dll",
-            "target/release/librustperf.dll",
-            "./rust/target/release/librustperf.dll",
-            "./run/rustperf.dll"
-          };
-
-      for (String path : fallbackPaths) {
-        try {
-          java.io.File f = new java.io.File(path);
-          if (f.exists()) {
-            System.load(f.getAbsolutePath());
-            loaded = true;
-            LOGGER.info("Loaded Rust native library from fallback path: {}", f.getAbsolutePath());
-            break;
-          }
-        } catch (UnsatisfiedLinkError ule) {
-          LOGGER.debug("Fallback load failed for {}: {}", path, ule.getMessage());
-        }
-      }
-
-      if (!loaded) {
-        nativeLibraryAvailable = false;
-        LOGGER.warn(
-            "Failed to load Rust database library: {}. Native operations will be disabled.",
-            e.getMessage());
+      nativeLibraryAvailable = com.kneaf.core.performance.bridge.NativeLibraryLoader.loadNativeLibrary();
+      if (nativeLibraryAvailable) {
+        LOGGER.info("Rust database native library loaded successfully via NativeLibraryLoader");
       } else {
-        nativeLibraryAvailable = true;
+        LOGGER.warn("Rust database native library not available via NativeLibraryLoader; native operations will be disabled");
       }
+    } catch (Throwable t) {
+      nativeLibraryAvailable = false;
+      LOGGER.warn("Unexpected error while attempting to load Rust native library: " + t.getMessage(), t);
     }
   }
 

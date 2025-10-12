@@ -1,8 +1,8 @@
-use super::types::*;
 use super::config::*;
+use super::types::*;
+use crate::parallelism::{get_adaptive_pool, WorkStealingScheduler};
 use rayon::prelude::*;
 use serde_json;
-use crate::parallelism::{get_adaptive_pool, WorkStealingScheduler};
 use std::time::Instant;
 
 pub fn process_block_entities(input: BlockInput) -> BlockProcessResult {
@@ -13,7 +13,8 @@ pub fn process_block_entities(input: BlockInput) -> BlockProcessResult {
     // Active entities: close radius (always tick), medium radius (reduced rate), far radius (minimal rate)
     let pool = get_adaptive_pool();
     let block_entities_to_tick: Vec<u64> = pool.execute(|| {
-        input.block_entities
+        input
+            .block_entities
             .par_iter()
             .filter_map(|be| {
                 // Simple heuristic: closer entities are more likely to be active
@@ -39,9 +40,15 @@ pub fn process_block_entities(input: BlockInput) -> BlockProcessResult {
     });
 
     // Record performance metrics
-    crate::performance_monitoring::record_operation(start_time, input.block_entities.len(), pool.current_thread_count());
+    crate::performance_monitoring::record_operation(
+        start_time,
+        input.block_entities.len(),
+        pool.current_thread_count(),
+    );
 
-    BlockProcessResult { block_entities_to_tick }
+    BlockProcessResult {
+        block_entities_to_tick,
+    }
 }
 
 /// Batch process multiple block entity collections in parallel with work-stealing
@@ -54,11 +61,10 @@ pub fn process_block_entities_batch(inputs: Vec<BlockInput>) -> Vec<BlockProcess
 pub fn process_block_entities_json(json_input: &str) -> Result<String, String> {
     let input: BlockInput = serde_json::from_str(json_input)
         .map_err(|e| format!("Failed to parse JSON input: {}", e))?;
-    
+
     let result = process_block_entities(input);
-    
-    serde_json::to_string(&result)
-        .map_err(|e| format!("Failed to serialize result to JSON: {}", e))
+
+    serde_json::to_string(&result).map_err(|e| format!("Failed to serialize result to JSON: {}", e))
 }
 
 /// Process block entities from binary input in batches for better JNI performance

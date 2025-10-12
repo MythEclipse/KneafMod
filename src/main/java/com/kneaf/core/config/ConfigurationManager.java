@@ -1,6 +1,7 @@
 package com.kneaf.core.config;
 
 import com.kneaf.core.config.chunkstorage.ChunkStorageConfig;
+import com.kneaf.core.config.core.ConfigurationConstants;
 import com.kneaf.core.config.core.ConfigSource;
 import com.kneaf.core.config.core.ConfigurationUtils;
 import com.kneaf.core.config.core.PropertiesFileConfigSource;
@@ -146,6 +147,9 @@ public class ConfigurationManager {
         
         if (configType == PerformanceConfig.class) {
             return (T) createPerformanceConfig(properties);
+        } else if (configType == com.kneaf.core.config.performance.PerformanceConfiguration.class) {
+            // Support consumers that expect the legacy PerformanceConfiguration loaded from properties
+            return (T) com.kneaf.core.config.performance.PerformanceConfiguration.fromProperties(properties);
         } else if (configType == ChunkStorageConfig.class) {
             return (T) createChunkStorageConfig(properties);
         } else if (configType == SwapConfig.class) {
@@ -235,9 +239,9 @@ public class ConfigurationManager {
                 .swapBatchSize(ConfigurationUtils.getIntProperty(props, "swap.swapBatchSize", 50))
                 .swapTimeoutMs(ConfigurationUtils.getLongProperty(props, "swap.swapTimeoutMs", 30000))
                 .enableAutomaticSwapping(ConfigurationUtils.getBooleanProperty(props, "swap.enableAutomaticSwapping", true))
-                .criticalMemoryThreshold(ConfigurationUtils.getDoubleProperty(props, "swap.criticalMemoryThreshold", 0.95))
-                .highMemoryThreshold(ConfigurationUtils.getDoubleProperty(props, "swap.highMemoryThreshold", 0.85))
-                .elevatedMemoryThreshold(ConfigurationUtils.getDoubleProperty(props, "swap.elevatedMemoryThreshold", 0.75))
+                .criticalMemoryThreshold(ConfigurationUtils.getDoubleProperty(props, "swap.criticalMemoryThreshold", ConfigurationConstants.DEFAULT_CRITICAL_MEMORY_THRESHOLD))
+                .highMemoryThreshold(ConfigurationUtils.getDoubleProperty(props, "swap.highMemoryThreshold", ConfigurationConstants.DEFAULT_HIGH_MEMORY_THRESHOLD))
+                .elevatedMemoryThreshold(ConfigurationUtils.getDoubleProperty(props, "swap.elevatedMemoryThreshold", ConfigurationConstants.DEFAULT_ELEVATED_MEMORY_THRESHOLD))
                 .minSwapChunkAgeMs(ConfigurationUtils.getIntProperty(props, "swap.minSwapChunkAgeMs", 60000))
                 .enableSwapStatistics(ConfigurationUtils.getBooleanProperty(props, "swap.enableSwapStatistics", true))
                 .enablePerformanceMonitoring(ConfigurationUtils.getBooleanProperty(props, "swap.enablePerformanceMonitoring", true))

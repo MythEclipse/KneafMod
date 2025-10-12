@@ -1,20 +1,20 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::collections::VecDeque;
 
-use crate::logging::PerformanceLogger;
 use crate::logging::generate_trace_id;
+use crate::logging::PerformanceLogger;
 
 /// Pool error type for lightweight memory pool operations
 #[derive(Debug, thiserror::Error)]
 pub enum PoolError {
     #[error("Pool operation failed: {0}")]
     OperationFailed(String),
-    
+
     #[error("Thread safety violation")]
     ThreadSafetyViolation,
-    
+
     #[error("Invalid pool state")]
     InvalidState,
 }
@@ -46,7 +46,8 @@ impl<T: Default> LightweightMemoryPool<T> {
         let trace_id = generate_trace_id();
 
         let obj = if let Some(obj) = self.pool.borrow_mut().pop_front() {
-            self.logger.log_info("get", &trace_id, "Reused object from pool");
+            self.logger
+                .log_info("get", &trace_id, "Reused object from pool");
             obj
         } else {
             self.logger.log_info("get", &trace_id, "Created new object");
@@ -68,9 +69,11 @@ impl<T: Default> LightweightMemoryPool<T> {
         let mut pool = self.pool.borrow_mut();
         if pool.len() < self.max_size {
             pool.push_back(obj);
-            self.logger.log_info("return_object", &trace_id, "Object returned to pool");
+            self.logger
+                .log_info("return_object", &trace_id, "Object returned to pool");
         } else {
-            self.logger.log_info("return_object", &trace_id, "Pool full, object discarded");
+            self.logger
+                .log_info("return_object", &trace_id, "Pool full, object discarded");
         }
 
         self.allocated_count.fetch_sub(1, Ordering::Relaxed);
@@ -101,7 +104,11 @@ impl<T: Default> LightweightMemoryPool<T> {
         self.pool.borrow_mut().clear();
         self.allocated_count.store(0, Ordering::Relaxed);
 
-        self.logger.log_info("clear", &trace_id, &format!("Cleared {} objects from pool", cleared_count));
+        self.logger.log_info(
+            "clear",
+            &trace_id,
+            &format!("Cleared {} objects from pool", cleared_count),
+        );
     }
 
     /// Resize the pool capacity with proper memory management
@@ -114,16 +121,31 @@ impl<T: Default> LightweightMemoryPool<T> {
         if new_max_size < current_len {
             // Shrink pool by removing excess objects
             pool.truncate(new_max_size);
-            self.logger.log_info("resize", &trace_id, &format!("Shrunk pool from {} to {} objects", current_len, new_max_size));
+            self.logger.log_info(
+                "resize",
+                &trace_id,
+                &format!(
+                    "Shrunk pool from {} to {} objects",
+                    current_len, new_max_size
+                ),
+            );
         } else {
             // Grow pool capacity
             pool.reserve(new_max_size - current_len);
-            self.logger.log_info("resize", &trace_id, &format!("Grew pool capacity to {} objects", new_max_size));
+            self.logger.log_info(
+                "resize",
+                &trace_id,
+                &format!("Grew pool capacity to {} objects", new_max_size),
+            );
         }
 
         // Update max_size with proper atomic operation for thread safety
         self.max_size = new_max_size;
-        self.logger.log_info("resize", &trace_id, &format!("Updated pool max size to {}", new_max_size));
+        self.logger.log_info(
+            "resize",
+            &trace_id,
+            &format!("Updated pool max size to {}", new_max_size),
+        );
 
         Ok(())
     }
@@ -131,18 +153,23 @@ impl<T: Default> LightweightMemoryPool<T> {
     /// Recreate the pool with new capacity while preserving allocated objects
     pub fn recreate(&self, new_max_size: usize) -> Result<(), PoolError> {
         let trace_id = generate_trace_id();
-        
+
         // Get current allocated objects (safely handle borrow conflicts)
         let allocated_objects = self.allocated_count.load(Ordering::Relaxed);
-        
+
         // Create new pool with desired capacity
         let new_pool: LightweightMemoryPool<T> = LightweightMemoryPool::new(new_max_size);
-        
+
         // Transfer allocated objects state to new pool
-        self.allocated_count.store(allocated_objects, Ordering::Relaxed);
-        
-        self.logger.log_info("recreate", &trace_id, &format!("Recreated pool with new capacity: {}", new_max_size));
-        
+        self.allocated_count
+            .store(allocated_objects, Ordering::Relaxed);
+
+        self.logger.log_info(
+            "recreate",
+            &trace_id,
+            &format!("Recreated pool with new capacity: {}", new_max_size),
+        );
+
         Ok(())
     }
 }
@@ -256,19 +283,18 @@ impl<T: Default> FastArena<T> {
         let trace_id = generate_trace_id();
 
         let index = if let Some(index) = self.free_indices.borrow_mut().pop() {
-            self.logger.log_info("alloc", &trace_id, &format!("Reused slot {}", index));
+            self.logger
+                .log_info("alloc", &trace_id, &format!("Reused slot {}", index));
             index
         } else {
             let index = self.objects.borrow().len();
             self.objects.borrow_mut().push(T::default());
-            self.logger.log_info("alloc", &trace_id, &format!("Allocated new slot {}", index));
+            self.logger
+                .log_info("alloc", &trace_id, &format!("Allocated new slot {}", index));
             index
         };
 
-        ArenaHandle {
-            index,
-            arena: self,
-        }
+        ArenaHandle { index, arena: self }
     }
 
     /// Get reference to object at index
@@ -289,7 +315,8 @@ impl<T: Default> FastArena<T> {
         *self.get_mut(index) = T::default();
 
         self.free_indices.borrow_mut().push(index);
-        self.logger.log_info("dealloc", &trace_id, &format!("Deallocated slot {}", index));
+        self.logger
+            .log_info("dealloc", &trace_id, &format!("Deallocated slot {}", index));
     }
 
     /// Clear all objects and reset arena
@@ -302,7 +329,14 @@ impl<T: Default> FastArena<T> {
         self.objects.borrow_mut().clear();
         self.free_indices.borrow_mut().clear();
 
-        self.logger.log_info("clear", &trace_id, &format!("Cleared arena: {} objects, {} free slots", object_count, free_count));
+        self.logger.log_info(
+            "clear",
+            &trace_id,
+            &format!(
+                "Cleared arena: {} objects, {} free slots",
+                object_count, free_count
+            ),
+        );
     }
 
     /// Get arena statistics

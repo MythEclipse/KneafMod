@@ -1,8 +1,8 @@
-use std::sync::{Arc, Mutex, RwLock};
-use std::collections::HashMap;
-use jni::JNIEnv;
 use jni::objects::JObject;
-use jni::sys::{jlong, jint};
+use jni::sys::{jint, jlong};
+use jni::JNIEnv;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 
 use lazy_static::lazy_static;
 
@@ -200,7 +200,12 @@ impl JNIOperationMetrics {
     // End metrics recording and mark as successful
     pub fn end_success(&mut self, bytes_transferred: usize) {
         self.end_time = Some(std::time::Instant::now());
-        self.duration_ns = Some(self.end_time.unwrap().duration_since(self.start_time).as_nanos());
+        self.duration_ns = Some(
+            self.end_time
+                .unwrap()
+                .duration_since(self.start_time)
+                .as_nanos(),
+        );
         self.success = true;
         self.bytes_transferred = bytes_transferred;
     }
@@ -208,7 +213,12 @@ impl JNIOperationMetrics {
     // End metrics recording and mark as failed
     pub fn end_failure(&mut self, error: JNIError) {
         self.end_time = Some(std::time::Instant::now());
-        self.duration_ns = Some(self.end_time.unwrap().duration_since(self.start_time).as_nanos());
+        self.duration_ns = Some(
+            self.end_time
+                .unwrap()
+                .duration_since(self.start_time)
+                .as_nanos(),
+        );
         self.success = false;
         self.error = Some(error);
     }
@@ -222,14 +232,18 @@ impl JNIOperationMetrics {
             self.duration_ns.unwrap_or(0),
             self.bytes_transferred,
             self.connection_id.unwrap_or(-1),
-            self.error.as_ref().map(|e| e.to_java_string()).unwrap_or_else(|| "none".to_string())
+            self.error
+                .as_ref()
+                .map(|e| e.to_java_string())
+                .unwrap_or_else(|| "none".to_string())
         )
     }
 }
 
 // Global metrics collection
 lazy_static! {
-    pub static ref JNI_METRICS_COLLECTOR: Arc<RwLock<Vec<JNIOperationMetrics>>> = Arc::new(RwLock::new(Vec::new()));
+    pub static ref JNI_METRICS_COLLECTOR: Arc<RwLock<Vec<JNIOperationMetrics>>> =
+        Arc::new(RwLock::new(Vec::new()));
 }
 
 // JNI bridge utilities

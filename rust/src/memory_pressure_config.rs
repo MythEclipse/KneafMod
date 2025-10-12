@@ -1,11 +1,11 @@
 //! Centralized memory pressure configuration for cross-language consistency
-//! 
+//!
 //! This module provides standardized memory pressure thresholds that are used
 //! by both Rust and Java components to ensure consistent behavior across
 //! the entire system.
 
-use std::sync::RwLock;
 use once_cell::sync::Lazy;
+use std::sync::RwLock;
 
 /// Standardized memory pressure thresholds for consistent cross-language behavior
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -24,10 +24,10 @@ pub struct MemoryPressureConfig {
 impl Default for MemoryPressureConfig {
     fn default() -> Self {
         Self {
-            normal_threshold: 0.70,    // 70% - Normal operation
-            moderate_threshold: 0.85,  // 85% - Moderate pressure
-            high_threshold: 0.95,      // 95% - High pressure
-            critical_threshold: 0.98,  // 98% - Critical pressure
+            normal_threshold: 0.70,   // 70% - Normal operation
+            moderate_threshold: 0.85, // 85% - Moderate pressure
+            high_threshold: 0.95,     // 95% - High pressure
+            critical_threshold: 0.98, // 98% - Critical pressure
         }
     }
 }
@@ -37,16 +37,28 @@ impl MemoryPressureConfig {
     pub fn new(normal: f64, moderate: f64, high: f64, critical: f64) -> Result<Self, String> {
         // Validate thresholds
         if normal < 0.0 || normal > 1.0 {
-            return Err(format!("Normal threshold must be between 0.0 and 1.0, got {}", normal));
+            return Err(format!(
+                "Normal threshold must be between 0.0 and 1.0, got {}",
+                normal
+            ));
         }
         if moderate < normal || moderate > 1.0 {
-            return Err(format!("Moderate threshold must be between normal ({})) and 1.0, got {}", normal, moderate));
+            return Err(format!(
+                "Moderate threshold must be between normal ({})) and 1.0, got {}",
+                normal, moderate
+            ));
         }
         if high < moderate || high > 1.0 {
-            return Err(format!("High threshold must be between moderate ({}) and 1.0, got {}", moderate, high));
+            return Err(format!(
+                "High threshold must be between moderate ({}) and 1.0, got {}",
+                moderate, high
+            ));
         }
         if critical < high || critical > 1.0 {
-            return Err(format!("Critical threshold must be between high ({}) and 1.0, got {}", high, critical));
+            return Err(format!(
+                "Critical threshold must be between high ({}) and 1.0, got {}",
+                high, critical
+            ));
         }
 
         Ok(Self {
@@ -94,7 +106,10 @@ impl MemoryPressureConfig {
     pub fn to_json(&self) -> String {
         format!(
             r#"{{"normal":{},"moderate":{},"high":{},"critical":{}}}"#,
-            self.normal_threshold, self.moderate_threshold, self.high_threshold, self.critical_threshold
+            self.normal_threshold,
+            self.moderate_threshold,
+            self.high_threshold,
+            self.critical_threshold
         )
     }
 
@@ -106,7 +121,7 @@ impl MemoryPressureConfig {
             return Err("Invalid JSON format".to_string());
         }
 
-        let content = &json[1..json.len()-1];
+        let content = &json[1..json.len() - 1];
         let mut normal = 0.70;
         let mut moderate = 0.85;
         let mut high = 0.95;
@@ -116,7 +131,9 @@ impl MemoryPressureConfig {
             let part = part.trim();
             if let Some((key, value)) = part.split_once(':') {
                 let key = key.trim().trim_matches('"');
-                let value = value.trim().parse::<f64>()
+                let value = value
+                    .trim()
+                    .parse::<f64>()
                     .map_err(|e| format!("Invalid number for {}: {}", key, e))?;
 
                 match key {
@@ -145,7 +162,8 @@ pub enum MemoryPressureLevel {
 impl MemoryPressureLevel {
     /// Get memory pressure level from usage ratio using global configuration
     pub fn from_usage_ratio(usage_ratio: f64) -> Self {
-        GLOBAL_MEMORY_PRESSURE_CONFIG.read()
+        GLOBAL_MEMORY_PRESSURE_CONFIG
+            .read()
             .unwrap()
             .get_pressure_level(usage_ratio)
     }
@@ -162,7 +180,7 @@ impl MemoryPressureLevel {
 }
 
 /// Global memory pressure configuration instance
-pub static GLOBAL_MEMORY_PRESSURE_CONFIG: Lazy<RwLock<MemoryPressureConfig>> = 
+pub static GLOBAL_MEMORY_PRESSURE_CONFIG: Lazy<RwLock<MemoryPressureConfig>> =
     Lazy::new(|| RwLock::new(MemoryPressureConfig::default()));
 
 /// Get the global memory pressure configuration
@@ -224,12 +242,21 @@ mod tests {
     #[test]
     fn test_pressure_levels() {
         let config = MemoryPressureConfig::default();
-        
+
         assert_eq!(config.get_pressure_level(0.5), MemoryPressureLevel::Normal);
-        assert_eq!(config.get_pressure_level(0.7), MemoryPressureLevel::Moderate);
+        assert_eq!(
+            config.get_pressure_level(0.7),
+            MemoryPressureLevel::Moderate
+        );
         assert_eq!(config.get_pressure_level(0.85), MemoryPressureLevel::High);
-        assert_eq!(config.get_pressure_level(0.95), MemoryPressureLevel::Critical);
-        assert_eq!(config.get_pressure_level(0.99), MemoryPressureLevel::Critical);
+        assert_eq!(
+            config.get_pressure_level(0.95),
+            MemoryPressureLevel::Critical
+        );
+        assert_eq!(
+            config.get_pressure_level(0.99),
+            MemoryPressureLevel::Critical
+        );
     }
 
     #[test]
@@ -252,7 +279,7 @@ mod tests {
         let config = MemoryPressureConfig::default();
         let json = config.to_json();
         let parsed = MemoryPressureConfig::from_json(&json).unwrap();
-        
+
         assert_eq!(config.normal_threshold, parsed.normal_threshold);
         assert_eq!(config.moderate_threshold, parsed.moderate_threshold);
         assert_eq!(config.high_threshold, parsed.high_threshold);
@@ -267,7 +294,7 @@ mod tests {
 
         let new_config = MemoryPressureConfig::new(0.65, 0.80, 0.90, 0.95).unwrap();
         set_memory_pressure_config(new_config).unwrap();
-        
+
         let updated_config = get_memory_pressure_config();
         assert_eq!(updated_config.normal_threshold, 0.65);
         assert_eq!(updated_config.moderate_threshold, 0.80);

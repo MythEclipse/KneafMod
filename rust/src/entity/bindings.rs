@@ -1,9 +1,9 @@
-use jni::JNIEnv;
-use jni::objects::{JClass, JString, JByteBuffer, JObject};
-use jni::sys::{jstring, jbyteArray};
 use crate::entity::processing::process_entities_json;
 use crate::logging::JniLogger;
-use crate::{jni_log_warn, jni_log_error, jni_log_trace};
+use crate::{jni_log_error, jni_log_trace, jni_log_warn};
+use jni::objects::{JByteBuffer, JClass, JObject, JString};
+use jni::sys::{jbyteArray, jstring};
+use jni::JNIEnv;
 use std::sync::OnceLock;
 // Generated FlatBuffers bindings are not used; the manual converters in
 // `crate::binary::conversions` are the canonical path for binary data.
@@ -39,18 +39,32 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
             if str_val.is_empty() {
                 jni_log_warn!(logger, &mut env, "JNI", "Input string is empty");
             } else if str_val.len() > 1000000 {
-                jni_log_error!(logger, &mut env, "JNI", &format!("Input string too large: {} bytes", str_val.len()));
-                let error_msg = format!("{{\"error\":\"Input too large: {} bytes\"}}", str_val.len());
+                jni_log_error!(
+                    logger,
+                    &mut env,
+                    "JNI",
+                    &format!("Input string too large: {} bytes", str_val.len())
+                );
+                let error_msg =
+                    format!("{{\"error\":\"Input too large: {} bytes\"}}", str_val.len());
                 return match env.new_string(error_msg) {
                     Ok(s) => s.into_raw(),
                     Err(_) => std::ptr::null_mut(),
                 };
             }
             str_val
-        },
+        }
         Err(e) => {
-            jni_log_error!(logger, &mut env, "JNI", &format!("Failed to get string from JString: {:?}", e));
-            let error_msg = format!("{{\"error\":\"Failed to get string from JString: {:?}\"}}", e);
+            jni_log_error!(
+                logger,
+                &mut env,
+                "JNI",
+                &format!("Failed to get string from JString: {:?}", e)
+            );
+            let error_msg = format!(
+                "{{\"error\":\"Failed to get string from JString: {:?}\"}}",
+                e
+            );
             return match env.new_string(error_msg) {
                 Ok(s) => s.into_raw(),
                 Err(_) => std::ptr::null_mut(),
@@ -65,13 +79,23 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
             match env.new_string(result_json) {
                 Ok(s) => s.into_raw(),
                 Err(e) => {
-                    jni_log_error!(logger, &mut env, "JNI", &format!("Failed to create JString from result: {:?}", e));
+                    jni_log_error!(
+                        logger,
+                        &mut env,
+                        "JNI",
+                        &format!("Failed to create JString from result: {:?}", e)
+                    );
                     std::ptr::null_mut()
                 }
             }
-        },
+        }
         Err(e) => {
-            jni_log_error!(logger, &mut env, "JNI", &format!("process_entities_json failed: {}", e));
+            jni_log_error!(
+                logger,
+                &mut env,
+                "JNI",
+                &format!("process_entities_json failed: {}", e)
+            );
             let error_msg = format!("{{\"error\":\"{}\"}}", e);
             match env.new_string(error_msg) {
                 Ok(s) => s.into_raw(),
@@ -82,7 +106,9 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEntitiesBinaryNative<'local>(
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEntitiesBinaryNative<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     input_buffer: JObject<'local>,
@@ -103,7 +129,12 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
     let data = match env.get_direct_buffer_address(&input_buffer) {
         Ok(data) => data,
         Err(e) => {
-            jni_log_error!(logger, &mut env, "JNI", &format!("Failed to get direct buffer address: {:?}", e));
+            jni_log_error!(
+                logger,
+                &mut env,
+                "JNI",
+                &format!("Failed to get direct buffer address: {:?}", e)
+            );
             let error_msg = b"{\"error\":\"Direct ByteBuffer required\"}";
             return match env.byte_array_from_slice(error_msg) {
                 Ok(arr) => arr.into_raw(),
@@ -115,7 +146,12 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
     let capacity = match env.get_direct_buffer_capacity(&input_buffer) {
         Ok(capacity) => capacity,
         Err(e) => {
-            jni_log_error!(logger, &mut env, "JNI", &format!("Failed to get ByteBuffer capacity: {:?}", e));
+            jni_log_error!(
+                logger,
+                &mut env,
+                "JNI",
+                &format!("Failed to get ByteBuffer capacity: {:?}", e)
+            );
             let error_msg = b"{\"error\":\"Failed to get ByteBuffer capacity\"}";
             return match env.byte_array_from_slice(error_msg) {
                 Ok(arr) => arr.into_raw(),
@@ -137,7 +173,12 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
     // Remove debug log to reduce noise - only log warnings/errors
 
     if slice.is_empty() {
-        jni_log_warn!(logger, &mut env, "JNI", "Empty slice, returning empty result");
+        jni_log_warn!(
+            logger,
+            &mut env,
+            "JNI",
+            "Empty slice, returning empty result"
+        );
         let result = vec![0u8; 4];
         return match env.byte_array_from_slice(&result) {
             Ok(arr) => arr.into_raw(),
@@ -149,12 +190,22 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processEn
         Ok(result) => match env.byte_array_from_slice(&result) {
             Ok(arr) => arr.into_raw(),
             Err(e) => {
-                jni_log_error!(logger, &mut env, "JNI", &format!("Failed to create byte array from result: {:?}", e));
+                jni_log_error!(
+                    logger,
+                    &mut env,
+                    "JNI",
+                    &format!("Failed to create byte array from result: {:?}", e)
+                );
                 std::ptr::null_mut()
             }
         },
         Err(e) => {
-            jni_log_error!(logger, &mut env, "JNI", &format!("process_entities_binary_batch failed: {}", e));
+            jni_log_error!(
+                logger,
+                &mut env,
+                "JNI",
+                &format!("process_entities_binary_batch failed: {}", e)
+            );
             let error_msg = format!("{{\"error\":\"{}\"}}", e);
             match env.byte_array_from_slice(error_msg.as_bytes()) {
                 Ok(arr) => arr.into_raw(),
@@ -170,15 +221,31 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
     // Remove debug log to reduce noise - only log warnings/errors
 
     if data.is_empty() {
-        jni_log_warn!(logger, env, "BINARY", "Empty input data, returning empty result");
+        jni_log_warn!(
+            logger,
+            env,
+            "BINARY",
+            "Empty input data, returning empty result"
+        );
         let mut result = Vec::with_capacity(4);
         result.extend_from_slice(&0i32.to_le_bytes());
         return Ok(result);
     }
 
     if data.len() < 8 {
-        jni_log_error!(logger, env, "BINARY", &format!("Data too small for FlatBuffers header: {} bytes", data.len()));
-        return Err(format!("Data too small for FlatBuffers header: {} bytes", data.len()));
+        jni_log_error!(
+            logger,
+            env,
+            "BINARY",
+            &format!(
+                "Data too small for FlatBuffers header: {} bytes",
+                data.len()
+            )
+        );
+        return Err(format!(
+            "Data too small for FlatBuffers header: {} bytes",
+            data.len()
+        ));
     }
 
     // Strengthened probe to decide whether the buffer resembles a FlatBuffers buffer.
@@ -196,12 +263,38 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
 
         // Basic checks: non-zero, in-bounds, aligned and reasonably large (root table typically not at very small offsets)
         if root_offset_u32 == 0 {
-            jni_log_trace!(logger, env, "BINARY", &format!("FlatBuffers header probe failed: root_offset=0, data_len={}", data.len()));
+            jni_log_trace!(
+                logger,
+                env,
+                "BINARY",
+                &format!(
+                    "FlatBuffers header probe failed: root_offset=0, data_len={}",
+                    data.len()
+                )
+            );
         } else if root_offset + 4 > data.len() {
-            jni_log_trace!(logger, env, "BINARY", &format!("FlatBuffers header probe failed: root_offset out of bounds: {}, data_len={}", root_offset, data.len()));
+            jni_log_trace!(
+                logger,
+                env,
+                "BINARY",
+                &format!(
+                    "FlatBuffers header probe failed: root_offset out of bounds: {}, data_len={}",
+                    root_offset,
+                    data.len()
+                )
+            );
         } else if (root_offset_u32 % 4) != 0 || root_offset < 8 {
             // Require 4-byte alignment and a minimum offset so we don't accept tiny/implausible values
-            jni_log_trace!(logger, env, "BINARY", &format!("FlatBuffers header probe failed: root_offset alignment/size: {}, data_len={}", root_offset, data.len()));
+            jni_log_trace!(
+                logger,
+                env,
+                "BINARY",
+                &format!(
+                    "FlatBuffers header probe failed: root_offset alignment/size: {}, data_len={}",
+                    root_offset,
+                    data.len()
+                )
+            );
         } else {
             // Attempt a small vtable sanity check. At table start, FlatBuffers stores a 16-bit vtable offset
             // (little-endian signed i16) that is typically negative; the vtable itself starts at
@@ -217,8 +310,11 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
                         jni_log_trace!(logger, env, "BINARY", &format!("FlatBuffers header probe failed: vtable out of bounds vtable_pos={}, data_len={}", vtable_pos, data.len()));
                     } else {
                         // vtable begins with two uint16: [vtable_len, object_inline_size]
-                        let vtable_len = u16::from_le_bytes([data[vtable_pos], data[vtable_pos + 1]]) as usize;
-                        let object_inline_size = u16::from_le_bytes([data[vtable_pos + 2], data[vtable_pos + 3]]) as usize;
+                        let vtable_len =
+                            u16::from_le_bytes([data[vtable_pos], data[vtable_pos + 1]]) as usize;
+                        let object_inline_size =
+                            u16::from_le_bytes([data[vtable_pos + 2], data[vtable_pos + 3]])
+                                as usize;
                         // Basic sanity ranges and bounds checks to avoid mis-identifying manual layouts
                         // - vtable_len should be at least 4 (two uint16 values) and not huge
                         // - vtable_pos should be within bounds and 2-byte aligned
@@ -248,7 +344,15 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
             }
         }
     } else {
-        jni_log_trace!(logger, env, "BINARY", &format!("FlatBuffers header probe skipped: data too small ({})", data.len()));
+        jni_log_trace!(
+            logger,
+            env,
+            "BINARY",
+            &format!(
+                "FlatBuffers header probe skipped: data too small ({})",
+                data.len()
+            )
+        );
     }
 
     // For entity inputs we use a custom manual binary layout produced by the Java side.
@@ -262,24 +366,31 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
 
     // Manual deserialization fallback. Build a Result here and return it once so we
     // avoid early `return` calls inside the match (which made subsequent code unreachable).
-    let manual_result: Result<Vec<u8>, String> = match crate::binary::conversions::deserialize_entity_input(data) {
-        Ok(manual_input) => {
-            let entities_to_tick: Vec<u64> = manual_input.entities.iter().map(|e| e.id).collect();
-            // Format expected by Java BinarySerializer for process result: [numItems:i32][ids...]
-            let mut result = Vec::with_capacity(4 + entities_to_tick.len() * 8);
-            // Number of entities (i32 little-endian)
-            result.extend_from_slice(&(entities_to_tick.len() as i32).to_le_bytes());
-            for entity_id in &entities_to_tick {
-                result.extend_from_slice(&entity_id.to_le_bytes());
+    let manual_result: Result<Vec<u8>, String> =
+        match crate::binary::conversions::deserialize_entity_input(data) {
+            Ok(manual_input) => {
+                let entities_to_tick: Vec<u64> =
+                    manual_input.entities.iter().map(|e| e.id).collect();
+                // Format expected by Java BinarySerializer for process result: [numItems:i32][ids...]
+                let mut result = Vec::with_capacity(4 + entities_to_tick.len() * 8);
+                // Number of entities (i32 little-endian)
+                result.extend_from_slice(&(entities_to_tick.len() as i32).to_le_bytes());
+                for entity_id in &entities_to_tick {
+                    result.extend_from_slice(&entity_id.to_le_bytes());
+                }
+                // Remove debug logs to reduce noise - only log errors
+                Ok(result)
             }
-            // Remove debug logs to reduce noise - only log errors
-            Ok(result)
-        },
-        Err(manual_err) => {
-            jni_log_error!(logger, env, "BINARY", &format!("Manual deserialization also failed: {}", manual_err));
-            Err(format!("Manual deserialization failed: {}", manual_err))
-        }
-    };
+            Err(manual_err) => {
+                jni_log_error!(
+                    logger,
+                    env,
+                    "BINARY",
+                    &format!("Manual deserialization also failed: {}", manual_err)
+                );
+                Err(format!("Manual deserialization failed: {}", manual_err))
+            }
+        };
 
     manual_result
 }

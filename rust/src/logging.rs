@@ -1,14 +1,14 @@
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use std::collections::HashMap;
-use std::sync::Mutex;
 use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
-use log::{Level, Record, Metadata, Log};
+use log::{Level, Log, Metadata, Record};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 // JNI-specific imports for Java logging
-use jni::JNIEnv;
 use jni::objects::{JObject, JValue};
 use jni::sys::jstring;
+use jni::JNIEnv;
 
 static TRACE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -72,7 +72,8 @@ impl LogEntry {
     }
 
     pub fn log(self) {
-        let json = serde_json::to_string(&self).unwrap_or_else(|_| "Failed to serialize log entry".to_string());
+        let json = serde_json::to_string(&self)
+            .unwrap_or_else(|_| "Failed to serialize log entry".to_string());
         match self.level.as_str() {
             "ERROR" => log::error!("{}", json),
             "WARN" => log::warn!("{}", json),
@@ -147,12 +148,32 @@ impl PerformanceLogger {
 /// Error types with context
 #[derive(Debug, Clone)]
 pub enum ProcessingError {
-    SerializationError { message: String, trace_id: String },
-    DeserializationError { message: String, trace_id: String },
-    ValidationError { field: String, message: String, trace_id: String },
-    ResourceExhaustionError { resource: String, trace_id: String },
-    TimeoutError { operation: String, timeout_ms: u64, trace_id: String },
-    InternalError { message: String, trace_id: String },
+    SerializationError {
+        message: String,
+        trace_id: String,
+    },
+    DeserializationError {
+        message: String,
+        trace_id: String,
+    },
+    ValidationError {
+        field: String,
+        message: String,
+        trace_id: String,
+    },
+    ResourceExhaustionError {
+        resource: String,
+        trace_id: String,
+    },
+    TimeoutError {
+        operation: String,
+        timeout_ms: u64,
+        trace_id: String,
+    },
+    InternalError {
+        message: String,
+        trace_id: String,
+    },
 }
 
 impl ProcessingError {
@@ -182,9 +203,17 @@ impl ProcessingError {
         let message = match self {
             ProcessingError::SerializationError { message, .. } => message.clone(),
             ProcessingError::DeserializationError { message, .. } => message.clone(),
-            ProcessingError::ValidationError { field, message, .. } => format!("Validation failed for field '{}': {}", field, message),
-            ProcessingError::ResourceExhaustionError { resource, .. } => format!("Resource exhausted: {}", resource),
-            ProcessingError::TimeoutError { operation: op, timeout_ms, .. } => format!("Operation '{}' timed out after {}ms", op, timeout_ms),
+            ProcessingError::ValidationError { field, message, .. } => {
+                format!("Validation failed for field '{}': {}", field, message)
+            }
+            ProcessingError::ResourceExhaustionError { resource, .. } => {
+                format!("Resource exhausted: {}", resource)
+            }
+            ProcessingError::TimeoutError {
+                operation: op,
+                timeout_ms,
+                ..
+            } => format!("Operation '{}' timed out after {}ms", op, timeout_ms),
             ProcessingError::InternalError { message, .. } => message.clone(),
         };
 
@@ -198,12 +227,30 @@ impl ProcessingError {
 impl std::fmt::Display for ProcessingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProcessingError::SerializationError { message, .. } => write!(f, "Serialization error: {}", message),
-            ProcessingError::DeserializationError { message, .. } => write!(f, "Deserialization error: {}", message),
-            ProcessingError::ValidationError { field, message, .. } => write!(f, "Validation error for field '{}': {}", field, message),
-            ProcessingError::ResourceExhaustionError { resource, .. } => write!(f, "Resource exhaustion: {}", resource),
-            ProcessingError::TimeoutError { operation, timeout_ms, .. } => write!(f, "Timeout in operation '{}' after {}ms", operation, timeout_ms),
-            ProcessingError::InternalError { message, .. } => write!(f, "Internal error: {}", message),
+            ProcessingError::SerializationError { message, .. } => {
+                write!(f, "Serialization error: {}", message)
+            }
+            ProcessingError::DeserializationError { message, .. } => {
+                write!(f, "Deserialization error: {}", message)
+            }
+            ProcessingError::ValidationError { field, message, .. } => {
+                write!(f, "Validation error for field '{}': {}", field, message)
+            }
+            ProcessingError::ResourceExhaustionError { resource, .. } => {
+                write!(f, "Resource exhaustion: {}", resource)
+            }
+            ProcessingError::TimeoutError {
+                operation,
+                timeout_ms,
+                ..
+            } => write!(
+                f,
+                "Timeout in operation '{}' after {}ms",
+                operation, timeout_ms
+            ),
+            ProcessingError::InternalError { message, .. } => {
+                write!(f, "Internal error: {}", message)
+            }
         }
     }
 }
@@ -276,7 +323,10 @@ impl LoggerRegistry {
         loggers.insert(name.to_string(), logger);
     }
 
-    pub fn get_logger(&self, name: &str) -> Option<std::sync::MutexGuard<'_, Box<dyn Log + Send + Sync>>> {
+    pub fn get_logger(
+        &self,
+        name: &str,
+    ) -> Option<std::sync::MutexGuard<'_, Box<dyn Log + Send + Sync>>> {
         let loggers = self.loggers.lock().unwrap();
         if loggers.contains_key(name) {
             // This is a simplified implementation - in practice, you'd need to handle the lifetime properly
@@ -327,9 +377,11 @@ impl JniLogger {
     pub fn log_to_java(&self, env: &mut JNIEnv, level: &str, message: &str) {
         // Format message with prefix
         let formatted_message = format!("[KneafMod] {}", message);
-        
+
         if let Ok(cls) = env.find_class("com/kneaf/core/performance/RustPerformance") {
-            if let (Ok(jlevel), Ok(jmsg)) = (env.new_string(level), env.new_string(&formatted_message)) {
+            if let (Ok(jlevel), Ok(jmsg)) =
+                (env.new_string(level), env.new_string(&formatted_message))
+            {
                 let jlevel_obj = JObject::from(jlevel);
                 let jmsg_obj = JObject::from(jmsg);
                 let _ = env.call_static_method(
@@ -341,21 +393,18 @@ impl JniLogger {
             }
         }
     }
-    
+
     /// Initialize Java logging system
     pub fn init_java_logging(env: &mut JNIEnv) -> Result<(), String> {
         if JAVA_LOGGING_INITIALIZED.load(Ordering::Relaxed) {
             return Ok(());
         }
-        
+
         if let Ok(cls) = env.find_class("com/kneaf/core/performance/RustPerformance") {
-            let _ = env.call_static_method(
-                cls,
-                "initNativeLogging",
-                "()V",
-                &[],
-            ).map_err(|e| format!("Failed to initialize Java logging: {}", e))?;
-            
+            let _ = env
+                .call_static_method(cls, "initNativeLogging", "()V", &[])
+                .map_err(|e| format!("Failed to initialize Java logging: {}", e))?;
+
             JAVA_LOGGING_INITIALIZED.store(true, Ordering::Relaxed);
             Ok(())
         } else {
@@ -439,23 +488,21 @@ pub fn make_jni_error_bytes(env: &JNIEnv, message: &[u8]) -> jni::sys::jbyteArra
 /// Enhanced logging macro that sends logs to both Rust logger and Java via JNI
 #[macro_export]
 macro_rules! log_to_java {
-    ($env:expr, $level:expr, $component:expr, $operation:expr, $message:expr) => {
-        {
-            let trace_id = $crate::logging::generate_trace_id();
-            let formatted_message = format!("[{}] {}: {}", $component, $operation, $message);
-            
-            // Log to Rust logger
-            $crate::logging::LogEntry::new($level, $component, $operation, &formatted_message)
-                .with_trace_id(trace_id.to_string())
-                .log();
-            
-            // Log to Java via JNI if environment is available
-            if let Some(env) = $env {
-                let logger = $crate::logging::JniLogger::new($component);
-                logger.log_to_java(env, $level, &formatted_message);
-            }
+    ($env:expr, $level:expr, $component:expr, $operation:expr, $message:expr) => {{
+        let trace_id = $crate::logging::generate_trace_id();
+        let formatted_message = format!("[{}] {}: {}", $component, $operation, $message);
+
+        // Log to Rust logger
+        $crate::logging::LogEntry::new($level, $component, $operation, &formatted_message)
+            .with_trace_id(trace_id.to_string())
+            .log();
+
+        // Log to Java via JNI if environment is available
+        if let Some(env) = $env {
+            let logger = $crate::logging::JniLogger::new($component);
+            logger.log_to_java(env, $level, &formatted_message);
         }
-    };
+    }};
 }
 
 /// Convenience macros for logging
@@ -468,10 +515,15 @@ macro_rules! log_error {
             .log();
     };
     ($component:expr, $operation:expr, $trace_id:expr, $message:expr, $error:expr) => {
-        $crate::logging::LogEntry::new("ERROR", $component, $operation, &format!("{}: {}", $message, $error.to_string()))
-            .with_trace_id($trace_id.to_string())
-            .with_error_code("GENERIC_ERROR".to_string())
-            .log();
+        $crate::logging::LogEntry::new(
+            "ERROR",
+            $component,
+            $operation,
+            &format!("{}: {}", $message, $error.to_string()),
+        )
+        .with_trace_id($trace_id.to_string())
+        .with_error_code("GENERIC_ERROR".to_string())
+        .log();
     };
 }
 
@@ -498,8 +550,9 @@ macro_rules! handle_error_with_code {
             Ok(value) => value,
             Err(e) => {
                 let trace_id = $crate::logging::generate_trace_id();
-                let mut entry = $crate::logging::LogEntry::new("ERROR", $component, $operation, &e.to_string())
-                    .with_trace_id(trace_id.to_string());
+                let mut entry =
+                    $crate::logging::LogEntry::new("ERROR", $component, $operation, &e.to_string())
+                        .with_trace_id(trace_id.to_string());
                 if !$error_code.is_empty() {
                     entry = entry.with_error_code($error_code);
                 }
@@ -546,17 +599,15 @@ macro_rules! log_performance {
 
 #[macro_export]
 macro_rules! with_trace_logging {
-    ($component:expr, $operation:expr, $code:block) => {
-        {
-            let trace_id = $crate::logging::generate_trace_id();
-            let start = std::time::Instant::now();
-            let result = $code;
-            let duration = start.elapsed().as_millis() as u64;
+    ($component:expr, $operation:expr, $code:block) => {{
+        let trace_id = $crate::logging::generate_trace_id();
+        let start = std::time::Instant::now();
+        let result = $code;
+        let duration = start.elapsed().as_millis() as u64;
 
-            $crate::logging::log_performance!($component, $operation, &trace_id, duration);
-            result
-        }
-    };
+        $crate::logging::log_performance!($component, $operation, &trace_id, duration);
+        result
+    }};
 }
 
 /// JNI-specific logging macros

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Atomic state for thread-safe pool operations
 #[derive(Debug)]
@@ -129,7 +129,10 @@ mod tests {
 
         // Verify final state is consistent
         let final_size = state.get_current_size();
-        assert_eq!(final_size, 0, "Final pool size should be 0 after all operations");
+        assert_eq!(
+            final_size, 0,
+            "Final pool size should be 0 after all operations"
+        );
     }
 
     #[test]
@@ -193,7 +196,7 @@ mod tests {
     #[test]
     fn test_atomic_counter() {
         let counter = AtomicCounter::new(0);
-        
+
         assert_eq!(counter.get(), 0);
         assert_eq!(counter.increment(), 1);
         assert_eq!(counter.get(), 1);

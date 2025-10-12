@@ -1,23 +1,35 @@
-use jni::{JNIEnv, objects::JClass, sys::{jlong, jint, jstring, jbyte, jbyteArray}};
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use jni::{
+    objects::JClass,
+    sys::{jbyte, jbyteArray, jint, jlong, jstring},
+    JNIEnv,
+};
+use log::{debug, error, info};
 use serde_json;
-use log::{error, info, debug};
-use std::sync::atomic::{AtomicUsize, AtomicU64, AtomicBool, Ordering};
-use std::thread;
 use std::cmp;
-use tokio::sync::{mpsc, oneshot};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
+use tokio::sync::{mpsc, oneshot};
 
 // Helper trait for mutex operations with timeout
 // Use a more efficient lock strategy with better backoff
 trait LockExt<T> {
-    fn try_lock_with_backoff(&self, max_attempts: usize, initial_backoff: Duration) -> Result<std::sync::MutexGuard<'_, T>, String>;
+    fn try_lock_with_backoff(
+        &self,
+        max_attempts: usize,
+        initial_backoff: Duration,
+    ) -> Result<std::sync::MutexGuard<'_, T>, String>;
 }
 
 impl<T> LockExt<T> for std::sync::Mutex<T> {
-    fn try_lock_with_backoff(&self, max_attempts: usize, initial_backoff: Duration) -> Result<std::sync::MutexGuard<'_, T>, String> {
+    fn try_lock_with_backoff(
+        &self,
+        max_attempts: usize,
+        initial_backoff: Duration,
+    ) -> Result<std::sync::MutexGuard<'_, T>, String> {
         let mut backoff = initial_backoff;
         for attempt in 0..max_attempts {
             match self.try_lock() {
@@ -82,23 +94,23 @@ impl BatchBufferPool {
         let _shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
 
         // Use a more efficient shard selection algorithm with local affinity
-                let mut attempts = 0;
-                let max_attempts = self.shard_count * 2; // Try all shards twice
-                
-                while attempts < max_attempts {
-                    let shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
-                    
-                    if let Some(buffer) = self.try_acquire_from_shard(shard_idx) {
-                        return Some(buffer);
-                    }
-                    
-                    attempts += 1;
-                    
-                    // If we've tried all shards once, add some jitter to avoid contention
-                    if attempts == self.shard_count {
-                        std::thread::sleep(Duration::from_micros(1));
-                    }
-                }
+        let mut attempts = 0;
+        let max_attempts = self.shard_count * 2; // Try all shards twice
+
+        while attempts < max_attempts {
+            let shard_idx = ACQUIRE_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
+
+            if let Some(buffer) = self.try_acquire_from_shard(shard_idx) {
+                return Some(buffer);
+            }
+
+            attempts += 1;
+
+            // If we've tried all shards once, add some jitter to avoid contention
+            if attempts == self.shard_count {
+                std::thread::sleep(Duration::from_micros(1));
+            }
+        }
 
         None
     }
@@ -146,11 +158,11 @@ pub struct EnhancedBatchConfig {
 impl Default for EnhancedBatchConfig {
     fn default() -> Self {
         Self {
-            min_batch_size: 50,  // Increased for more aggressive batching
-            max_batch_size: 500, // Increased to reduce JNI crossings
+            min_batch_size: 50,           // Increased for more aggressive batching
+            max_batch_size: 500,          // Increased to reduce JNI crossings
             adaptive_batch_timeout_ms: 1, // Reduced for faster batching
-            max_pending_batches: 200, // Increased to handle more concurrent batches
-            worker_threads: 8, // Increased for better parallelism
+            max_pending_batches: 200,     // Increased to handle more concurrent batches
+            worker_threads: 8,            // Increased for better parallelism
             enable_adaptive_sizing: true,
         }
     }
@@ -220,7 +232,8 @@ impl EnhancedBatchMetrics {
         let current = self.average_batch_size.load(Ordering::Relaxed);
         let updated = (current * 9 + new_size as u64) / 10; // Exponential moving average
         self.average_batch_size.store(updated, Ordering::Relaxed);
-        self.adaptive_batch_size.store(updated as usize, Ordering::Relaxed);
+        self.adaptive_batch_size
+            .store(updated as usize, Ordering::Relaxed);
     }
 
     pub fn get_pressure_level(&self) -> u8 {
@@ -261,28 +274,33 @@ impl PriorityBatchQueue {
 
     pub fn push(&self, operation: EnhancedBatchOperation) {
         let shard_idx = self.get_shard(operation.priority);
-        
+
         let mut queue = self.queues[shard_idx].lock().unwrap();
 
         // Insert based on priority (higher priority first)
-        let insert_pos = queue.binary_search_by_key(&operation.priority, |op| op.priority)
+        let insert_pos = queue
+            .binary_search_by_key(&operation.priority, |op| op.priority)
             .unwrap_or_else(|pos| pos);
         queue.insert(insert_pos, operation);
 
         // Update total queue depth across all shards
         let total_depth = self.get_total_depth();
-        self.metrics.current_queue_depth.store(total_depth, Ordering::Relaxed);
+        self.metrics
+            .current_queue_depth
+            .store(total_depth, Ordering::Relaxed);
     }
 
     pub fn pop(&self) -> Option<EnhancedBatchOperation> {
         // Try to pop from highest priority shards first
         for priority_level in (0..=255).rev() {
             let shard_idx = self.get_shard(priority_level);
-            
+
             let mut queue = self.queues[shard_idx].lock().unwrap();
             if let Some(operation) = queue.pop_front() {
                 let total_depth = self.get_total_depth();
-                self.metrics.current_queue_depth.store(total_depth, Ordering::Relaxed);
+                self.metrics
+                    .current_queue_depth
+                    .store(total_depth, Ordering::Relaxed);
                 return Some(operation);
             }
         }
@@ -291,101 +309,104 @@ impl PriorityBatchQueue {
     }
 
     pub fn drain_batch(&self, max_size: usize, timeout: Duration) -> Vec<EnhancedBatchOperation> {
-            let start_time = Instant::now();
-            let mut batch = Vec::with_capacity(max_size);
-            let initial_queue_depth = self.len();
-    
-            // Use a more efficient batching algorithm with reduced lock contention
-            while batch.len() < max_size && start_time.elapsed() < timeout {
-                // Try to get operations from all shards in parallel without holding locks
-                let mut operations = Vec::with_capacity(max_size - batch.len());
-                
-                for shard_idx in 0..self.shard_count {
-                    if start_time.elapsed() >= timeout {
-                        break;
-                    }
-                    
-                    // Use try_lock to minimize contention
-                    if let Ok(mut queue) = self.queues[shard_idx].try_lock() {
-                        let batch_size = std::cmp::min(max_size - batch.len(), queue.len());
-                        if batch_size > 0 {
-                            // Take operations from the front of the queue
-                            for _ in 0..batch_size {
-                                if let Some(op) = queue.pop_front() {
-                                    operations.push(op);
-                                } else {
-                                    break;
-                                }
+        let start_time = Instant::now();
+        let mut batch = Vec::with_capacity(max_size);
+        let initial_queue_depth = self.len();
+
+        // Use a more efficient batching algorithm with reduced lock contention
+        while batch.len() < max_size && start_time.elapsed() < timeout {
+            // Try to get operations from all shards in parallel without holding locks
+            let mut operations = Vec::with_capacity(max_size - batch.len());
+
+            for shard_idx in 0..self.shard_count {
+                if start_time.elapsed() >= timeout {
+                    break;
+                }
+
+                // Use try_lock to minimize contention
+                if let Ok(mut queue) = self.queues[shard_idx].try_lock() {
+                    let batch_size = std::cmp::min(max_size - batch.len(), queue.len());
+                    if batch_size > 0 {
+                        // Take operations from the front of the queue
+                        for _ in 0..batch_size {
+                            if let Some(op) = queue.pop_front() {
+                                operations.push(op);
+                            } else {
+                                break;
                             }
                         }
                     }
                 }
-                
-                // Add all collected operations to the batch
-                batch.extend(operations.clone());
-                
-                // If we got some operations, check if we should continue
-                if operations.is_empty() {
-                    // No operations available - check if we should wait or return empty batch
-                    let elapsed = start_time.elapsed();
-                    if elapsed < Duration::from_millis(10) {
-                        std::thread::sleep(Duration::from_micros(1)); // Very short wait for new operations
-                    } else {
-                        break; // Don't wait too long for empty queues
-                    }
+            }
+
+            // Add all collected operations to the batch
+            batch.extend(operations.clone());
+
+            // If we got some operations, check if we should continue
+            if operations.is_empty() {
+                // No operations available - check if we should wait or return empty batch
+                let elapsed = start_time.elapsed();
+                if elapsed < Duration::from_millis(10) {
+                    std::thread::sleep(Duration::from_micros(1)); // Very short wait for new operations
                 } else {
-                    // Check adaptive termination conditions
-                    let current_depth = self.len();
-                    let depth_change = initial_queue_depth - current_depth;
-                    
-                    // If we've processed a significant portion of the queue or it's emptying fast, stop early
-                    if (batch.len() as f64 / max_size as f64) > 0.9 ||  // More aggressive batching
-                       (depth_change > 0 && (depth_change as f64 / initial_queue_depth as f64) > 0.7) {
-                        break;
-                    }
+                    break; // Don't wait too long for empty queues
+                }
+            } else {
+                // Check adaptive termination conditions
+                let current_depth = self.len();
+                let depth_change = initial_queue_depth - current_depth;
+
+                // If we've processed a significant portion of the queue or it's emptying fast, stop early
+                if (batch.len() as f64 / max_size as f64) > 0.9 ||  // More aggressive batching
+                       (depth_change > 0 && (depth_change as f64 / initial_queue_depth as f64) > 0.7)
+                {
+                    break;
                 }
             }
-    
-            batch
         }
+
+        batch
+    }
 
     /// Pop operation with timeout to prevent deadlocks
     pub fn pop_with_timeout(&self, timeout: Duration) -> Option<EnhancedBatchOperation> {
-            // Use a more efficient approach with try_lock to minimize contention
-            let start_time = Instant::now();
-            let max_attempts = 5; // Limit number of attempts to avoid long delays
-            
-            for attempt in 0..max_attempts {
-                // Check if we've exceeded the timeout
-                if start_time.elapsed() >= timeout {
-                    return None;
-                }
-                
-                // Try to get an operation from any shard
-                for priority_level in (0..=255).rev() {
-                    let shard_idx = self.get_shard(priority_level);
-                    
-                    // Use try_lock with backoff to minimize contention
-                    match self.queues[shard_idx].try_lock_with_backoff(3, Duration::from_micros(1)) {
-                        Ok(mut queue) => {
-                            if let Some(operation) = queue.pop_front() {
-                                let total_depth = self.get_total_depth();
-                                self.metrics.current_queue_depth.store(total_depth, Ordering::Relaxed);
-                                return Some(operation);
-                            }
+        // Use a more efficient approach with try_lock to minimize contention
+        let start_time = Instant::now();
+        let max_attempts = 5; // Limit number of attempts to avoid long delays
+
+        for attempt in 0..max_attempts {
+            // Check if we've exceeded the timeout
+            if start_time.elapsed() >= timeout {
+                return None;
+            }
+
+            // Try to get an operation from any shard
+            for priority_level in (0..=255).rev() {
+                let shard_idx = self.get_shard(priority_level);
+
+                // Use try_lock with backoff to minimize contention
+                match self.queues[shard_idx].try_lock_with_backoff(3, Duration::from_micros(1)) {
+                    Ok(mut queue) => {
+                        if let Some(operation) = queue.pop_front() {
+                            let total_depth = self.get_total_depth();
+                            self.metrics
+                                .current_queue_depth
+                                .store(total_depth, Ordering::Relaxed);
+                            return Some(operation);
                         }
-                        Err(_) => continue, // Try next shard if this one is locked
                     }
-                }
-                
-                // Add short delay between attempts to reduce contention
-                if attempt < max_attempts - 1 {
-                    std::thread::sleep(Duration::from_micros(1));
+                    Err(_) => continue, // Try next shard if this one is locked
                 }
             }
-    
-            None
+
+            // Add short delay between attempts to reduce contention
+            if attempt < max_attempts - 1 {
+                std::thread::sleep(Duration::from_micros(1));
+            }
         }
+
+        None
+    }
 
     pub fn len(&self) -> usize {
         self.get_total_depth()
@@ -465,7 +486,7 @@ impl ZeroCopyBufferPool {
         let mut attempts = 0;
         const MAX_ATTEMPTS: usize = 5;
         const BASE_BACKOFF: Duration = Duration::from_micros(1);
-        
+
         while attempts < MAX_ATTEMPTS {
             for i in 0..self.shard_count {
                 if let Ok(mut buffers) = self.buffer_pools[i].try_lock() {
@@ -474,7 +495,7 @@ impl ZeroCopyBufferPool {
                     }
                 }
             }
-            
+
             attempts += 1;
             let backoff = BASE_BACKOFF * 2u32.pow(attempts as u32);
             std::thread::sleep(backoff);
@@ -496,7 +517,7 @@ impl ZeroCopyBufferPool {
         // Reset buffer contents efficiently
         buffer.clear();
         buffer.shrink_to_fit(); // More aggressive memory return
-        
+
         // Use thread-local sharding for release
         let thread_id = rand::random::<usize>();
         let shard_idx = thread_id % self.shard_count;
@@ -513,13 +534,13 @@ impl ZeroCopyBufferPool {
         let mut attempts = 0;
         const MAX_ATTEMPTS: usize = 3;
         const BASE_BACKOFF: Duration = Duration::from_micros(1);
-        
+
         while attempts < MAX_ATTEMPTS {
             for i in 0..self.shard_count {
                 if i == shard_idx {
                     continue;
                 }
-                
+
                 if let Ok(mut buffers) = self.buffer_pools[i].try_lock() {
                     let max_per_shard = self.max_buffers / self.shard_count;
                     if buffers.len() < max_per_shard {
@@ -528,7 +549,7 @@ impl ZeroCopyBufferPool {
                     }
                 }
             }
-            
+
             attempts += 1;
             let backoff = BASE_BACKOFF * 2u32.pow(attempts as u32);
             std::thread::sleep(backoff);
@@ -574,31 +595,29 @@ impl EnhancedBatchProcessor {
     pub fn new(config: EnhancedBatchConfig) -> Self {
         let metrics = Arc::new(EnhancedBatchMetrics::new());
         let mut queues = Vec::with_capacity(7); // 7 operation types
-        
+
         // Create priority queues for each operation type
         for _ in 0..7 {
             queues.push(PriorityBatchQueue::new(Arc::clone(&metrics)));
         }
-        
+
         let queues = Arc::new(queues);
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let mut worker_handles = Vec::with_capacity(config.worker_threads);
-        
+
         // Create async runtime for enhanced processing
-        let async_runtime = Arc::new(
-            Runtime::new().expect("Failed to create Tokio runtime")
-        );
-        
+        let async_runtime = Arc::new(Runtime::new().expect("Failed to create Tokio runtime"));
+
         // Create async task channel
         let (async_task_sender, async_task_receiver) = mpsc::channel::<AsyncBatchTask>(1000);
         let async_task_receiver = Arc::new(Mutex::new(async_task_receiver));
-        
+
         // Create zero-copy buffer pool (increased for more aggressive batching)
         let zero_copy_pool = Arc::new(ZeroCopyBufferPool::new(64, 128 * 1024)); // 64 buffers, 128KB each
-        
+
         // Create connection pool for async tasks
         let connection_pool = Arc::new(Mutex::new(Vec::new()));
-        
+
         // Spawn async worker tasks
         for worker_id in 0..config.worker_threads {
             let queues_clone = Arc::clone(&queues);
@@ -607,7 +626,7 @@ impl EnhancedBatchProcessor {
             let shutdown_clone = Arc::clone(&shutdown_flag);
             let zero_copy_pool_clone = Arc::clone(&zero_copy_pool);
             let async_task_receiver_clone = Arc::clone(&async_task_receiver);
-            
+
             let handle = thread::spawn(move || {
                 let rt = Runtime::new().expect("Failed to create worker runtime");
                 rt.block_on(async {
@@ -619,12 +638,13 @@ impl EnhancedBatchProcessor {
                         shutdown_clone,
                         async_task_receiver_clone,
                         zero_copy_pool_clone,
-                    ).await;
+                    )
+                    .await;
                 });
             });
             worker_handles.push(handle);
         }
-        
+
         Self {
             config,
             queues,
@@ -650,10 +670,10 @@ impl EnhancedBatchProcessor {
     ) {
         let thread_name = format!("AsyncEnhancedBatchProcessor-{}", worker_id);
         debug!("Starting {}", thread_name);
-        
+
         while !shutdown_flag.load(Ordering::Relaxed) {
             let mut processed_any = false;
-            
+
             // Process async tasks with timeout
             let mut receiver_guard = async_task_receiver.lock().unwrap();
             tokio::select! {
@@ -665,7 +685,7 @@ impl EnhancedBatchProcessor {
                         &zero_copy_pool,
                         &metrics,
                     ).await;
-                    
+
                     let _ = task.result_sender.send(result);
                     processed_any = true;
                 }
@@ -673,37 +693,37 @@ impl EnhancedBatchProcessor {
                     // Continue to process regular queues
                 }
             }
-            
+
             // Process queues round-robin with priority consideration
             for operation_type in 0..queues.len() {
                 if shutdown_flag.load(Ordering::Relaxed) {
                     break;
                 }
-                
+
                 let queue = &queues[operation_type];
                 let current_depth = queue.len();
-                
+
                 if current_depth == 0 {
                     continue;
                 }
-                
+
                 // Calculate optimal batch size based on pressure and queue depth
                 let optimal_batch_size = Self::calculate_optimal_batch_size(
                     &config,
                     &metrics,
                     current_depth,
-                    operation_type as u8
+                    operation_type as u8,
                 );
-                
+
                 let timeout = Duration::from_millis(config.adaptive_batch_timeout_ms);
                 let batch = queue.drain_batch(optimal_batch_size, timeout);
-                
+
                 if !batch.is_empty() {
                     processed_any = true;
                     Self::process_batch(operation_type as u8, batch, &metrics);
                 }
             }
-            
+
             // Adaptive sleep based on processing activity
             if !processed_any {
                 let sleep_duration = if metrics.get_pressure_level() > 50 {
@@ -714,10 +734,10 @@ impl EnhancedBatchProcessor {
                 tokio::time::sleep(sleep_duration).await;
             }
         }
-        
+
         debug!("Shutting down {}", thread_name);
     }
-    
+
     /// Process async batch task with zero-copy optimization
     async fn process_async_batch_task(
         operation_type: u8,
@@ -727,28 +747,41 @@ impl EnhancedBatchProcessor {
     ) -> Result<EnhancedBatchResult, String> {
         let start_time = Instant::now();
         let batch_size = operations.len();
-        
-        debug!("Processing async batch of {} operations for type {}", batch_size, operation_type);
-        
+
+        debug!(
+            "Processing async batch of {} operations for type {}",
+            batch_size, operation_type
+        );
+
         // Acquire zero-copy buffer for processing
-        let mut buffer = zero_copy_pool.acquire_buffer()
+        let mut buffer = zero_copy_pool
+            .acquire_buffer()
             .ok_or_else(|| "No zero-copy buffers available".to_string())?;
-        
+
         match Self::execute_native_batch_with_buffer(operation_type, &operations, &mut buffer) {
             Ok(results) => {
                 let processing_time = start_time.elapsed().as_nanos() as u64;
-                
+
                 // Update metrics
-                metrics.total_batches_processed.fetch_add(1, Ordering::Relaxed);
-                metrics.total_operations_batched.fetch_add(batch_size as u64, Ordering::Relaxed);
-                metrics.total_processing_time_ns.fetch_add(processing_time, Ordering::Relaxed);
+                metrics
+                    .total_batches_processed
+                    .fetch_add(1, Ordering::Relaxed);
+                metrics
+                    .total_operations_batched
+                    .fetch_add(batch_size as u64, Ordering::Relaxed);
+                metrics
+                    .total_processing_time_ns
+                    .fetch_add(processing_time, Ordering::Relaxed);
                 metrics.update_average_batch_size(batch_size);
-                
-                debug!("Async batch processed successfully: {} operations in {} ns", batch_size, processing_time);
-                
+
+                debug!(
+                    "Async batch processed successfully: {} operations in {} ns",
+                    batch_size, processing_time
+                );
+
                 // Return buffer to pool
                 zero_copy_pool.release_buffer(buffer);
-                
+
                 Ok(EnhancedBatchResult {
                     operation_type,
                     results,
@@ -759,16 +792,18 @@ impl EnhancedBatchProcessor {
             }
             Err(e) => {
                 error!("Async batch processing failed: {}", e);
-                metrics.failed_operations.fetch_add(batch_size as u64, Ordering::Relaxed);
-                
+                metrics
+                    .failed_operations
+                    .fetch_add(batch_size as u64, Ordering::Relaxed);
+
                 // Return buffer to pool even on error
                 zero_copy_pool.release_buffer(buffer);
-                
+
                 Err(format!("Async batch processing failed: {}", e))
             }
         }
     }
-    
+
     /// Execute native batch processing with zero-copy buffer
     fn execute_native_batch_with_buffer(
         operation_type: u8,
@@ -778,31 +813,31 @@ impl EnhancedBatchProcessor {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
-        
+
         // Calculate total size needed
         let mut total_size = 0;
         for operation in batch {
             total_size += operation.input_data.len() + 8; // data + header
         }
-        
+
         // Ensure buffer has enough capacity
         if buffer.capacity() < total_size + 8 {
             buffer.reserve(total_size + 8 - buffer.capacity());
         }
-        
+
         buffer.clear();
-        
+
         // Write batch header
         buffer.extend_from_slice(&(batch.len() as u32).to_le_bytes());
         buffer.extend_from_slice(&(total_size as u32).to_le_bytes());
-        
+
         // Write individual operations
         for operation in batch {
             let data_len = operation.input_data.len();
             buffer.extend_from_slice(&(data_len as u32).to_le_bytes());
             buffer.extend_from_slice(&operation.input_data);
         }
-        
+
         // Call native batch processing function with zero-copy buffer
         match native_process_batch_zero_copy(operation_type, buffer) {
             Ok(results) => Ok(results),
@@ -811,118 +846,145 @@ impl EnhancedBatchProcessor {
     }
 
     fn calculate_optimal_batch_size(
-            config: &EnhancedBatchConfig,
-            metrics: &Arc<EnhancedBatchMetrics>,
-            queue_depth: usize,
-            operation_type: u8,
-        ) -> usize {
-            if !config.enable_adaptive_sizing {
-                return config.min_batch_size;
-            }
-            
-            let base_size = metrics.adaptive_batch_size.load(Ordering::Relaxed);
-            let pressure_level = metrics.get_pressure_level();
-            
-            // More granular pressure-based scaling with exponential response
-            let multiplier = match pressure_level {
-                0..=10 => 2.0,     // Very low pressure - double batch size
-                11..=20 => 1.7,    // Low pressure - significantly increase batch size
-                21..=35 => 1.4,    // Moderate low pressure - increase batch size
-                36..=50 => 1.1,    // Near normal pressure - slightly increase batch size
-                51..=65 => 1.0,    // Normal pressure - use base size
-                66..=75 => 0.8,    // Moderate high pressure - slightly reduce batch size
-                76..=85 => 0.6,    // High pressure - reduce batch size
-                86..=95 => 0.4,    // Very high pressure - significantly reduce batch size
-                _ => 0.2,           // Extreme pressure - minimal batch size to prevent overload
-            };
-            
-            let adjusted_size = (base_size as f64 * multiplier) as usize;
-            
-            // Queue depth adaptation with more precise thresholds
-            let depth_factor = match queue_depth {
-                d if d == 0 => 0.0,                          // Empty queue - no operations
-                d if d < config.min_batch_size => 0.5,       // Very low queue - minimal batch
-                d if d < config.min_batch_size * 2 => 0.7, // Low queue - small batch
-                d if d < config.min_batch_size * 2 => 0.9,   // Below normal - slightly smaller batch
-                d if d < config.max_batch_size => 1.0,       // Normal queue - base size
-                d if d < config.max_batch_size * 2 => 1.2,// Above normal - slightly larger batch
-                d if d < config.max_batch_size => 1.5,   // Very high queue - significantly larger batch
-                d if d < config.max_batch_size * 2 => 1.5,   // Very high queue - significantly larger batch
-                _ => 2.0,                                    // Extreme queue - maximum batch size
-            };
-            
-            // Apply operation type specific adjustments with more granularity
-            let type_factor = match operation_type {
-                0x01 => 1.2,  // Echo operations can be larger
-                0x02 => 0.8,  // Heavy operations should be smaller
-                0x03 => 1.5,  // Fast operations can be very large
-                0x04 => 0.9,  // Medium operations slightly smaller
-                _ => 1.0,     // Default
-            };
-            
-            // Apply system load factor based on historical performance
-            let load_factor = if metrics.get_pressure_level() < 50 {
-                1.1 // Good performance - push larger batches
-            } else if metrics.get_pressure_level() < 80 {
-                1.0 // Stable performance - use calculated size
-            } else {
-                0.9 // Poor performance - use smaller batches to reduce load
-            };
-            
-            let final_size = (adjusted_size as f64 * depth_factor * type_factor * load_factor) as usize;
-            
-            // Ensure we stay within configured bounds but allow for more aggressive sizing
-            // when under low pressure to maximize throughput
-            if pressure_level < 30 {
-                cmp::max(config.min_batch_size, cmp::min(config.max_batch_size * 2, final_size))
-            } else {
-                cmp::max(config.min_batch_size, cmp::min(config.max_batch_size, final_size))
-            }
+        config: &EnhancedBatchConfig,
+        metrics: &Arc<EnhancedBatchMetrics>,
+        queue_depth: usize,
+        operation_type: u8,
+    ) -> usize {
+        if !config.enable_adaptive_sizing {
+            return config.min_batch_size;
         }
 
-    fn process_batch(operation_type: u8, batch: Vec<EnhancedBatchOperation>, metrics: &Arc<EnhancedBatchMetrics>) {
+        let base_size = metrics.adaptive_batch_size.load(Ordering::Relaxed);
+        let pressure_level = metrics.get_pressure_level();
+
+        // More granular pressure-based scaling with exponential response
+        let multiplier = match pressure_level {
+            0..=10 => 2.0,  // Very low pressure - double batch size
+            11..=20 => 1.7, // Low pressure - significantly increase batch size
+            21..=35 => 1.4, // Moderate low pressure - increase batch size
+            36..=50 => 1.1, // Near normal pressure - slightly increase batch size
+            51..=65 => 1.0, // Normal pressure - use base size
+            66..=75 => 0.8, // Moderate high pressure - slightly reduce batch size
+            76..=85 => 0.6, // High pressure - reduce batch size
+            86..=95 => 0.4, // Very high pressure - significantly reduce batch size
+            _ => 0.2,       // Extreme pressure - minimal batch size to prevent overload
+        };
+
+        let adjusted_size = (base_size as f64 * multiplier) as usize;
+
+        // Queue depth adaptation with more precise thresholds
+        let depth_factor = match queue_depth {
+            d if d == 0 => 0.0,                        // Empty queue - no operations
+            d if d < config.min_batch_size => 0.5,     // Very low queue - minimal batch
+            d if d < config.min_batch_size * 2 => 0.7, // Low queue - small batch
+            d if d < config.min_batch_size * 2 => 0.9, // Below normal - slightly smaller batch
+            d if d < config.max_batch_size => 1.0,     // Normal queue - base size
+            d if d < config.max_batch_size * 2 => 1.2, // Above normal - slightly larger batch
+            d if d < config.max_batch_size => 1.5, // Very high queue - significantly larger batch
+            d if d < config.max_batch_size * 2 => 1.5, // Very high queue - significantly larger batch
+            _ => 2.0,                                  // Extreme queue - maximum batch size
+        };
+
+        // Apply operation type specific adjustments with more granularity
+        let type_factor = match operation_type {
+            0x01 => 1.2, // Echo operations can be larger
+            0x02 => 0.8, // Heavy operations should be smaller
+            0x03 => 1.5, // Fast operations can be very large
+            0x04 => 0.9, // Medium operations slightly smaller
+            _ => 1.0,    // Default
+        };
+
+        // Apply system load factor based on historical performance
+        let load_factor = if metrics.get_pressure_level() < 50 {
+            1.1 // Good performance - push larger batches
+        } else if metrics.get_pressure_level() < 80 {
+            1.0 // Stable performance - use calculated size
+        } else {
+            0.9 // Poor performance - use smaller batches to reduce load
+        };
+
+        let final_size = (adjusted_size as f64 * depth_factor * type_factor * load_factor) as usize;
+
+        // Ensure we stay within configured bounds but allow for more aggressive sizing
+        // when under low pressure to maximize throughput
+        if pressure_level < 30 {
+            cmp::max(
+                config.min_batch_size,
+                cmp::min(config.max_batch_size * 2, final_size),
+            )
+        } else {
+            cmp::max(
+                config.min_batch_size,
+                cmp::min(config.max_batch_size, final_size),
+            )
+        }
+    }
+
+    fn process_batch(
+        operation_type: u8,
+        batch: Vec<EnhancedBatchOperation>,
+        metrics: &Arc<EnhancedBatchMetrics>,
+    ) {
         let start_time = Instant::now();
         let batch_size = batch.len();
-        
-        debug!("Processing batch of {} operations for type {}", batch_size, operation_type);
-        
+
+        debug!(
+            "Processing batch of {} operations for type {}",
+            batch_size, operation_type
+        );
+
         match Self::execute_native_batch(operation_type, &batch) {
             Ok(_results) => {
                 let processing_time = start_time.elapsed().as_nanos() as u64;
-                
+
                 // Update metrics
-                metrics.total_batches_processed.fetch_add(1, Ordering::Relaxed);
-                metrics.total_operations_batched.fetch_add(batch_size as u64, Ordering::Relaxed);
-                metrics.total_processing_time_ns.fetch_add(processing_time, Ordering::Relaxed);
+                metrics
+                    .total_batches_processed
+                    .fetch_add(1, Ordering::Relaxed);
+                metrics
+                    .total_operations_batched
+                    .fetch_add(batch_size as u64, Ordering::Relaxed);
+                metrics
+                    .total_processing_time_ns
+                    .fetch_add(processing_time, Ordering::Relaxed);
                 metrics.update_average_batch_size(batch_size);
-                
-                debug!("Batch processed successfully: {} operations in {} ns", batch_size, processing_time);
+
+                debug!(
+                    "Batch processed successfully: {} operations in {} ns",
+                    batch_size, processing_time
+                );
             }
             Err(e) => {
                 error!("Batch processing failed: {}", e);
-                metrics.failed_operations.fetch_add(batch_size as u64, Ordering::Relaxed);
+                metrics
+                    .failed_operations
+                    .fetch_add(batch_size as u64, Ordering::Relaxed);
             }
         }
     }
 
-    fn execute_native_batch(operation_type: u8, batch: &[EnhancedBatchOperation]) -> Result<Vec<Vec<u8>>, String> {
+    fn execute_native_batch(
+        operation_type: u8,
+        batch: &[EnhancedBatchOperation],
+    ) -> Result<Vec<Vec<u8>>, String> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
-        
+
         // Prepare batch data
         let mut total_size = 0;
         for operation in batch {
             total_size += operation.input_data.len() + 8; // data + header
         }
-        
+
         let mut batch_data = Vec::with_capacity(total_size + 8); // + header
         let mut operation_sizes = Vec::with_capacity(batch.len());
-        
+
         // Write batch header
         batch_data.extend_from_slice(&(batch.len() as u32).to_le_bytes());
         batch_data.extend_from_slice(&(total_size as u32).to_le_bytes());
-        
+
         // Write individual operations
         for operation in batch {
             let data_len = operation.input_data.len();
@@ -930,7 +992,7 @@ impl EnhancedBatchProcessor {
             batch_data.extend_from_slice(&operation.input_data);
             operation_sizes.push(data_len);
         }
-        
+
         // Call native batch processing function (this would be implemented in the main lib.rs)
         match native_process_batch(operation_type, &batch_data) {
             Ok(results) => Ok(results),
@@ -941,15 +1003,18 @@ impl EnhancedBatchProcessor {
     /// Submit operation to the processor with async support
     pub fn submit_operation(&self, operation: EnhancedBatchOperation) -> Result<(), String> {
         let operation_type = operation.operation_type as usize;
-        
+
         if operation_type >= self.queues.len() {
-            return Err(format!("Invalid operation type: {}", operation.operation_type));
+            return Err(format!(
+                "Invalid operation type: {}",
+                operation.operation_type
+            ));
         }
-        
+
         self.queues[operation_type].push(operation);
         Ok(())
     }
-    
+
     /// Submit async batch operation with zero-copy optimization
     pub async fn submit_async_batch(
         &self,
@@ -959,23 +1024,26 @@ impl EnhancedBatchProcessor {
         if operations.is_empty() {
             return Err("No operations provided".to_string());
         }
-        
+
         let (result_sender, result_receiver) = oneshot::channel();
         let task = AsyncBatchTask {
             operation_type,
             operations,
             result_sender,
         };
-        
+
         // Send task to async processor
-        self.async_task_sender.send(task).await
+        self.async_task_sender
+            .send(task)
+            .await
             .map_err(|e| format!("Failed to send async task: {}", e))?;
-        
+
         // Wait for result
-        result_receiver.await
+        result_receiver
+            .await
             .map_err(|e| format!("Failed to receive async result: {}", e))?
     }
-    
+
     /// Submit operation with zero-copy buffer sharing
     pub fn submit_zero_copy_operation(
         &self,
@@ -983,11 +1051,14 @@ impl EnhancedBatchProcessor {
         shared_buffer: Arc<Mutex<Vec<u8>>>,
     ) -> Result<(), String> {
         let operation_type = operation.operation_type as usize;
-        
+
         if operation_type >= self.queues.len() {
-            return Err(format!("Invalid operation type: {}", operation.operation_type));
+            return Err(format!(
+                "Invalid operation type: {}",
+                operation.operation_type
+            ));
         }
-        
+
         // Use zero-copy buffer instead of copying data
         if let Ok(mut buffer) = shared_buffer.lock() {
             // Process operation directly in shared buffer
@@ -995,10 +1066,10 @@ impl EnhancedBatchProcessor {
         } else {
             return Err("Failed to acquire shared buffer lock".to_string());
         }
-        
+
         Ok(())
     }
-    
+
     /// Process operation with zero-copy optimization
     fn process_zero_copy_operation(
         &self,
@@ -1009,10 +1080,10 @@ impl EnhancedBatchProcessor {
         // This is a simplified implementation - in production, this would be more sophisticated
         shared_buffer.clear();
         shared_buffer.extend_from_slice(&operation.input_data);
-        
+
         // Process the data in place
         // ... processing logic here ...
-        
+
         Ok(())
     }
 
@@ -1020,13 +1091,22 @@ impl EnhancedBatchProcessor {
     pub fn get_metrics(&self) -> EnhancedBatchMetricsSnapshot {
         EnhancedBatchMetricsSnapshot {
             total_batches_processed: self.metrics.total_batches_processed.load(Ordering::Relaxed),
-            total_operations_batched: self.metrics.total_operations_batched.load(Ordering::Relaxed),
+            total_operations_batched: self
+                .metrics
+                .total_operations_batched
+                .load(Ordering::Relaxed),
             average_batch_size: self.metrics.average_batch_size.load(Ordering::Relaxed),
             current_queue_depth: self.metrics.current_queue_depth.load(Ordering::Relaxed),
             failed_operations: self.metrics.failed_operations.load(Ordering::Relaxed),
             average_processing_time_ms: {
-                let total_time = self.metrics.total_processing_time_ns.load(Ordering::Relaxed);
-                let total_ops = self.metrics.total_operations_batched.load(Ordering::Relaxed);
+                let total_time = self
+                    .metrics
+                    .total_processing_time_ns
+                    .load(Ordering::Relaxed);
+                let total_ops = self
+                    .metrics
+                    .total_operations_batched
+                    .load(Ordering::Relaxed);
                 if total_ops > 0 {
                     (total_time as f64 / total_ops as f64) / 1_000_000.0
                 } else {
@@ -1041,11 +1121,11 @@ impl EnhancedBatchProcessor {
     /// Shutdown the processor
     pub fn shutdown(&self) {
         self.shutdown_flag.store(true, Ordering::Relaxed);
-        
+
         for handle in &self.worker_handles {
             handle.thread().unpark();
         }
-        
+
         // Wait for workers to finish
         for _handle in self.worker_handles.iter() {
             // Don't join here, let the thread run independently
@@ -1068,30 +1148,35 @@ pub struct EnhancedBatchMetricsSnapshot {
 
 // Global enhanced batch processor instance
 lazy_static::lazy_static! {
-    static ref ENHANCED_BATCH_PROCESSOR: Arc<RwLock<Option<Arc<EnhancedBatchProcessor>>>> = 
+    static ref ENHANCED_BATCH_PROCESSOR: Arc<RwLock<Option<Arc<EnhancedBatchProcessor>>>> =
         Arc::new(RwLock::new(None));
 }
 
 /// Initialize the enhanced batch processor
 pub fn init_enhanced_batch_processor(config: EnhancedBatchConfig) -> Result<(), String> {
     let config_clone = config.clone();
-    let mut processor_guard = ENHANCED_BATCH_PROCESSOR.write()
+    let mut processor_guard = ENHANCED_BATCH_PROCESSOR
+        .write()
         .map_err(|_| "Enhanced batch processor RwLock poisoned")?;
-    
+
     if processor_guard.is_some() {
         return Err("Enhanced batch processor already initialized".to_string());
     }
-    
+
     let processor = Arc::new(EnhancedBatchProcessor::new(config_clone));
     *processor_guard = Some(processor);
-    
-    info!("Enhanced batch processor initialized with config: {:?}", config);
+
+    info!(
+        "Enhanced batch processor initialized with config: {:?}",
+        config
+    );
     Ok(())
 }
 
 /// Get the enhanced batch processor
 pub fn get_enhanced_batch_processor() -> Option<Arc<EnhancedBatchProcessor>> {
-    ENHANCED_BATCH_PROCESSOR.read()
+    ENHANCED_BATCH_PROCESSOR
+        .read()
         .ok()
         .and_then(|guard| guard.clone())
 }
@@ -1106,29 +1191,34 @@ pub fn submit_enhanced_operation(operation: EnhancedBatchOperation) -> Result<()
 }
 
 /// Native function to process batch with zero-copy optimization
-pub fn native_process_batch_zero_copy(operation_type: u8, batch_data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+pub fn native_process_batch_zero_copy(
+    operation_type: u8,
+    batch_data: &[u8],
+) -> Result<Vec<Vec<u8>>, String> {
     // Zero-copy batch processing implementation
     if batch_data.len() < 8 {
         return Err("Batch data too small for header".to_string());
     }
-    
+
     // Parse batch header
-    let batch_count = u32::from_le_bytes([batch_data[0], batch_data[1], batch_data[2], batch_data[3]]) as usize;
-    let total_size = u32::from_le_bytes([batch_data[4], batch_data[5], batch_data[6], batch_data[7]]) as usize;
-    
+    let batch_count =
+        u32::from_le_bytes([batch_data[0], batch_data[1], batch_data[2], batch_data[3]]) as usize;
+    let total_size =
+        u32::from_le_bytes([batch_data[4], batch_data[5], batch_data[6], batch_data[7]]) as usize;
+
     if batch_data.len() < 8 + total_size {
         return Err("Batch data size mismatch".to_string());
     }
-    
+
     let mut results = Vec::with_capacity(batch_count);
     let mut offset = 8;
-    
+
     // Process each operation in the batch
     for _ in 0..batch_count {
         if offset + 4 > batch_data.len() {
             break;
         }
-        
+
         let data_len = u32::from_le_bytes([
             batch_data[offset],
             batch_data[offset + 1],
@@ -1136,24 +1226,24 @@ pub fn native_process_batch_zero_copy(operation_type: u8, batch_data: &[u8]) -> 
             batch_data[offset + 3],
         ]) as usize;
         offset += 4;
-        
+
         if offset + data_len > batch_data.len() {
             break;
         }
-        
+
         let operation_data = &batch_data[offset..offset + data_len];
-        
+
         // Process operation based on type
         let result = match operation_type {
             0x01 => process_echo_operation(operation_data),
             0x02 => process_heavy_operation(operation_data),
             _ => process_generic_operation(operation_data, operation_type),
         };
-        
+
         results.push(result);
         offset += data_len;
     }
-    
+
     Ok(results)
 }
 
@@ -1166,27 +1256,33 @@ fn process_echo_operation(data: &[u8]) -> Vec<u8> {
 /// Process heavy operation (zero-copy)
 fn process_heavy_operation(data: &[u8]) -> Vec<u8> {
     match std::str::from_utf8(data) {
-        Ok(n_str) => {
-            match n_str.parse::<u64>() {
-                Ok(n) => {
-                    let sum: u64 = (1..=n).map(|x| x * x).sum();
-                    let json = format!("{{\"task\":\"heavy\",\"n\":{},\"sum\":{}}}", n, sum);
-                    json.into_bytes()
-                }
-                Err(_) => b"Invalid number in payload".to_vec(),
+        Ok(n_str) => match n_str.parse::<u64>() {
+            Ok(n) => {
+                let sum: u64 = (1..=n).map(|x| x * x).sum();
+                let json = format!("{{\"task\":\"heavy\",\"n\":{},\"sum\":{}}}", n, sum);
+                json.into_bytes()
             }
-        }
+            Err(_) => b"Invalid number in payload".to_vec(),
+        },
         Err(_) => b"Invalid UTF-8 in payload".to_vec(),
     }
 }
 
 /// Process generic operation (zero-copy)
 fn process_generic_operation(data: &[u8], operation_type: u8) -> Vec<u8> {
-    format!("Processed generic operation type {} with {} bytes", operation_type, data.len()).into_bytes()
+    format!(
+        "Processed generic operation type {} with {} bytes",
+        operation_type,
+        data.len()
+    )
+    .into_bytes()
 }
 
 /// Legacy function for backward compatibility
-pub fn native_process_batch(_operation_type: u8, batch_data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+pub fn native_process_batch(
+    _operation_type: u8,
+    batch_data: &[u8],
+) -> Result<Vec<Vec<u8>>, String> {
     native_process_batch_zero_copy(_operation_type, batch_data)
 }
 
@@ -1243,7 +1339,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_initEnhan
     };
 
     match init_enhanced_batch_processor(config) {
-        Ok(_) => 0, // Success
+        Ok(_) => 0,  // Success
         Err(_) => 1, // Error
     }
 }
@@ -1259,24 +1355,26 @@ pub unsafe extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_su
     if let Some(processor) = get_enhanced_batch_processor() {
         if direct_buffer.is_null() {
             let error_msg = "Direct buffer cannot be null";
-            return env.new_string(error_msg)
+            return env
+                .new_string(error_msg)
                 .map(|s| s.into_raw())
                 .unwrap_or(std::ptr::null_mut());
         }
 
         let byte_buffer = unsafe { jni::objects::JByteBuffer::from_raw(direct_buffer) };
-        
+
         match env.get_direct_buffer_address(&byte_buffer) {
             Ok(address) => {
                 if address.is_null() {
                     let error_msg = "Failed to get direct buffer address";
-                    return env.new_string(error_msg)
+                    return env
+                        .new_string(error_msg)
                         .map(|s| s.into_raw())
                         .unwrap_or(std::ptr::null_mut());
                 }
-                
+
                 let data = unsafe { std::slice::from_raw_parts(address, buffer_size as usize) };
-                
+
                 // Parse operations from direct buffer (zero-copy)
                 match parse_zero_copy_operations(data) {
                     Ok(operations) => {
@@ -1287,7 +1385,10 @@ pub unsafe extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_su
                             }
                         }
 
-                        let result = format!("Submitted {} zero-copy operations successfully", success_count);
+                        let result = format!(
+                            "Submitted {} zero-copy operations successfully",
+                            success_count
+                        );
                         env.new_string(&result)
                             .map(|s| s.into_raw())
                             .unwrap_or(std::ptr::null_mut())
@@ -1326,8 +1427,8 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitAsy
 ) -> jlong {
     if let Some(_processor) = get_enhanced_batch_processor() {
         // Convert raw jbyteArray to JByteArray wrapper expected by the JNI helpers
-        let operations_obj = unsafe { jni::objects::JObject::from_raw(operations_data as *mut _ ) };
-        let priorities_obj = unsafe { jni::objects::JObject::from_raw(priorities as *mut _ ) };
+        let operations_obj = unsafe { jni::objects::JObject::from_raw(operations_data as *mut _) };
+        let priorities_obj = unsafe { jni::objects::JObject::from_raw(priorities as *mut _) };
         let operations_jarray = jni::objects::JByteArray::from(operations_obj);
         let priorities_jarray = jni::objects::JByteArray::from(priorities_obj);
 
@@ -1346,17 +1447,18 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitAsy
                                 let operation_id = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap()
-                                    .as_nanos() as u64;
-                                
+                                    .as_nanos()
+                                    as u64;
+
                                 operation_id as jlong
                             }
-                            Err(_) => 0 // Error
+                            Err(_) => 0, // Error
                         }
                     }
-                    Err(_) => 0 // Error
+                    Err(_) => 0, // Error
                 }
             }
-            Err(_) => 0 // Error
+            Err(_) => 0, // Error
         }
     } else {
         0 // Error
@@ -1381,7 +1483,7 @@ fn parse_zero_copy_operations(data: &[u8]) -> Result<Vec<EnhancedBatchOperation>
     }
 
     let operation_count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    
+
     let mut operations = Vec::with_capacity(operation_count);
     let mut offset = 4;
 
@@ -1422,8 +1524,8 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitBat
 ) -> jstring {
     if let Some(processor) = get_enhanced_batch_processor() {
         // Convert raw jbyteArray to JByteArray wrapper expected by the JNI helpers
-        let operations_obj = unsafe { jni::objects::JObject::from_raw(operations_data as *mut _ ) };
-        let priorities_obj = unsafe { jni::objects::JObject::from_raw(priorities as *mut _ ) };
+        let operations_obj = unsafe { jni::objects::JObject::from_raw(operations_data as *mut _) };
+        let priorities_obj = unsafe { jni::objects::JObject::from_raw(priorities as *mut _) };
         let operations_jarray = jni::objects::JByteArray::from(operations_obj);
         let priorities_jarray = jni::objects::JByteArray::from(priorities_obj);
 
@@ -1444,7 +1546,8 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitBat
                                     }
                                 }
 
-                                let result = format!("Submitted {} operations successfully", success_count);
+                                let result =
+                                    format!("Submitted {} operations successfully", success_count);
                                 env.new_string(&result)
                                     .map(|s| s.into_raw())
                                     .unwrap_or(std::ptr::null_mut())
@@ -1481,12 +1584,20 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitBat
 }
 
 /// Parse batched operations data from Java arrays
-fn parse_batched_operations(operations_data: &[u8], priorities: &[u8]) -> Result<Vec<EnhancedBatchOperation>, String> {
+fn parse_batched_operations(
+    operations_data: &[u8],
+    priorities: &[u8],
+) -> Result<Vec<EnhancedBatchOperation>, String> {
     if operations_data.len() < 4 {
         return Err("Operations data too small".to_string());
     }
 
-    let operation_count = u32::from_le_bytes([operations_data[0], operations_data[1], operations_data[2], operations_data[3]]) as usize;
+    let operation_count = u32::from_le_bytes([
+        operations_data[0],
+        operations_data[1],
+        operations_data[2],
+        operations_data[3],
+    ]) as usize;
     if operation_count != priorities.len() {
         return Err("Operation count mismatch with priorities".to_string());
     }
@@ -1518,62 +1629,75 @@ fn parse_batched_operations(operations_data: &[u8], priorities: &[u8]) -> Result
         offset += data_len;
     }
 
-#[allow(dead_code)]
-/// Submit async batch operation
-pub fn submit_async_batch(worker_handle: u64, operations: Vec<Vec<u8>>) -> Result<u64, String> {
-    // Submit to async JNI bridge
-    match crate::jni_async_bridge::submit_async_batch(worker_handle, operations) {
-        Ok(async_handle) => {
-            info!("Submitted async batch operation with handle: {}", async_handle.0);
-            Ok(async_handle.0)
-        }
-        Err(e) => {
-            error!("Failed to submit async batch: {}", e);
-            Err(e)
-        }
-    }
-}
-
-#[allow(dead_code)]
-/// Poll async batch results
-pub fn poll_async_batch_results(operation_id: u64, max_results: usize) -> Result<Vec<Vec<u8>>, String> {
-    match crate::jni_async_bridge::poll_async_batch_results(operation_id, max_results) {
-        Ok(results) => {
-            debug!("Retrieved {} async batch results", results.len());
-            Ok(results)
-        }
-        Err(e) => {
-            error!("Failed to poll async batch results: {}", e);
-            Err(e)
+    #[allow(dead_code)]
+    /// Submit async batch operation
+    pub fn submit_async_batch(worker_handle: u64, operations: Vec<Vec<u8>>) -> Result<u64, String> {
+        // Submit to async JNI bridge
+        match crate::jni_async_bridge::submit_async_batch(worker_handle, operations) {
+            Ok(async_handle) => {
+                info!(
+                    "Submitted async batch operation with handle: {}",
+                    async_handle.0
+                );
+                Ok(async_handle.0)
+            }
+            Err(e) => {
+                error!("Failed to submit async batch: {}", e);
+                Err(e)
+            }
         }
     }
-}
 
-#[allow(dead_code)]
-/// Cleanup async batch operation
-pub fn cleanup_async_batch_operation(operation_id: u64) {
-    crate::jni_async_bridge::cleanup_async_batch_operation(operation_id);
-    debug!("Cleaned up async batch operation: {}", operation_id);
-}
-
-#[allow(dead_code)]
-/// Submit zero-copy batch operation
-pub fn submit_zero_copy_batch(
-    worker_handle: u64,
-    buffer_addresses: Vec<(u64, usize)>,
-    operation_type: u32
-) -> Result<u64, String> {
-    match crate::jni_async_bridge::submit_zero_copy_batch(worker_handle, buffer_addresses, operation_type) {
-        Ok(async_handle) => {
-            info!("Submitted zero-copy batch operation with handle: {}", async_handle.0);
-            Ok(async_handle.0)
-        }
-        Err(e) => {
-            error!("Failed to submit zero-copy batch: {}", e);
-            Err(e)
+    #[allow(dead_code)]
+    /// Poll async batch results
+    pub fn poll_async_batch_results(
+        operation_id: u64,
+        max_results: usize,
+    ) -> Result<Vec<Vec<u8>>, String> {
+        match crate::jni_async_bridge::poll_async_batch_results(operation_id, max_results) {
+            Ok(results) => {
+                debug!("Retrieved {} async batch results", results.len());
+                Ok(results)
+            }
+            Err(e) => {
+                error!("Failed to poll async batch results: {}", e);
+                Err(e)
+            }
         }
     }
-}
+
+    #[allow(dead_code)]
+    /// Cleanup async batch operation
+    pub fn cleanup_async_batch_operation(operation_id: u64) {
+        crate::jni_async_bridge::cleanup_async_batch_operation(operation_id);
+        debug!("Cleaned up async batch operation: {}", operation_id);
+    }
+
+    #[allow(dead_code)]
+    /// Submit zero-copy batch operation
+    pub fn submit_zero_copy_batch(
+        worker_handle: u64,
+        buffer_addresses: Vec<(u64, usize)>,
+        operation_type: u32,
+    ) -> Result<u64, String> {
+        match crate::jni_async_bridge::submit_zero_copy_batch(
+            worker_handle,
+            buffer_addresses,
+            operation_type,
+        ) {
+            Ok(async_handle) => {
+                info!(
+                    "Submitted zero-copy batch operation with handle: {}",
+                    async_handle.0
+                );
+                Ok(async_handle.0)
+            }
+            Err(e) => {
+                error!("Failed to submit zero-copy batch: {}", e);
+                Err(e)
+            }
+        }
+    }
 
     Ok(operations)
 }

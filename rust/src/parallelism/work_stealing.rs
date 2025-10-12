@@ -20,58 +20,58 @@ impl<T> WorkStealingScheduler<T> {
     /// Execute tasks with optimized work distribution and performance monitoring
     #[inline(always)]
     pub fn execute<F, R>(self, processor: F) -> Vec<R>
-        where
-            F: Fn(T) -> R + Send + Sync + 'static,
-            T: Send + 'static,
-            R: Send + 'static,
-        {
-            let task_count = self.tasks.len();
-            
-            // Increment parallel task counter for monitoring
-            PARALLEL_TASK_STATS.fetch_add(1, Ordering::Relaxed);
-            
-            // Use branch prediction for common case optimization
-            if task_count == 0 {
-                return Vec::new();
-            }
+    where
+        F: Fn(T) -> R + Send + Sync + 'static,
+        T: Send + 'static,
+        R: Send + 'static,
+    {
+        let task_count = self.tasks.len();
 
-            // Aggressive optimization: for very small task counts (<=4), use sequential processing
-            // to avoid Rayon thread spawning and work distribution overhead
-            if task_count <= 4 {
-                return self.execute_sequential(processor);
-            }
+        // Increment parallel task counter for monitoring
+        PARALLEL_TASK_STATS.fetch_add(1, Ordering::Relaxed);
 
-            // For medium task counts (5-64), use optimized sequential with loop unrolling
-            if task_count <= 64 {
-                return self.execute_optimized_sequential(processor);
-            }
-
-            // For larger task counts, use Rayon's optimized work stealing with task type awareness
-            self.execute_parallel(processor)
+        // Use branch prediction for common case optimization
+        if task_count == 0 {
+            return Vec::new();
         }
+
+        // Aggressive optimization: for very small task counts (<=4), use sequential processing
+        // to avoid Rayon thread spawning and work distribution overhead
+        if task_count <= 4 {
+            return self.execute_sequential(processor);
+        }
+
+        // For medium task counts (5-64), use optimized sequential with loop unrolling
+        if task_count <= 64 {
+            return self.execute_optimized_sequential(processor);
+        }
+
+        // For larger task counts, use Rayon's optimized work stealing with task type awareness
+        self.execute_parallel(processor)
+    }
 
     /// Sequential execution with no overhead
     fn execute_sequential<F, R>(self, processor: F) -> Vec<R>
-        where
-            F: Fn(T) -> R,
+    where
+        F: Fn(T) -> R,
     {
         self.tasks.into_iter().map(processor).collect()
     }
 
     /// Optimized sequential execution with loop unrolling for better ILP
     fn execute_optimized_sequential<F, R>(self, processor: F) -> Vec<R>
-        where
-            F: Fn(T) -> R,
+    where
+        F: Fn(T) -> R,
     {
         self.tasks.into_iter().map(processor).collect()
     }
 
     /// Parallel execution with Rayon work stealing
     fn execute_parallel<F, R>(self, processor: F) -> Vec<R>
-        where
-            F: Fn(T) -> R + Send + Sync + 'static,
-            T: Send + 'static,
-            R: Send + 'static,
+    where
+        F: Fn(T) -> R + Send + Sync + 'static,
+        T: Send + 'static,
+        R: Send + 'static,
     {
         // For CPU-bound tasks, use Rayon's default (which is usually optimal)
         // For I/O-bound tasks, we might want different configuration, but Rayon handles this well
@@ -86,7 +86,10 @@ impl<T> WorkStealingScheduler<T> {
         // Log performance statistics (in a real system, this would go to a proper monitoring system)
         #[cfg(debug_assertions)]
         {
-            eprintln!("Parallel execution: {} tasks in {:?}", _task_count, _duration);
+            eprintln!(
+                "Parallel execution: {} tasks in {:?}",
+                _task_count, _duration
+            );
         }
 
         results

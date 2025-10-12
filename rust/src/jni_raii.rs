@@ -1,4 +1,8 @@
-use jni::{JNIEnv, objects::{JObject, JClass, JString}, sys::{jmethodID, jvalue, jsize}};
+use jni::{
+    objects::{JClass, JObject, JString},
+    sys::{jmethodID, jsize, jvalue},
+    JNIEnv,
+};
 use log::{debug, error};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,7 +31,7 @@ impl<'a> JniGlobalRef<'a> {
             Ok(global_ref) => {
                 let count = GLOBAL_REF_COUNT.fetch_add(1, Ordering::Relaxed);
                 debug!("Global reference count: {}", count + 1);
-                
+
                 Ok(JniGlobalRef {
                     env,
                     global_ref,
@@ -54,7 +58,11 @@ impl<'a> JniGlobalRef<'a> {
             // TEMP: Disable GlobalRef deletion to resolve compilation issue
             // Skip actual deletion for now to make compilation work
             eprintln!("TEMP: Skipping global ref deletion for compilation");
-            self.global_ref = jni::objects::GlobalRef::from(self.env.new_global_ref(jni::objects::JObject::null()).unwrap_or_else(|_| panic!("Failed to create null global ref")));
+            self.global_ref = jni::objects::GlobalRef::from(
+                self.env
+                    .new_global_ref(jni::objects::JObject::null())
+                    .unwrap_or_else(|_| panic!("Failed to create null global ref")),
+            );
             let count = GLOBAL_REF_COUNT.fetch_sub(1, Ordering::Relaxed);
             debug!("Global reference count decreased to: {}", count);
         }
@@ -97,7 +105,7 @@ impl<'a> JniLocalRef<'a> {
     pub fn new(env: &'a JNIEnv<'a>, local_ref: JObject<'a>) -> Self {
         let count = LOCAL_REF_COUNT.fetch_add(1, Ordering::Relaxed);
         debug!("Local reference count: {}", count + 1);
-        
+
         JniLocalRef {
             env,
             local_ref,
@@ -115,13 +123,16 @@ impl<'a> JniLocalRef<'a> {
     pub fn delete(&mut self) {
         if !self.is_deleted {
             let local_ref = self.local_ref.clone();
-            if let Err(e) = self.env.delete_local_ref(unsafe { JObject::from_raw(local_ref) }) {
+            if let Err(e) = self
+                .env
+                .delete_local_ref(unsafe { JObject::from_raw(local_ref) })
+            {
                 eprintln!("Warning: Failed to delete local ref: {}", e);
             } else {
                 self.is_deleted = true;
                 let count = LOCAL_REF_COUNT.fetch_sub(1, Ordering::Relaxed);
                 debug!("Local reference count decreased to: {}", count);
-                
+
                 // Log reference lifetime for debugging
                 let lifetime = self.creation_time.elapsed().as_micros();
                 debug!("Local reference lifetime: {}µs", lifetime);
@@ -152,13 +163,16 @@ impl<'a> Drop for JniLocalRef<'a> {
     fn drop(&mut self) {
         if !self.is_deleted {
             let local_ref = self.local_ref.clone();
-            if let Err(e) = self.env.delete_local_ref(unsafe { JObject::from_raw(local_ref) }) {
+            if let Err(e) = self
+                .env
+                .delete_local_ref(unsafe { JObject::from_raw(local_ref) })
+            {
                 eprintln!("Warning: Failed to delete local ref during drop: {}", e);
             } else {
                 self.is_deleted = true;
                 let count = LOCAL_REF_COUNT.fetch_sub(1, Ordering::Relaxed);
                 debug!("Local reference count decreased to: {}", count);
-                
+
                 // Log reference lifetime for debugging
                 let lifetime = self.creation_time.elapsed().as_micros();
                 debug!("Local reference lifetime: {}µs", lifetime);

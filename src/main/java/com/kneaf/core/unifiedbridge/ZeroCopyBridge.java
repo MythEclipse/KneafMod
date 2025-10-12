@@ -29,10 +29,16 @@ class NativeZeroCopyBridge {
     // Load native library
     static {
         try {
-            System.loadLibrary("rustperf");
-        } catch (UnsatisfiedLinkError e) {
+            if (!com.kneaf.core.performance.bridge.NativeLibraryLoader.loadNativeLibrary()) {
+                Logger.getLogger(NativeZeroCopyBridge.class.getName()).log(Level.WARNING,
+                    "Native library 'rustperf' not available via NativeLibraryLoader; JNI features will be disabled.");
+            } else {
+                Logger.getLogger(NativeZeroCopyBridge.class.getName()).log(Level.INFO,
+                    "Native library 'rustperf' loaded successfully via NativeLibraryLoader.");
+            }
+        } catch (Throwable t) {
             Logger.getLogger(NativeZeroCopyBridge.class.getName()).log(Level.WARNING,
-                "Failed to load native library rustperf: " + e.getMessage());
+                "Failed to load native library via NativeLibraryLoader: " + t.getMessage(), t);
         }
     }
 }

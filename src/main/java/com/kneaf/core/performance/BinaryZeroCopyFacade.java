@@ -13,9 +13,11 @@ public final class BinaryZeroCopyFacade {
     
     static {
         try {
-            System.loadLibrary("rustperf");
-        } catch (UnsatisfiedLinkError e) {
-            LOGGER.error("Failed to load native library rustperf", e);
+            if (!com.kneaf.core.performance.bridge.NativeLibraryLoader.loadNativeLibrary()) {
+                LOGGER.error("Native library 'rustperf' not available via NativeLibraryLoader; native features disabled");
+            }
+        } catch (Throwable t) {
+            LOGGER.error("Failed to load native library via NativeLibraryLoader", t);
         }
     }
     

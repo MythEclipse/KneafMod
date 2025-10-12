@@ -1,13 +1,14 @@
-use super::types::*;
 use super::config::*;
+use super::types::*;
 use rayon::prelude::*;
 use serde_json;
 
 pub fn process_mob_ai(input: MobInput) -> MobProcessResult {
     let config = AI_CONFIG.read().unwrap();
-    
+
     // Filter mobs based on distance and activity level using parallel processing
-    let results: Vec<(Option<u64>, Option<u64>)> = input.mobs
+    let results: Vec<(Option<u64>, Option<u64>)> = input
+        .mobs
         .par_iter()
         .map(|mob| {
             // Passive mobs: disable AI if far away
@@ -28,7 +29,7 @@ pub fn process_mob_ai(input: MobInput) -> MobProcessResult {
     // Separate the results into two vectors
     let mut mobs_to_disable_ai = Vec::new();
     let mut mobs_to_simplify_ai = Vec::new();
-    
+
     for (disable_id, simplify_id) in results {
         if let Some(id) = disable_id {
             mobs_to_disable_ai.push(id);
@@ -40,24 +41,26 @@ pub fn process_mob_ai(input: MobInput) -> MobProcessResult {
 
     MobProcessResult {
         mobs_to_disable_ai,
-        mobs_to_simplify_ai
+        mobs_to_simplify_ai,
     }
 }
 
 /// Batch process multiple mob collections in parallel
 pub fn process_mob_ai_batch(inputs: Vec<MobInput>) -> Vec<MobProcessResult> {
-    inputs.into_par_iter().map(|input| process_mob_ai(input)).collect()
+    inputs
+        .into_par_iter()
+        .map(|input| process_mob_ai(input))
+        .collect()
 }
 
 /// Process mob AI from JSON input and return JSON result
 pub fn process_mob_ai_json(json_input: &str) -> Result<String, String> {
     let input: MobInput = serde_json::from_str(json_input)
         .map_err(|e| format!("Failed to parse JSON input: {}", e))?;
-    
+
     let result = process_mob_ai(input);
-    
-    serde_json::to_string(&result)
-        .map_err(|e| format!("Failed to serialize result to JSON: {}", e))
+
+    serde_json::to_string(&result).map_err(|e| format!("Failed to serialize result to JSON: {}", e))
 }
 
 /// Process mob AI from binary input in batches for better JNI performance

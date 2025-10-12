@@ -1,5 +1,5 @@
-use std::sync::RwLock;
 use crate::types::Aabb;
+use std::sync::RwLock;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

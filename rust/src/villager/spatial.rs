@@ -1,16 +1,20 @@
 use super::types::*;
-use rayon::prelude::*;
-use once_cell::sync::Lazy;
 use dashmap::DashMap;
+use once_cell::sync::Lazy;
+use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
 
 const CHUNK_SIZE: f32 = 16.0;
 const MAX_GROUP_RADIUS: f32 = 32.0;
 
 // Global lock-free spatial grouping cache
-static VILLAGER_SPATIAL_CACHE: Lazy<DashMap<(i32, i32), Vec<SpatialGroup>>> = Lazy::new(DashMap::new);
+static VILLAGER_SPATIAL_CACHE: Lazy<DashMap<(i32, i32), Vec<SpatialGroup>>> =
+    Lazy::new(DashMap::new);
 
-pub fn group_villagers_by_proximity(villagers: &[VillagerData], players: &[PlayerData]) -> Vec<SpatialGroup> {
+pub fn group_villagers_by_proximity(
+    villagers: &[VillagerData],
+    players: &[PlayerData],
+) -> Vec<SpatialGroup> {
     if villagers.is_empty() {
         return Vec::new();
     }
@@ -23,37 +27,53 @@ pub fn group_villagers_by_proximity(villagers: &[VillagerData], players: &[Playe
         let chunk_z = (villager.z / CHUNK_SIZE).floor() as i32;
         let key = (chunk_x, chunk_z);
 
-        villager_chunks.entry(key).or_insert_with(Vec::new).push(villager.clone());
+        villager_chunks
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(villager.clone());
     }
 
     // Process chunks in parallel with lock-free operations
     let results: Arc<Mutex<Vec<SpatialGroup>>> = Arc::new(Mutex::new(Vec::new()));
-    villager_chunks.into_iter().par_bridge().for_each(|((chunk_x, chunk_z), mut chunk_villagers)| {
-        if chunk_villagers.is_empty() {
-            return;
-        }
+    villager_chunks.into_iter().par_bridge().for_each(
+        |((chunk_x, chunk_z), mut chunk_villagers)| {
+            if chunk_villagers.is_empty() {
+                return;
+            }
 
-        // Calculate approximate player distance for this chunk
-        let chunk_center_x = (chunk_x as f32 + 0.5) * CHUNK_SIZE;
-        let chunk_center_z = (chunk_z as f32 + 0.5) * CHUNK_SIZE;
-        let estimated_player_distance = calculate_min_distance_to_players(chunk_center_x, 64.0, chunk_center_z, players);
+            // Calculate approximate player distance for this chunk
+            let chunk_center_x = (chunk_x as f32 + 0.5) * CHUNK_SIZE;
+            let chunk_center_z = (chunk_z as f32 + 0.5) * CHUNK_SIZE;
+            let estimated_player_distance =
+                calculate_min_distance_to_players(chunk_center_x, 64.0, chunk_center_z, players);
 
-        // Group villagers within the chunk based on proximity
-        let groups = group_villagers_in_chunk(&mut chunk_villagers, chunk_x, chunk_z, estimated_player_distance);
-        
-        // Use atomic operations to update cache without locking
-        VILLAGER_SPATIAL_CACHE.insert((chunk_x, chunk_z), groups.clone());
-        
-        // Append results into shared vector
-        let mut guard = results.lock().unwrap();
-        guard.extend(groups);
-    });
+            // Group villagers within the chunk based on proximity
+            let groups = group_villagers_in_chunk(
+                &mut chunk_villagers,
+                chunk_x,
+                chunk_z,
+                estimated_player_distance,
+            );
+
+            // Use atomic operations to update cache without locking
+            VILLAGER_SPATIAL_CACHE.insert((chunk_x, chunk_z), groups.clone());
+
+            // Append results into shared vector
+            let mut guard = results.lock().unwrap();
+            guard.extend(groups);
+        },
+    );
 
     let guard = results.lock().unwrap();
     guard.clone()
 }
 
-fn group_villagers_in_chunk(villagers: &mut Vec<VillagerData>, chunk_x: i32, chunk_z: i32, estimated_player_distance: f32) -> Vec<SpatialGroup> {
+fn group_villagers_in_chunk(
+    villagers: &mut Vec<VillagerData>,
+    chunk_x: i32,
+    chunk_z: i32,
+    estimated_player_distance: f32,
+) -> Vec<SpatialGroup> {
     if villagers.is_empty() {
         return Vec::new();
     }
@@ -72,7 +92,7 @@ fn group_villagers_in_chunk(villagers: &mut Vec<VillagerData>, chunk_x: i32, chu
         // Start a new group with this villager
         let mut group_villagers = vec![villagers[i].clone()];
         processed[i] = true;
-        
+
         let mut group_center = (villagers[i].x, villagers[i].y, villagers[i].z);
         let mut total_weight = 1.0;
 
@@ -83,8 +103,12 @@ fn group_villagers_in_chunk(villagers: &mut Vec<VillagerData>, chunk_x: i32, chu
             }
 
             let distance = calculate_distance(
-                villagers[i].x, villagers[i].y, villagers[i].z,
-                villagers[j].x, villagers[j].y, villagers[j].z
+                villagers[i].x,
+                villagers[i].y,
+                villagers[i].z,
+                villagers[j].x,
+                villagers[j].y,
+                villagers[j].z,
             );
 
             if distance <= MAX_GROUP_RADIUS {
@@ -129,7 +153,8 @@ pub fn calculate_min_distance_to_players(x: f32, y: f32, z: f32, players: &[Play
         return f32::MAX;
     }
 
-    players.par_iter()
+    players
+        .par_iter()
         .map(|player| calculate_distance(x, y, z, player.x, player.y, player.z))
         .min_by(|a, b| a.partial_cmp(b).unwrap())
         .unwrap_or(f32::MAX)
@@ -143,8 +168,12 @@ fn calculate_distance(x1: f32, y1: f32, z1: f32, x2: f32, y2: f32, z2: f32) -> f
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-pub fn optimize_villager_groups(groups: Vec<SpatialGroup>, config: &VillagerConfig) -> Vec<VillagerGroup> {
-    groups.into_par_iter()
+pub fn optimize_villager_groups(
+    groups: Vec<SpatialGroup>,
+    config: &VillagerConfig,
+) -> Vec<VillagerGroup> {
+    groups
+        .into_par_iter()
         .filter_map(|group| {
             if group.villagers.is_empty() {
                 return None;
@@ -152,10 +181,11 @@ pub fn optimize_villager_groups(groups: Vec<SpatialGroup>, config: &VillagerConf
 
             // Determine group type based on villager characteristics
             let group_type = determine_group_type(&group.villagers);
-            
+
             // Calculate AI tick rate based on player distance and group characteristics
-            let ai_tick_rate = calculate_ai_tick_rate(group.estimated_player_distance, &group_type, config);
-            
+            let ai_tick_rate =
+                calculate_ai_tick_rate(group.estimated_player_distance, &group_type, config);
+
             // Create villager group
             Some(VillagerGroup {
                 group_id: ((group.chunk_x as u32) << 16) | (group.chunk_z as u32 & 0xFFFF),
@@ -174,7 +204,7 @@ fn determine_group_type(villagers: &[VillagerData]) -> String {
     let has_workstation = villagers.iter().any(|v| v.has_workstation);
     let is_resting = villagers.iter().any(|v| v.is_resting);
     let is_breeding = villagers.iter().any(|v| v.is_breeding);
-    
+
     if is_breeding {
         "breeding".to_string()
     } else if is_resting {
@@ -202,14 +232,14 @@ fn calculate_ai_tick_rate(player_distance: f32, group_type: &str, config: &Villa
             } else {
                 config.pathfinding_tick_interval
             }
-        },
+        }
         "working" => {
             if player_distance < config.simplify_ai_distance {
                 config.simple_ai_tick_interval
             } else {
                 config.pathfinding_tick_interval
             }
-        },
+        }
         "breeding" => {
             // Breeding villagers need more frequent updates when players are nearby
             if player_distance < config.simplify_ai_distance {
@@ -217,7 +247,7 @@ fn calculate_ai_tick_rate(player_distance: f32, group_type: &str, config: &Villa
             } else {
                 config.pathfinding_tick_interval
             }
-        },
+        }
         "resting" => config.rest_tick_interval,
         "wandering" => config.pathfinding_tick_interval,
         _ => config.pathfinding_tick_interval,
@@ -235,8 +265,12 @@ fn calculate_average_villager_distance(villagers: &[VillagerData]) -> f32 {
     for i in 0..villagers.len() {
         for j in (i + 1)..villagers.len() {
             let distance = calculate_distance(
-                villagers[i].x, villagers[i].y, villagers[i].z,
-                villagers[j].x, villagers[j].y, villagers[j].z
+                villagers[i].x,
+                villagers[i].y,
+                villagers[i].z,
+                villagers[j].x,
+                villagers[j].y,
+                villagers[j].z,
             );
             total_distance += distance;
             count += 1;

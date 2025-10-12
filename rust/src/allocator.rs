@@ -3,14 +3,14 @@
 //! This module provides a unified memory arena system using jemalloc for optimal performance.
 //! Features include slab allocation, memory pooling, and zero-copy buffer management.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
-use log::{info, debug, warn};
-use jni::sys::{jint, jboolean, jdouble, jstring};
-use parking_lot::RwLock;
+use jni::sys::{jboolean, jdouble, jint, jstring};
 use lazy_static::lazy_static;
+use log::{debug, info, warn};
+use parking_lot::RwLock;
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 // Configuration for different allocation strategies
 const SMALL_OBJECT_THRESHOLD: usize = 4096; // 4KB
@@ -26,7 +26,11 @@ pub struct TrackedAllocation {
 
 impl TrackedAllocation {
     pub fn new(ptr: *mut u8, size: usize, allocation_id: u64) -> Self {
-        Self { ptr, size, allocation_id }
+        Self {
+            ptr,
+            size,
+            allocation_id,
+        }
     }
 
     pub fn as_ptr(&self) -> *mut u8 {
@@ -56,7 +60,13 @@ unsafe impl Send for TrackedAllocation {}
 /// Memory allocation tracker for leak detection (lock-free with sharding)
 #[derive(Debug)]
 pub struct AllocationTracker {
-    active_allocations: Arc<Vec<std::sync::atomic::AtomicPtr<std::sync::Mutex<HashMap<u64, (usize, std::time::Instant)>>>>>, // Lock-free sharded structure
+    active_allocations: Arc<
+        Vec<
+            std::sync::atomic::AtomicPtr<
+                std::sync::Mutex<HashMap<u64, (usize, std::time::Instant)>>,
+            >,
+        >,
+    >, // Lock-free sharded structure
     total_allocations: AtomicU64,
     total_deallocations: AtomicU64,
     shard_count: usize,
@@ -68,7 +78,9 @@ impl AllocationTracker {
         let mut shards = Vec::with_capacity(shard_count);
         for _ in 0..shard_count {
             let mutex = Mutex::new(HashMap::new());
-            shards.push(std::sync::atomic::AtomicPtr::new(Box::into_raw(Box::new(mutex))));
+            shards.push(std::sync::atomic::AtomicPtr::new(Box::into_raw(Box::new(
+                mutex,
+            ))));
         }
 
         Self {
@@ -86,7 +98,7 @@ impl AllocationTracker {
     pub fn track_allocation(&self, allocation_id: u64, size: usize) {
         self.total_allocations.fetch_add(1, Ordering::Relaxed);
         let shard_idx = self.get_shard(allocation_id);
-        
+
         // Lock-free shard access with relaxed ordering where safe
         let shard_ptr = self.active_allocations[shard_idx].load(Ordering::Relaxed);
         let mut shard = unsafe { &mut *shard_ptr }.lock().unwrap();
@@ -96,7 +108,7 @@ impl AllocationTracker {
     pub fn track_deallocation(&self, allocation_id: u64) -> Option<usize> {
         self.total_deallocations.fetch_add(1, Ordering::Relaxed);
         let shard_idx = self.get_shard(allocation_id);
-        
+
         // Lock-free shard access with relaxed ordering where safe
         let shard_ptr = self.active_allocations[shard_idx].load(Ordering::Relaxed);
         let mut shard = unsafe { &mut *shard_ptr }.lock().unwrap();
@@ -134,7 +146,9 @@ pub struct ScopeGuard<F: FnOnce()> {
 
 impl<F: FnOnce()> ScopeGuard<F> {
     pub fn new(cleanup: F) -> Self {
-        Self { cleanup: Some(cleanup) }
+        Self {
+            cleanup: Some(cleanup),
+        }
     }
 
     pub fn dismiss(mut self) {
@@ -272,7 +286,8 @@ impl SlabAllocator {
             let shard_idx = DEALLOC_COUNTER.fetch_add(1, Ordering::Relaxed) % self.shard_count;
 
             let mut slabs = self.slab_pools[shard_idx].lock().unwrap();
-            if slabs.len() < 1250 { // Max per shard (10000 / 8)
+            if slabs.len() < 1250 {
+                // Max per shard (10000 / 8)
                 slabs.push(slab);
             }
         }
@@ -331,9 +346,18 @@ impl UnifiedMemoryArena {
         }
 
         Self {
-            small_allocator: SlabAllocator::new(SMALL_OBJECT_THRESHOLD, config.small_object_pool_size),
-            medium_allocator: SlabAllocator::new(MEDIUM_OBJECT_THRESHOLD, config.medium_object_pool_size),
-            large_allocator: SlabAllocator::new(LARGE_OBJECT_THRESHOLD, config.large_object_pool_size),
+            small_allocator: SlabAllocator::new(
+                SMALL_OBJECT_THRESHOLD,
+                config.small_object_pool_size,
+            ),
+            medium_allocator: SlabAllocator::new(
+                MEDIUM_OBJECT_THRESHOLD,
+                config.medium_object_pool_size,
+            ),
+            large_allocator: SlabAllocator::new(
+                LARGE_OBJECT_THRESHOLD,
+                config.large_object_pool_size,
+            ),
             zero_copy_buffers: Arc::new(zero_copy_buffers),
             next_buffer_id: AtomicU64::new(1),
             config,
@@ -347,8 +371,9 @@ impl UnifiedMemoryArena {
     /// Legacy allocate method for backward compatibility - deprecated, use allocate_tracked instead
     #[deprecated(note = "Use allocate_tracked for proper memory leak prevention")]
     pub fn allocate(&self, size: usize) -> *mut u8 {
-        self.total_allocated.fetch_add(size as u64, Ordering::Relaxed);
-        
+        self.total_allocated
+            .fetch_add(size as u64, Ordering::Relaxed);
+
         if size <= SMALL_OBJECT_THRESHOLD && self.config.enable_slab_allocation {
             if let Some(buffer) = self.small_allocator.allocate() {
                 let ptr = buffer.as_ptr() as *mut u8;
@@ -382,15 +407,23 @@ impl UnifiedMemoryArena {
             return Err(AllocationError::InvalidSize);
         }
 
-        let allocation_id = self.allocation_tracker.total_allocations.load(Ordering::Relaxed) + 1;
-        
+        let allocation_id = self
+            .allocation_tracker
+            .total_allocations
+            .load(Ordering::Relaxed)
+            + 1;
+
         // Create scope guard to ensure cleanup on failure
         let _guard = ScopeGuard::new(|| {
-            warn!("Allocation failed for size {} with id {}, cleanup triggered", size, allocation_id);
+            warn!(
+                "Allocation failed for size {} with id {}, cleanup triggered",
+                size, allocation_id
+            );
         });
 
-        self.total_allocated.fetch_add(size as u64, Ordering::Relaxed);
-        
+        self.total_allocated
+            .fetch_add(size as u64, Ordering::Relaxed);
+
         let ptr = if size <= SMALL_OBJECT_THRESHOLD && self.config.enable_slab_allocation {
             if let Some(buffer) = self.small_allocator.allocate() {
                 let ptr = buffer.as_ptr() as *mut u8;
@@ -418,7 +451,8 @@ impl UnifiedMemoryArena {
         } else {
             // Fallback to system allocator for very large allocations
             unsafe {
-                let layout = Layout::from_size_align(size, 8).map_err(|_| AllocationError::InvalidSize)?;
+                let layout =
+                    Layout::from_size_align(size, 8).map_err(|_| AllocationError::InvalidSize)?;
                 System.alloc(layout)
             }
         };
@@ -428,8 +462,9 @@ impl UnifiedMemoryArena {
         }
 
         // Track the successful allocation
-        self.allocation_tracker.track_allocation(allocation_id, size);
-        
+        self.allocation_tracker
+            .track_allocation(allocation_id, size);
+
         // Dismiss the guard since allocation succeeded
         let guard = ScopeGuard::new(|| {});
         std::mem::forget(guard);
@@ -442,18 +477,23 @@ impl UnifiedMemoryArena {
         let ptr = allocation.as_ptr();
         let size = allocation.size();
         let allocation_id = allocation.allocation_id();
-        
+
         // Prevent the allocation from being dropped (which would trigger the leak warning)
         std::mem::forget(allocation);
-        
-        self.total_deallocated.fetch_add(size as u64, Ordering::Relaxed);
-        
+
+        self.total_deallocated
+            .fetch_add(size as u64, Ordering::Relaxed);
+
         if ptr.is_null() {
             return Err(AllocationError::InvalidSize);
         }
 
         // Track the deallocation
-        if self.allocation_tracker.track_deallocation(allocation_id).is_none() {
+        if self
+            .allocation_tracker
+            .track_deallocation(allocation_id)
+            .is_none()
+        {
             warn!("Deallocation of untracked allocation id {}", allocation_id);
         }
 
@@ -491,8 +531,9 @@ impl UnifiedMemoryArena {
     }
 
     pub fn deallocate(&self, ptr: *mut u8, size: usize) {
-        self.total_deallocated.fetch_add(size as u64, Ordering::Relaxed);
-        
+        self.total_deallocated
+            .fetch_add(size as u64, Ordering::Relaxed);
+
         if ptr.is_null() {
             return;
         }
@@ -532,8 +573,14 @@ impl UnifiedMemoryArena {
 
     /// Get allocation statistics
     pub fn get_allocation_stats(&self) -> (u64, u64) {
-        let allocated = self.allocation_tracker.total_allocations.load(Ordering::Relaxed);
-        let deallocated = self.allocation_tracker.total_deallocations.load(Ordering::Relaxed);
+        let allocated = self
+            .allocation_tracker
+            .total_allocations
+            .load(Ordering::Relaxed);
+        let deallocated = self
+            .allocation_tracker
+            .total_deallocations
+            .load(Ordering::Relaxed);
         (allocated, deallocated)
     }
 
@@ -567,7 +614,8 @@ impl UnifiedMemoryArena {
         let shard_idx = self.get_buffer_shard(buffer_id);
         let mut buffers = self.zero_copy_buffers[shard_idx].lock().unwrap();
         if let Some(allocation) = buffers.remove(&buffer_id) {
-            self.deallocate_tracked(allocation).map_err(|e| format!("Failed to deallocate buffer: {:?}", e))
+            self.deallocate_tracked(allocation)
+                .map_err(|e| format!("Failed to deallocate buffer: {:?}", e))
         } else {
             Err("Buffer ID not found".to_string())
         }
@@ -590,7 +638,8 @@ impl UnifiedMemoryArena {
             large_pool_stats: large_stats,
             total_allocated: self.total_allocated.load(Ordering::Relaxed),
             total_deallocated: self.total_deallocated.load(Ordering::Relaxed),
-            current_usage: self.total_allocated.load(Ordering::Relaxed) - self.total_deallocated.load(Ordering::Relaxed),
+            current_usage: self.total_allocated.load(Ordering::Relaxed)
+                - self.total_deallocated.load(Ordering::Relaxed),
             zero_copy_buffers: total_zero_copy_buffers,
         }
     }
@@ -599,14 +648,18 @@ impl UnifiedMemoryArena {
         info!("Performing unified memory arena cleanup");
 
         let usage_ratio = if self.total_allocated.load(Ordering::Relaxed) > 0 {
-            (self.total_allocated.load(Ordering::Relaxed) - self.total_deallocated.load(Ordering::Relaxed)) as f64
+            (self.total_allocated.load(Ordering::Relaxed)
+                - self.total_deallocated.load(Ordering::Relaxed)) as f64
                 / self.total_allocated.load(Ordering::Relaxed) as f64
         } else {
             0.0
         };
 
         if usage_ratio > self.config.cleanup_threshold {
-            warn!("High memory usage detected ({:.1}%), triggering cleanup", usage_ratio * 100.0);
+            warn!(
+                "High memory usage detected ({:.1}%), triggering cleanup",
+                usage_ratio * 100.0
+            );
 
             // Clear zero-copy buffers across all shards
             let mut total_cleared = 0;
@@ -616,7 +669,10 @@ impl UnifiedMemoryArena {
                 buffers.clear();
             }
 
-            debug!("Cleared {} zero-copy buffers across all shards", total_cleared);
+            debug!(
+                "Cleared {} zero-copy buffers across all shards",
+                total_cleared
+            );
         }
     }
 }
@@ -634,21 +690,20 @@ pub struct MemoryArenaStats {
 
 // Global unified memory arena instance
 lazy_static! {
-    static ref UNIFIED_MEMORY_ARENA: RwLock<Option<Arc<UnifiedMemoryArena>>> =
-        RwLock::new(None);
+    static ref UNIFIED_MEMORY_ARENA: RwLock<Option<Arc<UnifiedMemoryArena>>> = RwLock::new(None);
 }
 
 /// Initialize the unified memory arena
 pub fn init_unified_memory_arena(config: MemoryArenaConfig) -> Result<(), String> {
     let mut arena_guard = UNIFIED_MEMORY_ARENA.write();
-    
+
     if arena_guard.is_some() {
         return Err("Unified memory arena already initialized".to_string());
     }
-    
+
     let arena = Arc::new(UnifiedMemoryArena::new(config));
     *arena_guard = Some(arena);
-    
+
     info!("Unified memory arena initialized with jemalloc integration");
     Ok(())
 }
@@ -678,7 +733,7 @@ pub fn init_allocator() {
 #[cfg(not(target_os = "windows"))]
 pub fn init_allocator() {
     println!("Using unified memory arena with jemalloc integration");
-    
+
     // Initialize with default config
     let config = MemoryArenaConfig::default();
     if let Err(e) = init_unified_memory_arena(config) {
@@ -710,7 +765,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_NativeBridge_initUnifiedMemory
     };
 
     match init_unified_memory_arena(config) {
-        Ok(_) => 0, // Success
+        Ok(_) => 0,  // Success
         Err(_) => 1, // Error
     }
 }

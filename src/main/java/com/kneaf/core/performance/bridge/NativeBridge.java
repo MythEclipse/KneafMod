@@ -24,11 +24,13 @@ public final class NativeBridge {
 
   static {
     try {
-      System.loadLibrary("rustperf");
-      LOGGER.info("Native library rustperf loaded successfully");
-    } catch (UnsatisfiedLinkError e) {
-      LOGGER.warning("Native library rustperf not available, using fallback mode: " + e.getMessage());
-      // library may not be present in test environment
+      if (com.kneaf.core.performance.bridge.NativeLibraryLoader.loadNativeLibrary()) {
+        LOGGER.info("Native library rustperf loaded successfully via NativeLibraryLoader");
+      } else {
+        LOGGER.warning("Native library rustperf not available via NativeLibraryLoader; using fallback mode");
+      }
+    } catch (Throwable t) {
+      LOGGER.warning("Unexpected error while attempting to load native library: " + t.getMessage());
     }
   }
 

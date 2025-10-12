@@ -95,13 +95,43 @@ public final class JniCallManager {
         }
         
         try {
-            System.loadLibrary("rustperf");
-            nativeLibraryLoaded.set(true);
-            LOGGER.info("Successfully loaded native library 'rustperf'");
-            
-            // Set appropriate log level for native library
-            int logLevel = config.isEnableDebugLogging() ? 1 : 2; // 1=DEBUG, 2=INFO
-            NativeBridge.nativeSetLogLevel(logLevel);
+                boolean loaded = com.kneaf.core.performance.bridge.NativeLibraryLoader.loadNativeLibrary();
+                if (!loaded) {
+                    nativeLibraryLoaded.set(false);
+                    LOGGER.warning("Native library 'rustperf' not available via NativeLibraryLoader; JNI optimizations disabled");
+                } else {
+                    // Library loaded; verify that core native symbols are available by calling a small probe.
+                    try {
+                        boolean probe = NativeBridge.nativeIsAvailable();
+                        if (!probe) {
+                            nativeLibraryLoaded.set(false);
+                            LOGGER.warning("Native library loaded but probe nativeIsAvailable() returned false; treating as unavailable");
+                            recordNativeError(ERROR_JNI_LOAD, "nativeIsAvailable returned false");
+                        } else {
+                            // Attempt to call optional initializer symbol (set log level). Wrap in its own try/catch
+                            try {
+                                int logLevel = config.isEnableDebugLogging() ? 1 : 2; // 1=DEBUG, 2=INFO
+                                NativeBridge.nativeSetLogLevel(logLevel);
+                                nativeLibraryLoaded.set(true);
+                                LOGGER.info("Successfully loaded native library 'rustperf' via NativeLibraryLoader and initialized");
+                            } catch (UnsatisfiedLinkError ule) {
+                                // Expected symbol missing (optional). Log helpful diagnostic and disable native features.
+                                nativeLibraryLoaded.set(false);
+                                String expected = "Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeSetLogLevel";
+                                LOGGER.log(WARNING, "Failed to invoke optional native method nativeSetLogLevel (symbol may be missing): {0}", ule.getMessage());
+                                LOGGER.log(WARNING, "Expected JNI symbol: {0}. If you built the native library manually, ensure this symbol is exported and matches the Java package/class name.", expected);
+                                recordNativeError(ERROR_JNI_LOAD, ule.getMessage());
+                            }
+                        }
+                    } catch (UnsatisfiedLinkError probeEx) {
+                        // Core symbol missing - record and disable native
+                        nativeLibraryLoaded.set(false);
+                        String expectedProbe = "Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeIsAvailable";
+                        LOGGER.log(WARNING, "Core native probe nativeIsAvailable() is missing or failed: {0}", probeEx.getMessage());
+                        LOGGER.log(WARNING, "Expected JNI symbol: {0}. Rebuild the native library ensuring JNI signatures match Java packages and class names.", expectedProbe);
+                        recordNativeError(ERROR_JNI_LOAD, probeEx.getMessage());
+                    }
+                }
             
         } catch (UnsatisfiedLinkError e) {
             LOGGER.log(WARNING, "Failed to load native library 'rustperf': " + e.getMessage());

@@ -14,7 +14,7 @@ pub struct VillagerData {
     pub is_breeding: bool,
     pub last_pathfind_tick: u64,
     pub pathfind_frequency: u8, // How often to pathfind (1=every tick, 2=every 2nd tick, etc.)
-    pub ai_complexity: u8, // 0=simple, 1=normal, 2=complex
+    pub ai_complexity: u8,      // 0=simple, 1=normal, 2=complex
 }
 
 #[derive(Serialize, Deserialize)]
@@ -48,7 +48,7 @@ pub struct VillagerGroup {
     pub center_z: f32,
     pub villager_ids: Vec<u64>,
     pub group_type: String, // "village", "trading", "wandering", "working"
-    pub ai_tick_rate: u8, // How often to update AI for this group
+    pub ai_tick_rate: u8,   // How often to update AI for this group
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]

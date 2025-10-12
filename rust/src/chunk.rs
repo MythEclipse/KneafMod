@@ -1,8 +1,8 @@
-use rayon::prelude::*;
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
-use dashmap::DashMap;
-use std::sync::Arc;
 use crate::arena::get_global_arena_pool;
+use dashmap::DashMap;
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// Represents a chunk position
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -37,12 +37,25 @@ impl Clone for ChunkGenerationStats {
     fn clone(&self) -> Self {
         let snap = self.get_stats();
         let stats = ChunkGenerationStats::new();
-        stats.total_generated.store(snap.total_generated, Ordering::Relaxed);
-        stats.total_attempted.store(snap.total_attempted, Ordering::Relaxed);
-        stats.highest_concurrency.store(snap.highest_concurrency, Ordering::Relaxed);
-        stats.current_concurrency.store(snap.current_concurrency, Ordering::Relaxed);
-        stats.memory_pressure_aborts.store(snap.memory_pressure_aborts.unwrap_or(0), Ordering::Relaxed);
-        stats.critical_operation_count.store(snap.critical_operation_count.unwrap_or(0), Ordering::Relaxed);
+        stats
+            .total_generated
+            .store(snap.total_generated, Ordering::Relaxed);
+        stats
+            .total_attempted
+            .store(snap.total_attempted, Ordering::Relaxed);
+        stats
+            .highest_concurrency
+            .store(snap.highest_concurrency, Ordering::Relaxed);
+        stats
+            .current_concurrency
+            .store(snap.current_concurrency, Ordering::Relaxed);
+        stats
+            .memory_pressure_aborts
+            .store(snap.memory_pressure_aborts.unwrap_or(0), Ordering::Relaxed);
+        stats.critical_operation_count.store(
+            snap.critical_operation_count.unwrap_or(0),
+            Ordering::Relaxed,
+        );
         stats
     }
 }
@@ -70,11 +83,13 @@ impl ChunkGenerationStats {
     pub fn update_concurrency(&self, delta: isize) {
         let current = self.current_concurrency.load(Ordering::Relaxed) as isize;
         let new_current = current + delta;
-        
-        self.current_concurrency.store(new_current as usize, Ordering::Relaxed);
-        
+
+        self.current_concurrency
+            .store(new_current as usize, Ordering::Relaxed);
+
         if new_current > self.highest_concurrency.load(Ordering::Relaxed) as isize {
-            self.highest_concurrency.store(new_current as usize, Ordering::Relaxed);
+            self.highest_concurrency
+                .store(new_current as usize, Ordering::Relaxed);
         }
     }
 
@@ -112,9 +127,13 @@ impl ChunkGenerator {
     }
 
     /// Pre-generates nearby chunks asynchronously with proximity-based optimization
-    pub fn pre_generate_nearby_chunks(&self, center_x: i32, center_z: i32, radius: i32) -> Vec<ChunkPos> {
+    pub fn pre_generate_nearby_chunks(
+        &self,
+        center_x: i32,
+        center_z: i32,
+        radius: i32,
+    ) -> Vec<ChunkPos> {
         // Use proximity-based optimization to reduce processing overhead
-        
 
         // Create chunk positions with proximity-based filtering
         let chunk_positions: Vec<ChunkPos> = (-radius..=radius)
@@ -152,8 +171,9 @@ impl ChunkGenerator {
 
                 // Enhanced proximity calculation with Manhattan distance for better performance
                 let manhattan_distance = (pos.x - center_x).abs() + (pos.z - center_z).abs();
-                let euclidean_distance = ((pos.x - center_x) as f64).hypot((pos.z - center_z) as f64);
-                
+                let euclidean_distance =
+                    ((pos.x - center_x) as f64).hypot((pos.z - center_z) as f64);
+
                 // Apply proximity-based generation logic with reduced frequency for distant chunks (LOD)
                 if manhattan_distance <= radius as i32 && euclidean_distance <= radius as f64 {
                     // Higher probability for closer chunks, lower for distant ones (Level of Detail)
@@ -164,9 +184,10 @@ impl ChunkGenerator {
                         7..=10 => 0.2, // Distant chunks, low priority for LOD
                         _ => 0.05,     // Very far chunks, minimal generation for LOD
                     };
-                    
+
                     // Use a simple hash-based deterministic check instead of expensive modulo
-                    let hash_value = (pos.x.wrapping_mul(73856093) ^ pos.z.wrapping_mul(19349663)) % 100;
+                    let hash_value =
+                        (pos.x.wrapping_mul(73856093) ^ pos.z.wrapping_mul(19349663)) % 100;
                     if (hash_value as f64) < (generation_probability * 100.0) {
                         Some(pos)
                     } else {
