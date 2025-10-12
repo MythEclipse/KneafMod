@@ -11,6 +11,7 @@ public class CommandLogger {
 
     private final AtomicLong commandExecutionCount = new AtomicLong(0);
     private final AtomicLong commandErrorCount = new AtomicLong(0);
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(CommandLogger.class);
 
     /**
      * Log command registration.
@@ -92,8 +93,7 @@ public class CommandLogger {
      * @param message the message to log
      */
     protected void logInfo(String message) {
-        // In a real implementation, this would use the actual logging framework
-        System.out.println("[INFO] " + message);
+        LOGGER.info(message);
     }
 
     /**
@@ -102,8 +102,7 @@ public class CommandLogger {
      * @param message the message to log
      */
     protected void logWarn(String message) {
-        // In a real implementation, this would use the actual logging framework
-        System.out.println("[WARN] " + message);
+        LOGGER.warn(message);
     }
 
     /**
@@ -113,9 +112,7 @@ public class CommandLogger {
      * @param error the error
      */
     protected void logError(String message, Exception error) {
-        // In a real implementation, this would use the actual logging framework
-        System.err.println("[ERROR] " + message);
-        error.printStackTrace();
+        LOGGER.error(message, error);
     }
 
     /**

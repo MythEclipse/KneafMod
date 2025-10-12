@@ -89,15 +89,21 @@ public abstract class BaseCommand implements CommandExecutor {
       long duration = System.currentTimeMillis() - startTime;
 
       // Log successful completion
-      logger.logOperationComplete(
-          "command_execute",
-          "command",
-          traceId,
-          duration,
-          result > 0,
-          Map.of("command", commandName, "result", result, "source", sourceName));
+     logger.logOperationComplete(
+         "command_execute",
+         "command",
+         traceId,
+         duration,
+         result > 0,
+         Map.of("command", commandName, "result", result, "source", sourceName));
 
-      return result;
+     // Send success message to command source
+     if (result > 0) {
+       context.getSource().sendSuccess(() -> Component.literal(String.format(
+           "Command '%s' executed successfully (result: %d)", commandName, result)), false);
+     }
+
+     return result;
 
     } catch (Exception e) {
       long duration = System.currentTimeMillis() - startTime;
@@ -108,6 +114,10 @@ public abstract class BaseCommand implements CommandExecutor {
           e,
           traceId,
           Map.of("command", commandName, "duration", duration, "source", sourceName));
+
+      // Send error message to command source
+      String errorMessage = String.format("Command '%s' failed: %s", commandName, e.getMessage());
+      context.getSource().sendFailure(Component.literal(errorMessage));
 
       // Handle error
       return handleError(context, e);

@@ -895,15 +895,10 @@ public class RustPerformance {
 
   /** Helper method to get UnifiedBridge instance */
   private static UnifiedBridge getUnifiedBridgeInstance() {
-    // In a real implementation, you would get the appropriate UnifiedBridge instance
-    // This is just a placeholder
-    try {
-      return com.kneaf.core.unifiedbridge.BridgeFactory.createUnifiedBridge("rust-performance-bridge");
-    } catch (Exception e) {
-      KneafCore.LOGGER.error("Failed to create UnifiedBridge instance, using fallback", e);
-      // Return a fallback implementation or throw an exception
-      throw new IllegalStateException("Cannot create UnifiedBridge instance", e);
-    }
+    // First ensure the factory is initialized
+    UnifiedBridgeFactory.initialize();
+    // Get appropriate UnifiedBridge instance using factory pattern
+    return UnifiedBridgeFactory.getBridgeInstance("rust-performance-bridge");
   }
 
   /** Helper method to extract Long list from BridgeResult */

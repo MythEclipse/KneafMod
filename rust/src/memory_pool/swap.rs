@@ -358,25 +358,174 @@ impl SwapMemoryPool {
         self.cleanup()
     }
 
-    /// Write data asynchronously (placeholder for async operations)
+    /// Write data asynchronously to swap file
     pub async fn write_data_async(&self, data: Vec<u8>) -> Result<u64, String> {
+        let trace_id = generate_trace_id();
+        
+        // Allocate memory for the data
         let allocation = self.allocate(data.len())?;
         let page_id = allocation.page_id;
         
-        // In a real implementation, this would write to disk asynchronously
-        // For now, we'll just simulate the operation
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        // Get page metadata and ensure it's updated
+        let mut page = self.pages.write().unwrap();
+        let page = page.get_mut(&page_id)
+            .ok_or_else(|| format!("Page {} not found", page_id))?
+            .clone();
+        
+        // Compress data if enabled
+        let (compressed_data, is_compressed) = if self.config.compression_enabled {
+            match self.compress_data(&data).await {
+                Ok(compressed) => {
+                    if compressed.len() < data.len() {
+                        (compressed, true)
+                    } else {
+                        (data, false) // Compression didn't help
+                    }
+                }
+                Err(e) => {
+                    self.logger.log_error("write_data_async", &trace_id, &format!("Compression failed: {}", e));
+                    (data, false) // Use original data if compression fails
+                }
+            }
+        } else {
+            (data, false)
+        };
+        
+        // Calculate checksum
+        let checksum = crc32fast::hash(&compressed_data);
+        
+        // Write to swap file asynchronously
+        let swap_file_path = self.config.swap_file_path.clone();
+        let write_result = tokio::task::spawn_blocking(move || {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&swap_file_path)
+                .map_err(|e| format!("Failed to open swap file: {}", e))?;
+            
+            let offset = file.seek(SeekFrom::End(0))
+                .map_err(|e| format!("Failed to seek swap file: {}", e))?;
+            
+            file.write_all(&compressed_data)
+                .map_err(|e| format!("Failed to write to swap file: {}", e))?;
+            
+            Ok(offset)
+        }).await.map_err(|e| format!("Task join error: {}", e))?;
+        
+        let offset = write_result?;
+        
+        // Update page metadata
+        let mut page = self.pages.write().unwrap();
+        let page = page.get_mut(&page_id)
+            .ok_or_else(|| format!("Page {} not found", page_id))?;
+        
+        page.offset = offset;
+        page.compressed_size = compressed_data.len();
+        page.is_compressed = is_compressed;
+        page.checksum = checksum;
+        page.last_access = std::time::SystemTime::now();
+        
+        self.logger.log_info("write_data_async", &trace_id, &format!(
+            "Asynchronously wrote {} bytes to swap file (page {}), compressed: {}",
+            compressed_data.len(), page_id, is_compressed
+        ));
         
         Ok(page_id)
     }
 
-    /// Read data asynchronously (placeholder for async operations)
-    pub async fn read_data_async(&self, _page_id: u64, size: usize) -> Result<Vec<u8>, String> {
-        // In a real implementation, this would read from disk asynchronously
-        // For now, we'll just simulate the operation
-        std::thread::sleep(std::time::Duration::from_millis(1));
+    /// Read data asynchronously from swap file
+    pub async fn read_data_async(&self, page_id: u64, size: usize) -> Result<Vec<u8>, String> {
+        let trace_id = generate_trace_id();
         
-        Ok(vec![0u8; size])
+        // Get page metadata
+        let page = self.pages.read().unwrap()
+            .get(&page_id)
+            .ok_or_else(|| format!("Page {} not found", page_id))?
+            .clone();
+        
+        // Check if already in memory cache
+        if let Some(cached_data) = self.memory_cache.read().unwrap().get(&page_id) {
+            if cached_data.len() == size {
+                self.logger.log_info("read_data_async", &trace_id, &format!("Cache hit for page {}", page_id));
+                return Ok(cached_data.clone());
+            }
+        }
+        
+        // Read from swap file asynchronously
+        let swap_file_path = self.config.swap_file_path.clone();
+        let read_result = tokio::task::spawn_blocking(move || {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .open(&swap_file_path)
+                .map_err(|e| format!("Failed to open swap file: {}", e))?;
+            
+            file.seek(SeekFrom::Start(page.offset))
+                .map_err(|e| format!("Failed to seek to page offset: {}", e))?;
+            
+            let mut compressed_data = vec![0u8; page.compressed_size];
+            file.read_exact(&mut compressed_data)
+                .map_err(|e| format!("Failed to read from swap file: {}", e))?;
+            
+            Ok(compressed_data)
+        }).await.map_err(|e| format!("Task join error: {}", e))?;
+        
+        let compressed_data = read_result?;
+        
+        // Verify checksum
+        let calculated_checksum = crc32fast::hash(&compressed_data);
+        if calculated_checksum != page.checksum {
+            return Err(format!(
+                "Checksum mismatch for page {}: expected {}, got {}",
+                page_id, page.checksum, calculated_checksum
+            ));
+        }
+        
+        // Decompress if necessary
+        let data = if page.is_compressed {
+            self.decompress_data(&compressed_data).map_err(|e| {
+                self.logger.log_error("read_data_async", &trace_id, &format!("Decompression failed: {}", e));
+                format!("Decompression failed: {}", e)
+            })?
+        } else {
+            compressed_data
+        };
+        
+        // Update memory cache
+        if data.len() == size {
+            self.memory_cache.write().unwrap().insert(page_id, data.clone());
+            
+            // Update last access time
+            if let Some(page) = self.pages.write().unwrap().get_mut(&page_id) {
+                page.last_access = std::time::SystemTime::now();
+            }
+        }
+        
+        self.logger.log_info("read_data_async", &trace_id, &format!(
+            "Asynchronously read {} bytes from swap file (page {})",
+            data.len(), page_id
+        ));
+        
+        Ok(data)
+    }
+
+    /// Async wrapper for compress_data to support async operations
+    async fn compress_data(&self, data: &[u8]) -> Result<Vec<u8>, String> {
+        let start_time = std::time::Instant::now();
+        
+        // Use LZ4 compression for speed
+        let compressed = lz4_flex::compress_prepend_size(data);
+        
+        let elapsed = start_time.elapsed();
+        let mut stats = self.compression_stats.write().unwrap();
+        stats.total_uncompressed += data.len();
+        stats.total_compressed += compressed.len();
+        stats.compression_time += elapsed;
+        
+        if stats.total_uncompressed > 0 {
+            stats.compression_ratio = stats.total_compressed as f64 / stats.total_uncompressed as f64;
+        }
+        
+        Ok(compressed)
     }
 
     /// Prefetch pages that are likely to be accessed soon
@@ -477,13 +626,43 @@ impl<T> SwapPooledVec<T> {
         self.data.is_empty()
     }
 
-    /// Ensure data is in memory (swap in if necessary)
+    /// Ensure data is in memory (swap in if necessary) with proper type conversion
     pub fn ensure_in_memory(&mut self) -> Result<(), String> {
         if self.is_swapped {
-            // Swap in the data - this is a simplified version
-            // In a real implementation, you'd need proper type conversion
-            // For now, we'll just mark as not swapped
+            let trace_id = generate_trace_id();
+            
+            // Get the page from the pool
+            let pool = unsafe { &*self.pool };
+            let page = match pool.pages.read().unwrap().get(&self.page_id) {
+                Some(page) => page.clone(),
+                None => return Err(format!("Page {} not found in metadata", self.page_id)),
+            };
+            
+            // Read data from swap file with proper type conversion
+            let data = pool.read_data_async(self.page_id, page.size).await?;
+            
+            // Convert the read data to the appropriate type (u8 in this case)
+            // For other types, this would involve deserialization or type conversion logic
+            if data.len() != page.size {
+                return Err(format!(
+                    "Data size mismatch for page {}: expected {}, got {}",
+                    self.page_id, page.size, data.len()
+                ));
+            }
+            
+            // Replace the internal data with the swapped-in data
+            self.data = data.try_into().map_err(|e| {
+                format!("Failed to convert data for page {}: {}", self.page_id, e)
+            })?;
+            
+            // Mark as not swapped and not dirty (data is now in memory)
             self.is_swapped = false;
+            self.dirty = false;
+            
+            self.logger.log_info("ensure_in_memory", &trace_id, &format!(
+                "Successfully swapped in page {} with {} bytes of data",
+                self.page_id, self.data.len()
+            ));
         }
         Ok(())
     }

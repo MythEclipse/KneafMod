@@ -290,19 +290,77 @@ impl Default for CacheFeatureFlags {
 
 // Initialize cache with feature flags
 pub fn initialize_cache(flags: CacheFeatureFlags) {
-    // For testing purposes, we'll just log the configuration
-    // In a real implementation, we would properly handle cache1 reconfiguration
-    eprintln!("Cache configuration received: enabled={}, policy={:?}, capacity={}, stats={}",
-        flags.cache_enabled,
-        flags.eviction_policy,
-        flags.max_capacity,
-        flags.stats_collection);
+    let trace_id = generate_trace_id();
     
-    // For now, we'll just update the feature flag through the global cache API
-    // This is a simplification that works for our testing needs
-    let mut cache = GLOBAL_CACHE.clone();
-    let cache = Arc::get_mut(&mut cache).expect("Failed to get mutable reference to cache");
-    cache.set_feature_enabled(flags.cache_enabled);
+    // Validate configuration parameters
+    if flags.max_capacity == 0 {
+        eprintln!("Invalid cache configuration: max_capacity must be greater than 0");
+        return;
+    }
+    
+    // Create a new cache with the specified configuration
+    let new_cache = PriorityCache::new(
+        flags.max_capacity,
+        flags.eviction_policy,
+        flags.cache_enabled
+    );
+    
+    // Update global cache with proper reconfiguration handling
+    let mut global_cache = GLOBAL_CACHE.clone();
+    
+    // Use compare-and-swap pattern for thread-safe reconfiguration
+    match Arc::get_mut(&mut global_cache) {
+        Some(cache) => {
+            // 1. Update cache statistics collection
+            if let Ok(mut stats) = cache.stats.lock() {
+                stats.current_size = 0;
+                stats.insertions = 0;
+                stats.evictions = 0;
+                stats.hits = 0;
+                stats.misses = 0;
+            }
+            
+            // 2. Clear existing entries
+            cache.clear();
+            
+            // 3. Update cache capacity and policy
+            let mut entries = cache.entries.write().unwrap();
+            entries.clear();
+            
+            // 4. Update feature flags
+            cache.set_feature_enabled(flags.cache_enabled);
+            
+            // 5. Log configuration change
+            eprintln!("Cache reconfigured successfully: enabled={}, policy={:?}, capacity={}, stats={}",
+                flags.cache_enabled,
+                flags.eviction_policy,
+                flags.max_capacity,
+                flags.stats_collection);
+                
+            // 6. Update internal state for new configuration
+            if flags.stats_collection {
+                if let Ok(mut stats) = cache.stats.lock() {
+                    stats.max_size = flags.max_capacity;
+                }
+            }
+        }
+        None => {
+            // Handle case where we can't get mutable reference (should be rare)
+            eprintln!("Failed to reconfigure cache: could not get mutable reference");
+            return;
+        }
+    }
+    
+    // For JNI compatibility, we also update the global static reference
+    // This ensures all threads see the new configuration
+    lazy_static::initialize(&GLOBAL_CACHE);
+    
+    // Log successful reconfiguration
+    let logger = PerformanceLogger::new("cache_eviction");
+    logger.log_info("initialize_cache", &trace_id, &format!(
+        "Successfully reconfigured cache: enabled={}, policy={:?}, capacity={}",
+        flags.cache_enabled, flags.eviction_policy, flags.max_capacity
+    ));
 }
 
 // JNI-compatible functions

@@ -3,6 +3,8 @@ package com.kneaf.core.command.unified;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import com.kneaf.core.binary.utils.SerializationException;
+import java.nio.ByteBuffer;
 
 /**
  * Consolidated network message processing for command-related network traffic.
@@ -167,9 +169,38 @@ public class NetworkMessageHandler {
      * @return the command source stack
      */
     private Object extractCommandSourceFromMessage(NetworkMessage message) {
-        // In a real implementation, this would extract and reconstruct the CommandSourceStack
-        // from the network message data
-        return new Object(); // Placeholder
+        // Extract command source information from network message data
+        Map<String, Object> data = message.getData();
+        
+        // Validate required fields for command source reconstruction
+        if (!data.containsKey("sourceType") || !data.containsKey("sourceId") || !data.containsKey("permissionLevel")) {
+            throw new IllegalArgumentException("Missing required fields for command source reconstruction");
+        }
+
+        try {
+            // In a real implementation, this would use the actual Minecraft CommandSourceStack construction
+            // For this implementation, we'll create a structured map that can be used by CommandContext.Builder
+            
+            String sourceType = data.get("sourceType").toString();
+            String sourceId = data.get("sourceId").toString();
+            int permissionLevel = Integer.parseInt(data.get("permissionLevel").toString());
+            
+            // Create a structured representation that can be used by CommandContext.Builder
+            // In a real Minecraft implementation, you would use the actual CommandSourceStack class
+            Map<String, Object> commandSource = Map.of(
+                "sourceType", sourceType,
+                "sourceId", sourceId,
+                "permissionLevel", permissionLevel,
+                "toString", String.format("CommandSource{type=%s, id=%s, permissionLevel=%d}",
+                    sourceType, sourceId, permissionLevel)
+            );
+
+            return commandSource;
+        } catch (Exception e) {
+            // Use simpler SerializationException constructor that doesn't require byte[]
+            throw new SerializationException("Failed to extract command source from message",
+                "CommandSourceExtractor", "extract");
+        }
     }
 
     /**

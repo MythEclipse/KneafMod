@@ -33,16 +33,49 @@ where
 
     /// Perform cleanup and return true if any resources were freed
     pub fn cleanup(&self) -> bool {
-        // Implement efficient cleanup that trims unused objects
-        let cleaned = false;
+        let mut cleaned = false;
+        let mut pool = self.pool.write().unwrap();
         
-        // In a real implementation, we would:
-        // 1. Check pool usage statistics
-        // 2. Trim excess capacity based on current load
-        // 3. Free unused memory buffers
-        // 4. Return true if any resources were freed
+        // 1. Get current pool statistics
+        let current_size = pool.len();
+        let high_water_mark = pool.high_water_mark();
+        let load_factor = if high_water_mark > 0 {
+            current_size as f64 / high_water_mark as f64
+        } else { 0.0 };
         
-        // For now, maintain the no-op behavior but preserve the API contract
+        // 2. Trim excess capacity if load is low (below 30%)
+        if load_factor < 0.3 {
+            let target_size = (current_size as f64 * 0.5) as usize; // Keep 50% of current objects
+            let excess = current_size.saturating_sub(target_size);
+            
+            if excess > 0 {
+                // Remove excess objects from the pool
+                for _ in 0..excess {
+                    if let Some(mut obj) = pool.pop() {
+                        // Explicitly clear and shrink the vector to free memory
+                        obj.clear();
+                        obj.shrink_to_fit();
+                    }
+                }
+                cleaned = true;
+            }
+        }
+        
+        // 3. Free unused memory buffers by shrinking the underlying storage
+        if let Some(inner_vec) = pool.get_inner_vec() {
+            if inner_vec.capacity() > inner_vec.len() * 2 { // If capacity is more than twice the size
+                let new_capacity = inner_vec.len().max(10); // Keep at least 10 elements for reuse
+                inner_vec.shrink_to(new_capacity);
+                cleaned = true;
+            }
+        }
+        
+        // 4. Log cleanup operation
+        self.logger.log_info("cleanup", "vec_pool", &format!(
+            "Cleaned up VecPool: removed {} objects, load factor: {:.1}%, capacity trimmed",
+            excess, load_factor * 100.0
+        ));
+        
         cleaned
     }
 
@@ -104,16 +137,49 @@ impl StringPool {
 
     /// Perform cleanup and return true if any resources were freed
     pub fn cleanup(&self) -> bool {
-        // Implement efficient cleanup that trims unused objects
-        let cleaned = false;
+        let mut cleaned = false;
+        let mut pool = self.pool.write().unwrap();
         
-        // In a real implementation, we would:
-        // 1. Check pool usage statistics
-        // 2. Trim excess capacity based on current load
-        // 3. Free unused memory buffers
-        // 4. Return true if any resources were freed
+        // 1. Get current pool statistics
+        let current_size = pool.len();
+        let high_water_mark = pool.high_water_mark();
+        let load_factor = if high_water_mark > 0 {
+            current_size as f64 / high_water_mark as f64
+        } else { 0.0 };
         
-        // For now, maintain the no-op behavior but preserve the API contract
+        // 2. Trim excess capacity if load is low (below 30%)
+        if load_factor < 0.3 {
+            let target_size = (current_size as f64 * 0.5) as usize; // Keep 50% of current objects
+            let excess = current_size.saturating_sub(target_size);
+            
+            if excess > 0 {
+                // Remove excess objects from the pool
+                for _ in 0..excess {
+                    if let Some(mut obj) = pool.pop() {
+                        // Explicitly clear and shrink the string to free memory
+                        obj.clear();
+                        obj.shrink_to_fit();
+                    }
+                }
+                cleaned = true;
+            }
+        }
+        
+        // 3. Free unused memory buffers by shrinking the underlying storage
+        if let Some(inner_vec) = pool.get_inner_vec() {
+            if inner_vec.capacity() > inner_vec.len() * 2 { // If capacity is more than twice the size
+                let new_capacity = inner_vec.len().max(10); // Keep at least 10 elements for reuse
+                inner_vec.shrink_to(new_capacity);
+                cleaned = true;
+            }
+        }
+        
+        // 4. Log cleanup operation
+        self.logger.log_info("cleanup", "string_pool", &format!(
+            "Cleaned up StringPool: removed {} objects, load factor: {:.1}%, capacity trimmed",
+            excess, load_factor * 100.0
+        ));
+        
         cleaned
     }
 

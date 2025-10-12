@@ -55,55 +55,61 @@ public class BridgeException extends RuntimeException {
     }
 
     /**
-     * Enum representing different types of bridge errors.
-     */
-    public enum BridgeErrorType {
-        /** Generic bridge error */
-        GENERIC_ERROR,
-        
-        /** Worker creation failed */
-        WORKER_CREATION_FAILED,
-        
-        /** Worker destruction failed */
-        WORKER_DESTROY_FAILED,
-        
-        /** Task processing failed */
-        TASK_PROCESSING_FAILED,
-        
-        /** Result polling failed */
-        RESULT_POLLING_FAILED,
-        
-        /** Buffer allocation failed */
-        BUFFER_ALLOCATION_FAILED,
-        
-        /** Buffer access failed */
-        BUFFER_ACCESS_FAILED,
-        
-        /** Batch processing failed */
-        BATCH_PROCESSING_FAILED,
-        
-        /** Configuration error */
-        CONFIGURATION_ERROR,
-        
-        /** Native call failed */
-        NATIVE_CALL_FAILED,
-        
-        /** Resource management error */
-        RESOURCE_MANAGEMENT_ERROR,
-        
-        /** Plugin error */
-        PLUGIN_ERROR,
-        
-        /** Shutdown error */
-        SHUTDOWN_ERROR,
-        
-        /** Invalid state error */
-        INVALID_STATE_ERROR,
-        
-        /** Compatibility error */
-        COMPATIBILITY_ERROR,
-        
-        /** Metrics collection error */
-        METRICS_ERROR
-    }
+    * Enum representing different types of bridge errors.
+    */
+   public enum BridgeErrorType {
+       /** Generic bridge error */
+       GENERIC_ERROR,
+       
+       /** Worker creation failed */
+       WORKER_CREATION_FAILED,
+       
+       /** Worker destruction failed */
+       WORKER_DESTROY_FAILED,
+       
+       /** Task processing failed */
+       TASK_PROCESSING_FAILED,
+       
+       /** Result polling failed */
+       RESULT_POLLING_FAILED,
+       
+       /** Buffer allocation failed */
+       BUFFER_ALLOCATION_FAILED,
+       
+       /** Buffer access failed */
+       BUFFER_ACCESS_FAILED,
+       
+       /** Batch processing failed */
+       BATCH_PROCESSING_FAILED,
+       
+       /** Configuration error */
+       CONFIGURATION_ERROR,
+       
+       /** Native call failed */
+       NATIVE_CALL_FAILED,
+       
+       /** Native method not found */
+       NATIVE_METHOD_NOT_FOUND,
+       
+       /** JNI call failed */
+       JNI_CALL_FAILED,
+       
+       /** Resource management error */
+       RESOURCE_MANAGEMENT_ERROR,
+       
+       /** Plugin error */
+       PLUGIN_ERROR,
+       
+       /** Shutdown error */
+       SHUTDOWN_ERROR,
+       
+       /** Invalid state error */
+       INVALID_STATE_ERROR,
+       
+       /** Compatibility error */
+       COMPATIBILITY_ERROR,
+       
+       /** Metrics collection error */
+       METRICS_ERROR
+   }
 }

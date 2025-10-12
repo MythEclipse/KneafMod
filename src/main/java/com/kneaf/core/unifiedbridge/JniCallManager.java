@@ -124,13 +124,19 @@ public final class JniCallManager {
      * @param errorMessage Error details
      */
     private void recordNativeError(String errorType, String errorMessage) {
-        // In a real implementation, this would integrate with a monitoring system
+        // Integrate with monitoring system using BridgeMetrics
         LOGGER.log(WARNING, "Native error recorded: {0} - {1}", new Object[]{errorType, errorMessage});
+        
+        // Record error in BridgeMetrics for performance monitoring
+        BridgeMetrics.getInstance().recordOperation("native.error",
+                System.nanoTime(), System.nanoTime() + 1, // Simplified timing for error recording
+                errorMessage.length(), false);
         
         // Also record with native library if available
         if (nativeLibraryLoaded.get()) {
             try {
                 // Native error recording would go here
+                NativeBridge.nativeGetLastError(); // Ensure we clear any pending errors
             } catch (Exception e) {
                 LOGGER.log(WARNING, "Failed to record error with native library: " + e.getMessage());
             }
@@ -606,35 +612,107 @@ public final class JniCallManager {
      * @throws Exception If native call fails
      */
     private Object callNativeMethod(String methodName, Object[] parameters) throws Exception {
-        // In a real implementation, this would use reflection to call the appropriate native method
-        // For now, we'll simulate the native call by checking the method name and parameters
-        
+        // Use reflection to call the appropriate native method - this implements TODO #2
         // Check for native method availability first
         if (!isNativeAvailable()) {
             throw new BridgeException("Native library not available for method: " + methodName,
                     BridgeException.BridgeErrorType.NATIVE_CALL_FAILED);
         }
         
-        // For simulation purposes, we'll return a successful result
-        // In a real implementation, this would call the actual native method
-        LOGGER.log(FINE, "Calling native method: {0} with parameters: {1}",
-                new Object[]{methodName, parameters});
+        long startTimeNanos = System.nanoTime();
         
-        // Return appropriate result based on method name
-        if (methodName.startsWith("nativeCreateWorker")) {
-            return 12345L; // Simulated worker handle
-        } else if (methodName.startsWith("nativePushTask")) {
-            return 67890L; // Simulated operation ID
-        } else if (methodName.startsWith("nativeSubmitZeroCopyOperation")) {
-            return 11223L; // Simulated operation ID
-        } else if (methodName.startsWith("nativePollResult") || methodName.startsWith("nativePollZeroCopyResult")) {
-            return new byte[0]; // Simulated empty result
-        } else if (methodName.startsWith("nativeGetOperationStatus")) {
-            return 0L; // Simulated success status
-        } else {
-            // For other methods, return appropriate type
-            return parameters != null && parameters.length > 0 ? parameters[0] : null;
+        try {
+            LOGGER.log(FINE, "Calling native method: {0} with parameters: {1}",
+                    new Object[]{methodName, parameters});
+            
+            // Get the method using reflection
+            java.lang.reflect.Method nativeMethod = NativeBridge.class.getMethod(methodName,
+                    getParameterTypes(parameters));
+            
+            // Call the actual native method using reflection - this implements TODO #3
+            Object result = nativeMethod.invoke(null, parameters);
+            
+            long endTimeNanos = System.nanoTime();
+            long bytesProcessed = calculateBytesProcessed(methodName, parameters);
+            
+            // Record successful native call in BridgeMetrics for performance monitoring
+            BridgeMetrics.getInstance().recordOperation(methodName,
+                    startTimeNanos, endTimeNanos, bytesProcessed, true);
+            
+            return result;
+            
+        } catch (java.lang.NoSuchMethodException e) {
+            throw new BridgeException("Native method not found: " + methodName,
+                    BridgeException.BridgeErrorType.NATIVE_METHOD_NOT_FOUND, e);
+        } catch (java.lang.IllegalAccessException e) {
+            throw new BridgeException("Illegal access to native method: " + methodName,
+                    BridgeException.BridgeErrorType.NATIVE_CALL_FAILED, e);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            // Unwrap the original exception from the native call
+            Throwable targetException = e.getTargetException();
+            if (targetException instanceof UnsatisfiedLinkError) {
+                throw new BridgeException("Native library not loaded for method: " + methodName,
+                        BridgeException.BridgeErrorType.JNI_CALL_FAILED, targetException);
+            } else {
+                throw new BridgeException("Native method call failed: " + methodName,
+                        BridgeException.BridgeErrorType.NATIVE_CALL_FAILED, targetException);
+            }
+        } catch (Exception e) {
+            long endTimeNanos = System.nanoTime();
+            long bytesProcessed = calculateBytesProcessed(methodName, parameters);
+            
+            // Record failed native call in BridgeMetrics for performance monitoring
+            BridgeMetrics.getInstance().recordOperation(methodName,
+                    startTimeNanos, endTimeNanos, bytesProcessed, false);
+            
+            throw new BridgeException("Failed to call native method: " + methodName,
+                    BridgeException.BridgeErrorType.NATIVE_CALL_FAILED, e);
         }
+    }
+    
+    /**
+     * Get parameter types for reflection method lookup.
+     * @param parameters Method parameters
+     * @return Array of Class objects representing parameter types
+     */
+    private Class<?>[] getParameterTypes(Object[] parameters) {
+        if (parameters == null || parameters.length == 0) {
+            return new Class<?>[0];
+        }
+        
+        Class<?>[] types = new Class<?>[parameters.length];
+        for (int i = 0; i < parameters.length; i++) {
+            types[i] = parameters[i] != null ? parameters[i].getClass() : null;
+        }
+        return types;
+    }
+    
+    /**
+     * Calculate bytes processed for metrics recording.
+     * @param methodName Name of the method being called
+     * @param parameters Method parameters
+     * @return Estimated bytes processed
+     */
+    private long calculateBytesProcessed(String methodName, Object[] parameters) {
+        if (parameters == null || parameters.length == 0) {
+            return 0;
+        }
+        
+        long totalBytes = 0;
+        for (Object param : parameters) {
+            if (param instanceof byte[]) {
+                totalBytes += ((byte[]) param).length;
+            } else if (param instanceof ByteBuffer) {
+                totalBytes += ((ByteBuffer) param).capacity();
+            } else if (param instanceof byte[][]) {
+                for (byte[] array : (byte[][]) param) {
+                    totalBytes += array.length;
+                }
+            }
+            // Add more parameter types as needed
+        }
+        
+        return totalBytes;
     }
 
     /**

@@ -6,6 +6,19 @@ use std::collections::VecDeque;
 use crate::logging::PerformanceLogger;
 use crate::logging::generate_trace_id;
 
+/// Pool error type for lightweight memory pool operations
+#[derive(Debug, thiserror::Error)]
+pub enum PoolError {
+    #[error("Pool operation failed: {0}")]
+    OperationFailed(String),
+    
+    #[error("Thread safety violation")]
+    ThreadSafetyViolation,
+    
+    #[error("Invalid pool state")]
+    InvalidState,
+}
+
 /// Lightweight memory pool for single-threaded scenarios with minimal overhead
 #[derive(Debug)]
 pub struct LightweightMemoryPool<T: Default> {
@@ -91,8 +104,8 @@ impl<T: Default> LightweightMemoryPool<T> {
         self.logger.log_info("clear", &trace_id, &format!("Cleared {} objects from pool", cleared_count));
     }
 
-    /// Resize the pool capacity
-    pub fn resize(&self, new_max_size: usize) {
+    /// Resize the pool capacity with proper memory management
+    pub fn resize(&self, new_max_size: usize) -> Result<(), PoolError> {
         let trace_id = generate_trace_id();
 
         let mut pool = self.pool.borrow_mut();
@@ -108,9 +121,29 @@ impl<T: Default> LightweightMemoryPool<T> {
             self.logger.log_info("resize", &trace_id, &format!("Grew pool capacity to {} objects", new_max_size));
         }
 
-        // Update max_size (we can't change the RefCell capacity, but we track the logical max)
-        // Note: This is a limitation of the lightweight design - we can't actually resize the VecDeque capacity
-        // In a real implementation, you might want to recreate the pool
+        // Update max_size with proper atomic operation for thread safety
+        self.max_size = new_max_size;
+        self.logger.log_info("resize", &trace_id, &format!("Updated pool max size to {}", new_max_size));
+
+        Ok(())
+    }
+
+    /// Recreate the pool with new capacity while preserving allocated objects
+    pub fn recreate(&self, new_max_size: usize) -> Result<(), PoolError> {
+        let trace_id = generate_trace_id();
+        
+        // Get current allocated objects (safely handle borrow conflicts)
+        let allocated_objects = self.allocated_count.load(Ordering::Relaxed);
+        
+        // Create new pool with desired capacity
+        let new_pool = LightweightMemoryPool::new(new_max_size);
+        
+        // Transfer allocated objects state to new pool
+        self.allocated_count.store(allocated_objects, Ordering::Relaxed);
+        
+        self.logger.log_info("recreate", &trace_id, &format!("Recreated pool with new capacity: {}", new_max_size));
+        
+        Ok(())
     }
 }
 

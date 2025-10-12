@@ -36,12 +36,11 @@ public final class EnhancedManualSerializers {
             // Allocate direct buffer for zero-copy (call static method correctly)
             ByteBuffer zeroCopyBuffer = BinaryZeroCopyFacade.ZeroCopyWrapper.createDirectBuffer(stdBuffer.remaining());
             
-            // In a real implementation, we would use the zero-copy Rust functions here
-            // For now, copy the data (this will be optimized in the Rust implementation)
-            zeroCopyBuffer.put(stdBuffer);
-            zeroCopyBuffer.flip();
-            
-            return zeroCopyBuffer;
+            // Use zero-copy Rust serialization for entity data
+            byte[] zeroCopyResult = ZERO_COPY_WRAPPER.serializeEntityInput(stdBuffer);
+            ByteBuffer resultBuffer = ByteBuffer.wrap(zeroCopyResult).order(ByteOrder.LITTLE_ENDIAN);
+            resultBuffer.flip();
+            return resultBuffer;
             
         } catch (Exception e) {
             // Fall back to standard serialization if zero-copy fails
@@ -58,9 +57,10 @@ public final class EnhancedManualSerializers {
     public static List<Long> deserializeEntityProcessResultZeroCopy(ByteBuffer buffer) throws Exception {
         if (buffer.isDirect()) {
             try {
-                // In a real implementation, we would call the Rust zero-copy deserialization here
-                // For now, fall back to standard deserialization
-                return ManualSerializers.deserializeEntityProcessResult(buffer);
+                // Use zero-copy Rust deserialization for entity process result
+                byte[] resultBytes = ZERO_COPY_WRAPPER.deserializeEntityProcessResult(buffer);
+                ByteBuffer resultBuffer = ByteBuffer.wrap(resultBytes).order(ByteOrder.LITTLE_ENDIAN);
+                return ManualSerializers.deserializeEntityProcessResult(resultBuffer);
             } catch (Exception e) {
                 // Fall back to standard deserialization if zero-copy fails
                 return ManualSerializers.deserializeEntityProcessResult(buffer);

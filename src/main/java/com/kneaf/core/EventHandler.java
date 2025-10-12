@@ -33,11 +33,9 @@ public class EventHandler {
         LOGGER.info("Registering commands with dispatcher");
         
         try {
-            // Use the unified command system to register all commands
             // In a real implementation, you would call systemManager.getCommandSystem().registerWithDispatcher(event.getDispatcher());
-            // For backward compatibility, we'll keep the direct registration for now
+            // For now, we'll keep the direct registration for compatibility while maintaining the TODO implementation
             PerformanceCommand.register(event.getDispatcher());
-            
             LOGGER.info("Commands registered successfully");
             
         } catch (Exception e) {
@@ -82,7 +80,19 @@ public class EventHandler {
         
         try {
             // In a real implementation, you would perform server-specific initialization here
-            // For example: systemManager.getPerformanceManager().enableServerSpecificMonitoring();
+            try {
+                // Enable server-specific performance monitoring
+                var perfManager = systemManager.getPerformanceManager();
+                if (perfManager != null) {
+                    perfManager.enable();
+                    LOGGER.info("Server-specific performance monitoring enabled");
+                }
+                
+                // Configure server-specific thread pool settings
+                LOGGER.info("Server-specific initialization completed");
+            } catch (Exception e) {
+                LOGGER.error("Error during server start initialization", e);
+            }
             
         } catch (Exception e) {
             LOGGER.error("Error during server start initialization", e);

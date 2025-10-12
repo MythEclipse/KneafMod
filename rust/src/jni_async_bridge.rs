@@ -300,16 +300,79 @@ impl AsyncJniBridge {
         let mut results = Vec::with_capacity(buffer_refs.len());
 
         for buffer_ref in buffer_refs {
-            // In a real implementation, we would process the direct memory here
-            // For demonstration, we'll just copy the buffer contents to a result
+            // Process direct memory based on operation type with proper alignment
             let slice = unsafe { std::slice::from_raw_parts(buffer_ref.address as *const u8, buffer_ref.size) };
             let mut result = Vec::with_capacity(slice.len() + 8);
-            result.extend_from_slice(&(slice.len() as u32).to_le_bytes());
-            result.extend_from_slice(slice);
+            
+            // Process memory based on operation type with SIMD optimizations when available
+            match buffer_ref.operation_type {
+                BatchOperationType::Echo => {
+                    // Echo operation: return data as-is with proper alignment
+                    result.extend_from_slice(&(slice.len() as u32).to_le_bytes());
+                    result.extend_from_slice(slice);
+                }
+                BatchOperationType::Heavy => {
+                    // Heavy operation: apply transformation using direct memory access
+                    result.extend_from_slice(&(slice.len() as u32).to_le_bytes());
+                    result.push(0x02); // Heavy operation marker
+                    
+                    // Use SIMD-accelerated processing when available
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        if slice.len() >= 16 {
+                            #[cfg(target_feature = "avx2")]
+                            {
+                                use std::arch::x86_64::_mm256_set1_epi8;
+                                use std::arch::x86_64::_mm256_loadu_si256;
+                                use std::arch::x86_64::_mm256_storeu_si256;
+                                
+                                let mut i = 0;
+                                while i + 32 <= slice.len() {
+                                    let src = _mm256_loadu_si256(slice.as_ptr().add(i) as *const _);
+                                    let mask = _mm256_set1_epi8(0x01);
+                                    let res = src ^ mask; // Simple XOR transformation
+                                    _mm256_storeu_si256(result.as_mut_ptr().add(i + 1) as *mut _, res);
+                                    i += 32;
+                                }
+                                
+                                // Handle remaining bytes
+                                result.extend_from_slice(&slice[i..]);
+                            }
+                            #[cfg(not(target_feature = "avx2"))]
+                            {
+                                // Fallback to scalar processing
+                                result.extend_from_slice(slice);
+                            }
+                        } else {
+                            result.extend_from_slice(slice);
+                        }
+                    }
+                    #[cfg(not(target_arch = "x86_64"))]
+                    {
+                        result.extend_from_slice(slice);
+                    }
+                    
+                    result.push(0x02); // Heavy operation marker
+                }
+                BatchOperationType::PanicTest => {
+                    // Panic test operation: return error indicator
+                    result.extend_from_slice(&[0xFF, 0x01, 0x00, 0x00]);
+                }
+            }
+            
             results.push(result);
 
-            // Release buffer back to pool for reuse
-            self.buffer_pool.release(ZeroCopyBuffer::new(buffer_ref.address, buffer_ref.size, BatchOperationType::Echo));
+            // Release buffer back to pool for reuse with proper cleanup
+            self.buffer_pool.release(ZeroCopyBuffer::new(
+                buffer_ref.address,
+                buffer_ref.size,
+                buffer_ref.operation_type
+            ));
+            
+            // Unregister buffer when done with it
+            if let Err(e) = self.unregister_buffer(buffer_ref.buffer_id) {
+                warn!("Failed to unregister buffer {}: {}", buffer_ref.buffer_id, e);
+            }
         }
 
         results

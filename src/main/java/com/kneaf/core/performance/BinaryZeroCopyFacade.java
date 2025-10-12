@@ -1,15 +1,29 @@
 package com.kneaf.core.performance;
 
 import java.nio.ByteBuffer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Java facade for zero-copy binary serialization/deserialization
  * Provides high-performance binary operations with Rust backend
  */
 public final class BinaryZeroCopyFacade {
+    private static final Logger LOGGER = LoggerFactory.getLogger(BinaryZeroCopyFacade.class);
+    
     static {
-        System.loadLibrary("rustperf");
+        try {
+            System.loadLibrary("rustperf");
+        } catch (UnsatisfiedLinkError e) {
+            LOGGER.error("Failed to load native library rustperf", e);
+        }
     }
+    
+    /**
+     * Get native library version information
+     * @return Version string from native library
+     */
+    private native String nativeGetVersionInfo();
 
     /**
      * Deserialize mob input using zero-copy operations
@@ -32,6 +46,20 @@ public final class BinaryZeroCopyFacade {
      * @return Required buffer size in bytes, or -1 on error
      */
     public native int nativeCalculateMobResultSize(ByteBuffer resultBuffer);
+
+    /**
+     * Serialize entity input using zero-copy operations
+     * @param inputBuffer Direct ByteBuffer containing entity input data
+     * @return Serialized result as byte array
+     */
+    public native byte[] nativeSerializeEntityInput(ByteBuffer inputBuffer);
+
+    /**
+     * Deserialize entity process result using zero-copy operations
+     * @param buffer Direct ByteBuffer containing serialized result
+     * @return Deserialized result as byte array
+     */
+    public native byte[] nativeDeserializeEntityProcessResult(ByteBuffer buffer);
 
     /**
      * Java wrapper for zero-copy binary operations
@@ -96,11 +124,41 @@ public final class BinaryZeroCopyFacade {
 
         /**
          * Get native library version information
-         * @return Version string or "unknown" if not available
+         * @return Version string from native library or "unknown" if not available
          */
         public String getNativeVersion() {
-            // In a real implementation, this would call a native method to get version info
-            return "1.0.0";
+            try {
+                // Call actual native method to get version info
+                return facade.nativeGetVersionInfo();
+            } catch (UnsatisfiedLinkError | Exception e) {
+                // Fall back to hardcoded version if native method fails
+                LOGGER.debug("Failed to get native version info, using fallback", e);
+                return "1.0.0-fallback";
+            }
+        }
+
+        /**
+         * Serialize entity input with zero-copy
+         * @param inputBuffer Direct ByteBuffer containing entity input data
+         * @return Serialized result as byte array
+         */
+        public byte[] serializeEntityInput(ByteBuffer inputBuffer) {
+            if (!inputBuffer.isDirect()) {
+                throw new IllegalArgumentException("Buffer must be direct ByteBuffer for zero-copy operations");
+            }
+            return facade.nativeSerializeEntityInput(inputBuffer);
+        }
+
+        /**
+         * Deserialize entity process result with zero-copy
+         * @param buffer Direct ByteBuffer containing serialized result
+         * @return Deserialized result as byte array
+         */
+        public byte[] deserializeEntityProcessResult(ByteBuffer buffer) {
+            if (!buffer.isDirect()) {
+                throw new IllegalArgumentException("Buffer must be direct ByteBuffer for zero-copy operations");
+            }
+            return facade.nativeDeserializeEntityProcessResult(buffer);
         }
     }
 }

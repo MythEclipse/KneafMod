@@ -523,16 +523,29 @@ public class SwapEndToEndTest {
   }
 
   private void simulateChunkInCache(String chunkKey) {
-    // Simulate a chunk being in cache by creating a mock cached chunk
+    // Simulate a chunk being in cache by creating a proper LevelChunk
     try {
       java.lang.reflect.Field field = ChunkStorageManager.class.getDeclaredField("cache");
       field.setAccessible(true);
       ChunkCache cache = (ChunkCache) field.get(storageManager);
 
-      // Create a mock chunk with proper data that can be serialized
-      Object mockChunk = createMockChunkWithData(chunkKey);
-      cache.putChunk(chunkKey, mockChunk);
-      System.out.println("✓ Simulated chunk in cache: " + chunkKey);
+      // Extract coordinates from chunk key
+      String[] parts = chunkKey.split(":");
+      int x = Integer.parseInt(parts[1]);
+      int z = Integer.parseInt(parts[2]);
+
+      // Create a proper LevelChunk with test data that can be serialized
+      LevelChunk levelChunk = new LevelChunk(testWorldName, x, z);
+      
+      // Add some test block data to make it realistic
+      byte[] testBlockData = new byte[4096]; // 4KB of block data
+      for (int i = 0; i < testBlockData.length; i++) {
+        testBlockData[i] = (byte) (i % 256);
+      }
+      levelChunk.setBlockSection(0, testBlockData);
+      
+      cache.putChunk(chunkKey, levelChunk);
+      System.out.println("✓ Simulated LevelChunk in cache: " + chunkKey);
     } catch (Exception e) {
       System.err.println("Failed to simulate chunk in cache: " + e.getMessage());
     }
@@ -551,9 +564,13 @@ public class SwapEndToEndTest {
     return data;
   }
 
+  private LevelChunk createLevelChunk(int x, int z) {
+    // Create a proper LevelChunk instance for testing
+    return new LevelChunk(testWorldName, x, z);
+  }
+
   private Object createMockChunk(int x, int z) {
-    // Create a mock chunk object for testing
-    // In a real implementation, this would be a proper LevelChunk
+    // Create a mock chunk object for testing (fallback for compatibility)
     return new MockChunk(x, z);
   }
 

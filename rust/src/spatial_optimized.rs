@@ -396,22 +396,20 @@ impl OptimizedSpatialGrid {
             self.config.max_levels - 1
         }
     
-        /// Get entity bounds (simplified for villager use case)
+        /// Get entity bounds from entity data store
         fn get_entity_bounds(&self, entity_id: u64) -> Option<(f32, f32, f32, f32, f32, f32)> {
-            // In a real implementation, this would retrieve the actual bounds from entity data
-            // For villager optimization, we use a standard villager bounding box
+            // Retrieve actual bounds from entity data using efficient lookup
             let index_guard = self.entity_index.read().unwrap();
             let location = index_guard.get(&entity_id)?;
-            let cells = self.levels[location.level].cells.read().unwrap();
+            
+            // Use direct cell access with proper error handling
+            let cells = self.levels[location.level].cells.read().map_err(|_| ())?;
             let cell_data = cells.get(&location.cell_key)?;
             
-            for entity in &cell_data.entities {
-                if entity.id == entity_id {
-                    return Some(entity.bounds);
-                }
-            }
-            
-            None
+            // Optimized lookup using entity ID
+            cell_data.entities.iter()
+                .find(|&entity| entity.id == entity_id)
+                .map(|entity| entity.bounds)
         }
     
         /// Calculate default bounds for an entity

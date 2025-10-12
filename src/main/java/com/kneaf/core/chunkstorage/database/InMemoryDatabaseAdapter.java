@@ -1,17 +1,21 @@
 package com.kneaf.core.chunkstorage.database;
 
 import com.kneaf.core.chunkstorage.common.ChunkStorageUtils;
+import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.slf4j.Logger;
@@ -32,8 +36,16 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
   }
 
   private final Map<String, byte[]> chunkStorage = new ConcurrentHashMap<>();
+  private final Map<String, String> swappedOutChunks = new ConcurrentHashMap<>(); // key -> filePath
   private final AtomicLong totalSizeBytes = new AtomicLong(0);
-  private final ReadWriteLock StatsLock = new ReentrantReadWriteLock();
+  private final AtomicLong swapOutCount = new AtomicLong(0);
+  private final AtomicLong swapInCount = new AtomicLong(0);
+  private final AtomicLong swapOutBytes = new AtomicLong(0);
+  private final AtomicLong swapInBytes = new AtomicLong(0);
+  private final AtomicLong swapQueueSize = new AtomicLong(0);
+  private final ReadWriteLock statsLock = new ReentrantReadWriteLock();
+  private final ReadWriteLock swapLock = new ReentrantReadWriteLock();
+  private static final String SWAP_DIRECTORY = "swap_storage";
 
   // Performance tracking
   private volatile long readLatencyMs = 0;
@@ -195,7 +207,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
 
   @Override
   public Object getStats() {
-    StatsLock.readLock().lock();
+    statsLock.readLock().lock();
     try {
       long chunkCount = getChunkCount();
       long currentSize = totalSizeBytes.get();
@@ -204,8 +216,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
       long lastMaint = lastMaintenanceTime;
       boolean health = healthy;
 
-      // In-memory adapter doesn't support swap operations, so use zeros for swap metrics
-      // Return a simple Stats object for compatibility
+      // Return stats including swap metrics
       Map<String, Object> Stats = new HashMap<>();
       Stats.put("chunkCount", chunkCount);
       Stats.put("totalSize", currentSize);
@@ -213,17 +224,17 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
       Stats.put("writeLatencyMs", currentWriteLatency);
       Stats.put("lastMaintenanceTime", lastMaint);
       Stats.put("healthy", health);
-      Stats.put("swapOutCount", 0L);
-      Stats.put("swapInCount", 0L);
-      Stats.put("swapOutBytes", 0L);
-      Stats.put("swapInBytes", 0L);
-      Stats.put("swapQueueSize", 0L);
+      Stats.put("swapOutCount", swapOutCount.get());
+      Stats.put("swapInCount", swapInCount.get());
+      Stats.put("swapOutBytes", swapOutBytes.get());
+      Stats.put("swapInBytes", swapInBytes.get());
+      Stats.put("swapQueueSize", swapQueueSize.get());
       return Stats;
     } catch (Exception e) {
       LOGGER.error("Failed to get database Stats", e);
       throw new RuntimeException("Failed to get database Stats", e);
     } finally {
-      StatsLock.readLock().unlock();
+      statsLock.readLock().unlock();
     }
   }
 
@@ -394,22 +405,63 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
     ChunkStorageUtils.validateKey(chunkKey);
 
     try {
-      // For in-memory adapter, swap-out means the chunk is moved to "secondary storage"
-      // In testing context, we simulate this by checking if chunk exists and "swapping" it out
-      if (chunkStorage.containsKey(chunkKey)) {
-        // In a real implementation, this would move data to disk/slower storage
-        // For testing, we just return true to indicate successful swap-out
-        if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("Simulated swap-out for chunk {}", chunkKey);
-        }
-        return true;
-      } else {
-        // Chunk doesn't exist, cannot swap out
+      swapLock.writeLock().lock();
+      
+      // Check if chunk exists in memory
+      byte[] data = chunkStorage.get(chunkKey);
+      if (data == null) {
         return false;
       }
+
+      // Create swap directory if it doesn't exist
+      File swapDir = new File(SWAP_DIRECTORY);
+      if (!swapDir.exists() && !swapDir.mkdirs()) {
+        throw new IOException("Failed to create swap directory: " + SWAP_DIRECTORY);
+      }
+
+      // Generate unique file path for the chunk
+      String filePath = SWAP_DIRECTORY + File.separator + chunkKey + ".dat";
+      File chunkFile = new File(filePath);
+
+      // Write chunk data to disk using existing serialization framework
+      try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(chunkFile)))) {
+        // Write header with format identifier
+        dos.writeUTF("KNEAF_SWAP_CHUNK_v2");
+        dos.writeLong(System.currentTimeMillis());
+        
+        // Write chunk metadata using SerializationUtils
+        String metadata = "CHUNK:" + chunkKey + ":" + data.length + ":" + System.currentTimeMillis();
+        byte[] metadataBytes = metadata.getBytes(StandardCharsets.UTF_8);
+        dos.writeInt(metadataBytes.length);
+        dos.write(metadataBytes);
+        
+        // Write chunk data
+        dos.writeInt(data.length);
+        dos.write(data);
+        
+        // Write footer
+        dos.writeUTF("CHUNK_END");
+      }
+
+      // Update tracking
+      swappedOutChunks.put(chunkKey, filePath);
+      chunkStorage.remove(chunkKey);
+      totalSizeBytes.addAndGet(-data.length);
+      
+      swapOutCount.incrementAndGet();
+      swapOutBytes.addAndGet(data.length);
+
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Successfully swapped out chunk {} to {}", chunkKey, filePath);
+      }
+
+      return true;
+
     } catch (Exception e) {
       LOGGER.error("Failed to swap out chunk {}", chunkKey, e);
       throw new IOException("Failed to swap out chunk", e);
+    } finally {
+      swapLock.writeLock().unlock();
     }
   }
 
@@ -418,23 +470,66 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
     ChunkStorageUtils.validateKey(chunkKey);
 
     try {
-      // For in-memory adapter, swap-in means retrieving chunk from "secondary storage"
-      // In testing context, we simulate this by returning the chunk data if it exists
-      byte[] data = chunkStorage.get(chunkKey);
-      if (data != null) {
-        // In a real implementation, this would move data from disk/slower storage back to memory
-        // For testing, we just return the data
-        if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("Simulated swap-in for chunk {} ({} bytes)", chunkKey, data.length);
-        }
-        return Optional.of(data.clone());
-      } else {
-        // Chunk not found in "secondary storage"
+      swapLock.writeLock().lock();
+
+      // Check if chunk is swapped out to disk
+      String filePath = swappedOutChunks.get(chunkKey);
+      if (filePath == null) {
         return Optional.empty();
       }
+
+      File chunkFile = new File(filePath);
+      if (!chunkFile.exists()) {
+        swappedOutChunks.remove(chunkKey);
+        return Optional.empty();
+      }
+
+      // Read chunk data from disk using existing serialization framework
+      byte[] data;
+      try (DataInputStream dis = new DataInputStream(new BufferedInputStream(new FileInputStream(chunkFile)))) {
+        // Read header with format identifier
+        String header = dis.readUTF();
+        if (!header.equals("KNEAF_SWAP_CHUNK_v2")) {
+          throw new IOException("Invalid swap chunk header: " + header);
+        }
+        
+        // Read metadata
+        int metadataLength = dis.readInt();
+        byte[] metadataBytes = new byte[metadataLength];
+        dis.readFully(metadataBytes);
+        // Read chunk data
+        int dataLength = dis.readInt();
+        data = new byte[dataLength];
+        dis.readFully(data);
+        
+        // Read footer
+        String footer = dis.readUTF();
+        if (!footer.equals("CHUNK_END")) {
+          throw new IOException("Invalid swap chunk footer: " + footer);
+        }
+      }
+
+      // Restore to memory
+      chunkStorage.put(chunkKey, data.clone());
+      totalSizeBytes.addAndGet(data.length);
+      
+      // Remove from swapped out tracking
+      swappedOutChunks.remove(chunkKey);
+      
+      swapInCount.incrementAndGet();
+      swapInBytes.addAndGet(data.length);
+
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Successfully swapped in chunk {} from {}", chunkKey, filePath);
+      }
+
+      return Optional.of(data.clone());
+
     } catch (Exception e) {
       LOGGER.error("Failed to swap in chunk {}", chunkKey, e);
       throw new IOException("Failed to swap in chunk", e);
+    } finally {
+      swapLock.writeLock().unlock();
     }
   }
 }
