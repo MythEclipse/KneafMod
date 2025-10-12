@@ -37,7 +37,11 @@ public class PropertiesFileConfigSource implements ConfigSource {
                 throw new ConfigurationException("Failed to load properties from file: " + filePath, e);
             }
         } else {
-            throw new ConfigurationException("Properties file not found: " + filePath);
+            // Treat missing properties file as non-fatal: return empty properties and log a warning.
+            // Many environments (tests, CI) may not provide an optional config file and should
+            // continue with defaults.
+            System.err.println("Properties file not found: " + filePath + " - using defaults");
+            return properties;
         }
     }
 

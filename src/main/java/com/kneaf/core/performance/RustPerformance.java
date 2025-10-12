@@ -136,13 +136,31 @@ public class RustPerformance {
     ensureInitialized();
     return CompletableFuture.supplyAsync(() -> {
       try {
+        // If the unified bridge is not available, immediately fall back to the Java FACADE
+        if (UNIFIED_BRIDGE == null) {
+          // If the unified bridge is not present, prefer the Java FACADE if available.
+          if (FACADE != null) {
+            try {
+              return FACADE.getEntitiesToTick(entities, players).join();
+            } catch (Exception ex) {
+              KneafCore.LOGGER.error("Error getting entities to tick from FACADE in async path", ex);
+              return entities.stream().map(EntityData::getId).collect(Collectors.toList());
+            }
+          } else {
+            // Both bridge and facade are unavailable in this worker thread; fall back to a
+            // local pure-Java conservative result (tick all entities).
+            KneafCore.LOGGER.warn("UnifiedBridge and FACADE both unavailable in async entities-to-tick path; returning all entities");
+            return entities.stream().map(EntityData::getId).collect(Collectors.toList());
+          }
+        }
+
         // First try unified bridge
         BridgeResult result = UNIFIED_BRIDGE.executeSync(
             "get_entities_to_tick",
             entities.stream().map(EntityData::getId).collect(Collectors.toList()),
             players.stream().map(PlayerData::getId).collect(Collectors.toList())
         );
-        
+
         return extractLongListResult(result);
       } catch (BridgeException e) {
         KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -155,13 +173,13 @@ public class RustPerformance {
   public static List<Long> getEntitiesToTick(List<EntityData> entities, List<PlayerData> players) {
     ensureInitialized();
     try {
-      // Try unified bridge first
-      BridgeResult result = UNIFIED_BRIDGE.executeSync(
+      // Try unified bridge first (safeExecute will throw BridgeException if bridge is missing)
+      BridgeResult result = safeExecute(
           "get_entities_to_tick",
           entities.stream().map(EntityData::getId).collect(Collectors.toList()),
           players.stream().map(PlayerData::getId).collect(Collectors.toList())
       );
-      
+
       return extractLongListResult(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -179,12 +197,11 @@ public class RustPerformance {
   public static MobProcessResult processMobAI(List<MobData> mobs) {
     ensureInitialized();
     try {
-      // Try unified bridge first
-      BridgeResult result = UNIFIED_BRIDGE.executeSync(
+      BridgeResult result = safeExecute(
           "process_mob_ai",
           mobs.stream().map(MobData::getId).collect(Collectors.toList())
       );
-      
+
       return extractMobProcessResult(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -257,12 +274,27 @@ public class RustPerformance {
     ensureInitialized();
     return CompletableFuture.supplyAsync(() -> {
       try {
+        if (UNIFIED_BRIDGE == null) {
+          if (FACADE != null) {
+            try {
+              return FACADE.getBlockEntitiesToTick(blockEntities).join();
+            } catch (Exception ex) {
+              KneafCore.LOGGER.error("Error getting block entities to tick from FACADE in async path", ex);
+              // Fallback: return all block entities
+              return blockEntities.stream().map(block -> block.getId()).collect(Collectors.toList());
+            }
+          } else {
+            KneafCore.LOGGER.warn("UnifiedBridge and FACADE both unavailable in async block-entities-to-tick path; returning all block entities");
+            return blockEntities.stream().map(block -> block.getId()).collect(Collectors.toList());
+          }
+        }
+
         // First try unified bridge
         BridgeResult result = UNIFIED_BRIDGE.executeSync(
             "get_block_entities_to_tick",
             blockEntities.stream().map(BlockEntityData::getId).collect(Collectors.toList())
         );
-        
+
         return extractLongListResult(result);
       } catch (BridgeException e) {
         KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -305,15 +337,14 @@ public class RustPerformance {
       List<VillagerData> villagers, int centerX, int centerZ, int radius) {
     ensureInitialized();
     try {
-      // Try unified bridge first
-      BridgeResult result = UNIFIED_BRIDGE.executeSync(
+      BridgeResult result = safeExecute(
           "optimize_villagers",
           villagers.stream().map(VillagerData::getId).collect(Collectors.toList()),
           centerX,
           centerZ,
           radius
       );
-      
+
       return extractLongListResult(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -325,7 +356,7 @@ public class RustPerformance {
   public static void optimizeMemory() {
     ensureInitialized();
     try {
-      UNIFIED_BRIDGE.executeSync("optimize_memory");
+      safeExecute("optimize_memory");
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
       FACADE.optimizeMemory();
@@ -336,8 +367,7 @@ public class RustPerformance {
   public static PerformanceStatistics getPerformanceStatistics() {
     ensureInitialized();
     try {
-      // Try unified bridge first
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_performance_statistics");
+      BridgeResult result = safeExecute("get_performance_statistics");
       return extractPerformanceStatistics(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -356,7 +386,7 @@ public class RustPerformance {
   public static String getMemoryStats() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_memory_stats");
+      BridgeResult result = safeExecute("get_memory_stats");
       return result.getResultString();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -368,7 +398,7 @@ public class RustPerformance {
   public static String getCpuStats() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_cpu_stats");
+      BridgeResult result = safeExecute("get_cpu_stats");
       return result.getResultString();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -382,6 +412,20 @@ public class RustPerformance {
     ensureInitialized();
     return CompletableFuture.supplyAsync(() -> {
       try {
+        if (UNIFIED_BRIDGE == null) {
+          if (FACADE != null) {
+            try {
+              return FACADE.preGenerateNearbyChunksAsync(centerX, centerZ, radius).join();
+            } catch (Exception ex) {
+              KneafCore.LOGGER.error("Error pre-generating chunks from FACADE in async path", ex);
+              return 0;
+            }
+          } else {
+            KneafCore.LOGGER.warn("UnifiedBridge and FACADE both unavailable in async pre-generate-chunks path; returning 0");
+            return 0;
+          }
+        }
+
         BridgeResult result = UNIFIED_BRIDGE.executeSync(
             "pre_generate_nearby_chunks",
             centerX,
@@ -405,7 +449,7 @@ public class RustPerformance {
   public static boolean isChunkGenerated(int x, int z) {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("is_chunk_generated", x, z);
+      BridgeResult result = safeExecute("is_chunk_generated", x, z);
       return result.getResultBoolean();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -417,7 +461,7 @@ public class RustPerformance {
   public static long getGeneratedChunkCount() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_generated_chunk_count");
+      BridgeResult result = safeExecute("get_generated_chunk_count");
       return result.getResultLong();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -429,7 +473,7 @@ public class RustPerformance {
   public static double getCurrentTPS() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_current_tps");
+      BridgeResult result = safeExecute("get_current_tps");
       return result.getResultDouble();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -441,7 +485,7 @@ public class RustPerformance {
   public static void setCurrentTPS(double tps) {
     ensureInitialized();
     try {
-      UNIFIED_BRIDGE.executeSync("set_current_tps", tps);
+      safeExecute("set_current_tps", tps);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
       FACADE.setCurrentTPS(tps);
@@ -452,7 +496,7 @@ public class RustPerformance {
   public static int getNativeWorkerQueueDepth() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_native_worker_queue_depth");
+      BridgeResult result = safeExecute("get_native_worker_queue_depth");
       return result.getResultInteger();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -464,7 +508,7 @@ public class RustPerformance {
   public static double getNativeWorkerAvgProcessingMs() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_native_worker_avg_processing_ms");
+      BridgeResult result = safeExecute("get_native_worker_avg_processing_ms");
       return result.getResultDouble();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -557,7 +601,7 @@ public class RustPerformance {
   public static boolean isNativeAvailable() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("is_native_available");
+      BridgeResult result = safeExecute("is_native_available");
       return result.getResultBoolean();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -569,7 +613,13 @@ public class RustPerformance {
   public static void shutdown() {
     if (initialized) {
       try {
-        UNIFIED_BRIDGE.shutdown();
+        if (UNIFIED_BRIDGE != null) {
+          try {
+            UNIFIED_BRIDGE.shutdown();
+          } catch (Throwable t) {
+            try { KneafCore.LOGGER.warn("Error shutting down UnifiedBridge: {}", t.getMessage()); } catch (Throwable ignore) {}
+          }
+        }
       } catch (Exception e) {
         KneafCore.LOGGER.warn("Failed to shutdown UnifiedBridge", e);
       }
@@ -583,17 +633,52 @@ public class RustPerformance {
     if (!initialized) {
       // Try to initialize, but don't fail the tests if native/init isn't available.
       try {
-        CONFIG = reloadConfiguration();
-        FACADE.initialize();
-        UNIFIED_BRIDGE.setConfiguration(createBridgeConfiguration(CONFIG));
+        try {
+          CONFIG = reloadConfiguration();
+        } catch (Throwable t) {
+          // Continue even if config can't be reloaded
+          try { KneafCore.LOGGER.warn("Failed to reload configuration in ensureInitialized: {}", t.getMessage()); } catch (Throwable ignore) {}
+        }
+
+        // Ensure facade is available
+        try {
+          if (FACADE == null) {
+            FACADE = RustPerformanceFacade.getInstance();
+          }
+          FACADE.initialize();
+        } catch (Throwable t) {
+          try { KneafCore.LOGGER.warn("FACADE initialization failed in ensureInitialized: {}", t.getMessage()); } catch (Throwable ignore) {}
+        }
+
+        // Lazy create UnifiedBridge if possible
+        try {
+          if (UNIFIED_BRIDGE == null) {
+            try {
+              UNIFIED_BRIDGE = getUnifiedBridgeInstance();
+            } catch (Throwable t) {
+              try { KneafCore.LOGGER.warn("Failed to obtain UnifiedBridge instance in ensureInitialized: {}", t.getMessage()); } catch (Throwable ignore) {}
+              UNIFIED_BRIDGE = null;
+            }
+          }
+
+          if (UNIFIED_BRIDGE != null && CONFIG != null) {
+            try {
+              UNIFIED_BRIDGE.setConfiguration(createBridgeConfiguration(CONFIG));
+            } catch (Throwable t) {
+              try { KneafCore.LOGGER.warn("Failed to set UnifiedBridge configuration in ensureInitialized: {}", t.getMessage()); } catch (Throwable ignore) {}
+            }
+          }
+        } catch (Throwable t) {
+          try { KneafCore.LOGGER.warn("Error while initializing UnifiedBridge in ensureInitialized: {}", t.getMessage()); } catch (Throwable ignore) {}
+        }
       } catch (Throwable t) {
         // Log and continue in degraded mode; some tests will detect missing native libs and skip.
         try {
-          KneafCore.LOGGER.warn(
-              "RustPerformance initialize failed (falling back): {}", t.getMessage());
+          KneafCore.LOGGER.warn("RustPerformance initialize failed (falling back): {}", t.getMessage());
         } catch (Throwable ignore) {
         }
       } finally {
+        // Mark initialized to avoid repeated attempts during noisy startup; bridge may be null
         initialized = true;
       }
     }
@@ -603,7 +688,7 @@ public class RustPerformance {
   public static long getTotalEntitiesProcessed() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_total_entities_processed");
+      BridgeResult result = safeExecute("get_total_entities_processed");
       return result.getResultLong();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -615,7 +700,7 @@ public class RustPerformance {
   public static long getTotalMobsProcessed() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_total_mobs_processed");
+      BridgeResult result = safeExecute("get_total_mobs_processed");
       return result.getResultLong();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -627,7 +712,7 @@ public class RustPerformance {
   public static long getTotalBlocksProcessed() {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("get_total_blocks_processed");
+      BridgeResult result = safeExecute("get_total_blocks_processed");
       return result.getResultLong();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
@@ -660,7 +745,7 @@ public class RustPerformance {
   public static ByteBuffer generateFloatBufferNative(int size, int flags) {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("generate_float_buffer", size, flags);
+      BridgeResult result = safeExecute("generate_float_buffer", size, flags);
       return result.getResultByteBuffer();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to NATIVE_MANAGER: " + e.getMessage());
@@ -673,7 +758,7 @@ public class RustPerformance {
       long rows, long cols) {
     ensureInitialized();
     try {
-      BridgeResult result = UNIFIED_BRIDGE.executeSync("generate_float_buffer_with_shape", rows, cols);
+      BridgeResult result = safeExecute("generate_float_buffer_with_shape", rows, cols);
       return (NativeFloatBufferAllocation) result.getResultObject();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to NATIVE_MANAGER: " + e.getMessage());
@@ -685,7 +770,7 @@ public class RustPerformance {
   public static void freeFloatBufferNative(ByteBuffer buffer) {
     ensureInitialized();
     try {
-      UNIFIED_BRIDGE.executeSync("free_float_buffer", buffer);
+      safeExecute("free_float_buffer", buffer);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to NATIVE_MANAGER: " + e.getMessage());
       NATIVE_MANAGER.freeFloatBuffer(buffer);
@@ -721,6 +806,17 @@ public class RustPerformance {
   /** Initialize native logging system. */
   public static void initNativeLogging() {
       RustLogger.initNativeLogging();
+  }
+  
+  /**
+   * Helper to safely execute a unified bridge call. Throws BridgeException when the bridge
+   * is not available so callers that already catch BridgeException will correctly fall back.
+   */
+  private static BridgeResult safeExecute(String method, Object... args) throws BridgeException {
+    if (UNIFIED_BRIDGE == null) {
+      throw new BridgeException("UnifiedBridge not available", BridgeException.BridgeErrorType.GENERIC_ERROR);
+    }
+    return UNIFIED_BRIDGE.executeSync(method, args);
   }
   
   /** Internal method to check native library availability (used during initialization). */
