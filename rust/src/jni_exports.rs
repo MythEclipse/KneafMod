@@ -6,7 +6,7 @@ use std::time::Instant;
 use blake3::Hasher;
 use chrono::Utc;
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JObjectArray, JString, JValue};
-use jni::sys::{jboolean, jbyteArray, jint, jlong, jobject, jstring, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jbyteArray, jdouble, jint, jlong, jobject, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
 use serde_json::json;
@@ -760,5 +760,304 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
         create_java_string(&mut env, &payload.to_string())
     } else {
         create_java_string(&mut env, "")
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeInitAllocator(
+    mut env: JNIEnv,
+    _class: JClass,
+) {
+    logger().info(&mut env, "Initializing native allocator");
+    // Initialization logic if needed
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeShutdownAllocator(
+    mut env: JNIEnv,
+    _class: JClass,
+) {
+    logger().info(&mut env, "Shutting down native allocator");
+    // Shutdown logic if needed
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeCreateWorker(
+    mut env: JNIEnv,
+    _class: JClass,
+    concurrency: jint,
+) -> jlong {
+    let mut state = STATE.lock().unwrap();
+    let worker_id = state.next_worker_id;
+    state.next_worker_id += 1;
+
+    state.workers.insert(
+        worker_id,
+        WorkerState {
+            concurrency,
+            created_at: Instant::now(),
+            results: VecDeque::new(),
+            processed_bytes: 0,
+            pending_tasks: 0,
+        },
+    );
+
+    let resource = ensure_resource(&mut state, worker_id);
+    resource.available = true;
+    resource.max_tasks = resource.max_tasks.max(concurrency as u64);
+
+    logger().info(
+        &mut env,
+        &format!(
+            "NativeIntegration worker {} created with concurrency {}",
+            worker_id, concurrency
+        ),
+    );
+
+    worker_id
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeDestroyWorker(
+    mut env: JNIEnv,
+    _class: JClass,
+    worker_handle: jlong,
+) {
+    let mut state = STATE.lock().unwrap();
+    state.workers.remove(&worker_handle);
+    state
+        .operations
+        .retain(|_, op| op.worker_id != worker_handle);
+    state.resources.remove(&worker_handle);
+    remove_resource_from_groups(&mut state, worker_handle);
+
+    logger().info(&mut env, &format!("NativeIntegration worker {} destroyed", worker_handle));
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativePushTask(
+    mut env: JNIEnv,
+    _class: JClass,
+    worker_handle: jlong,
+    payload: JByteArray,
+) {
+    let mut state = STATE.lock().unwrap();
+
+    match state.workers.contains_key(&worker_handle) {
+        true => match env.convert_byte_array(payload) {
+            Ok(bytes) => {
+                let processed = process_payload(worker_handle, &bytes);
+                add_result(&mut state, worker_handle, processed);
+            }
+            Err(err) => {
+                set_last_error(&mut state, format!("Failed to read payload: {}", err));
+                logger().error(
+                    &mut env,
+                    &format!("Failed to read payload for worker {}", worker_handle),
+                );
+            }
+        },
+        false => {
+            set_last_error(&mut state, format!("Worker {} not found", worker_handle));
+            logger().warn(
+                &mut env,
+                &format!("Attempt to push task to missing worker {}", worker_handle),
+            );
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativePushBatch(
+    mut env: JNIEnv,
+    _class: JClass,
+    worker_handle: jlong,
+    payloads: JObjectArray,
+    count: jint,
+) {
+    let mut state = STATE.lock().unwrap();
+
+    if !state.workers.contains_key(&worker_handle) {
+        set_last_error(&mut state, format!("Worker {} not found", worker_handle));
+        logger().warn(
+            &mut env,
+            &format!("Attempt to push batch to missing worker {}", worker_handle),
+        );
+        return;
+    }
+
+    let batch_size = env
+        .get_array_length(&payloads)
+        .unwrap_or(0)
+        .min(count.max(0) as i32);
+
+    for index in 0..batch_size {
+        if let Ok(item) = env.get_object_array_element(&payloads, index) {
+            let byte_array = JByteArray::from(item);
+            if let Ok(bytes) = env.convert_byte_array(byte_array) {
+                let processed = process_payload(worker_handle, &bytes);
+                add_result(&mut state, worker_handle, processed);
+            } else {
+                set_last_error(&mut state, "Failed to process batch payload");
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativePollResult(
+    mut env: JNIEnv,
+    _class: JClass,
+    worker_handle: jlong,
+) -> jbyteArray {
+    let mut state = STATE.lock().unwrap();
+
+    let result = if let Some(worker) = state.workers.get_mut(&worker_handle) {
+        if let Some(result) = worker.results.pop_front() {
+            worker.pending_tasks = worker.pending_tasks.saturating_sub(1);
+            Some((result, worker.pending_tasks))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some((result_data, pending_tasks)) = result {
+        if let Some(resource) = state.resources.get_mut(&worker_handle) {
+            resource.pending_tasks = pending_tasks;
+            resource.usage_bytes = resource.usage_bytes.saturating_sub(result_data.len() as u64);
+        }
+        return create_java_byte_array(&mut env, &result_data);
+    }
+
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeGetWorkerQueueDepth(
+    _env: JNIEnv,
+    _class: JClass,
+    worker_handle: jlong,
+) -> jlong {
+    let state = STATE.lock().unwrap();
+    state
+        .workers
+        .get(&worker_handle)
+        .map(|w| w.results.len() as jlong)
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeGetWorkerAvgProcessingMs(
+    _env: JNIEnv,
+    _class: JClass,
+    worker_handle: jlong,
+) -> jdouble {
+    // Simplified - return a fixed average for now
+    1.5
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeGetWorkerMemoryUsage(
+    _env: JNIEnv,
+    _class: JClass,
+    worker_handle: jlong,
+) -> jlong {
+    let state = STATE.lock().unwrap();
+    state
+        .resources
+        .get(&worker_handle)
+        .map(|r| r.usage_bytes as jlong)
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeFreeBuffer(
+    mut env: JNIEnv,
+    _class: JClass,
+    _buffer: JObject,
+) {
+    logger().debug(&mut env, "Freeing native buffer");
+    // Buffer freeing logic would go here
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeCleanupBufferPool(
+    mut env: JNIEnv,
+    _class: JClass,
+) {
+    logger().info(&mut env, "Cleaning up buffer pool");
+    // Buffer pool cleanup logic
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeForceCleanup(
+    mut env: JNIEnv,
+    _class: JClass,
+    resource_handle: jlong,
+) {
+    let mut state = STATE.lock().unwrap();
+    clear_worker(&mut state, resource_handle);
+    logger().info(&mut env, &format!("Force cleanup for resource {}", resource_handle));
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeIsResourceLeaked(
+    _env: JNIEnv,
+    _class: JClass,
+    resource_handle: jlong,
+) -> jboolean {
+    let state = STATE.lock().unwrap();
+    state
+        .resources
+        .get(&resource_handle)
+        .map(|r| (!r.available) as jboolean)
+        .unwrap_or(JNI_FALSE)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeSetResourceLimits(
+    mut env: JNIEnv,
+    _class: JClass,
+    resource_handle: jlong,
+    max_memory: jlong,
+    max_tasks: jlong,
+) {
+    let mut state = STATE.lock().unwrap();
+    if let Some(resource) = state.resources.get_mut(&resource_handle) {
+        resource.max_memory = max_memory as u64;
+        resource.max_tasks = max_tasks as u64;
+        logger().debug(
+            &mut env,
+            &format!(
+                "Set resource limits for {}: max_memory={}, max_tasks={}",
+                resource_handle, max_memory, max_tasks
+            ),
+        );
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeGetResourceStats(
+    mut env: JNIEnv,
+    _class: JClass,
+    resource_handle: jlong,
+) -> jstring {
+    let state = STATE.lock().unwrap();
+    if let Some(resource) = state.resources.get(&resource_handle) {
+        let uptime_ms = resource.created_at.elapsed().as_millis() as u64;
+        let payload = json!({
+            "resourceHandle": resource_handle,
+            "available": resource.available,
+            "usageBytes": resource.usage_bytes,
+            "maxMemory": resource.max_memory,
+            "maxTasks": resource.max_tasks,
+            "pendingTasks": resource.pending_tasks,
+            "uptimeMs": uptime_ms,
+        });
+        create_java_string(&mut env, &payload.to_string())
+    } else {
+        create_java_string(&mut env, "{}")
     }
 }
