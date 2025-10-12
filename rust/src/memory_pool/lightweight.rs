@@ -105,7 +105,7 @@ impl<T: Default> LightweightMemoryPool<T> {
     }
 
     /// Resize the pool capacity with proper memory management
-    pub fn resize(&self, new_max_size: usize) -> Result<(), PoolError> {
+    pub fn resize(&mut self, new_max_size: usize) -> Result<(), PoolError> {
         let trace_id = generate_trace_id();
 
         let mut pool = self.pool.borrow_mut();
@@ -136,7 +136,7 @@ impl<T: Default> LightweightMemoryPool<T> {
         let allocated_objects = self.allocated_count.load(Ordering::Relaxed);
         
         // Create new pool with desired capacity
-        let new_pool = LightweightMemoryPool::new(new_max_size);
+        let new_pool: LightweightMemoryPool<T> = LightweightMemoryPool::new(new_max_size);
         
         // Transfer allocated objects state to new pool
         self.allocated_count.store(allocated_objects, Ordering::Relaxed);

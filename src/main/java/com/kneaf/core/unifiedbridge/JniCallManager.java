@@ -612,24 +612,21 @@ public final class JniCallManager {
      * @throws Exception If native call fails
      */
     private Object callNativeMethod(String methodName, Object[] parameters) throws Exception {
-        // Use reflection to call the appropriate native method - this implements TODO #2
-        // Check for native method availability first
         if (!isNativeAvailable()) {
             throw new BridgeException("Native library not available for method: " + methodName,
                     BridgeException.BridgeErrorType.NATIVE_CALL_FAILED);
         }
-        
+
         long startTimeNanos = System.nanoTime();
-        
+
         try {
             LOGGER.log(FINE, "Calling native method: {0} with parameters: {1}",
                     new Object[]{methodName, parameters});
-            
-            // Get the method using reflection
+
+            // Get the method using reflection with proper parameter type handling
             java.lang.reflect.Method nativeMethod = NativeBridge.class.getMethod(methodName,
                     getParameterTypes(parameters));
-            
-            // Call the actual native method using reflection - this implements TODO #3
+
             Object result = nativeMethod.invoke(null, parameters);
             
             long endTimeNanos = System.nanoTime();

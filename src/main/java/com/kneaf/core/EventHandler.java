@@ -33,8 +33,6 @@ public class EventHandler {
         LOGGER.info("Registering commands with dispatcher");
         
         try {
-            // In a real implementation, you would call systemManager.getCommandSystem().registerWithDispatcher(event.getDispatcher());
-            // For now, we'll keep the direct registration for compatibility while maintaining the TODO implementation
             PerformanceCommand.register(event.getDispatcher());
             LOGGER.info("Commands registered successfully");
             

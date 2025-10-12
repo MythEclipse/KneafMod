@@ -618,10 +618,11 @@ impl BatchOperation {
         #[allow(dead_code)]
         fn try_zero_copy_conversion(operation_type: BatchOperationType, payload: &[u8]) -> Result<Arc<ZeroCopyBufferRef>, String> {
             // 1. Allocate direct memory in Java using JNI
-            let env = jni::JNIEnv::new()?; // In real implementation, get from JNI call context
+            // In real implementation, get from JNI call context - this is just a placeholder
+            let mut env = unsafe { jni::JNIEnv::from_raw(std::ptr::null_mut()) }.map_err(|e| e.to_string())?;
             
             // 2. Create direct buffer with proper alignment
-            let buffer = env.new_direct_byte_buffer(payload.as_ptr() as *mut u8, payload.len())
+            let buffer = unsafe { env.new_direct_byte_buffer(payload.as_ptr() as *mut u8, payload.len()) }
                 .map_err(|e| format!("Failed to create direct buffer: {}", e))?;
             
             // 3. Get buffer address and capacity

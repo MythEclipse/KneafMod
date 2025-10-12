@@ -3,8 +3,6 @@ package com.kneaf.core.unifiedbridge;
 import com.kneaf.core.KneafCore;
 import com.kneaf.core.config.ConfigurationManager;
 import com.kneaf.core.config.performance.PerformanceConfiguration;
-import com.kneaf.core.exceptions.InitializationException;
-
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 

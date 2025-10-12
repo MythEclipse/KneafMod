@@ -100,11 +100,14 @@ impl BlockCompressor {
 }
 
 /// Compression statistics and metrics
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompressionStats {
     pub original_size: usize,
     pub compressed_size: usize,
+    pub total_uncompressed: usize,
+    pub total_compressed: usize,
     pub compression_ratio: f64,
+    pub compression_time: std::time::Duration,
     pub compression_time_ms: u64,
 }
 

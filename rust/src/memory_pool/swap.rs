@@ -4,6 +4,7 @@ use std::io::{Read, Write, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::RwLock;
 
+use crate::CompressionStats;
 use crate::logging::PerformanceLogger;
 use crate::memory_pool::object_pool::MemoryPressureLevel;
 use crate::logging::generate_trace_id;
@@ -60,14 +61,6 @@ pub struct SwapMemoryPool {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct CompressionStats {
-    pub total_compressed: usize,
-    pub total_uncompressed: usize,
-    pub compression_ratio: f64,
-    pub compression_time: std::time::Duration,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct SwapPoolMetrics {
     pub total_allocations: u64,
     pub current_usage_bytes: usize,
@@ -115,7 +108,7 @@ impl SwapMemoryPool {
     }
 
     /// Allocate memory with swap backing - returns a pooled object that can be swapped out
-    pub fn allocate(&self, size: usize) -> Result<SwapPooledVec<u8>, String> {
+    pub fn allocate(&self, size: usize) -> Result<SwapPooledVec, String> {
         let trace_id = generate_trace_id();
 
         // Check if we need to swap out some pages first
@@ -149,6 +142,7 @@ impl SwapMemoryPool {
             pool: self,
             is_swapped: false,
             dirty: false,
+            logger: PerformanceLogger::new("swap_pooled_vec"),
         })
     }
 
@@ -303,9 +297,12 @@ impl SwapMemoryPool {
 
         let elapsed = start_time.elapsed();
         let mut stats = self.compression_stats.write().unwrap();
+        stats.original_size += data.len();
+        stats.compressed_size += compressed.len();
         stats.total_uncompressed += data.len();
         stats.total_compressed += compressed.len();
         stats.compression_time += elapsed;
+        stats.compression_time_ms += elapsed.as_millis() as u64;
 
         if stats.total_uncompressed > 0 {
             stats.compression_ratio = stats.total_compressed as f64 / stats.total_uncompressed as f64;
@@ -321,17 +318,17 @@ impl SwapMemoryPool {
     }
 
     /// Allocate chunk metadata - specialized allocation for chunk metadata
-    pub fn allocate_chunk_metadata(&self, size: usize) -> Result<SwapPooledVec<u8>, String> {
+    pub fn allocate_chunk_metadata(&self, size: usize) -> Result<SwapPooledVec, String> {
         self.allocate(size)
     }
 
     /// Allocate compressed data - specialized allocation for compressed data
-    pub fn allocate_compressed_data(&self, size: usize) -> Result<SwapPooledVec<u8>, String> {
+    pub fn allocate_compressed_data(&self, size: usize) -> Result<SwapPooledVec, String> {
         self.allocate(size)
     }
 
     /// Allocate temporary buffer - specialized allocation for temporary buffers
-    pub fn allocate_temporary_buffer(&self, size: usize) -> Result<SwapPooledVec<u8>, String> {
+    pub fn allocate_temporary_buffer(&self, size: usize) -> Result<SwapPooledVec, String> {
         self.allocate(size)
     }
 
@@ -348,8 +345,8 @@ impl SwapMemoryPool {
             pages_in_memory: memory_cache.len(),
             pages_on_disk: pages.len() - memory_cache.len(),
             compression_ratio: compression_stats.compression_ratio,
-            total_compressed_bytes: compression_stats.total_compressed,
-            total_uncompressed_bytes: compression_stats.total_uncompressed,
+            total_compressed_bytes: compression_stats.compressed_size,
+            total_uncompressed_bytes: compression_stats.original_size,
         }
     }
 
@@ -358,8 +355,8 @@ impl SwapMemoryPool {
         self.cleanup()
     }
 
-    /// Write data asynchronously to swap file
-    pub async fn write_data_async(&self, data: Vec<u8>) -> Result<u64, String> {
+    /// Write data synchronously to swap file
+    pub fn write_data_sync(&self, data: Vec<u8>) -> Result<u64, String> {
         let trace_id = generate_trace_id();
         
         // Allocate memory for the data
@@ -374,7 +371,7 @@ impl SwapMemoryPool {
         
         // Compress data if enabled
         let (compressed_data, is_compressed) = if self.config.compression_enabled {
-            match self.compress_data(&data).await {
+            match self.compress_data(&data) {
                 Ok(compressed) => {
                     if compressed.len() < data.len() {
                         (compressed, true)
@@ -383,7 +380,7 @@ impl SwapMemoryPool {
                     }
                 }
                 Err(e) => {
-                    self.logger.log_error("write_data_async", &trace_id, &format!("Compression failed: {}", e));
+                    self.logger.log_error("write_data_sync", &trace_id, &format!("Compression failed: {}", e), "COMPRESSION_ERROR");
                     (data, false) // Use original data if compression fails
                 }
             }
@@ -394,9 +391,9 @@ impl SwapMemoryPool {
         // Calculate checksum
         let checksum = crc32fast::hash(&compressed_data);
         
-        // Write to swap file asynchronously
+        // Write to swap file
         let swap_file_path = self.config.swap_file_path.clone();
-        let write_result = tokio::task::spawn_blocking(move || {
+        let write_result: Result<u64, String> = {
             let mut file = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -410,7 +407,7 @@ impl SwapMemoryPool {
                 .map_err(|e| format!("Failed to write to swap file: {}", e))?;
             
             Ok(offset)
-        }).await.map_err(|e| format!("Task join error: {}", e))?;
+        };
         
         let offset = write_result?;
         
@@ -425,8 +422,8 @@ impl SwapMemoryPool {
         page.checksum = checksum;
         page.last_access = std::time::SystemTime::now();
         
-        self.logger.log_info("write_data_async", &trace_id, &format!(
-            "Asynchronously wrote {} bytes to swap file (page {}), compressed: {}",
+        self.logger.log_info("write_data_sync", &trace_id, &format!(
+            "Wrote {} bytes to swap file (page {}), compressed: {}",
             compressed_data.len(), page_id, is_compressed
         ));
         
@@ -453,7 +450,7 @@ impl SwapMemoryPool {
         
         // Read from swap file asynchronously
         let swap_file_path = self.config.swap_file_path.clone();
-        let read_result = tokio::task::spawn_blocking(move || {
+        let read_result: Result<Vec<u8>, String> = {
             let mut file = OpenOptions::new()
                 .read(true)
                 .open(&swap_file_path)
@@ -467,7 +464,7 @@ impl SwapMemoryPool {
                 .map_err(|e| format!("Failed to read from swap file: {}", e))?;
             
             Ok(compressed_data)
-        }).await.map_err(|e| format!("Task join error: {}", e))?;
+        };
         
         let compressed_data = read_result?;
         
@@ -483,7 +480,7 @@ impl SwapMemoryPool {
         // Decompress if necessary
         let data = if page.is_compressed {
             self.decompress_data(&compressed_data).map_err(|e| {
-                self.logger.log_error("read_data_async", &trace_id, &format!("Decompression failed: {}", e));
+                self.logger.log_error("read_data_async", &trace_id, &format!("Decompression failed: {}", e), "DECOMPRESSION_ERROR");
                 format!("Decompression failed: {}", e)
             })?
         } else {
@@ -509,7 +506,7 @@ impl SwapMemoryPool {
     }
 
     /// Async wrapper for compress_data to support async operations
-    async fn compress_data(&self, data: &[u8]) -> Result<Vec<u8>, String> {
+    async fn compress_data_async(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         let start_time = std::time::Instant::now();
         
         // Use LZ4 compression for speed
@@ -517,10 +514,13 @@ impl SwapMemoryPool {
         
         let elapsed = start_time.elapsed();
         let mut stats = self.compression_stats.write().unwrap();
+        stats.original_size += data.len();
+        stats.compressed_size += compressed.len();
         stats.total_uncompressed += data.len();
         stats.total_compressed += compressed.len();
         stats.compression_time += elapsed;
-        
+        stats.compression_time_ms += elapsed.as_millis() as u64;
+
         if stats.total_uncompressed > 0 {
             stats.compression_ratio = stats.total_compressed as f64 / stats.total_uncompressed as f64;
         }
@@ -596,22 +596,23 @@ impl SwapMemoryPool {
 
 /// Pooled vector with swap backing
 #[derive(Debug)]
-pub struct SwapPooledVec<T> {
-    data: Vec<T>,
+pub struct SwapPooledVec {
+    data: Vec<u8>,
     page_id: u64,
     pool: *const SwapMemoryPool, // Raw pointer to avoid lifetime issues
     is_swapped: bool,
     dirty: bool, // Track if data has been modified
+    logger: PerformanceLogger,
 }
 
-impl<T> SwapPooledVec<T> {
+impl SwapPooledVec {
     /// Access the underlying data
-    pub fn as_slice(&self) -> &[T] {
+    pub fn as_slice(&self) -> &[u8] {
         &self.data
     }
 
     /// Access mutable data (marks as dirty)
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.dirty = true;
         &mut self.data
     }
@@ -639,7 +640,10 @@ impl<T> SwapPooledVec<T> {
             };
             
             // Read data from swap file with proper type conversion
-            let data = pool.read_data_async(self.page_id, page.size).await?;
+            let data = {
+                let pool = unsafe { &*self.pool };
+                pool.swap_in_page(self.page_id)
+            }.map_err(|e| e.to_string())?;
             
             // Convert the read data to the appropriate type (u8 in this case)
             // For other types, this would involve deserialization or type conversion logic
@@ -651,15 +655,14 @@ impl<T> SwapPooledVec<T> {
             }
             
             // Replace the internal data with the swapped-in data
-            self.data = data.try_into().map_err(|e| {
-                format!("Failed to convert data for page {}: {}", self.page_id, e)
-            })?;
+            self.data = data;
             
             // Mark as not swapped and not dirty (data is now in memory)
             self.is_swapped = false;
             self.dirty = false;
             
-            self.logger.log_info("ensure_in_memory", &trace_id, &format!(
+            let pool = unsafe { &*self.pool };
+            pool.logger.log_info("ensure_in_memory", &trace_id, &format!(
                 "Successfully swapped in page {} with {} bytes of data",
                 self.page_id, self.data.len()
             ));
@@ -678,7 +681,7 @@ impl<T> SwapPooledVec<T> {
     }
 }
 
-impl<T> Drop for SwapPooledVec<T> {
+impl Drop for SwapPooledVec {
     fn drop(&mut self) {
         if self.dirty && !self.is_swapped {
             // Data was modified but not yet swapped out - ensure it's persisted
@@ -688,7 +691,7 @@ impl<T> Drop for SwapPooledVec<T> {
     }
 }
 
-impl<T: Clone> Clone for SwapPooledVec<T> {
+impl Clone for SwapPooledVec {
     fn clone(&self) -> Self {
         let mut cloned_data = self.data.clone();
         if self.is_swapped {
@@ -702,6 +705,7 @@ impl<T: Clone> Clone for SwapPooledVec<T> {
             pool: self.pool,
             is_swapped: self.is_swapped,
             dirty: false, // Clone starts clean
+            logger: PerformanceLogger::new("swap_pooled_vec"),
         }
     }
 }
@@ -709,7 +713,7 @@ impl<T: Clone> Clone for SwapPooledVec<T> {
 // Implement Send for SwapPooledVec to allow sending between threads
 // SAFETY: The raw pointer to the pool is only used for cleanup in Drop,
 // and the pool itself is expected to be thread-safe for allocation operations.
-unsafe impl<T> Send for SwapPooledVec<T> {}
+unsafe impl Send for SwapPooledVec {}
 
 #[cfg(test)]
 mod tests {

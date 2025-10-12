@@ -16,6 +16,7 @@ import com.kneaf.core.config.UltraPerformanceConfiguration;
 import com.kneaf.core.unifiedbridge.UnifiedBridge;
 import com.kneaf.core.unifiedbridge.BridgeResult;
 import com.kneaf.core.unifiedbridge.BridgeException;
+import com.kneaf.core.unifiedbridge.UnifiedBridgeFactory;
 
 import java.nio.ByteBuffer;
 import java.util.List;

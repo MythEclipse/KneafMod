@@ -1,7 +1,10 @@
-use std::sync::RwLock;
+use std::sync::{RwLock, Arc, Mutex};
+use std::collections::HashMap;
+use std::time::SystemTime;
 use std::fmt::Debug;
 
 use crate::memory_pool::object_pool::{ObjectPool, PooledObject};
+use crate::logging::PerformanceLogger;
 
 /// Specialized pool for vectors
 #[derive(Debug)]
@@ -10,6 +13,7 @@ where
     T: Debug,
 {
     pub pool: ObjectPool<Vec<T>>,
+    pub logger: PerformanceLogger,
 }
 
 impl<T> Clone for VecPool<T>
@@ -17,7 +21,10 @@ where
     T: Debug + Default + Clone + Send + 'static,
 {
     fn clone(&self) -> Self {
-        VecPool { pool: self.pool.clone_shallow() }
+        VecPool {
+            pool: self.pool.clone_shallow(),
+            logger: PerformanceLogger::new("vec_pool")
+        }
     }
 }
 
@@ -28,44 +35,42 @@ where
     pub fn new(max_size: usize) -> Self {
         Self {
             pool: ObjectPool::new(max_size),
+            logger: PerformanceLogger::new("vec_pool"),
         }
     }
 
     /// Perform cleanup and return true if any resources were freed
     pub fn cleanup(&self) -> bool {
         let mut cleaned = false;
-        let mut pool = self.pool.write().unwrap();
-        
         // 1. Get current pool statistics
-        let current_size = pool.len();
-        let high_water_mark = pool.high_water_mark();
+        let current_size = self.pool.pool.lock().unwrap().len();
+        let high_water_mark = self.pool.get_high_water_mark();
         let load_factor = if high_water_mark > 0 {
             current_size as f64 / high_water_mark as f64
         } else { 0.0 };
-        
+         
         // 2. Trim excess capacity if load is low (below 30%)
+        let mut excess = 0;
         if load_factor < 0.3 {
             let target_size = (current_size as f64 * 0.5) as usize; // Keep 50% of current objects
-            let excess = current_size.saturating_sub(target_size);
-            
+            excess = current_size.saturating_sub(target_size);
+             
             if excess > 0 {
                 // Remove excess objects from the pool
-                for _ in 0..excess {
-                    if let Some(mut obj) = pool.pop() {
-                        // Explicitly clear and shrink the vector to free memory
-                        obj.clear();
-                        obj.shrink_to_fit();
-                    }
+                let mut pool = self.pool.pool.lock().unwrap();
+                let keys: Vec<u64> = pool.keys().cloned().take(excess).collect();
+                for key in keys {
+                    pool.remove(&key);
                 }
                 cleaned = true;
             }
         }
-        
+         
         // 3. Free unused memory buffers by shrinking the underlying storage
-        if let Some(inner_vec) = pool.get_inner_vec() {
-            if inner_vec.capacity() > inner_vec.len() * 2 { // If capacity is more than twice the size
-                let new_capacity = inner_vec.len().max(10); // Keep at least 10 elements for reuse
-                inner_vec.shrink_to(new_capacity);
+        let mut pool = self.pool.pool.lock().unwrap();
+        if let Some((_, obj)) = pool.iter_mut().next() {
+            if obj.0.capacity() > obj.0.len() * 2 {
+                obj.0.shrink_to(obj.0.len().max(10));
                 cleaned = true;
             }
         }
@@ -120,11 +125,15 @@ pub type PooledVec<T> = PooledObject<Vec<T>>;
 #[derive(Debug)]
 pub struct StringPool {
     pub pool: ObjectPool<String>,
+    pub logger: PerformanceLogger,
 }
 
 impl Clone for StringPool {
     fn clone(&self) -> Self {
-        StringPool { pool: self.pool.clone_shallow() }
+        StringPool {
+            pool: self.pool.clone_shallow(),
+            logger: PerformanceLogger::new("string_pool")
+        }
     }
 }
 
@@ -132,44 +141,42 @@ impl StringPool {
     pub fn new(max_size: usize) -> Self {
         Self {
             pool: ObjectPool::new(max_size),
+            logger: PerformanceLogger::new("string_pool"),
         }
     }
 
     /// Perform cleanup and return true if any resources were freed
     pub fn cleanup(&self) -> bool {
         let mut cleaned = false;
-        let mut pool = self.pool.write().unwrap();
-        
         // 1. Get current pool statistics
-        let current_size = pool.len();
-        let high_water_mark = pool.high_water_mark();
+        let current_size = self.pool.pool.lock().unwrap().len();
+        let high_water_mark = self.pool.get_high_water_mark();
         let load_factor = if high_water_mark > 0 {
             current_size as f64 / high_water_mark as f64
         } else { 0.0 };
-        
+         
         // 2. Trim excess capacity if load is low (below 30%)
+        let mut excess = 0;
         if load_factor < 0.3 {
             let target_size = (current_size as f64 * 0.5) as usize; // Keep 50% of current objects
-            let excess = current_size.saturating_sub(target_size);
-            
+            excess = current_size.saturating_sub(target_size);
+             
             if excess > 0 {
                 // Remove excess objects from the pool
-                for _ in 0..excess {
-                    if let Some(mut obj) = pool.pop() {
-                        // Explicitly clear and shrink the string to free memory
-                        obj.clear();
-                        obj.shrink_to_fit();
-                    }
+                let mut pool = self.pool.pool.lock().unwrap();
+                let keys: Vec<u64> = pool.keys().cloned().take(excess).collect();
+                for key in keys {
+                    pool.remove(&key);
                 }
                 cleaned = true;
             }
         }
-        
+         
         // 3. Free unused memory buffers by shrinking the underlying storage
-        if let Some(inner_vec) = pool.get_inner_vec() {
-            if inner_vec.capacity() > inner_vec.len() * 2 { // If capacity is more than twice the size
-                let new_capacity = inner_vec.len().max(10); // Keep at least 10 elements for reuse
-                inner_vec.shrink_to(new_capacity);
+        let mut pool = self.pool.pool.lock().unwrap();
+        if let Some((_, obj)) = pool.iter_mut().next() {
+            if obj.0.capacity() > obj.0.len() * 2 {
+                obj.0.shrink_to(obj.0.len().max(10));
                 cleaned = true;
             }
         }

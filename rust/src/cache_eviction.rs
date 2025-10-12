@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
+use crate::logging::{generate_trace_id, PerformanceLogger};
 
 // Cache eviction policy types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,7 +300,7 @@ pub fn initialize_cache(flags: CacheFeatureFlags) {
     }
     
     // Create a new cache with the specified configuration
-    let new_cache = PriorityCache::new(
+    let new_cache: PriorityCache<Vec<u8>> = PriorityCache::new(
         flags.max_capacity,
         flags.eviction_policy,
         flags.cache_enabled
@@ -328,6 +329,11 @@ pub fn initialize_cache(flags: CacheFeatureFlags) {
             entries.clear();
             
             // 4. Update feature flags
+            entries.drain().collect::<Vec<_>>(); // Clear entries first
+            
+            // Release the entries lock before calling set_feature_enabled
+            drop(entries);
+            
             cache.set_feature_enabled(flags.cache_enabled);
             
             // 5. Log configuration change

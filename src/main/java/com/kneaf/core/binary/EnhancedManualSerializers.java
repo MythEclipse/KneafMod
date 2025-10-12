@@ -33,9 +33,6 @@ public final class EnhancedManualSerializers {
             // Use standard serialization first to get a buffer
             ByteBuffer stdBuffer = ManualSerializers.serializeEntityInput(tickCount, entities, players);
             
-            // Allocate direct buffer for zero-copy (call static method correctly)
-            ByteBuffer zeroCopyBuffer = BinaryZeroCopyFacade.ZeroCopyWrapper.createDirectBuffer(stdBuffer.remaining());
-            
             // Use zero-copy Rust serialization for entity data
             byte[] zeroCopyResult = ZERO_COPY_WRAPPER.serializeEntityInput(stdBuffer);
             ByteBuffer resultBuffer = ByteBuffer.wrap(zeroCopyResult).order(ByteOrder.LITTLE_ENDIAN);

@@ -403,7 +403,7 @@ impl OptimizedSpatialGrid {
             let location = index_guard.get(&entity_id)?;
             
             // Use direct cell access with proper error handling
-            let cells = self.levels[location.level].cells.read().map_err(|_| ())?;
+            let cells = self.levels[location.level].cells.read().unwrap();
             let cell_data = cells.get(&location.cell_key)?;
             
             // Optimized lookup using entity ID

@@ -162,10 +162,12 @@ dependencies {
     // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
     // http://www.gradle.org/docs/current/userguide/dependency_management.html
     // Testing dependencies
-    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
-    testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
-    testImplementation 'org.slf4j:slf4j-api:2.0.7'
-    testImplementation 'org.slf4j:slf4j-simple:2.0.7' // Add simple implementation for tests
+        testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
+        testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
+        testImplementation 'org.slf4j:slf4j-api:2.0.7'
+        testImplementation 'org.slf4j:slf4j-simple:2.0.7' // Add simple implementation for tests
+        testImplementation 'org.mockito:mockito-core:5.6.0' // Add Mockito for testing
+        testImplementation 'org.mockito:mockito-junit-jupiter:5.6.0' // Add Mockito JUnit 5 integration
     testRuntimeOnly files('src/main/resources/natives/rustperf.dll') // Ensure native libs are available for tests
     testRuntimeOnly files('src/main/resources/natives/librustperf.so')
     testRuntimeOnly files('src/main/resources/natives/librustperf.dylib')
@@ -366,7 +368,7 @@ task copyRustToSrc(type: Copy) {
 
     // Common release output directories to check with better error handling
     def libsCopied = false
-    
+
     // Windows libraries
     from('rust/target/release') {
         include 'rustperf.dll', 'librustperf.dll'
@@ -378,7 +380,7 @@ task copyRustToSrc(type: Copy) {
         into '.'
         eachFile { libsCopied = true }
     }
-    
+
     // Linux libraries
     from('rust/target/release') {
         include 'librustperf.so'
@@ -390,7 +392,7 @@ task copyRustToSrc(type: Copy) {
         into '.'
         eachFile { libsCopied = true }
     }
-    
+
     // macOS libraries
     from('rust/target/release') {
         include 'librustperf.dylib'

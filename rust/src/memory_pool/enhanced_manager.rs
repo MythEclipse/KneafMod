@@ -672,7 +672,7 @@ pub struct MaintenanceResult {
 #[derive(Debug)]
 pub enum SmartPooledVec<T> {
     Hierarchical(crate::memory_pool::hierarchical::PooledVec<T>),
-    Swap(crate::memory_pool::swap::SwapPooledVec<T>),
+    Swap(crate::memory_pool::swap::SwapPooledVec),
     Vec(crate::memory_pool::specialized_pools::PooledVec<T>),
     String(PooledStringWrapper<T>),
 }
@@ -696,22 +696,40 @@ pub struct PooledStringWrapper<T> {
     data: Vec<T>,
 }
 
-impl<T> SmartPooledVec<T> {
-    /// Get immutable reference to data
+impl<T> SmartPooledVec<T>
+where
+    T: 'static,
+{
+    /// Get immutable reference to data (generic version)
     pub fn as_slice(&self) -> &[T] {
         match self {
             SmartPooledVec::Hierarchical(v) => v.as_slice(),
-            SmartPooledVec::Swap(v) => v.as_slice(),
+            SmartPooledVec::Swap(v) => {
+                // For SwapPooledVec, we know it always contains u8 data in this codebase
+                // We use a safer approach with proper type conversion
+                let u8_slice = v.as_slice();
+                if std::mem::size_of::<T>() != std::mem::size_of::<u8>() {
+                    panic!("Cannot convert SwapPooledVec to non-u8 type");
+                }
+                unsafe { std::slice::from_raw_parts(u8_slice.as_ptr() as *const T, u8_slice.len()) }
+            },
             SmartPooledVec::Vec(v) => v.as_slice(),
             SmartPooledVec::String(v) => &v.data,
         }
     }
 
-    /// Get mutable reference to data
+    /// Get mutable reference to data (generic version)
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         match self {
             SmartPooledVec::Hierarchical(v) => v.as_mut(),
-            SmartPooledVec::Swap(v) => v.as_mut_slice(),
+            SmartPooledVec::Swap(v) => {
+                // For SwapPooledVec, we know it always contains u8 data in this codebase
+                let u8_slice = v.as_mut_slice();
+                if std::mem::size_of::<T>() != std::mem::size_of::<u8>() {
+                    panic!("Cannot convert SwapPooledVec to non-u8 type");
+                }
+                unsafe { std::slice::from_raw_parts_mut(u8_slice.as_mut_ptr() as *mut T, u8_slice.len()) }
+            },
             SmartPooledVec::Vec(v) => v.as_mut(),
             SmartPooledVec::String(v) => &mut v.data,
         }

@@ -175,8 +175,7 @@ public class ModInitializer {
         LOGGER.info("Registering performance commands");
         
         try {
-            // Get the actual command system instance from AtomicReference
-            UnifiedCommandSystem system = commandSystem.get();
+            
             
             // Register specific commands for the mod - using the existing command classes
             // In a real implementation, you would register your specific commands here

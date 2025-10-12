@@ -6,7 +6,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -248,15 +247,15 @@ public class LevelChunk implements Serializable {
     }
 
     /**
-     * Deserialize a byte array into a new LevelChunk instance.
+     * Deserialize a byte array into this LevelChunk instance.
      *
      * @param data Serialized byte array
-     * @return New LevelChunk instance if deserialization was successful, null otherwise
+     * @return true if deserialization was successful, false otherwise
      */
     @Override
-    public LevelChunk deserialize(byte[] data) {
+    public boolean deserialize(byte[] data) {
         if (data == null || data.length == 0) {
-            return null;
+            return false;
         }
 
         try {
@@ -266,7 +265,7 @@ public class LevelChunk implements Serializable {
             // Read header
             String header = dis.readUTF();
             if (!header.equals("LEVEL_CHUNK_V1")) {
-                return null;
+                return false;
             }
 
             long chunkLastModified = dis.readLong();
@@ -301,19 +300,39 @@ public class LevelChunk implements Serializable {
             // Read footer
             String footer = dis.readUTF();
             if (!footer.equals("CHUNK_END")) {
-                return null;
+                return false;
             }
 
-            // Create and return new instance with deserialized data
-            LevelChunk deserializedChunk = new LevelChunk(chunkWorldName, chunkX, chunkZ);
-            deserializedChunk.lastModified = chunkLastModified;
-            deserializedChunk.isModified = chunkModified;
-            deserializedChunk.blockSections = chunkBlockSections;
+            // Populate this instance with deserialized data
+            this.worldName = chunkWorldName;
+            this.x = chunkX;
+            this.z = chunkZ;
+            this.lastModified = chunkLastModified;
+            this.isModified = chunkModified;
+            this.blockSections = chunkBlockSections;
             
-            return deserializedChunk;
+            return true;
         } catch (IOException e) {
+            return false;
+        }
+    }
+    
+    /**
+     * Deserialize a byte array into a new LevelChunk instance.
+     *
+     * @param data Serialized byte array
+     * @return New LevelChunk instance if deserialization was successful, null otherwise
+     */
+    public static LevelChunk deserializeStatic(byte[] data) {
+        if (data == null || data.length == 0) {
             return null;
         }
+
+        LevelChunk chunk = new LevelChunk();
+        if (chunk.deserialize(data)) {
+            return chunk;
+        }
+        return null;
     }
 
     /**

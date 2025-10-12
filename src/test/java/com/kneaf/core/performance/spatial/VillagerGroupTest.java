@@ -1,7 +1,9 @@
 package com.kneaf.core.performance.spatial;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.anyLong;
 
 import com.kneaf.core.data.entity.VillagerData;
 import java.util.Arrays;

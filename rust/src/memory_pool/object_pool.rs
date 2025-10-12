@@ -349,6 +349,11 @@ where
         self.atomic_state.get_current_size()
     }
 
+    /// Get high water mark atomically
+    pub fn get_high_water_mark(&self) -> usize {
+        self.high_water_mark.load(Ordering::Relaxed)
+    }
+
     /// Get current usage ratio atomically
     pub fn get_usage_ratio(&self) -> f64 {
         self.atomic_state.get_usage_ratio()

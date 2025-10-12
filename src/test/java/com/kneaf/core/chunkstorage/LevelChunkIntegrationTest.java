@@ -2,6 +2,8 @@ package com.kneaf.core.chunkstorage;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.kneaf.core.chunkstorage.cache.ChunkCache;
+import com.kneaf.core.chunkstorage.common.ChunkStorageConfig;
 import com.kneaf.core.chunkstorage.database.RustDatabaseAdapter;
 import com.kneaf.core.chunkstorage.swap.SwapManager;
 import java.util.ArrayList;
@@ -253,12 +255,8 @@ public class LevelChunkIntegrationTest {
         for (int j = 0; j < 100; j++) {
           // Concurrent read/write operations
           if (threadId % 2 == 0) {
-            // Read operations
-            int x = testChunk.getX();
-            int z = testChunk.getZ();
             byte[] section = testChunk.getBlockSection(0);
             if (section != null) {
-              int length = section.length;
             }
           } else {
             // Write operations
