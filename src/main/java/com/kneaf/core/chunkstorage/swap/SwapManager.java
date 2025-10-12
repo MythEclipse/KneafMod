@@ -1460,6 +1460,16 @@ public class SwapManager implements StorageStatisticsProvider {
     }
   }
 
+  /**
+   * Return whether this SwapManager has been shut down.
+   * Tests and lazy-initializers use this to detect stale instances held in pools.
+   *
+   * @return true if shutdown() has been invoked, false otherwise
+   */
+  public boolean isShutdown() {
+    return shutdown.get();
+  }
+
   // Private helper methods
 
   private void initializeExecutors() {

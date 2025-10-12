@@ -122,8 +122,25 @@ public final class MemoryPoolManager {
         // Check if already initialized
         Object component = initializedComponents.get(componentName);
         if (component != null) {
-            LOGGER.debug("Returning cached component '{}'", componentName);
-            return component;
+                // If the cached component is a SwapManager and it's been shut down,
+                // remove it and re-run the initializer so callers get a fresh instance.
+                try {
+                    if (component instanceof com.kneaf.core.chunkstorage.swap.SwapManager) {
+                        com.kneaf.core.chunkstorage.swap.SwapManager sm = (com.kneaf.core.chunkstorage.swap.SwapManager) component;
+                        if (sm.isShutdown()) {
+                            LOGGER.info("Cached SwapManager '{}' is shutdown - reinitializing", componentName);
+                            initializedComponents.remove(componentName);
+                            totalLazyInitializations.decrementAndGet();
+                            component = null;
+                        }
+                    }
+                } catch (Throwable t) {
+                    // Ignore and return the component if we cannot introspect it
+                }
+                if (component != null) {
+                    LOGGER.debug("Returning cached component '{}'", componentName);
+                    return component;
+                }
         }
         
         // Check if initializer exists
