@@ -170,7 +170,7 @@ impl OptimizedSpatialGrid {
         Self {
             levels,
             entity_index: RwLock::new(HashMap::new()),
-            simd_processor: EnhancedSimdProcessor::new(),
+            simd_processor: EnhancedSimdProcessor::<16>::new(),
             config: config.clone(),
             metrics: GridMetrics::default(),
             lazy_update_queue: RwLock::new(HashSet::new()),

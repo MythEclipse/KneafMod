@@ -17,7 +17,7 @@ public final class PerformanceConstants {
 
   // Error messages
   public static final String BINARY_FALLBACK_MESSAGE =
-      "Binary protocol failed, falling back to JSON: { }";
+      "Binary protocol failed, falling back to JSON: {}";
   public static final String NATIVE_NOT_AVAILABLE_ERROR = "Rust native library is not available";
 
   // Batch processing constants (fallbacks)

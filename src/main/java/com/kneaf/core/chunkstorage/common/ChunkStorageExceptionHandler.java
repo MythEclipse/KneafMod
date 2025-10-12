@@ -23,7 +23,7 @@ public final class ChunkStorageExceptionHandler {
    */
   public static CompletableFuture<Void> handleSaveException(
       String chunkKey, Exception exception, String operation) {
-    LOGGER.error("Failed to { } chunk { }", operation, chunkKey, exception);
+    LOGGER.error("Failed to {} chunk {}", operation, chunkKey, exception);
     return CompletableFuture.failedFuture(exception);
   }
 
@@ -36,7 +36,7 @@ public final class ChunkStorageExceptionHandler {
    */
   public static <T> java.util.Optional<T> handleLoadException(
       String chunkKey, Exception exception) {
-    LOGGER.error("Failed to load chunk { }", chunkKey, exception);
+    LOGGER.error("Failed to load chunk {}", chunkKey, exception);
     return java.util.Optional.empty();
   }
 
@@ -50,7 +50,7 @@ public final class ChunkStorageExceptionHandler {
    */
   public static boolean handleDatabaseException(
       String operation, String chunkKey, Exception exception) {
-    LOGGER.error("Database { } failed for chunk { }", operation, chunkKey, exception);
+    LOGGER.error("Database {} failed for chunk {}", operation, chunkKey, exception);
     return false;
   }
 
@@ -64,7 +64,7 @@ public final class ChunkStorageExceptionHandler {
    */
   public static boolean handleSwapException(
       String operation, String chunkKey, Exception exception) {
-    LOGGER.error("Swap { } failed for chunk { }", operation, chunkKey, exception);
+    LOGGER.error("Swap {} failed for chunk {}", operation, chunkKey, exception);
     return false;
   }
 
@@ -78,7 +78,7 @@ public final class ChunkStorageExceptionHandler {
   public static void handleInitializationException(
       String component, Exception exception, String fallbackMessage) {
     String message = exception.getMessage() != null ? exception.getMessage() : fallbackMessage;
-    LOGGER.error("Failed to initialize { }: { }", component, message, exception);
+    LOGGER.error("Failed to initialize {}: {}", component, message, exception);
   }
 
   /**
@@ -88,7 +88,7 @@ public final class ChunkStorageExceptionHandler {
    * @param exception The exception that occurred
    */
   public static void handleShutdownException(String component, Exception exception) {
-    LOGGER.error("Error during shutdown of { }", component, exception);
+    LOGGER.error("Error during shutdown of {}", component, exception);
   }
 
   /**
@@ -98,7 +98,7 @@ public final class ChunkStorageExceptionHandler {
    * @param exception The exception that occurred
    */
   public static void handleMaintenanceException(String component, Exception exception) {
-    LOGGER.error("Failed to perform maintenance for { }", component, exception);
+    LOGGER.error("Failed to perform maintenance for {}", component, exception);
   }
 
   /**
@@ -110,7 +110,7 @@ public final class ChunkStorageExceptionHandler {
    */
   public static void handleBackupException(
       String component, String backupPath, Exception exception) {
-    LOGGER.error("Failed to create backup for { } at '{ }'", component, backupPath, exception);
+    LOGGER.error("Failed to create backup for {} at '{}'", component, backupPath, exception);
   }
 
   /**
@@ -121,7 +121,7 @@ public final class ChunkStorageExceptionHandler {
    * @return false to indicate unhealthy state
    */
   public static boolean handleHealthCheckException(String component, Exception exception) {
-    LOGGER.error("Health check failed for { }", component, exception);
+    LOGGER.error("Health check failed for {}", component, exception);
     return false;
   }
 
@@ -134,7 +134,7 @@ public final class ChunkStorageExceptionHandler {
    * @return Statistics object (either collected or default)
    */
   public static <T> T handleStatsException(String component, Exception exception, T defaultStats) {
-    LOGGER.error("Failed to get statistics for { }", component, exception);
+    LOGGER.error("Failed to get statistics for {}", component, exception);
     return defaultStats;
   }
 
@@ -149,7 +149,7 @@ public final class ChunkStorageExceptionHandler {
   public static <T> T handleReflectionException(
       String operation, String className, Exception exception) {
     LOGGER.debug(
-        "Reflection { } failed for class { }: { }", operation, className, exception.getMessage());
+        "Reflection {} failed for class {}: {}", operation, className, exception.getMessage());
     return null;
   }
 
@@ -161,7 +161,7 @@ public final class ChunkStorageExceptionHandler {
    * @param params Optional parameters for the message
    */
   public static void logWarning(String component, String message, Object... params) {
-    LOGGER.warn("[{ }] { }", component, String.format(message, params));
+    LOGGER.warn("[{}] {}", component, String.format(message, params));
   }
 
   /**
@@ -172,7 +172,7 @@ public final class ChunkStorageExceptionHandler {
    * @param params Optional parameters for the message
    */
   public static void logDebug(String component, String message, Object... params) {
-    LOGGER.debug("[{ }] { }", component, String.format(message, params));
+    LOGGER.debug("[{}] {}", component, String.format(message, params));
   }
 
   /**
@@ -183,6 +183,6 @@ public final class ChunkStorageExceptionHandler {
    * @param params Optional parameters for the message
    */
   public static void logInfo(String component, String message, Object... params) {
-    LOGGER.info("[{ }] { }", component, String.format(message, params));
+    LOGGER.info("[{}] {}", component, String.format(message, params));
   }
 }

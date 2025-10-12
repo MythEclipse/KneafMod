@@ -109,7 +109,7 @@ public class NetworkOptimizer {
   @SubscribeEvent
   public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
     if (event.getEntity() instanceof ServerPlayer player) {
-      LOGGER.info("Optimizing network for player: { }", player.getName().getString());
+      LOGGER.info("Optimizing network for player: {}", player.getName().getString());
       // Enable compression for player connection
       // Note: Actual compression would require modifying packet sending
     }
@@ -156,7 +156,7 @@ public class NetworkOptimizer {
       if (compressed.length < data.length) return compressed;
       return data;
     } catch (java.io.IOException e) {
-      LOGGER.warn("Failed to compress packet data: { }", e.getMessage());
+      LOGGER.warn("Failed to compress packet data: {}", e.getMessage());
       return data;
     } finally {
       deflater.reset();
@@ -183,7 +183,7 @@ public class NetworkOptimizer {
       }
     }
     
-    LOGGER.debug("Processed batched packets: { }", batch.size());
+    LOGGER.debug("Processed batched packets: {}", batch.size());
   }
 
   /** Process individual packet with compression and rate limiting */
@@ -209,7 +209,7 @@ public class NetworkOptimizer {
       byte[] raw = packet.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
       byte[] compressed = compressPacketData(raw);
       LOGGER.debug(
-          "Compressed packet { } est { } -> { } bytes",
+          "Compressed packet {} est {} -> {} bytes",
           packet.getClass().getSimpleName(),
           raw.length,
           compressed.length);
@@ -222,13 +222,13 @@ public class NetworkOptimizer {
           .schedule(
               () ->
                   LOGGER.debug(
-                      "Rate-limited packet send: { } delayed { }ms",
+                      "Rate-limited packet send: {} delayed {}ms",
                       packet.getClass().getSimpleName(),
                       rateLimitDelay),
               rateLimitDelay,
               java.util.concurrent.TimeUnit.MILLISECONDS);
     } else {
-      LOGGER.debug("Processed packet immediately: { }", packet.getClass().getSimpleName());
+      LOGGER.debug("Processed packet immediately: {}", packet.getClass().getSimpleName());
     }
   }
 

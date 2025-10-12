@@ -1,6 +1,8 @@
-use std::arch::is_x86_feature_detected;
+use std::arch::{is_x86_feature_detected, x86_64};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use log::{info, debug};
+use std::time::Instant;
+use log::{info, debug, trace};
+use crate::performance_monitoring::{PERFORMANCE_MONITOR, record_operation};
 use serde::{Serialize, Deserialize};
 
 use jni::JNIEnv;
@@ -245,12 +247,160 @@ pub trait SimdOperations {
     fn batch_aabb_intersections(&self, aabbs: &[crate::spatial::Aabb], queries: &[crate::spatial::Aabb]) -> Vec<Vec<bool>>;
 }
 
-/// SIMD processor implementation
-pub struct SimdProcessor;
+/// SIMD processor implementation with architecture-specific optimizations
+pub struct SimdProcessor {
+    level: SimdLevel,
+    features: SimdFeatures,
+}
 
 impl SimdProcessor {
     pub fn new() -> Self {
-        Self
+        let features = SimdFeatures::detect();
+        let level = features.best_level();
+        info!("Created SimdProcessor with level: {:?}", level);
+        Self { level, features }
+    }
+
+    /// Get the current SIMD optimization level
+    pub fn get_level(&self) -> SimdLevel {
+        self.level
+    }
+
+    /// Check if a specific SIMD feature is available
+    pub fn has_feature(&self, feature: &str) -> bool {
+        match feature {
+            "avx2" => self.features.has_avx2,
+            "sse4.1" => self.features.has_sse41,
+            "sse4.2" => self.features.has_sse42,
+            "avx512f" => self.features.has_avx512f,
+            _ => false,
+        }
+    }
+
+    /// Process large arrays with SIMD-optimized operations
+    pub fn process_large_array<T, F>(&self, data: &mut [T], operation: F) -> SimdResult<()>
+    where
+        T: Copy + Send + Sync,
+        F: Fn(&mut [T]) -> SimdResult<()>,
+    {
+        let start = Instant::now();
+        let result = match self.level {
+            SimdLevel::Avx512 => unsafe { self.process_avx512(data, operation) },
+            SimdLevel::Avx2 => unsafe { self.process_avx2(data, operation) },
+            SimdLevel::Sse42 | SimdLevel::Sse41 => unsafe { self.process_sse(data, operation) },
+            SimdLevel::Scalar => operation(data),
+        };
+        
+        record_operation(start, data.len(), 1);
+        result
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    unsafe fn process_avx512<T, F>(&self, data: &mut [T], operation: F) -> SimdResult<()>
+    where
+        T: Copy + Send + Sync,
+        F: Fn(&mut [T]) -> SimdResult<()>,
+    {
+        if !self.features.has_avx512f {
+            return Err(SimdError::UnsupportedInstructionSet {
+                required: "avx512f",
+                available: format!("{:?}", self.features),
+            });
+        }
+
+        // AVX-512 can process 16 f32 values or 8 f64 values per lane
+        const AVX512_F32_LANES: usize = 16;
+        const AVX512_F64_LANES: usize = 8;
+
+        let lanes = if std::mem::size_of::<T>() == 4 {
+            AVX512_F32_LANES
+        } else if std::mem::size_of::<T>() == 8 {
+            AVX512_F64_LANES
+        } else {
+            return operation(data); // Fall back to scalar for unsupported types
+        };
+
+        let chunks = data.chunks_mut(lanes);
+        for chunk in chunks {
+            let result = operation(chunk);
+            if let Err(e) = result {
+                return Err(e);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    unsafe fn process_avx2<T, F>(&self, data: &mut [T], operation: F) -> SimdResult<()>
+    where
+        T: Copy + Send + Sync,
+        F: Fn(&mut [T]) -> SimdResult<()>,
+    {
+        if !self.features.has_avx2 {
+            return Err(SimdError::UnsupportedInstructionSet {
+                required: "avx2",
+                available: format!("{:?}", self.features),
+            });
+        }
+
+        // AVX2 can process 8 f32 values or 4 f64 values per lane
+        const AVX2_F32_LANES: usize = 8;
+        const AVX2_F64_LANES: usize = 4;
+
+        let lanes = if std::mem::size_of::<T>() == 4 {
+            AVX2_F32_LANES
+        } else if std::mem::size_of::<T>() == 8 {
+            AVX2_F64_LANES
+        } else {
+            return operation(data); // Fall back to scalar for unsupported types
+        };
+
+        let chunks = data.chunks_mut(lanes);
+        for chunk in chunks {
+            let result = operation(chunk);
+            if let Err(e) = result {
+                return Err(e);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    unsafe fn process_sse<T, F>(&self, data: &mut [T], operation: F) -> SimdResult<()>
+    where
+        T: Copy + Send + Sync,
+        F: Fn(&mut [T]) -> SimdResult<()>,
+    {
+        if !(self.features.has_sse41 || self.features.has_sse42) {
+            return Err(SimdError::UnsupportedInstructionSet {
+                required: "sse4.1/sse4.2",
+                available: format!("{:?}", self.features),
+            });
+        }
+
+        // SSE can process 4 f32 values or 2 f64 values per lane
+        const SSE_F32_LANES: usize = 4;
+        const SSE_F64_LANES: usize = 2;
+
+        let lanes = if std::mem::size_of::<T>() == 4 {
+            SSE_F32_LANES
+        } else if std::mem::size_of::<T>() == 8 {
+            SSE_F64_LANES
+        } else {
+            return operation(data); // Fall back to scalar for unsupported types
+        };
+
+        let chunks = data.chunks_mut(lanes);
+        for chunk in chunks {
+            let result = operation(chunk);
+            if let Err(e) = result {
+                return Err(e);
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -263,7 +413,12 @@ impl SimdOperations for SimdProcessor {
                 operation: "dot_product",
             });
         }
-        Ok(a.iter().zip(b.iter()).map(|(x, y)| x * y).sum())
+
+        let start = Instant::now();
+        let result = Ok(a.iter().zip(b.iter()).map(|(x, y)| x * y).sum());
+
+        record_operation(start, a.len(), 1);
+        result
     }
 
     fn vector_add(&self, a: &mut [f32], b: &[f32], scale: f32) -> SimdResult<()> {
@@ -274,25 +429,38 @@ impl SimdOperations for SimdProcessor {
                 operation: "vector_add",
             });
         }
+
+        let start = Instant::now();
         for (av, bv) in a.iter_mut().zip(b.iter()) {
             *av += *bv * scale;
         }
-        Ok(())
+        let result = Ok(());
+
+        record_operation(start, a.len(), 1);
+        result
     }
 
     fn calculate_chunk_distances(&self, chunk_coords: &[(i32, i32)], center_chunk: (i32, i32)) -> Vec<f32> {
-        chunk_coords
+        let start = Instant::now();
+        let result = chunk_coords
             .iter()
             .map(|(x, z)| {
                 let dx = *x as f32 - center_chunk.0 as f32;
                 let dz = *z as f32 - center_chunk.1 as f32;
                 (dx * dx + dz * dz).sqrt()
             })
-            .collect()
+            .collect();
+
+        record_operation(start, chunk_coords.len(), 1);
+        result
     }
 
     fn batch_aabb_intersections(&self, aabbs: &[crate::spatial::Aabb], queries: &[crate::spatial::Aabb]) -> Vec<Vec<bool>> {
-        queries.iter().map(|q| aabbs.iter().map(|a| a.intersects(q)).collect()).collect()
+        let start = Instant::now();
+        let result = queries.iter().map(|q| aabbs.iter().map(|a| a.intersects(q)).collect()).collect();
+
+        record_operation(start, aabbs.len() * queries.len(), 1);
+        result
     }
 }
 

@@ -90,7 +90,7 @@ public class NeoForgeEventIntegration {
 
       if (optimizationsEnabled) {
         LOGGER.info(
-            "KneafCore optimizations enabled - targeting { }ms tick time",
+            "KneafCore optimizations enabled - targeting {}ms tick time",
             getTargetTickTimeNanos() / 1_000_000);
 
         // Initialize predictive chunk loading
@@ -199,7 +199,7 @@ public class NeoForgeEventIntegration {
       PREDICTED_CHUNKS.remove(chunkPos);
 
       // Update chunk loading metrics
-      // LOGGER.debug("Chunk loaded at { }", chunkPos);
+      // LOGGER.debug("Chunk loaded at {}", chunkPos);
     }
   }
 
@@ -242,7 +242,7 @@ public class NeoForgeEventIntegration {
       }
     }
 
-    LOGGER.info("Prepared optimization for { } villagers", VILLAGER_PROCESSING_TRACKER.size());
+    LOGGER.info("Prepared optimization for {} villagers", VILLAGER_PROCESSING_TRACKER.size());
   }
 
   private static void initializeMemoryManagement(MinecraftServer server) {
@@ -255,7 +255,7 @@ public class NeoForgeEventIntegration {
     long criticalThreshold = (long) (maxMemory * 0.9);
 
     LOGGER.info(
-        "Memory thresholds configured - Warning: { }MB, Critical: { }MB",
+        "Memory thresholds configured - Warning: {}MB, Critical: {}MB",
         warningThreshold / (1024 * 1024),
         criticalThreshold / (1024 * 1024));
   }
@@ -344,7 +344,7 @@ public class NeoForgeEventIntegration {
 
       // Process using SIMD operations
       if (!entityPositions.isEmpty()) {
-        LOGGER.debug("Processed { } entities with SIMD operations", entityPositions.size());
+        LOGGER.debug("Processed {} entities with SIMD operations", entityPositions.size());
       }
 
     } catch (Exception e) {
@@ -452,12 +452,12 @@ public class NeoForgeEventIntegration {
     long tickTime = System.nanoTime() - tickStartTime;
 
     if (tickTime > getCriticalTickTimeNanos()) {
-      LOGGER.warn("CRITICAL: Tick time { }ms exceeds threshold", tickTime / 1_000_000);
+      LOGGER.warn("CRITICAL: Tick time {}ms exceeds threshold", tickTime / 1_000_000);
 
       // Trigger emergency optimizations
       triggerEmergencyOptimizations(server);
     } else if (tickTime > getTargetTickTimeNanos()) {
-      LOGGER.debug("Tick time { }ms above target", tickTime / 1_000_000);
+      LOGGER.debug("Tick time {}ms above target", tickTime / 1_000_000);
     }
   }
 
@@ -573,7 +573,7 @@ public class NeoForgeEventIntegration {
       testSIMDOperations();
 
       long benchmarkTime = System.nanoTime() - startTime;
-      LOGGER.info("Initial benchmark completed in { }ms", benchmarkTime / 1_000_000);
+      LOGGER.info("Initial benchmark completed in {}ms", benchmarkTime / 1_000_000);
 
     } catch (Exception e) {
       LOGGER.error("Initial benchmark failed", e);
@@ -589,7 +589,7 @@ public class NeoForgeEventIntegration {
         }
       }
 
-      LOGGER.info("Chunk processing benchmark completed for { } chunks", testChunks.size());
+      LOGGER.info("Chunk processing benchmark completed for {} chunks", testChunks.size());
 
     } catch (Exception e) {
       LOGGER.warn("Chunk processing benchmark failed", e);
@@ -607,7 +607,7 @@ public class NeoForgeEventIntegration {
       }
 
       LOGGER.info(
-          "Villager processing benchmark completed for { } villagers", testVillagers.size());
+          "Villager processing benchmark completed for {} villagers", testVillagers.size());
 
     } catch (Exception e) {
       LOGGER.warn("Villager processing benchmark failed", e);
@@ -622,7 +622,7 @@ public class NeoForgeEventIntegration {
             new float[] {(float) (Math.random() * 1000), 64f, (float) (Math.random() * 1000)});
       }
 
-      LOGGER.info("SIMD operations benchmark completed for { } positions", testPositions.size());
+      LOGGER.info("SIMD operations benchmark completed for {} positions", testPositions.size());
 
     } catch (Exception e) {
       LOGGER.warn("SIMD operations benchmark failed", e);

@@ -198,7 +198,7 @@ public class PerformanceOptimizer {
 
       // Monitor villager optimization
       KneafCore.LOGGER.debug(
-          "Optimized { } villagers, { } processed", villagers.size(), result.size());
+          "Optimized {} villagers, {} processed", villagers.size(), result.size());
 
       return result;
 
@@ -268,7 +268,7 @@ public class PerformanceOptimizer {
     getOptimizationStatistics(); // Trigger cache cleanup
 
     KneafCore.LOGGER.warn(
-        "CRITICAL Memory optimization applied. Usage was { }% - reduced entity processing limits",
+        "CRITICAL Memory optimization applied. Usage was {}% - reduced entity processing limits",
         String.format("%.1f", memoryUsagePercent));
   }
 
@@ -282,7 +282,7 @@ public class PerformanceOptimizer {
 
     // Log optimization
     KneafCore.LOGGER.info(
-        "Memory optimization applied. Usage was { }%",
+        "Memory optimization applied. Usage was {}%",
         String.format("%.1f", memoryUsagePercent));
   }
 

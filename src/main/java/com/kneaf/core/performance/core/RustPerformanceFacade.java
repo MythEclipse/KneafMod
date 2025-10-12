@@ -144,7 +144,7 @@ public class RustPerformanceFacade {
           @Override
           public void logPerformanceSummary() {
             KneafCore.LOGGER.info(
-                "Performance Summary - Entities: { }, Items: { }, Mobs: { }, Blocks: { }, TPS: { }",
+                "Performance Summary - Entities: {}, Items: {}, Mobs: {}, Blocks: {}, TPS: {}",
                 totalEntities.get(),
                 totalItems.get(),
                 totalMobs.get(),

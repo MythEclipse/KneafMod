@@ -69,10 +69,10 @@ public class ChunkStorageCore {
         if (ChunkStorageUtils.isMinecraftLevelChunk(chunk)) {
           evicted = cache.putChunk(chunkKey, chunk);
         } else {
-          LOGGER.debug("Chunk object is not a LevelChunk, skipping cache for { }", chunkKey);
+          LOGGER.debug("Chunk object is not a LevelChunk, skipping cache for {}", chunkKey);
         }
       } catch (Exception e) {
-        LOGGER.debug("Failed to cache chunk { }: { }", chunkKey, e.getMessage());
+        LOGGER.debug("Failed to cache chunk {}: {}", chunkKey, e.getMessage());
       }
 
       // Handle evicted chunk if needed (save to database if dirty)
@@ -113,11 +113,11 @@ public class ChunkStorageCore {
       // Try cache first
       Optional<ChunkCache.CachedChunk> cached = cache.getChunk(chunkKey);
       if (cached.isPresent()) {
-        LOGGER.trace("Chunk { } found in cache", chunkKey);
+        LOGGER.trace("Chunk {} found in cache", chunkKey);
 
         // Check if chunk is swapped out and needs to be swapped in
         if (cached.get().isSwapped()) {
-          LOGGER.debug("Chunk { } is swapped out, initiating swap-in", chunkKey);
+          LOGGER.debug("Chunk {} is swapped out, initiating swap-in", chunkKey);
 
           boolean swappedIn = false;
 
@@ -175,7 +175,7 @@ public class ChunkStorageCore {
           }
 
           if (swappedIn) {
-            LOGGER.debug("Successfully swapped in chunk: { }", chunkKey);
+            LOGGER.debug("Successfully swapped in chunk: {}", chunkKey);
             // Attempt to retrieve the (now) in-memory cached chunk
             cached = cache.getChunk(chunkKey);
             if (cached.isPresent() && !cached.get().isSwapped()) {
@@ -225,7 +225,7 @@ public class ChunkStorageCore {
               }
             }
           } else {
-            LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
+            LOGGER.warn("Failed to swap in chunk: {}", chunkKey);
           }
         }
       }
@@ -233,7 +233,7 @@ public class ChunkStorageCore {
       // Try database
       Optional<byte[]> dbData = database.getChunk(chunkKey);
       if (dbData.isPresent()) {
-        LOGGER.trace("Chunk { } found in database", chunkKey);
+        LOGGER.trace("Chunk {} found in database", chunkKey);
         try {
           Object chunkData = serializer.deserialize(dbData.get());
 
@@ -244,17 +244,17 @@ public class ChunkStorageCore {
             // For now, we just return the NBT data
             return Optional.of(chunkData);
           } else {
-            LOGGER.warn("Deserialized data is not a valid CompoundTag for chunk { }", chunkKey);
+            LOGGER.warn("Deserialized data is not a valid CompoundTag for chunk {}", chunkKey);
             return Optional.empty();
           }
         } catch (Exception e) {
           LOGGER.error(
-              "Failed to deserialize chunk data for { }: { }", chunkKey, e.getMessage(), e);
+              "Failed to deserialize chunk data for {}: {}", chunkKey, e.getMessage(), e);
           return Optional.empty();
         }
       }
 
-      LOGGER.trace("Chunk { } not found in storage", chunkKey);
+      LOGGER.trace("Chunk {} not found in storage", chunkKey);
       return Optional.empty();
 
     } catch (Exception e) {
@@ -287,7 +287,7 @@ public class ChunkStorageCore {
       boolean deleted = removedFromCache != null || removedFromDb;
 
       if (deleted && LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Deleted chunk { } from storage", chunkKey);
+        LOGGER.debug("Deleted chunk {} from storage", chunkKey);
       }
 
       return deleted;
@@ -303,7 +303,7 @@ public class ChunkStorageCore {
         .putChunkAsync(chunkKey, data)
         .exceptionally(
             throwable -> {
-              LOGGER.error("Failed to save chunk { } to database", chunkKey, throwable);
+              LOGGER.error("Failed to save chunk {} to database", chunkKey, throwable);
               return null;
             });
   }
@@ -311,14 +311,14 @@ public class ChunkStorageCore {
   /** Save chunk to database (helper method). */
   private CompletableFuture<Void> saveChunkToDatabase(String chunkKey, Object chunk) {
     if (serializer == null) {
-      LOGGER.warn("Cannot serialize chunk { } - serializer is null", chunkKey);
+      LOGGER.warn("Cannot serialize chunk {} - serializer is null", chunkKey);
       return CompletableFuture.completedFuture(null);
     }
     try {
       byte[] data = serializer.serialize(chunk);
       return saveChunkToDatabase(chunkKey, data);
     } catch (Exception e) {
-      LOGGER.error("Failed to serialize chunk { } for database storage", chunkKey, e);
+      LOGGER.error("Failed to serialize chunk {} for database storage", chunkKey, e);
       return ChunkStorageUtils.failedFuture(e);
     }
   }
@@ -366,7 +366,7 @@ public class ChunkStorageCore {
     }
 
     try {
-      LOGGER.info("Creating backup at '{ }'", backupPath);
+      LOGGER.info("Creating backup at '{}'", backupPath);
       database.createBackup(backupPath);
       LOGGER.info("Backup completed");
     } catch (Exception e) {

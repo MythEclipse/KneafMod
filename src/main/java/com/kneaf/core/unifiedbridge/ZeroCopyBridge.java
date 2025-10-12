@@ -1,7 +1,9 @@
 package com.kneaf.core.unifiedbridge;
 
 import java.nio.ByteBuffer;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -11,6 +13,29 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static java.util.logging.Level.FINE;
+
+// Native bridge untuk zero-copy operations
+class NativeZeroCopyBridge {
+    // Native method declarations untuk zero-copy operations
+    public static native long nativeExecuteSync(String operationName, Object[] parameters);
+    public static native long nativeAllocateZeroCopyBuffer(long size, int bufferType);
+    public static native void nativeFreeBuffer(long bufferHandle);
+    public static native ByteBuffer nativeGetBufferContent(long bufferHandle);
+    public static native long nativeCreateWorker(int threadCount);
+    public static native void nativeDestroyWorker(long workerHandle);
+    public static native long nativePushTask(long workerHandle, NativeTask task);
+    public static native List<TaskResult> nativePollTasks(long workerHandle, int maxResults);
+    
+    // Load native library
+    static {
+        try {
+            System.loadLibrary("rustperf");
+        } catch (UnsatisfiedLinkError e) {
+            Logger.getLogger(NativeZeroCopyBridge.class.getName()).log(Level.WARNING,
+                "Failed to load native library rustperf: " + e.getMessage());
+        }
+    }
+}
 
 /**
  * Zero-copy bridge implementation for efficient direct memory access operations.
@@ -78,12 +103,19 @@ public class ZeroCopyBridge implements UnifiedBridge {
         long startTime = System.nanoTime();
         
         try {
-            // In real implementation, this would call native code with zero-copy optimizations
-            // For simulation, we'll create a successful result
-            LOGGER.log(FINE, "Executing zero-copy sync operation: {0} with {1} parameters", 
+            // Call actual native sync method with zero-copy optimizations
+            LOGGER.log(FINE, "Executing zero-copy sync operation: {0} with {1} parameters",
                     new Object[]{operationName, parameters.length});
             
-            BridgeResult result = BridgeResultFactory.createSuccess(operationName);
+            long nativeResult = NativeZeroCopyBridge.nativeExecuteSync(operationName, parameters);
+            
+            // Convert native result to BridgeResult with zero-copy metadata
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("nativeOperation", operationName);
+            metadata.put("nativeResult", nativeResult);
+            metadata.put("zeroCopyOptimized", true);
+            
+            BridgeResult result = BridgeResultFactory.createSuccess(operationName, (byte[]) null, metadata);
             
             metrics.recordOperation(operationName, startTime, System.nanoTime(), 
                     calculateBytesProcessed(parameters), true);
@@ -162,27 +194,46 @@ public class ZeroCopyBridge implements UnifiedBridge {
     public long allocateZeroCopyBuffer(long size, BufferType bufferType) throws BridgeException {
         Objects.requireNonNull(bufferType, "Buffer type cannot be null");
         
+        if (size <= 0) {
+            throw new BridgeException("Buffer size must be positive",
+                    BridgeException.BridgeErrorType.GENERIC_ERROR);
+        }
+        
         long startTime = System.nanoTime();
         
         try {
+            // Validate buffer size against configuration limits
+            if (size > config.getMaxBufferSize()) {
+                throw new BridgeException("Buffer size " + size + " exceeds maximum allowed " + config.getMaxBufferSize(),
+                        BridgeException.BridgeErrorType.GENERIC_ERROR);
+            }
+            
             // Allocate buffer with zero-copy semantics - uses direct memory allocation
-            LOGGER.log(FINE, "Allocating zero-copy buffer of size {0} with type {1}", 
+            LOGGER.log(FINE, "Allocating zero-copy buffer of size {0} with type {1}",
                     new Object[]{size, bufferType.name()});
             
-            // In real implementation, this would call native memory allocation directly
-            // For simulation, we'll use buffer pool manager with zero-copy configuration
-            long bufferHandle = bufferPoolManager.allocateBuffer(size, bufferType);
+            // Call actual native zero-copy buffer allocation
+            long bufferHandle = NativeZeroCopyBridge.nativeAllocateZeroCopyBuffer(size, bufferType.ordinal());
             
-            metrics.recordOperation("buffer.allocate.zeroCopy", startTime, System.nanoTime(), 
+            if (bufferHandle <= 0) {
+                throw new BridgeException("Failed to allocate zero-copy buffer (invalid handle: " + bufferHandle + ")",
+                        BridgeException.BridgeErrorType.BUFFER_ALLOCATION_FAILED);
+            }
+            
+            // Log buffer allocation for monitoring
+            LOGGER.log(FINE, "Zero-copy buffer allocated with handle: {0}, size: {1}, type: {2}",
+                    new Object[]{bufferHandle, size, bufferType.name()});
+            
+            metrics.recordOperation("buffer.allocate.zeroCopy", startTime, System.nanoTime(),
                     size, true);
             
             return bufferHandle;
             
         } catch (Exception e) {
-            metrics.recordOperation("buffer.allocate.zeroCopy", startTime, System.nanoTime(), 
+            metrics.recordOperation("buffer.allocate.zeroCopy", startTime, System.nanoTime(),
                     size, false);
             
-            throw new BridgeException("Zero-copy buffer allocation failed", 
+            throw new BridgeException("Zero-copy buffer allocation failed",
                     BridgeException.BridgeErrorType.BUFFER_ALLOCATION_FAILED, e);
         }
     }
@@ -196,19 +247,17 @@ public class ZeroCopyBridge implements UnifiedBridge {
         long startTime = System.nanoTime();
         
         try {
-            boolean freed = bufferPoolManager.freeBuffer(bufferHandle);
+            LOGGER.log(FINE, "Freeing zero-copy buffer with handle {0}", bufferHandle);
             
-            if (!freed) {
-                throw new BridgeException("Failed to free zero-copy buffer: " + bufferHandle, 
-                        BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED);
-            }
+            // Call actual native buffer free method
+            NativeZeroCopyBridge.nativeFreeBuffer(bufferHandle);
             
             metrics.recordOperation("buffer.free.zeroCopy", startTime, System.nanoTime(), 0, true);
             
         } catch (Exception e) {
             metrics.recordOperation("buffer.free.zeroCopy", startTime, System.nanoTime(), 0, false);
             
-            throw new BridgeException("Zero-copy buffer free failed: " + bufferHandle, 
+            throw new BridgeException("Zero-copy buffer free failed: " + bufferHandle,
                     BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED, e);
         }
     }
@@ -223,15 +272,18 @@ public class ZeroCopyBridge implements UnifiedBridge {
         long startTime = System.nanoTime();
         
         try {
-            ByteBuffer content = bufferPoolManager.getBufferContent(bufferHandle);
+            // Verify buffer exists and is accessible
+            LOGGER.log(FINE, "Getting content for zero-copy buffer with handle {0}", bufferHandle);
             
-            if (content == null) {
-                throw new BridgeException("Zero-copy buffer not found: " + bufferHandle, 
+            // Call actual native buffer content retrieval
+            ByteBuffer content = NativeZeroCopyBridge.nativeGetBufferContent(bufferHandle);
+            
+            if (content == null || !content.isDirect()) {
+                throw new BridgeException("Invalid buffer content for handle: " + bufferHandle,
                         BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED);
             }
             
-            // For zero-copy, we return the direct buffer directly without copying
-            metrics.recordOperation("buffer.getContent.zeroCopy", startTime, System.nanoTime(), 
+            metrics.recordOperation("buffer.getContent.zeroCopy", startTime, System.nanoTime(),
                     content.capacity(), true);
             
             return content;
@@ -239,7 +291,7 @@ public class ZeroCopyBridge implements UnifiedBridge {
         } catch (Exception e) {
             metrics.recordOperation("buffer.getContent.zeroCopy", startTime, System.nanoTime(), 0, false);
             
-            throw new BridgeException("Failed to get zero-copy buffer content: " + bufferHandle, 
+            throw new BridgeException("Failed to get zero-copy buffer content: " + bufferHandle,
                     BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED, e);
         }
     }
@@ -259,9 +311,8 @@ public class ZeroCopyBridge implements UnifiedBridge {
             // Create worker optimized for zero-copy operations
             LOGGER.log(FINE, "Creating zero-copy worker with config: {0}", workerConfig);
             
-            // In real implementation, this would create a native worker with zero-copy optimizations
-            // For simulation, we'll use worker manager with zero-copy configuration
-            long workerHandle = workerManager.createWorker(workerConfig.getThreadCount());
+            // Create worker optimized for zero-copy operations using actual native implementation
+            long workerHandle = NativeZeroCopyBridge.nativeCreateWorker(workerConfig.getThreadCount());
             
             metrics.recordOperation("worker.create.zeroCopy", startTime, System.nanoTime(), 0, true);
             
@@ -284,12 +335,8 @@ public class ZeroCopyBridge implements UnifiedBridge {
         long startTime = System.nanoTime();
         
         try {
-            boolean destroyed = workerManager.destroyWorker(workerHandle);
-            
-            if (!destroyed) {
-                throw new BridgeException("Failed to destroy zero-copy worker: " + workerHandle, 
-                        BridgeException.BridgeErrorType.WORKER_DESTROY_FAILED);
-            }
+            // Call actual native worker destruction method
+            NativeZeroCopyBridge.nativeDestroyWorker(workerHandle);
             
             metrics.recordOperation("worker.destroy.zeroCopy", startTime, System.nanoTime(), 0, true);
             
@@ -317,30 +364,24 @@ public class ZeroCopyBridge implements UnifiedBridge {
             // Push task to worker with zero-copy optimizations
             LOGGER.log(FINE, "Pushing zero-copy task to worker {0}", workerHandle);
             
-            // In real implementation, this would push task to native worker queue with direct memory access
-            // For simulation, we'll execute the task synchronously
-            // Perbaiki: BridgeResult tidak bisa dikonversi ke TaskResult
-            BridgeResult bridgeResult = task.execute(this);
+            // Call actual native task push method with zero-copy optimizations
+            long operationId = NativeZeroCopyBridge.nativePushTask(workerHandle, task);
             
-            // Konversi BridgeResult ke TaskResult
-            TaskResult result = new TaskResult(
-                bridgeResult.getTaskId(),
-                bridgeResult.isSuccess(),
-                bridgeResult.getResultObject(),
-                bridgeResult.getErrorMessage(),
-                bridgeResult.getDurationMillis()
-            );
+            if (operationId <= 0) {
+                throw new BridgeException("Failed to push zero-copy task (invalid operation ID: " + operationId + ")",
+                        BridgeException.BridgeErrorType.TASK_PROCESSING_FAILED);
+            }
             
-            metrics.recordOperation("task.push.zeroCopy", startTime, System.nanoTime(), 
+            metrics.recordOperation("task.push.zeroCopy", startTime, System.nanoTime(),
                     calculateBytesProcessed(task), true);
             
-            return result.getTaskHandle();
+            return operationId;
             
         } catch (Exception e) {
-            metrics.recordOperation("task.push.zeroCopy", startTime, System.nanoTime(), 
+            metrics.recordOperation("task.push.zeroCopy", startTime, System.nanoTime(),
                     calculateBytesProcessed(task), false);
             
-            throw new BridgeException("Zero-copy task push failed", 
+            throw new BridgeException("Zero-copy task push failed",
                     BridgeException.BridgeErrorType.TASK_PROCESSING_FAILED, e);
         }
     }
@@ -360,11 +401,13 @@ public class ZeroCopyBridge implements UnifiedBridge {
             LOGGER.log(FINE, "Polling zero-copy tasks from worker {0}, max results: {1}", 
                     new Object[]{workerHandle, maxResults});
             
-            // In real implementation, this would poll native worker queue for completed tasks
-            // For simulation, we'll return an empty list
-            metrics.recordOperation("task.poll.zeroCopy", startTime, System.nanoTime(), 0, true);
+            // Call actual native task polling method with zero-copy optimizations
+            List<TaskResult> results = NativeZeroCopyBridge.nativePollTasks(workerHandle, maxResults);
             
-            return List.of(); // Return empty list for simulation
+            metrics.recordOperation("task.poll.zeroCopy", startTime, System.nanoTime(),
+                    calculateBytesProcessed(results), true);
+            
+            return results;
             
         } catch (Exception e) {
             metrics.recordOperation("task.poll.zeroCopy", startTime, System.nanoTime(), 0, false);
@@ -494,8 +537,29 @@ public class ZeroCopyBridge implements UnifiedBridge {
      * @return Approximate bytes processed
      */
     private long calculateBytesProcessed(NativeTask task) {
-        // For tasks, we can't easily calculate bytes without executing them
-        // In real implementation, this would be more sophisticated
-        return 0;
+        // Calculate bytes processed from task parameters using zero-copy optimizations
+        if (task == null || task.getParameters() == null) {
+            return 0;
+        }
+        return calculateBytesProcessed(task.getParameters());
+    }
+    
+    private long calculateBytesProcessed(List<TaskResult> results) {
+        if (results == null || results.isEmpty()) {
+            return 0;
+        }
+        
+        long totalBytes = 0;
+        for (TaskResult result : results) {
+            Object resultData = result.getResult();
+            if (resultData instanceof byte[]) {
+                totalBytes += ((byte[]) resultData).length;
+            } else if (resultData instanceof ByteBuffer) {
+                totalBytes += ((ByteBuffer) resultData).capacity();
+            } else if (resultData != null) {
+                totalBytes += resultData.toString().getBytes().length;
+            }
+        }
+        return totalBytes;
     }
 }

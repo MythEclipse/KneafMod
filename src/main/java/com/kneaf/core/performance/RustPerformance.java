@@ -589,7 +589,7 @@ public class RustPerformance {
         // Log and continue in degraded mode; some tests will detect missing native libs and skip.
         try {
           KneafCore.LOGGER.warn(
-              "RustPerformance initialize failed (falling back): { }", t.getMessage());
+              "RustPerformance initialize failed (falling back): {}", t.getMessage());
         } catch (Throwable ignore) {
         }
       } finally {

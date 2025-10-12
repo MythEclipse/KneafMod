@@ -270,7 +270,7 @@ public class ChunkCache implements StorageStatisticsProvider {
               farthestKey = entry.getKey();
             }
           } catch (NumberFormatException e) {
-            LOGGER.debug("Invalid chunk key format: { }", entry.getKey());
+            LOGGER.debug("Invalid chunk key format: {}", entry.getKey());
           }
         }
       }
@@ -433,7 +433,7 @@ public class ChunkCache implements StorageStatisticsProvider {
     this.evictionPolicy = evictionPolicy;
 
     LOGGER.info(
-        "Initialized ChunkCache with capacity { } and { } eviction policy",
+        "Initialized ChunkCache with capacity {} and {} eviction policy",
         this.maxCapacity.get(),
         evictionPolicy.getPolicyName());
   }
@@ -458,7 +458,7 @@ public class ChunkCache implements StorageStatisticsProvider {
         totalHits.incrementAndGet();
 
         if (LOGGER.isTraceEnabled()) {
-          LOGGER.trace("Cache hit for chunk { }", key);
+          LOGGER.trace("Cache hit for chunk {}", key);
         }
 
         return Optional.of(cached);
@@ -467,7 +467,7 @@ public class ChunkCache implements StorageStatisticsProvider {
         totalMisses.incrementAndGet();
 
         if (LOGGER.isTraceEnabled()) {
-          LOGGER.trace("Cache miss for chunk { }", key);
+          LOGGER.trace("Cache miss for chunk {}", key);
         }
 
         return Optional.empty();
@@ -500,7 +500,7 @@ public class ChunkCache implements StorageStatisticsProvider {
 
           if (LOGGER.isDebugEnabled()) {
             LOGGER.debug(
-                "Evicted chunk { } from cache (policy: { })",
+                "Evicted chunk {} from cache (policy: {})",
                 keyToEvict,
                 evictionPolicy.getPolicyName());
           }
@@ -515,7 +515,7 @@ public class ChunkCache implements StorageStatisticsProvider {
       cache.put(key, cachedChunk);
 
       if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Cached chunk { } (total cached: { })", key, cache.size());
+        LOGGER.debug("Cached chunk {} (total cached: {})", key, cache.size());
       }
 
       return null;
@@ -540,7 +540,7 @@ public class ChunkCache implements StorageStatisticsProvider {
     try {
       CachedChunk removed = cache.remove(key);
       if (removed != null && LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Removed chunk { } from cache", key);
+        LOGGER.debug("Removed chunk {} from cache", key);
       }
       return removed;
     } finally {
@@ -598,7 +598,7 @@ public class ChunkCache implements StorageStatisticsProvider {
       cache.clear();
 
       if (LOGGER.isInfoEnabled()) {
-        LOGGER.info("Cleared { } chunks from cache", sizeBefore);
+        LOGGER.info("Cleared {} chunks from cache", sizeBefore);
       }
     } finally {
       cacheLock.writeLock().unlock();
@@ -669,7 +669,7 @@ public class ChunkCache implements StorageStatisticsProvider {
     cacheLock.writeLock().lock();
     try {
       int old = this.maxCapacity.getAndSet(newCapacity);
-      LOGGER.info("Cache capacity changed from { } to { }", old, newCapacity);
+      LOGGER.info("Cache capacity changed from {} to {}", old, newCapacity);
 
       // If we now exceed capacity, evict until size <= newCapacity
       while (cache.size() > newCapacity) {
@@ -682,7 +682,7 @@ public class ChunkCache implements StorageStatisticsProvider {
           evictionCount.incrementAndGet();
           if (LOGGER.isDebugEnabled()) {
             LOGGER.debug(
-                "Evicted chunk { } due to capacity change (policy: { })",
+                "Evicted chunk {} due to capacity change (policy: {})",
                 keyToEvict,
                 evictionPolicy.getPolicyName());
           }
@@ -731,7 +731,7 @@ public class ChunkCache implements StorageStatisticsProvider {
       }
 
       this.evictionPolicy = newPolicy;
-      LOGGER.info("Eviction policy switched to { }", newPolicy.getPolicyName());
+      LOGGER.info("Eviction policy switched to {}", newPolicy.getPolicyName());
       return true;
     } finally {
       cacheLock.writeLock().unlock();
@@ -759,7 +759,7 @@ public class ChunkCache implements StorageStatisticsProvider {
   public void setMemoryPressureLevel(MemoryPressureLevel pressureLevel) {
     if (pressureLevel != null) {
       this.memoryPressureLevel = pressureLevel;
-      LOGGER.debug("Memory pressure level set to { }", pressureLevel);
+      LOGGER.debug("Memory pressure level set to {}", pressureLevel);
     }
   }
 
@@ -790,12 +790,12 @@ public class ChunkCache implements StorageStatisticsProvider {
           try {
             CachedChunk cached = cache.get(key);
             if (cached == null) {
-              LOGGER.warn("Cannot swap out non-existent chunk: { }", key);
+              LOGGER.warn("Cannot swap out non-existent chunk: {}", key);
               return false;
             }
 
             if (cached.isSwapping() || cached.isSwapped()) {
-              LOGGER.debug("Chunk { } is already swapping or swapped", key);
+              LOGGER.debug("Chunk {} is already swapping or swapped", key);
               return false;
             }
 
@@ -804,7 +804,7 @@ public class ChunkCache implements StorageStatisticsProvider {
             cached.setState(ChunkState.SWAPPING_OUT);
             cached.setSwapStartTime(startTime);
 
-            LOGGER.debug("Initiated swap-out for chunk { }", key);
+            LOGGER.debug("Initiated swap-out for chunk {}", key);
 
             // Simulate swap operation (in real implementation, this would be async)
             try {
@@ -818,7 +818,7 @@ public class ChunkCache implements StorageStatisticsProvider {
               totalSwapOutTime.addAndGet(duration);
               swapOutCount.incrementAndGet();
 
-              LOGGER.debug("Completed swap-out for chunk { } in { }ms", key, duration);
+              LOGGER.debug("Completed swap-out for chunk {} in {}ms", key, duration);
 
               if (swapCallback != null) {
                 swapCallback.accept(true);
@@ -832,7 +832,7 @@ public class ChunkCache implements StorageStatisticsProvider {
               cached.setSwapError("Swap interrupted");
               swapOutFailureCount.incrementAndGet();
 
-              LOGGER.error("Swap-out interrupted for chunk { }", key, e);
+              LOGGER.error("Swap-out interrupted for chunk {}", key, e);
 
               if (swapCallback != null) {
                 swapCallback.accept(false);
@@ -865,12 +865,12 @@ public class ChunkCache implements StorageStatisticsProvider {
           try {
             CachedChunk cached = cache.get(key);
             if (cached == null) {
-              LOGGER.warn("Cannot swap in non-existent chunk: { }", key);
+              LOGGER.warn("Cannot swap in non-existent chunk: {}", key);
               return false;
             }
 
             if (!cached.isSwapped()) {
-              LOGGER.debug("Chunk { } is not swapped out", key);
+              LOGGER.debug("Chunk {} is not swapped out", key);
               return false;
             }
 
@@ -879,7 +879,7 @@ public class ChunkCache implements StorageStatisticsProvider {
             cached.setState(ChunkState.SWAPPING_IN);
             cached.setSwapStartTime(startTime);
 
-            LOGGER.debug("Initiated swap-in for chunk { }", key);
+            LOGGER.debug("Initiated swap-in for chunk {}", key);
 
             // Simulate swap operation (in real implementation, this would be async)
             try {
@@ -893,7 +893,7 @@ public class ChunkCache implements StorageStatisticsProvider {
               totalSwapInTime.addAndGet(duration);
               swapInCount.incrementAndGet();
 
-              LOGGER.debug("Completed swap-in for chunk { } in { }ms", key, duration);
+              LOGGER.debug("Completed swap-in for chunk {} in {}ms", key, duration);
 
               if (swapCallback != null) {
                 swapCallback.accept(true);
@@ -907,7 +907,7 @@ public class ChunkCache implements StorageStatisticsProvider {
               cached.setSwapError("Swap-in interrupted");
               swapInFailureCount.incrementAndGet();
 
-              LOGGER.error("Swap-in interrupted for chunk { }", key, e);
+              LOGGER.error("Swap-in interrupted for chunk {}", key, e);
 
               if (swapCallback != null) {
                 swapCallback.accept(false);
@@ -949,7 +949,7 @@ public class ChunkCache implements StorageStatisticsProvider {
                 keyToSwap,
                 success -> {
                   if (success) {
-                    LOGGER.debug("Lazy swap-out completed for chunk { }", keyToSwap);
+                    LOGGER.debug("Lazy swap-out completed for chunk {}", keyToSwap);
                   }
                 });
             swappedCount++;
@@ -958,7 +958,7 @@ public class ChunkCache implements StorageStatisticsProvider {
       }
 
       LOGGER.info(
-          "Initiated swap-aware eviction for { } chunks (pressure: { })",
+          "Initiated swap-aware eviction for {} chunks (pressure: {})",
           swappedCount,
           memoryPressureLevel);
 

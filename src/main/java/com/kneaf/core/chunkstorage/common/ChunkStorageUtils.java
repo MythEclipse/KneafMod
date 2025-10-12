@@ -31,14 +31,14 @@ public final class ChunkStorageUtils {
     executor.shutdown();
     try {
       if (!executor.awaitTermination(timeoutSeconds, TimeUnit.SECONDS)) {
-        LOGGER.warn(
-            "{ } executor did not terminate within { } seconds, forcing shutdown",
-            executorName,
-            timeoutSeconds);
+    LOGGER.warn(
+      "{} executor did not terminate within {} seconds, forcing shutdown",
+      executorName,
+      timeoutSeconds);
         executor.shutdownNow();
       }
     } catch (InterruptedException e) {
-      LOGGER.warn("{ } executor shutdown interrupted, forcing shutdown", executorName);
+  LOGGER.warn("{} executor shutdown interrupted, forcing shutdown", executorName);
       executor.shutdownNow();
       Thread.currentThread().interrupt();
     }

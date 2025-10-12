@@ -1157,14 +1157,14 @@ public class SwapManager {
                     fallbackOperation.setStatus(SwapStatus.COMPLETED);
                     swapStats.recordSwapIn(duration, estimateChunkSize(chunkKey));
                     performanceMonitor.recordSwapIn(estimateChunkSize(chunkKey), duration);
-                    LOGGER.debug("Successfully swapped in chunk: { } in { }ms", chunkKey, duration);
+                    LOGGER.debug("Successfully swapped in chunk: {} in {}ms", chunkKey, duration);
                   } else {
                     fallbackOperation.setStatus(SwapStatus.FAILED);
                     fallbackOperation.setErrorMessage("Swap-in operation failed");
                     swapStats.recordFailure();
                     failedSwapOperations.incrementAndGet();
                     performanceMonitor.recordSwapFailure("swap_in", "Operation failed");
-                    LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
+                    LOGGER.warn("Failed to swap in chunk: {}", chunkKey);
                   }
 
                   return success;
@@ -1176,7 +1176,7 @@ public class SwapManager {
                   swapStats.recordFailure();
                   failedSwapOperations.incrementAndGet();
                   performanceMonitor.recordSwapFailure("swap_in", ex.getMessage());
-                  LOGGER.error("Exception during swap-in for chunk: { }", chunkKey, ex);
+                  LOGGER.error("Exception during swap-in for chunk: {}", chunkKey, ex);
                   return false;
 
                 } finally {
@@ -1231,14 +1231,14 @@ public class SwapManager {
                   operation.setStatus(SwapStatus.COMPLETED);
                   swapStats.recordSwapIn(duration, estimateChunkSize(chunkKey));
                   performanceMonitor.recordSwapIn(estimateChunkSize(chunkKey), duration);
-                  LOGGER.debug("Successfully swapped in chunk: { } in { }ms", chunkKey, duration);
+                  LOGGER.debug("Successfully swapped in chunk: {} in {}ms", chunkKey, duration);
                 } else {
                   operation.setStatus(SwapStatus.FAILED);
                   operation.setErrorMessage("Swap-in operation failed");
                   swapStats.recordFailure();
                   failedSwapOperations.incrementAndGet();
                   performanceMonitor.recordSwapFailure("swap_in", "Operation failed");
-                  LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
+                  LOGGER.warn("Failed to swap in chunk: {}", chunkKey);
                 }
 
                 return success;
@@ -1250,7 +1250,7 @@ public class SwapManager {
                 swapStats.recordFailure();
                 failedSwapOperations.incrementAndGet();
                 performanceMonitor.recordSwapFailure("swap_in", e.getMessage());
-                LOGGER.error("Exception during swap-in for chunk: { }", chunkKey, e);
+                LOGGER.error("Exception during swap-in for chunk: {}", chunkKey, e);
                 return false;
 
               } finally {
@@ -1882,7 +1882,7 @@ public class SwapManager {
         // Format usage percentage to two decimal places for the log message
         String pct = String.format("%.2f", usage.getUsagePercentage() * 100);
         LOGGER.info(
-            "Memory pressure level changed from { } to { } (usage: { }%)",
+            "Memory pressure level changed from {} to {} (usage: {}%)",
             CURRENT_PRESSURELevel, newLevel, pct);
 
         CURRENT_PRESSURELevel = newLevel;
@@ -1946,12 +1946,12 @@ public class SwapManager {
     int targetSwaps = determineTargetSwapCount(level);
     if (targetSwaps > 0 && chunkCache != null) {
       LOGGER.info(
-          "Triggering automatic swap for { } chunks due to { } memory pressure",
+          "Triggering automatic swap for {} chunks due to {} memory pressure",
           targetSwaps,
           level);
 
       int swapped = chunkCache.performSwapAwareEviction(targetSwaps);
-      LOGGER.info("Automatically initiated swap for { } chunks", swapped);
+      LOGGER.info("Automatically initiated swap for {} chunks", swapped);
     }
   }
 
@@ -2007,7 +2007,7 @@ public class SwapManager {
             }
           } catch (Exception e) {
             LOGGER.debug(
-                "Transient DB swap-out attempt { } failed for { }: { }",
+                "Transient DB swap-out attempt {} failed for {}: {}",
                 attempts,
                 chunkKey,
                 e.getMessage());
@@ -2053,7 +2053,7 @@ public class SwapManager {
                 putOk = true;
               } catch (Exception pe) {
                 LOGGER.debug(
-                    "Attempt { } to put marker failed for { }: { }",
+                    "Attempt {} to put marker failed for {}: {}",
                     putAttempts,
                     chunkKey,
                     pe.getMessage());
@@ -2074,12 +2074,12 @@ public class SwapManager {
                 }
               } catch (Exception se) {
                 LOGGER.debug(
-                    "Marker-based swap-out attempt failed for { }: { }", chunkKey, se.getMessage());
+                    "Marker-based swap-out attempt failed for {}: {}", chunkKey, se.getMessage());
               }
             }
           } catch (Throwable t) {
             LOGGER.debug(
-                "Marker-based recovery attempt failed for { }: { }", chunkKey, t.getMessage());
+                "Marker-based recovery attempt failed for {}: {}", chunkKey, t.getMessage());
           }
 
           // After retries, presence check, and marker attempt, we may still decide to
@@ -2111,7 +2111,7 @@ public class SwapManager {
 
     // Check if chunk can be swapped (not currently swapping)
     if (cachedChunk.isSwapping() || cachedChunk.isSwapped()) {
-      LOGGER.debug("Chunk is already swapping or swapped: { }", chunkKey);
+      LOGGER.debug("Chunk is already swapping or swapped: {}", chunkKey);
       return false;
     }
 

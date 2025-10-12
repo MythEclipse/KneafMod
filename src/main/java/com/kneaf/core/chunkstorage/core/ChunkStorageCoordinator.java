@@ -37,7 +37,7 @@ public class ChunkStorageCoordinator implements StorageStatisticsProvider {
       // Initialize swap manager with core components
       if (swapManager != null && core.getCache() != null && core.getDatabase() != null) {
         // Note: Type compatibility issue - we'll skip initialization for now
-        LOGGER.info("ChunkStorageCoordinator initialized for world '{ }'", worldName);
+        LOGGER.info("ChunkStorageCoordinator initialized for world '{}'", worldName);
       }
     } catch (Exception e) {
       ChunkStorageExceptionHandler.handleInitializationException(
@@ -186,13 +186,13 @@ public class ChunkStorageCoordinator implements StorageStatisticsProvider {
     }
 
     try {
-      LOGGER.info("Shutting down ChunkStorageCoordinator for world '{ }'", worldName);
+      LOGGER.info("Shutting down ChunkStorageCoordinator for world '{}'", worldName);
 
       if (swapManager != null) {
         swapManager.shutdown();
       }
 
-      LOGGER.info("ChunkStorageCoordinator shutdown completed for world '{ }'", worldName);
+      LOGGER.info("ChunkStorageCoordinator shutdown completed for world '{}'", worldName);
 
     } catch (Exception e) {
       ChunkStorageExceptionHandler.handleShutdownException("ChunkStorageCoordinator", e);

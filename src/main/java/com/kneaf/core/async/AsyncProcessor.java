@@ -179,7 +179,7 @@ public class AsyncProcessor {
     long startTime = System.currentTimeMillis();
 
     if (enableLogging) {
-      LOGGER.debug("{ }: Starting async operation '{ }'", processorName, operationName);
+      LOGGER.debug("{}: Starting async operation '{}'", processorName, operationName);
     }
 
     CompletableFuture<T> future =
@@ -197,7 +197,7 @@ public class AsyncProcessor {
 
                 if (enableLogging) {
                   LOGGER.debug(
-                      "{ }: Completed async operation '{ }' in { }ms",
+                      "{}: Completed async operation '{}' in {}ms",
                       processorName,
                       operationName,
                       duration);
@@ -216,7 +216,7 @@ public class AsyncProcessor {
 
                 if (enableLogging) {
                   LOGGER.error(
-                      "{ }: Failed async operation '{ }' after { }ms",
+                      "{}: Failed async operation '{}' after {}ms",
                       processorName,
                       operationName,
                       duration,
@@ -251,7 +251,7 @@ public class AsyncProcessor {
 
                       if (enableLogging) {
                         LOGGER.error(
-                            "{ }: Async operation '{ }' timed out after { }ms",
+                            "{}: Async operation '{}' timed out after {}ms",
                             processorName,
                             operationName,
                             timeoutMs);
@@ -367,7 +367,7 @@ public class AsyncProcessor {
             try {
               if (enableLogging && attempt > 1) {
                 LOGGER.debug(
-                    "{ }: Retry attempt { } for operation '{ }'",
+                    "{}: Retry attempt {} for operation '{}'",
                     processorName,
                     attempt,
                     operationName);
@@ -423,7 +423,7 @@ public class AsyncProcessor {
           } catch (Exception e) {
             if (enableLogging) {
               LOGGER.warn(
-                  "{ }: Error in operation '{ }', applying error handler",
+                  "{}: Error in operation '{}', applying error handler",
                   processorName,
                   operationName,
                   e);
@@ -474,7 +474,7 @@ public class AsyncProcessor {
 
     if (enableLogging) {
       LOGGER.info(
-          "{ }: Shutdown completed. Total operations: { }, Failed: { }",
+          "{}: Shutdown completed. Total operations: {}, Failed: {}",
           processorName,
           totalOperations.get(),
           failedOperations.get());

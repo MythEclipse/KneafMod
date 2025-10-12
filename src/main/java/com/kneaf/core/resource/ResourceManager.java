@@ -131,7 +131,7 @@ public class ResourceManager implements Closeable {
         return healthy;
       } catch (Exception e) {
         LOGGER.warn(
-            "Health check failed for resource { }: { }",
+            "Health check failed for resource {}: {}",
             resource.getResourceName(),
             e.getMessage());
         return false;
@@ -185,7 +185,7 @@ public class ResourceManager implements Closeable {
       ResourceWrapper wrapper = resources.get(resourceName);
       wrapper.initialize();
       notifyListeners(ResourceLifecycleEvent.Type.REGISTERED, resource);
-      LOGGER.info("Registered resource: { } (type: { })", resourceName, resource.getResourceType());
+      LOGGER.info("Registered resource: {} (type: {})", resourceName, resource.getResourceType());
     } catch (Exception e) {
       resources.remove(resourceName);
       notifyListeners(ResourceLifecycleEvent.Type.REGISTRATION_FAILED, resource);
@@ -210,7 +210,7 @@ public class ResourceManager implements Closeable {
     try {
       wrapper.start();
       notifyListeners(ResourceLifecycleEvent.Type.STARTED, wrapper.getResource());
-      LOGGER.info("Started resource: { }", resourceName);
+      LOGGER.info("Started resource: {}", resourceName);
     } catch (Exception e) {
       notifyListeners(ResourceLifecycleEvent.Type.START_FAILED, wrapper.getResource());
       throw KneafCoreException.builder()
@@ -234,7 +234,7 @@ public class ResourceManager implements Closeable {
     try {
       wrapper.stop();
       notifyListeners(ResourceLifecycleEvent.Type.STOPPED, wrapper.getResource());
-      LOGGER.info("Stopped resource: { }", resourceName);
+      LOGGER.info("Stopped resource: {}", resourceName);
     } catch (Exception e) {
       notifyListeners(ResourceLifecycleEvent.Type.STOP_FAILED, wrapper.getResource());
       throw KneafCoreException.builder()

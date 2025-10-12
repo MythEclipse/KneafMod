@@ -51,7 +51,7 @@ public class ChunkStorageConfigManager {
       default:
         ChunkStorageExceptionHandler.logWarning(
             "ChunkStorageConfigManager",
-            "Unknown eviction policy '{ }', defaulting to LRU",
+            "Unknown eviction policy '{}', defaulting to LRU",
             evictionPolicy);
         return new ChunkCache.LRUEvictionPolicy();
     }

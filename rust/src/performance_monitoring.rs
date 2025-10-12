@@ -439,7 +439,7 @@ pub fn log_performance_summary() {
         metrics.memory_metrics.gc_count));
 }
 
-static PERFORMANCE_MONITOR: Lazy<PerformanceMonitor> = Lazy::new(|| {
+pub static PERFORMANCE_MONITOR: Lazy<PerformanceMonitor> = Lazy::new(|| {
     let logger = PerformanceLogger::new("performance_monitor");
     PerformanceMonitor::new(Arc::new(logger))
 });

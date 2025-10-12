@@ -1,7 +1,9 @@
 package com.kneaf.core.unifiedbridge;
 
 import java.nio.ByteBuffer;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -10,6 +12,30 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static java.util.logging.Level.FINE;
+
+// Native bridge untuk actual JNI calls
+class NativeUnifiedBridge {
+    // Native method declarations untuk unified operations
+    public static native long nativeExecuteSync(String operationName, Object[] parameters);
+    public static native CompletableFuture<Long> nativeExecuteAsync(String operationName, Object[] parameters);
+    public static native long nativeAllocateZeroCopyBuffer(long size, int bufferType);
+    public static native void nativeFreeBuffer(long bufferHandle);
+    public static native ByteBuffer nativeGetBufferContent(long bufferHandle);
+    public static native long nativeCreateWorker(int threadCount);
+    public static native void nativeDestroyWorker(long workerHandle);
+    public static native long nativePushTask(long workerHandle, NativeTask task);
+    public static native List<BridgeResult> nativePollTasks(long workerHandle, int maxResults);
+    
+    // Load native library
+    static {
+        try {
+            System.loadLibrary("rustperf");
+        } catch (UnsatisfiedLinkError e) {
+            Logger.getLogger(NativeUnifiedBridge.class.getName()).log(Level.WARNING,
+                "Failed to load native library rustperf: " + e.getMessage());
+        }
+    }
+}
 
 /**
  * Main implementation that coordinates all unified bridge components.
@@ -51,29 +77,36 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
         
         return CompletableFuture.supplyAsync(() -> {
             try {
-                LOGGER.log(FINE, "Executing async operation: {0} with {1} parameters", 
+                LOGGER.log(FINE, "Executing async operation: {0} with {1} parameters",
                         new Object[]{operationName, parameters.length});
                 
-                // In real implementation, this would call native code asynchronously
-                BridgeResult result = executeSync(operationName, parameters);
+                // Call actual native async method
+                CompletableFuture<Long> nativeFuture = NativeUnifiedBridge.nativeExecuteAsync(operationName, parameters);
                 
-                metrics.recordOperation(operationName, startTime, System.nanoTime(), 
+                // Convert native result to BridgeResult
+                long taskId = nativeFuture.get(); // Wait for completion
+                Map<String, Object> metadata = new HashMap<>();
+                metadata.put("taskId", taskId);
+                metadata.put("nativeOperation", operationName);
+                BridgeResult result = BridgeResultFactory.createSuccess(operationName, (byte[]) null, metadata);
+                
+                metrics.recordOperation(operationName, startTime, System.nanoTime(),
                         calculateBytesProcessed(parameters), result.isSuccess());
                 
                 return result;
                 
             } catch (Exception e) {
-                metrics.recordOperation(operationName, startTime, System.nanoTime(), 
+                metrics.recordOperation(operationName, startTime, System.nanoTime(),
                         calculateBytesProcessed(parameters), false);
                 
-                return errorHandler.handleBridgeError("Async operation failed: " + operationName, 
+                return errorHandler.handleBridgeError("Async operation failed: " + operationName,
                         e, BridgeException.BridgeErrorType.GENERIC_ERROR);
             }
         }).exceptionally(ex -> {
-            metrics.recordOperation(operationName, System.nanoTime(), System.nanoTime(), 
+            metrics.recordOperation(operationName, System.nanoTime(), System.nanoTime(),
                     calculateBytesProcessed(parameters), false);
             
-            return errorHandler.handleBridgeError("Async operation failed with exception: " + operationName, 
+            return errorHandler.handleBridgeError("Async operation failed with exception: " + operationName,
                     ex, BridgeException.BridgeErrorType.GENERIC_ERROR);
         });
     }
@@ -88,8 +121,14 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
             LOGGER.log(FINE, "Executing sync operation: {0} with {1} parameters", 
                     new Object[]{operationName, parameters.length});
             
-            // In real implementation, this would call native code synchronously
-            BridgeResult result = BridgeResultFactory.createSuccess(operationName);
+            // Call actual native sync method
+            long nativeResult = NativeUnifiedBridge.nativeExecuteSync(operationName, parameters);
+            
+            // Convert native result to BridgeResult
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("nativeOperation", operationName);
+            metadata.put("nativeResult", nativeResult);
+            BridgeResult result = BridgeResultFactory.createSuccess(operationName, (byte[]) null, metadata);
             
             metrics.recordOperation(operationName, startTime, System.nanoTime(), 
                     calculateBytesProcessed(parameters), result.isSuccess());
@@ -170,18 +209,19 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
         long startTime = System.nanoTime();
         
         try {
-            LOGGER.log(FINE, "Allocating zero-copy buffer of size {0} with type {1}", 
+            LOGGER.log(FINE, "Allocating zero-copy buffer of size {0} with type {1}",
                     new Object[]{size, bufferType.name()});
             
-            long bufferHandle = bufferPoolManager.allocateBuffer(size, bufferType);
+            // Call actual native buffer allocation
+            long bufferHandle = NativeUnifiedBridge.nativeAllocateZeroCopyBuffer(size, bufferType.ordinal());
             
-            metrics.recordOperation("buffer.allocate.zeroCopy", startTime, System.nanoTime(), 
+            metrics.recordOperation("buffer.allocate.zeroCopy", startTime, System.nanoTime(),
                     size, true);
             
             return bufferHandle;
             
         } catch (Exception e) {
-            metrics.recordOperation("buffer.allocate.zeroCopy", startTime, System.nanoTime(), 
+            metrics.recordOperation("buffer.allocate.zeroCopy", startTime, System.nanoTime(),
                     size, false);
             
             throw errorHandler.createBridgeError("Zero-copy buffer allocation failed",
@@ -198,12 +238,8 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
         long startTime = System.nanoTime();
         
         try {
-            boolean freed = bufferPoolManager.freeBuffer(bufferHandle);
-            
-            if (!freed) {
-                throw new BridgeException("Failed to free buffer: " + bufferHandle, 
-                        BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED);
-            }
+            // Call actual native buffer free method
+            NativeUnifiedBridge.nativeFreeBuffer(bufferHandle);
             
             metrics.recordOperation("buffer.free", startTime, System.nanoTime(), 0, true);
             
@@ -225,9 +261,15 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
         long startTime = System.nanoTime();
         
         try {
-            ByteBuffer content = bufferPoolManager.getBufferContent(bufferHandle);
+            // Call actual native buffer content retrieval
+            ByteBuffer content = NativeUnifiedBridge.nativeGetBufferContent(bufferHandle);
             
-            metrics.recordOperation("buffer.getContent", startTime, System.nanoTime(), 
+            if (content == null) {
+                throw new BridgeException("Buffer content not found: " + bufferHandle,
+                        BridgeException.BridgeErrorType.BUFFER_ACCESS_FAILED);
+            }
+            
+            metrics.recordOperation("buffer.getContent", startTime, System.nanoTime(),
                     content.capacity(), true);
             
             return content;
@@ -254,7 +296,13 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
         try {
             LOGGER.log(FINE, "Creating worker with config: {0}", workerConfig);
             
-            long workerHandle = workerManager.createWorker(workerConfig.getThreadCount());
+            // Call actual native worker creation
+            long workerHandle = NativeUnifiedBridge.nativeCreateWorker(workerConfig.getThreadCount());
+            
+            if (workerHandle <= 0) {
+                throw new BridgeException("Failed to create native worker",
+                        BridgeException.BridgeErrorType.WORKER_CREATION_FAILED);
+            }
             
             metrics.recordOperation("worker.create", startTime, System.nanoTime(), 0, true);
             
@@ -277,12 +325,8 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
         long startTime = System.nanoTime();
         
         try {
-            boolean destroyed = workerManager.destroyWorker(workerHandle);
-            
-            if (!destroyed) {
-                throw new BridgeException("Failed to destroy worker: " + workerHandle, 
-                        BridgeException.BridgeErrorType.WORKER_DESTROY_FAILED);
-            }
+            // Call actual native worker destruction
+            NativeUnifiedBridge.nativeDestroyWorker(workerHandle);
             
             metrics.recordOperation("worker.destroy", startTime, System.nanoTime(), 0, true);
             
@@ -309,16 +353,16 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
         try {
             LOGGER.log(FINE, "Pushing task to worker {0}", workerHandle);
             
-            // In real implementation, this would push task to native worker queue
-            BridgeResult result = task.execute(this);
+            // Call actual native task push method
+            long operationId = NativeUnifiedBridge.nativePushTask(workerHandle, task);
             
             metrics.recordOperation("task.push", startTime, System.nanoTime(),
-                    calculateBytesProcessed(task), result.isSuccess());
+                    calculateBytesProcessed(task), operationId > 0);
             
-            return result.getTaskId();
+            return operationId;
             
         } catch (Exception e) {
-            metrics.recordOperation("task.push", startTime, System.nanoTime(), 
+            metrics.recordOperation("task.push", startTime, System.nanoTime(),
                     calculateBytesProcessed(task), false);
             
             throw errorHandler.createBridgeError("Task push failed",
@@ -337,16 +381,16 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
         long startTime = System.nanoTime();
         
         try {
-            LOGGER.log(FINE, "Polling tasks from worker {0}, max results: {1}", 
+            LOGGER.log(FINE, "Polling tasks from worker {0}, max results: {1}",
                     new Object[]{workerHandle, maxResults});
             
-            // In real implementation, this would poll native worker queue for completed tasks
-            // For simulation, we'll return an empty list
-            List<BridgeResult> results = List.of();
+            // Call actual native task polling method
+            List<BridgeResult> results = NativeUnifiedBridge.nativePollTasks(workerHandle, maxResults);
             
-            metrics.recordOperation("task.poll", startTime, System.nanoTime(), 0, true);
+            metrics.recordOperation("task.poll", startTime, System.nanoTime(),
+                    results != null ? results.size() : 0, true);
             
-            return results;
+            return results != null ? results : List.of();
             
         } catch (Exception e) {
             metrics.recordOperation("task.poll", startTime, System.nanoTime(), 0, false);

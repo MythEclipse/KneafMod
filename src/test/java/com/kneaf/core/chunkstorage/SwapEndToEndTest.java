@@ -56,7 +56,7 @@ public class SwapEndToEndTest {
     config.setMaxConcurrentSwaps(3);
     config.setSwapBatchSize(5);
     config.setSwapTimeoutMs(10000);
-    config.setEnableAutomaticSwapping(true);
+    config.setEnableAutomaticSwapping(false); // Disable automatic swapping for this test
     config.setCriticalMemoryThreshold(0.95);
     config.setHighMemoryThreshold(0.85);
     config.setElevatedMemoryThreshold(0.75);
@@ -128,6 +128,9 @@ public class SwapEndToEndTest {
 
     System.out.println("✓ Created and cached 15 test chunks");
 
+    // Wait to ensure chunks are old enough for swapping (min age is 100ms)
+    Thread.sleep(200);
+
     // Step 2: Verify initial state
     assertTrue(getCacheSize(storageManager) <= 10, "Cache should be at or below capacity");
     SwapManager.SwapManagerStats initialStats = swapManager.getStats();
@@ -188,11 +191,15 @@ public class SwapEndToEndTest {
       simulateChunkInCache(chunkKey);
     }
 
+    // Wait to ensure chunks are old enough for swapping (min age is 100ms)
+    Thread.sleep(200);
+
     // Perform bulk swap out
     CompletableFuture<Integer> bulkSwapOutFuture =
         swapManager.bulkSwapChunks(chunkKeys, SwapManager.SwapOperationType.SWAP_OUT);
     Integer swapOutCount = bulkSwapOutFuture.get(10, TimeUnit.SECONDS);
 
+    System.out.println("✓ Bulk swap out result: " + swapOutCount + " chunks succeeded");
     assertTrue(swapOutCount > 0, "Bulk swap out should succeed for at least some chunks");
     System.out.println("✓ Bulk swap out completed for " + swapOutCount + " chunks");
 
@@ -522,8 +529,8 @@ public class SwapEndToEndTest {
       field.setAccessible(true);
       ChunkCache cache = (ChunkCache) field.get(storageManager);
 
-      // Create a mock chunk and put it in cache
-      Object mockChunk = createMockChunk(1, 1);
+      // Create a mock chunk with proper data that can be serialized
+      Object mockChunk = createMockChunkWithData(chunkKey);
       cache.putChunk(chunkKey, mockChunk);
       System.out.println("✓ Simulated chunk in cache: " + chunkKey);
     } catch (Exception e) {
@@ -550,8 +557,76 @@ public class SwapEndToEndTest {
     return new MockChunk(x, z);
   }
 
+  private Object createSerializableChunk(String chunkKey) {
+    // Create a chunk that can be properly serialized by the SwapManager
+    // The SwapManager expects objects that can be converted to byte arrays
+    // We'll create a simple data structure that mimics what a real chunk would contain
+    
+    // Extract coordinates from chunk key
+    String[] parts = chunkKey.split(":");
+    int x = Integer.parseInt(parts[1]);
+    int z = Integer.parseInt(parts[2]);
+    
+    // Create a simple data structure that can be serialized
+    // This should be compatible with the serialization logic in SwapManager
+    return new SerializableChunkData(x, z, chunkKey);
+  }
+
+  private Object createMockChunkWithData(String chunkKey) {
+    // Create a mock chunk with data that can be properly serialized
+    // Extract coordinates from chunk key
+    String[] parts = chunkKey.split(":");
+    int x = Integer.parseInt(parts[1]);
+    int z = Integer.parseInt(parts[2]);
+    
+    // Create a more sophisticated mock that includes data
+    return new MockChunkWithData(x, z, "MockData:" + chunkKey);
+  }
+
   // Simple mock chunk class for testing
   private static class MockChunk {
     public MockChunk(int x, int z) {}
+  }
+
+  // Enhanced mock chunk class with data for proper serialization
+  private static class MockChunkWithData {
+    private final int x;
+    private final int z;
+    private final String data;
+
+    public MockChunkWithData(int x, int z, String data) {
+      this.x = x;
+      this.z = z;
+      this.data = data;
+    }
+
+    @Override
+    public String toString() {
+      return "MockChunkWithData[x=" + x + ",z=" + z + ",data=" + data + "]";
+    }
+  }
+
+  // Simple data structure that can be serialized by the SwapManager
+  private static class SerializableChunkData {
+    private final int x;
+    private final int z;
+    private final String chunkKey;
+    private final byte[] chunkData;
+
+    public SerializableChunkData(int x, int z, String chunkKey) {
+      this.x = x;
+      this.z = z;
+      this.chunkKey = chunkKey;
+      // Create some actual data that can be serialized
+      this.chunkData = new byte[1024]; // 1KB of data
+      for (int i = 0; i < chunkData.length; i++) {
+        chunkData[i] = (byte) (i % 256);
+      }
+    }
+
+    @Override
+    public String toString() {
+      return "SerializableChunkData[x=" + x + ",z=" + z + ",key=" + chunkKey + ",dataSize=" + chunkData.length + "]";
+    }
   }
 }

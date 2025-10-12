@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{RwLock, Mutex};
+use std::sync::{Arc, RwLock, Mutex};
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::collections::VecDeque;

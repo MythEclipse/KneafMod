@@ -75,7 +75,7 @@ public final class NetworkHandler {
           }
         } catch (Exception ex2) {
           LOGGER.debug(
-              "Packet constructor mismatch for ClientboundCustomPayloadPacket: { }",
+              "Packet constructor mismatch for ClientboundCustomPayloadPacket: {}",
               ex2.getMessage());
         }
       }
@@ -83,7 +83,7 @@ public final class NetworkHandler {
       // Packet class not available in this mapping; fall through to chat fallback
     } catch (Exception e) {
       LOGGER.debug(
-          "Reflection send error when sending performance payload to { }: { }",
+          "Reflection send error when sending performance payload to {}: {}",
           player.getGameProfile().getName(),
           e.getMessage());
     }
@@ -94,7 +94,7 @@ public final class NetworkHandler {
       player.displayClientMessage(net.minecraft.network.chat.Component.literal(line), false);
     } catch (Exception ex) {
       LOGGER.debug(
-          "Failed to fallback-send performance line to { }: { }",
+          "Failed to fallback-send performance line to {}: {}",
           player.getGameProfile().getName(),
           ex.getMessage());
     }
@@ -112,7 +112,7 @@ public final class NetworkHandler {
         }
       }
     } catch (Exception e) {
-      LOGGER.debug("Failed to broadcast performance payload to players: { }", e.getMessage());
+      LOGGER.debug("Failed to broadcast performance payload to players: {}", e.getMessage());
     }
   }
 }

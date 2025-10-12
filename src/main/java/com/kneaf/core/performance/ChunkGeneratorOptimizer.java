@@ -227,7 +227,7 @@ public class ChunkGeneratorOptimizer {
                 chunksGeneratedThisTick++;
                 PREDICTIVE_CHUNKS_GENERATED.incrementAndGet();
                 LOGGER.debug(
-                    "Predictively generated chunk at ({ }, { }) for player { }",
+                    "Predictively generated chunk at ({}, {}) for player {}",
                     chunkX,
                     chunkZ,
                     player.getName().getString());

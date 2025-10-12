@@ -146,7 +146,7 @@ public class ProtocolLoggerImpl implements ProtocolLogger {
     storeRecentLog(entry);
 
     // Also log to standard error for immediate visibility
-    LOGGER.error("Protocol error in operation '{ }': { }", operation, error.getMessage(), error);
+  LOGGER.error("Protocol error in operation '{}' : {}", operation, error.getMessage(), error);
   }
 
   @Override

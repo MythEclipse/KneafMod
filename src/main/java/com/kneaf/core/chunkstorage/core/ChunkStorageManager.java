@@ -64,7 +64,7 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
         try {
           this.core.setSwapManager(swapManager);
         } catch (Exception e) {
-          LOGGER.warn("Failed to set SwapManager on ChunkStorageCore: { }", e.getMessage());
+          LOGGER.warn("Failed to set SwapManager on ChunkStorageCore: {}", e.getMessage());
         }
       }
 
@@ -74,7 +74,7 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
               : null;
 
       LOGGER.info(
-          "Initialized ChunkStorageManager FACADE for world '{ }' with config: { }",
+          "Initialized ChunkStorageManager FACADE for world '{}' with config: {}",
           worldName,
           configManager.getConfigurationSummary());
     } else {
@@ -82,7 +82,7 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
       this.configManager = null;
       this.core = null;
       this.coordinator = null;
-      LOGGER.info("ChunkStorageManager FACADE disabled for world '{ }'", worldName);
+      LOGGER.info("ChunkStorageManager FACADE disabled for world '{}'", worldName);
     }
   }
 
@@ -243,9 +243,9 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
     }
 
     try {
-      LOGGER.info("Performing storage maintenance for world '{ }' via FACADE", worldName);
+      LOGGER.info("Performing storage maintenance for world '{}' via FACADE", worldName);
       core.performMaintenance();
-      LOGGER.info("Storage maintenance completed for world '{ }' via FACADE", worldName);
+      LOGGER.info("Storage maintenance completed for world '{}' via FACADE", worldName);
     } catch (Exception e) {
       LOGGER.error(
           "ChunkStorageManager: Failed to perform storage maintenance for world '"
@@ -264,13 +264,13 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
     shutdown = true;
 
     try {
-      LOGGER.info("Shutting down ChunkStorageManager FACADE for world '{ }'", worldName);
+      LOGGER.info("Shutting down ChunkStorageManager FACADE for world '{}'", worldName);
 
       if (core != null) {
         core.close();
       }
 
-      LOGGER.info("ChunkStorageManager FACADE shutdown completed for world '{ }'", worldName);
+      LOGGER.info("ChunkStorageManager FACADE shutdown completed for world '{}'", worldName);
 
     } catch (Exception e) {
       LOGGER.error(
@@ -310,9 +310,9 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
     }
 
     try {
-      LOGGER.info("Creating backup for world '{ }' at '{ }' via FACADE", worldName, backupPath);
+      LOGGER.info("Creating backup for world '{}' at '{}' via FACADE", worldName, backupPath);
       core.createBackup(backupPath);
-      LOGGER.info("Backup completed for world '{ }' via FACADE", worldName);
+      LOGGER.info("Backup completed for world '{}' via FACADE", worldName);
     } catch (Exception e) {
       LOGGER.error(
           "ChunkStorageManager: Failed to create backup for world '"
@@ -443,7 +443,7 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
         return null;
       }
     } catch (Exception e) {
-      LOGGER.warn("Failed to initialize serializer, will use fallback: { }", e.getMessage());
+      LOGGER.warn("Failed to initialize serializer, will use fallback: {}", e.getMessage());
 
       // Try fallback to standard NBT if FastNBT initialization failed
       if (NbtChunkSerializer.isMinecraftAvailable()) {
@@ -460,7 +460,7 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
     if (config.isUseRustDatabase()) {
       try {
         LOGGER.info(
-            "Attempting to create RustDatabaseAdapter with type: { }, checksums: { }",
+            "Attempting to create RustDatabaseAdapter with type: {}, checksums: {}",
             config.getDatabaseType(),
             config.isEnableChecksums());
         return new RustDatabaseAdapter(config.getDatabaseType(), config.isEnableChecksums());
@@ -488,7 +488,7 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
         break;
       default:
         evictionPolicy = new ChunkCache.LRUEvictionPolicy();
-        LOGGER.warn("Unknown eviction policy '{ }', defaulting to LRU", config.getEvictionPolicy());
+        LOGGER.warn("Unknown eviction policy '{}', defaulting to LRU", config.getEvictionPolicy());
     }
 
     return new ChunkCache(config.getCacheCapacity(), evictionPolicy);
@@ -503,7 +503,7 @@ public class ChunkStorageManager implements StorageStatisticsProvider {
         return swapManager;
       } catch (Exception e) {
         LOGGER.warn(
-            "Failed to initialize SwapManager, disabling swap functionality: { }", e.getMessage());
+            "Failed to initialize SwapManager, disabling swap functionality: {}", e.getMessage());
         return null;
       }
     } else {

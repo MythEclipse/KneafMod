@@ -379,28 +379,28 @@ public class SwapManager implements StorageStatisticsProvider {
     public void recordSwapIn(long bytes, long durationMs) {
       if (enabled) {
         // Integration with Rust performance monitoring would go here
-        LOGGER.debug("Recording swap-in: { } bytes in { }ms", bytes, durationMs);
+  LOGGER.debug("Recording swap-in: {} bytes in {}ms", bytes, durationMs);
       }
     }
 
     public void recordSwapOut(long bytes, long durationMs) {
       if (enabled) {
         // Integration with Rust performance monitoring would go here
-        LOGGER.debug("Recording swap-out: { } bytes in { }ms", bytes, durationMs);
+  LOGGER.debug("Recording swap-out: {} bytes in {}ms", bytes, durationMs);
       }
     }
 
     public void recordSwapFailure(String operationType, String error) {
       if (enabled) {
         // Integration with Rust performance monitoring would go here
-        LOGGER.error("Recording swap failure: { } - { }", operationType, error);
+  LOGGER.error("Recording swap failure: {} - {}", operationType, error);
       }
     }
 
     public void recordMemoryPressure(String level, boolean triggeredCleanup) {
       if (enabled) {
         // Integration with Rust performance monitoring would go here
-        LOGGER.info("Recording memory pressure: { } (cleanup: { })", level, triggeredCleanup);
+  LOGGER.info("Recording memory pressure: {} (cleanup: {})", level, triggeredCleanup);
       }
     }
   }
@@ -504,7 +504,7 @@ public class SwapManager implements StorageStatisticsProvider {
         monitorExecutor.scheduleAtFixedRate(
             this::processBatchOperations, 100, 100, TimeUnit.MILLISECONDS);
       }
-      LOGGER.info("SwapManager initialized with config: { }", config);
+  LOGGER.info("SwapManager initialized with config: {}", config);
     } else {
       LOGGER.info("SwapManager disabled by configuration");
     }
@@ -750,12 +750,11 @@ public class SwapManager implements StorageStatisticsProvider {
           Thread.currentThread().interrupt();
         }
 
-        // Record a fixed duration to make fast-path latencies deterministic
+  // Record a fixed duration to make fast-path latencies deterministic
         long fixedMs = Math.max(1L, FIXED_FAST_PATH_NANOS / 1_000_000L);
         operation.setEndTime(System.currentTimeMillis());
         if (success) {
             operation.setStatus(SwapStatus.COMPLETED);
-            totalSwapOperations.incrementAndGet();
             swapStats.recordSwapOut(fixedMs, estimateChunkSize(chunkKey));
             performanceMonitor.recordSwapOut(estimateChunkSize(chunkKey), fixedMs);
         } else {
@@ -773,7 +772,7 @@ public class SwapManager implements StorageStatisticsProvider {
     } catch (Exception e) {
       // If fast-path fails for any reason, fall back to async path below
       LOGGER.warn(
-          "Fast-path swap-out failed for { }: { }. Falling back to async execution.",
+          "Fast-path swap-out failed for {}: {}. Falling back to async execution.",
           chunkKey,
           e.getMessage());
       // ensure we don't leave operation in activeSwaps if it failed here
@@ -856,7 +855,6 @@ public class SwapManager implements StorageStatisticsProvider {
               fallbackOperation.getFuture().complete(false);
             } else {
               fallbackOperation.getFuture().complete(true);
-              totalSwapOperations.incrementAndGet();  // Track successful operation
             }
           });
 
@@ -882,7 +880,6 @@ public class SwapManager implements StorageStatisticsProvider {
                   swapStats.recordSwapOut(duration, estimateChunkSize(chunkKey));
                   performanceMonitor.recordSwapOut(estimateChunkSize(chunkKey), duration);
                   LOGGER.debug("Successfully swapped out chunk: {} in {}ms", chunkKey, duration);
-                  totalSwapOperations.incrementAndGet();  // Track successful operation
                 } else {
                   operation.setStatus(SwapStatus.FAILED);
                   operation.setErrorMessage("Swap-out operation failed");
@@ -1124,7 +1121,6 @@ public class SwapManager implements StorageStatisticsProvider {
                     swapStats.recordSwapIn(duration, estimateChunkSize(chunkKey));
                     performanceMonitor.recordSwapIn(estimateChunkSize(chunkKey), duration);
                     LOGGER.debug("Successfully swapped in chunk: {} in {}ms", chunkKey, duration);
-                    totalSwapOperations.incrementAndGet();  // Track successful operation
                   } else {
                     fallbackOperation.setStatus(SwapStatus.FAILED);
                     fallbackOperation.setErrorMessage("Swap-in operation failed");
@@ -1200,7 +1196,6 @@ public class SwapManager implements StorageStatisticsProvider {
                   swapStats.recordSwapIn(duration, estimateChunkSize(chunkKey));
                   performanceMonitor.recordSwapIn(estimateChunkSize(chunkKey), duration);
                   LOGGER.debug("Successfully swapped in chunk: {} in {}ms", chunkKey, duration);
-                  totalSwapOperations.incrementAndGet();  // Track successful operation
                 } else {
                   operation.setStatus(SwapStatus.FAILED);
                   operation.setErrorMessage("Swap-in operation failed");
@@ -1250,6 +1245,7 @@ public class SwapManager implements StorageStatisticsProvider {
             operation.getFuture().complete(false);
           } else {
             operation.getFuture().complete(true);
+            totalSwapOperations.incrementAndGet();  // Track successful operation
           }
         });
 
@@ -1360,6 +1356,8 @@ public class SwapManager implements StorageStatisticsProvider {
         .thenApply(
             v -> {
               long successCount = swapFutures.stream().filter(future -> future.join()).count();
+              // Update total operations count with actual successful operations only
+              totalSwapOperations.addAndGet(successCount);
               return (int) successCount;
             });
   }
@@ -1484,9 +1482,9 @@ public class SwapManager implements StorageStatisticsProvider {
         if (newLevel != CURRENT_PRESSURELevel) {
           // Format usage percentage to two decimal places for the log message
           String pct = String.format("%.2f", usage.getUsagePercentage() * 100);
-          LOGGER.info(
-              "Memory pressure level changed from { } to { } (usage: { }%)",
-              CURRENT_PRESSURELevel, newLevel, pct);
+      LOGGER.info(
+        "Memory pressure level changed from {} to {} (usage: {}%)",
+        CURRENT_PRESSURELevel, newLevel, pct);
 
           CURRENT_PRESSURELevel = newLevel;
           lastPressureCheck.set(System.currentTimeMillis());
@@ -1569,7 +1567,7 @@ public class SwapManager implements StorageStatisticsProvider {
     int targetSwaps = determineTargetSwapCount(level);
     if (targetSwaps > 0 && chunkCache != null) {
       LOGGER.info(
-          "Triggering automatic swap for { } chunks due to { } memory pressure",
+          "Triggering automatic swap for {} chunks due to {} memory pressure",
           targetSwaps,
           level);
 
@@ -1600,7 +1598,7 @@ public class SwapManager implements StorageStatisticsProvider {
 
       // Process in batches for better performance
       if (!chunksToSwap.isEmpty()) {
-        LOGGER.info("Automatically initiated LRU-based swap for { } chunks", swapped);
+        LOGGER.info("Automatically initiated LRU-based swap for {} chunks", swapped);
         
         // Split into batches if too large
         int batchSize = Math.min(chunksToSwap.size(), config.getSwapBatchSize());
@@ -1663,11 +1661,11 @@ public class SwapManager implements StorageStatisticsProvider {
               }
             }
           } catch (Exception e) {
-            LOGGER.debug(
-                "Transient DB swap-out attempt { } failed for { }: { }",
-                attempts,
-                chunkKey,
-                e.getMessage());
+      LOGGER.debug(
+        "Transient DB swap-out attempt {} failed for {}: {}",
+        attempts,
+        chunkKey,
+        e.getMessage());
       LOGGER.debug("Direct DB swap-out attempt {} failed for {}: {}", attempts, chunkKey, e.getMessage());
             try {
               Thread.sleep(10);
@@ -1683,13 +1681,13 @@ public class SwapManager implements StorageStatisticsProvider {
         } else {
           // If the adapter reports false but the chunk already exists in DB, consider this a
           // success
-          try {
-            if (databaseAdapter.hasChunk(chunkKey)) {
+            try {
+              if (databaseAdapter.hasChunk(chunkKey)) {
               return true;
             }
           } catch (Exception e) {
             LOGGER.debug(
-                "Failed to check DB presence after swap-out false for { }: { }",
+                "Failed to check DB presence after swap-out false for {}: {}",
                 chunkKey,
                 e.getMessage());
           }
@@ -1709,11 +1707,11 @@ public class SwapManager implements StorageStatisticsProvider {
                 databaseAdapter.putChunk(chunkKey, marker);
                 putOk = true;
               } catch (Exception pe) {
-                LOGGER.debug(
-                    "Attempt { } to put marker failed for { }: { }",
-                    putAttempts,
-                    chunkKey,
-                    pe.getMessage());
+        LOGGER.debug(
+          "Attempt {} to put marker failed for {}: {}",
+          putAttempts,
+          chunkKey,
+          pe.getMessage());
                 try {
                   Thread.sleep(5);
                 } catch (InterruptedException ie) {
@@ -1729,14 +1727,14 @@ public class SwapManager implements StorageStatisticsProvider {
                 if (secondSwap) {
                   return true;
                 }
-              } catch (Exception se) {
+                } catch (Exception se) {
                 LOGGER.debug(
-                    "Marker-based swap-out attempt failed for { }: { }", chunkKey, se.getMessage());
+                    "Marker-based swap-out attempt failed for {}: {}", chunkKey, se.getMessage());
               }
             }
           } catch (Throwable t) {
             LOGGER.debug(
-                "Marker-based recovery attempt failed for { }: { }", chunkKey, t.getMessage());
+                "Marker-based recovery attempt failed for {}: {}", chunkKey, t.getMessage());
           }
 
           // After retries, presence check, and marker attempt, we may still decide to
@@ -1755,7 +1753,6 @@ public class SwapManager implements StorageStatisticsProvider {
             // Record successful direct DB swap-out with minimal duration
             long duration = Math.max(1L, System.currentTimeMillis() - System.currentTimeMillis() + 1);
             swapStats.recordSwapOut(duration, estimateChunkSize(chunkKey));
-            totalSwapOperations.incrementAndGet();  // Track successful operation
             return true;
           }
 
@@ -1772,7 +1769,7 @@ public class SwapManager implements StorageStatisticsProvider {
 
     // Check if chunk can be swapped (not currently swapping)
     if (cachedChunk.isSwapping() || cachedChunk.isSwapped()) {
-      LOGGER.debug("Chunk is already swapping or swapped: { }", chunkKey);
+  LOGGER.debug("Chunk is already swapping or swapped: {}", chunkKey);
       return false;
     }
 
@@ -1785,11 +1782,11 @@ public class SwapManager implements StorageStatisticsProvider {
         if (databaseAdapter != null && databaseAdapter.hasChunk(chunkKey)) {
           LOGGER.debug("Chunk younger than min age but present in DB; allowing swap: {}", chunkKey);
         } else {
-          LOGGER.debug("Chunk too young for swap-out: { } (age: { }ms)", chunkKey, chunkAge);
+          LOGGER.debug("Chunk too young for swap-out: {} (age: {}ms)", chunkKey, chunkAge);
           return false;
         }
       } catch (Exception e) {
-        LOGGER.warn("Failed to check DB presence for chunk { }: { }", chunkKey, e.getMessage());
+  LOGGER.warn("Failed to check DB presence for chunk {}: {}", chunkKey, e.getMessage());
         LOGGER.debug("Failed to check DB presence for {}: {}", chunkKey, e.getMessage());
         return false;
       }
@@ -1815,7 +1812,10 @@ public class SwapManager implements StorageStatisticsProvider {
       while (attempts < maxAttempts && !success) {
         attempts++;
         try {
-          databaseAdapter.putChunk(chunkKey, serializedData);
+          // Only put chunk if it doesn't already exist in database
+          if (!databaseAdapter.hasChunk(chunkKey)) {
+            databaseAdapter.putChunk(chunkKey, serializedData);
+          }
           success = databaseAdapter.swapOutChunk(chunkKey);
           if (!success) {
             // short backoff before retry
@@ -1846,9 +1846,9 @@ public class SwapManager implements StorageStatisticsProvider {
       if (success) {
         // Update chunk state in cache
         chunkCache.updateChunkState(chunkKey, ChunkCache.ChunkState.SWAPPED);
-        LOGGER.debug("Successfully swapped out chunk: { }", chunkKey);
+  LOGGER.debug("Successfully swapped out chunk: {}", chunkKey);
       } else {
-        LOGGER.warn("Failed to swap out chunk via database adapter: { }", chunkKey);
+  LOGGER.warn("Failed to swap out chunk via database adapter: {}", chunkKey);
       }
 
       return success;
@@ -1867,7 +1867,7 @@ public class SwapManager implements StorageStatisticsProvider {
     if (chunkCache.hasChunk(chunkKey)) {
       Optional<ChunkCache.CachedChunk> cached = chunkCache.getChunk(chunkKey);
       if (cached.isPresent() && !cached.get().isSwapped()) {
-        LOGGER.debug("Chunk already in cache and not swapped: { }", chunkKey);
+  LOGGER.debug("Chunk already in cache and not swapped: {}", chunkKey);
         totalSwapOperations.incrementAndGet();  // Track successful operation
         swapStats.recordSwapIn(1, estimateChunkSize(chunkKey));  // Minimal stats for cache hit
         return true;
@@ -1882,10 +1882,10 @@ public class SwapManager implements StorageStatisticsProvider {
         chunkCache.updateChunkState(chunkKey, ChunkCache.ChunkState.HOT);
         // Update LRU access tracking
         updateAccess(chunkKey);
-        LOGGER.debug("Successfully swapped in chunk: { }", chunkKey);
+  LOGGER.debug("Successfully swapped in chunk: {}", chunkKey);
         return true;
       } else {
-        LOGGER.warn("Failed to swap in chunk via database adapter: { }", chunkKey);
+  LOGGER.warn("Failed to swap in chunk via database adapter: {}", chunkKey);
         return false;
       }
     } catch (Exception e) {
@@ -1958,7 +1958,7 @@ public class SwapManager implements StorageStatisticsProvider {
       totalUncompressedBytes.addAndGet(uncompressedData.length);
       totalCompressedBytes.addAndGet(totalStored);
 
-      LOGGER.debug("Compressed chunk data from { } to { } bytes (total stored: { } bytes)", uncompressedData.length, compressedLength, finalCompressedData.length);
+  LOGGER.debug("Compressed chunk data from {} to {} bytes (total stored: {} bytes)", uncompressedData.length, compressedLength, finalCompressedData.length);
       return finalCompressedData;
 
     } catch (Exception e) {
@@ -1980,13 +1980,13 @@ public class SwapManager implements StorageStatisticsProvider {
     
     // Optimized LRU update with concurrent map
     ChunkAccessEntry previous = accessMap.put(chunkKey, entry);
-    if (previous != null) {
+      if (previous != null) {
       // If we have a previous entry, we don't need to add to queue - the new entry
       // will be added and old one will be considered stale during polling
-      LOGGER.trace("Updated access time for chunk: {} (seq={})", chunkKey, entry.seq);
+      LOGGER.trace("Updated access time for chunk: {} (seq={})", chunkKey, entry.getSeq());
     } else {
       accessQueue.add(entry);
-      LOGGER.debug("Added new access entry for chunk: {} (seq={})", chunkKey, entry.seq);
+      LOGGER.debug("Added new access entry for chunk: {} (seq={})", chunkKey, entry.getSeq());
     }
 
     // Conditional compaction based on queue size and pressure level

@@ -519,7 +519,7 @@ public final class UnifiedExecutorManager {
             try {
               long lastTickMs =
                   com.kneaf.core.performance.monitoring.PerformanceManager.getLastTickDurationMs();
-              LOGGER.info("Scaling up threads due to slow tick: { } ms", lastTickMs);
+              LOGGER.info("Scaling up threads due to slow tick: {} ms", lastTickMs);
             } catch (Throwable t) {
               // Ignore if can't get the value
             }

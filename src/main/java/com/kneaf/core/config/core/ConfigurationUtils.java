@@ -29,15 +29,15 @@ public final class ConfigurationUtils {
     if (Files.exists(path)) {
       try (InputStream in = Files.newInputStream(path)) {
         props.load(in);
-        LOGGER.info("Loaded configuration from: { }", configPath);
+        LOGGER.info("Loaded configuration from: {}", configPath);
       } catch (IOException e) {
         LOGGER.warn(
-            "Failed to read configuration from { }, using defaults: { }",
+            "Failed to read configuration from {}, using defaults: {}",
             configPath,
             e.getMessage());
       }
     } else {
-      LOGGER.info("Configuration file not found at { }, using defaults", configPath);
+      LOGGER.info("Configuration file not found at {}, using defaults", configPath);
     }
 
     return props;
@@ -56,7 +56,7 @@ public final class ConfigurationUtils {
     try {
       return Integer.parseInt(value.trim());
     } catch (NumberFormatException e) {
-      LOGGER.warn("Invalid integer value for key '{ }': { }", key, value);
+      LOGGER.warn("Invalid integer value for key '{}': {}", key, value);
       return defaultValue;
     }
   }
@@ -68,7 +68,7 @@ public final class ConfigurationUtils {
     try {
       return Long.parseLong(value.trim());
     } catch (NumberFormatException e) {
-      LOGGER.warn("Invalid long value for key '{ }': { }", key, value);
+      LOGGER.warn("Invalid long value for key '{}': {}", key, value);
       return defaultValue;
     }
   }
@@ -80,7 +80,7 @@ public final class ConfigurationUtils {
     try {
       return Double.parseDouble(value.trim());
     } catch (NumberFormatException e) {
-      LOGGER.warn("Invalid double value for key '{ }': { }", key, value);
+      LOGGER.warn("Invalid double value for key '{}': {}", key, value);
       return defaultValue;
     }
   }

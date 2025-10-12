@@ -996,10 +996,30 @@ impl RustDatabaseAdapter {
     }
 
     /// Verify checksum for a swap chunk
-    pub fn verify_swap_chunk_checksum(&self, _key: &str) -> Result<(), String> {
-        // For now, just return Ok since checksum verification for swap is not implemented
-        // TODO: Implement actual checksum verification for swap files
+    pub fn verify_swap_chunk_checksum(&self, key: &str) -> Result<(), String> {
+        let swap_file_path = self.get_swap_file_path(key)?;
+        let data = std::fs::read(&swap_file_path).map_err(|e| {
+            format!("Failed to read swap file for checksum verification: {}", e)
+        })?;
+
+        // Verify checksum using the same method as for regular chunks
+        self.verify_and_extract_data(&data).map_err(|e| {
+            format!("Swap chunk checksum verification failed for key {}: {}", key, e)
+        })?;
+
         Ok(())
+    }
+
+    /// Get swap file path for a given chunk key
+    fn get_swap_file_path(&self, key: &str) -> Result<String, String> {
+        let safe_key = key.replace(':', "_").replace('/', "-");
+        let swap_file_path = format!("{}/{}_{}.swap", self.swap_path, self.world_name, safe_key);
+        
+        if !Path::new(&swap_file_path).exists() {
+            return Err(format!("Swap file not found for key: {}", key));
+        }
+
+        Ok(swap_file_path)
     }
     
     /// Clear all data
@@ -1037,16 +1057,10 @@ impl RustDatabaseAdapter {
         
         let data_size = data.len() as u64;
         
-        // Create swap file path DIRECTLY IN world save directory (alongside level.dat)
-        // Format: {world_name}_chunk_{x}_{z}_{dimension}_{timestamp}.swap for clarity
-        if let Some(coords) = ChunkCoordinates::from_key(key).ok() {
-            let safe_key = format!("chunk_{}_{}_{}", coords.x, coords.z, coords.dimension.replace('/', "_"));
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let swap_file_path = Path::new(&self.swap_path).join(format!("{}_{}_{}.swap", self.world_name, safe_key, timestamp));
-            let _swap_file_path_str = swap_file_path.to_str().ok_or_else(|| "Failed to convert swap path to string".to_string())?;
+        // Create world-specific swap file path with proper escaping (consistent with bulk_swap_out and swap_in_chunk)
+        let safe_key = key.replace(':', "_").replace('/', "-");
+        let swap_file_path = Path::new(&self.swap_path).join(format!("{}_{}.swap", self.world_name, safe_key));
+        let _swap_file_path_str = swap_file_path.to_str().ok_or_else(|| "Failed to convert swap path to string".to_string())?;
             
             // Write data to swap file with atomic operation (temp file + rename) for safety
             let temp_path = Path::new(&self.swap_path).join(format!("{}.tmp", swap_file_path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("swap_temp")).to_string_lossy()));
@@ -1084,9 +1098,6 @@ impl RustDatabaseAdapter {
                   key, data_size as f64 / 1024.0, self.world_name, swap_file_path.display());
             
             Ok(())
-        } else {
-            return Err(format!("Failed to extract coordinates from chunk key: {}", key));
-        }
     }
     
     /// Swap in a chunk from disk storage

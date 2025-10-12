@@ -774,7 +774,7 @@ pub struct BatchSimdProcessor {
 impl BatchSimdProcessor {
     pub fn new(chunk_size: usize) -> Self {
         Self {
-            simd: EnhancedSimdProcessor::new(),
+            simd: EnhancedSimdProcessor::<16>::new(),
             chunk_size,
         }
     }
@@ -806,7 +806,7 @@ mod tests {
     
     #[test]
     fn test_dot_product() {
-        let simd = EnhancedSimdProcessor::new();
+        let simd = EnhancedSimdProcessor::<16>::new();
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let b = vec![8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0];
         
@@ -818,7 +818,7 @@ mod tests {
     
     #[test]
     fn test_vector_add() {
-        let simd = EnhancedSimdProcessor::new();
+        let simd = EnhancedSimdProcessor::<16>::new();
         let mut a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let b = vec![8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0];
         let expected = vec![9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0];
@@ -832,7 +832,7 @@ mod tests {
     
     #[test]
     fn test_aabb_intersection() {
-        let simd = EnhancedSimdProcessor::new();
+        let simd = EnhancedSimdProcessor::<16>::new();
         let aabbs = vec![
             (0.0, 10.0, 0.0, 10.0, 0.0, 10.0), // AABB 1
             (5.0, 15.0, 5.0, 15.0, 5.0, 15.0), // AABB 2
@@ -865,7 +865,7 @@ mod tests {
     }
     #[test]
     fn test_small_batch_optimizations() {
-        let simd = EnhancedSimdProcessor::new();
+        let simd = EnhancedSimdProcessor::<16>::new();
 
         // Test dot product for small batches
         let test_cases = vec![

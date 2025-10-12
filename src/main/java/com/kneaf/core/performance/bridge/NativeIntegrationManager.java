@@ -1,10 +1,9 @@
 package com.kneaf.core.performance.bridge;
 
 import com.kneaf.core.KneafCore;
-// import com.kneaf.core.performance.NativeBridge; // NativeBridge not available in current
-// structure
 import com.kneaf.core.performance.NativeFloatBufferAllocation;
 import com.kneaf.core.performance.core.NativeBridgeProvider;
+
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,8 +22,8 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   private final int maxWorkers;
 
   public NativeIntegrationManager() {
-    this.defaultConcurrency = 4; // Default concurrency
-    this.maxWorkers = 8; // Maximum workers
+    this.defaultConcurrency = Runtime.getRuntime().availableProcessors() / 2; // Default concurrency based on available cores
+    this.maxWorkers = Runtime.getRuntime().availableProcessors(); // Maximum workers based on available cores
   }
 
   /** Initialize native integration manager. */
@@ -35,7 +34,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
         // Attempt to initialize the native allocator. If this fails we must
         // mark nativeAvailable as false so higher-level code chooses the
         // pure-Java execution paths (which are faster for our unit tests)
-        com.kneaf.core.performance.NativeBridge.initRustAllocator();
+        NativeResourceManager.nativeInitAllocator();
         nativeAvailable.set(true);
         KneafCore.LOGGER.info("Native allocator initialized successfully");
         KneafCore.LOGGER.info("Native integration manager initialized successfully");
@@ -43,9 +42,9 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
       } catch (Throwable t) {
         // Native init failed - do not advertise native availability. Use Java fallback.
         nativeAvailable.set(false);
-        KneafCore.LOGGER.warn(
-            "Native allocator init failed; native integration unavailable, using Java fallback: { }",
-            t.getMessage());
+    KneafCore.LOGGER.warn(
+      "Native allocator init failed; native integration unavailable, using Java fallback: {}",
+      t.getMessage());
         return false;
       }
     }
@@ -61,7 +60,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
     }
 
     try {
-      long workerHandle = com.kneaf.core.performance.NativeBridge.nativeCreateWorker(concurrency);
+      long workerHandle = NativeResourceManager.nativeCreateWorker(concurrency);
       if (workerHandle == 0) {
         throw new RuntimeException("Failed to create native worker");
       }
@@ -70,11 +69,11 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
       WorkerInfo workerInfo = new WorkerInfo(workerId, workerHandle, concurrency);
       activeWorkers.put(workerId, workerInfo);
 
-      KneafCore.LOGGER.debug(
-          "Created native worker { } with handle { } and concurrency { }",
-          workerId,
-          workerHandle,
-          concurrency);
+    KneafCore.LOGGER.debug(
+      "Created native worker {} with handle {} and concurrency {}",
+      workerId,
+      workerHandle,
+      concurrency);
 
       return workerId;
     } catch (Exception e) {
@@ -91,13 +90,22 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   public void destroyWorker(long workerId) throws RuntimeException {
     WorkerInfo workerInfo = activeWorkers.remove(workerId);
     if (workerInfo == null) {
-      KneafCore.LOGGER.warn("Attempted to destroy non-existent worker: { }", workerId);
+  KneafCore.LOGGER.warn("Attempted to destroy non-existent worker: {}", workerId);
       return;
     }
 
     try {
-      com.kneaf.core.performance.NativeBridge.nativeDestroyWorker(workerInfo.handle);
-      KneafCore.LOGGER.debug("Destroyed native worker { }", workerId);
+      if (workerInfo.isCleanedUp.compareAndSet(false, true)) {
+        NativeResourceManager.nativeDestroyWorker(workerInfo.handle);
+  KneafCore.LOGGER.debug("Destroyed native worker {}", workerId);
+        
+        // Verify cleanup was successful
+        if (NativeResourceManager.nativeIsResourceLeaked(workerInfo.handle)) {
+          KneafCore.LOGGER.warn("Resource leak detected for worker {} after destruction", workerId);
+          NativeResourceManager.nativeForceCleanup(workerInfo.handle);
+        }
+      }
+      
     } catch (Exception e) {
       throw new RuntimeException("Failed to destroy native worker " + workerId, e);
     }
@@ -111,7 +119,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
     }
 
     try {
-      com.kneaf.core.performance.NativeBridge.nativePushTask(workerInfo.handle, payload);
+      NativeResourceManager.nativePushTask(workerInfo.handle, payload);
       workerInfo.incrementTaskCount();
     } catch (Exception e) {
       throw new RuntimeException("Failed to push task to worker " + workerId, e);
@@ -126,7 +134,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
     }
 
     try {
-      com.kneaf.core.performance.NativeBridge.nativePushBatch(
+      NativeResourceManager.nativePushBatch(
           workerInfo.handle, payloads, payloads.length);
       workerInfo.incrementTaskCount(payloads.length);
     } catch (Exception e) {
@@ -139,7 +147,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
     WorkerInfo workerInfo = getWorkerInfo(workerId);
 
     try {
-      byte[] result = com.kneaf.core.performance.NativeBridge.nativePollResult(workerInfo.handle);
+      byte[] result = NativeResourceManager.nativePollResult(workerInfo.handle);
       if (result != null && result.length > 0) {
         workerInfo.incrementResultCount();
       }
@@ -155,11 +163,11 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
 
     try {
       long queueDepth =
-          com.kneaf.core.performance.NativeBridge.nativeGetWorkerQueueDepth(workerInfo.handle);
+          NativeResourceManager.nativeGetWorkerQueueDepth(workerInfo.handle);
       double avgProcessingMs =
-          com.kneaf.core.performance.NativeBridge.nativeGetWorkerAvgProcessingMs(workerInfo.handle);
+          NativeResourceManager.nativeGetWorkerAvgProcessingMs(workerInfo.handle);
       long memoryUsage =
-          com.kneaf.core.performance.NativeBridge.nativeGetWorkerMemoryUsage(workerInfo.handle);
+          NativeResourceManager.nativeGetWorkerMemoryUsage(workerInfo.handle);
 
       return new WorkerStatistics(
           workerId,
@@ -181,7 +189,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
         Stats.put(workerId, getWorkerStatistics(workerId));
       } catch (RuntimeException e) {
         KneafCore.LOGGER.warn(
-            "Failed to get statistics for worker { }: { }", workerId, e.getMessage());
+            "Failed to get statistics for worker {}: {}", workerId, e.getMessage());
       }
     }
     return Stats;
@@ -195,27 +203,107 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
 
     KneafCore.LOGGER.info("Shutting down native integration manager");
 
-    // Destroy all active workers
+    // Destroy all active workers with force cleanup
     for (Long workerId : activeWorkers.keySet()) {
       try {
         destroyWorker(workerId);
       } catch (Exception e) {
-        KneafCore.LOGGER.error("Failed to destroy worker { } during shutdown", workerId, e);
+        KneafCore.LOGGER.error("Failed to destroy worker {} during shutdown", workerId, e);
+        
+        // Force cleanup as fallback
+        try {
+          WorkerInfo workerInfo = activeWorkers.get(workerId);
+          if (workerInfo != null) {
+            NativeResourceManager.nativeForceCleanup(workerInfo.handle);
+          }
+        } catch (Exception cleanupEx) {
+          KneafCore.LOGGER.error("Failed to force cleanup worker {}", workerId, cleanupEx);
+        }
       }
     }
 
-    // Cleanup buffer pool (placeholder - actual implementation would cleanup native resources)
-    // try {
-    //     NativeBridge.cleanupBufferPool(); // Not available in current structure
-    // } catch (Exception e) {
-    //     KneafCore.LOGGER.error("Failed to cleanup buffer pool", e);
-    // }
+    // Cleanup buffer pool with actual native implementation
+    try {
+        NativeResourceManager.nativeCleanupBufferPool();
+    } catch (Exception e) {
+        KneafCore.LOGGER.error("Failed to cleanup buffer pool", e);
+        
+        // Perform additional cleanup operations
+        try {
+            forceResourceCleanup();
+        } catch (Exception cleanupEx) {
+            KneafCore.LOGGER.error("Failed to perform additional resource cleanup", cleanupEx);
+        }
+    }
+    
+    // Shutdown native allocator
+    try {
+        NativeResourceManager.nativeShutdownAllocator();
+        KneafCore.LOGGER.info("Native allocator shutdown complete");
+    } catch (Exception e) {
+        KneafCore.LOGGER.error("Failed to shutdown native allocator", e);
+    }
 
     activeWorkers.clear();
     initialized.set(false);
     nativeAvailable.set(false);
 
     KneafCore.LOGGER.info("Native integration manager shutdown complete");
+  }
+  
+  /** Force cleanup of all native resources. */
+  public void forceResourceCleanup() {
+    KneafCore.LOGGER.info("Performing forced native resource cleanup");
+    
+    // Check for leaked resources
+    for (Long workerId : activeWorkers.keySet()) {
+      try {
+        WorkerInfo workerInfo = activeWorkers.get(workerId);
+        if (workerInfo != null) {
+          if (NativeResourceManager.nativeIsResourceLeaked(workerInfo.handle)) {
+            KneafCore.LOGGER.warn("Resource leak detected for worker {}", workerId);
+            NativeResourceManager.nativeForceCleanup(workerInfo.handle);
+          }
+          // Ensure worker is destroyed even if leak check failed
+          NativeResourceManager.nativeDestroyWorker(workerInfo.handle);
+        }
+      } catch (Exception e) {
+        KneafCore.LOGGER.error("Failed to check resource leak for worker {}", workerId, e);
+      }
+    }
+    
+    // Force cleanup buffer pool as additional safety measure
+    try {
+      NativeResourceManager.nativeCleanupBufferPool();
+      KneafCore.LOGGER.info("Forced buffer pool cleanup completed");
+    } catch (Exception e) {
+      KneafCore.LOGGER.error("Failed to force cleanup buffer pool", e);
+    }
+  }
+  
+  /** Set resource limits for a worker. */
+  public void setWorkerResourceLimits(long workerId, long maxMemory, long maxTasks) throws RuntimeException {
+    WorkerInfo workerInfo = getWorkerInfo(workerId);
+    
+    try {
+      NativeResourceManager.nativeSetResourceLimits(workerInfo.handle, maxMemory, maxTasks);
+      KneafCore.LOGGER.debug(
+          "Set resource limits for worker {}: maxMemory={}, maxTasks={}",
+          workerId, maxMemory, maxTasks);
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to set resource limits for worker " + workerId, e);
+    }
+  }
+  
+  /** Get resource statistics for a worker. */
+  public String getWorkerResourceStats(long workerId) throws RuntimeException {
+    WorkerInfo workerInfo = getWorkerInfo(workerId);
+    
+    try {
+      return NativeResourceManager.nativeGetResourceStats(workerInfo.handle);
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to get resource stats for worker " + workerId, e);
+    }
   }
 
   @Override
@@ -232,7 +320,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   @Override
   public String processEntitiesJson(String input) {
     // Implementation would use a worker to process entities
-    return "{ }";
+    return "{}";
   }
 
   @Override
@@ -244,7 +332,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   @Override
   public String processMobAiJson(String input) {
     // Implementation would use a worker to process mob AI
-    return "{ }";
+    return "{}";
   }
 
   @Override
@@ -256,7 +344,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   @Override
   public String processBlockEntitiesJson(String input) {
     // Implementation would use a worker to process block entities
-    return "{ }";
+    return "{}";
   }
 
   @Override
@@ -268,7 +356,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   @Override
   public String processVillagerAiJson(String jsonInput) {
     // Implementation would use a worker to process villager AI
-    return "{ }";
+    return "{}";
   }
 
   @Override
@@ -280,7 +368,7 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   @Override
   public String processItemEntitiesJson(String input) {
     // Item optimization removed - return empty result as fallback
-    return "{ }";
+    return "{}";
   }
   @Override
   public String getMemoryStats() {
@@ -378,64 +466,69 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
     return NativeFloatBufferAllocation.allocate(rows, cols);
   }
 
-  /** Free float buffer native. */
+  /** Free float buffer native with enhanced cleanup. */
   public void freeFloatBuffer(ByteBuffer buffer) {
     if (buffer == null) return;
 
     // Prefer native free if available
     try {
-      NativeBridge.nativeFreeBuffer(buffer);
+      NativeResourceManager.nativeFreeBuffer(buffer);
+      KneafCore.LOGGER.debug("Successfully freed native buffer");
       return;
-    } catch (Throwable ignored) {
+    } catch (Throwable t) {
+  KneafCore.LOGGER.debug("Native buffer free failed, using fallback: {}", t.getMessage());
       // Fall back to Java-based cleanup below
     }
 
-    // If the buffer is a direct ByteBuffer, try to explicitly release its memory via Cleaner.
-    // This uses reflection to avoid compile-time dependency on internal APIs and is safe
-    // because it only runs when native free is not available.
+    // Enhanced Java-based cleanup for direct buffers
     try {
       if (buffer.isDirect()) {
-        // Java 9+ Cleaner approach: invoke 'cleaner' or use sun.misc.Cleaner via reflection
+        // First try standard Java 9+ Cleaner API
         try {
-          // Try the jdk.internal.ref.Cleaner path first (OpenJDK/Oracle)
-          Object cleaner = null;
-          try {
-            java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
-            cleanerMethod.setAccessible(true);
-            cleaner = cleanerMethod.invoke(buffer);
-          } catch (NoSuchMethodException nsme) {
-            // fall through to other strategies
-          }
-
+          java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+          cleanerMethod.setAccessible(true);
+          Object cleaner = cleanerMethod.invoke(buffer);
           if (cleaner != null) {
             java.lang.reflect.Method clean = cleaner.getClass().getMethod("clean");
             clean.invoke(cleaner);
+            KneafCore.LOGGER.debug("Successfully cleaned direct buffer via Cleaner API");
             return;
           }
+        } catch (NoSuchMethodException | IllegalAccessException | java.lang.reflect.InvocationTargetException e) {
+          // Fall through to other strategies
+          KneafCore.LOGGER.debug("Cleaner API not available, trying alternative approaches");
+        }
 
-          // Fallback: try invoking sun.misc.Cleaner (older JDKs)
-          try {
-            java.lang.reflect.Field cleanerField = buffer.getClass().getDeclaredField("cleaner");
-            cleanerField.setAccessible(true);
-            Object c = cleanerField.get(buffer);
-            if (c != null) {
-              java.lang.reflect.Method clean = c.getClass().getMethod("clean");
-              clean.invoke(c);
-            }
-          } catch (NoSuchFieldException | IllegalAccessException inner) {
-            // If all reflection attempts fail, rely on GC as last resort
-            KneafCore.LOGGER.debug(
-                "Could not explicitly free direct ByteBuffer; relying on GC: { }",
-                inner.getMessage());
+        // Try sun.misc.Cleaner for older JDKs
+        try {
+          java.lang.reflect.Field cleanerField = buffer.getClass().getDeclaredField("cleaner");
+          cleanerField.setAccessible(true);
+          Object cleaner = cleanerField.get(buffer);
+          if (cleaner != null) {
+            java.lang.reflect.Method clean = cleaner.getClass().getMethod("clean");
+            clean.invoke(cleaner);
+            KneafCore.LOGGER.debug("Successfully cleaned direct buffer via sun.misc.Cleaner");
+            return;
           }
-        } catch (Throwable ex) {
-          // Last resort - let the GC take care of it
-          KneafCore.LOGGER.debug("Failed explicit direct buffer cleanup: { }", ex.getMessage());
+        } catch (NoSuchFieldException | IllegalAccessException | java.lang.reflect.InvocationTargetException e) {
+          // If all reflection attempts fail, log and rely on GC
+            KneafCore.LOGGER.debug(
+              "Could not explicitly free direct ByteBuffer; relying on GC: {}",
+              e.getMessage());
         }
       }
     } catch (Throwable t) {
       // Safe fallback - do nothing, GC will reclaim when possible
-      KneafCore.LOGGER.debug("freeFloatBuffer fallback failed: { }", t.getMessage());
+      KneafCore.LOGGER.debug("freeFloatBuffer fallback failed: {}", t.getMessage());
+    }
+  }
+  
+  /** Bulk free multiple buffers. */
+  public void freeFloatBuffers(ByteBuffer[] buffers) {
+    if (buffers == null || buffers.length == 0) return;
+    
+    for (ByteBuffer buffer : buffers) {
+      freeFloatBuffer(buffer);
     }
   }
 
@@ -467,13 +560,49 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
   }
 
   /** Worker information holder. */
+  // Native bridge for actual resource management
+  private static class NativeResourceManager {
+      // Native method declarations for resource management
+      public static native void nativeInitAllocator();
+      public static native void nativeShutdownAllocator();
+      public static native long nativeCreateWorker(int concurrency);
+      public static native void nativeDestroyWorker(long workerHandle);
+      public static native void nativePushTask(long workerHandle, byte[] payload);
+      public static native void nativePushBatch(long workerHandle, byte[][] payloads, int count);
+      public static native byte[] nativePollResult(long workerHandle);
+      public static native long nativeGetWorkerQueueDepth(long workerHandle);
+      public static native double nativeGetWorkerAvgProcessingMs(long workerHandle);
+      public static native long nativeGetWorkerMemoryUsage(long workerHandle);
+      public static native void nativeFreeBuffer(ByteBuffer buffer);
+      public static native void nativeCleanupBufferPool();
+      public static native void nativeForceCleanup(long resourceHandle);
+      public static native boolean nativeIsResourceLeaked(long resourceHandle);
+      public static native void nativeSetResourceLimits(long resourceHandle, long maxMemory, long maxTasks);
+      public static native String nativeGetResourceStats(long resourceHandle);
+      
+      // Load native library
+      static {
+          try {
+              System.loadLibrary("rustperf");
+          } catch (UnsatisfiedLinkError e) {
+              KneafCore.LOGGER.warn("Failed to load native library rustperf: " + e.getMessage());
+          }
+      }
+      
+      // Prevent direct instantiation
+      private NativeResourceManager() {}
+  }
+
   private static class WorkerInfo {
     private final long handle;
+    private final int concurrency;
     private final AtomicLong taskCount = new AtomicLong(0);
     private final AtomicLong resultCount = new AtomicLong(0);
+    private final AtomicBoolean isCleanedUp = new AtomicBoolean(false);
 
     public WorkerInfo(long id, long handle, int concurrency) {
       this.handle = handle;
+      this.concurrency = concurrency;
     }
 
     public void incrementTaskCount() {

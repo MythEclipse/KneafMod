@@ -51,7 +51,7 @@ public class ModCompatibility {
         String description =
             CONFLICT_DESCRIPTIONS.getOrDefault(modId, "Unknown conflict with " + modId);
         conflicts.put(modId, description);
-        LOGGER.warn("Detected potentially conflicting mod: { } - { }", modId, description);
+        LOGGER.warn("Detected potentially conflicting mod: {} - {}", modId, description);
       }
     }
 
@@ -59,7 +59,7 @@ public class ModCompatibility {
     for (String modId : COMPATIBLE_MODS) {
       if (ModList.get().isLoaded(modId)) {
         String info = COMPAT_DESCRIPTIONS.getOrDefault(modId, "Detected compatible mod: " + modId);
-        LOGGER.info("Detected compatible mod: { } - { }", modId, info);
+        LOGGER.info("Detected compatible mod: {} - {}", modId, info);
       }
     }
 
@@ -67,7 +67,7 @@ public class ModCompatibility {
       LOGGER.info("No conflicting performance mods detected.");
     } else {
       LOGGER.warn(
-          "Found { } potentially conflicting performance mod(s). Consider reviewing configuration.",
+          "Found {} potentially conflicting performance mod(s). Consider reviewing configuration.",
           conflicts.size());
     }
 

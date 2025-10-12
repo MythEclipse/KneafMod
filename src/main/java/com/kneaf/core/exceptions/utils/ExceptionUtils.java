@@ -95,22 +95,22 @@ public final class ExceptionUtils {
 
     switch (severity) {
       case CRITICAL:
-        logger.error("CRITICAL: { }", formattedMessage, throwable);
+        logger.error("CRITICAL: {}", formattedMessage, throwable);
         break;
       case ERROR:
-        logger.error("ERROR: { }", formattedMessage, throwable);
+        logger.error("ERROR: {}", formattedMessage, throwable);
         break;
       case WARNING:
-        logger.warn("WARNING: { }", formattedMessage, throwable);
+        logger.warn("WARNING: {}", formattedMessage, throwable);
         break;
       case INFO:
-        logger.info("INFO: { }", formattedMessage, throwable);
+        logger.info("INFO: {}", formattedMessage, throwable);
         break;
       case DEBUG:
-        logger.debug("DEBUG: { }", formattedMessage, throwable);
+        logger.debug("DEBUG: {}", formattedMessage, throwable);
         break;
       default:
-        logger.error("UNKNOWN SEVERITY: { }", formattedMessage, throwable);
+        logger.error("UNKNOWN SEVERITY: {}", formattedMessage, throwable);
     }
   }
 

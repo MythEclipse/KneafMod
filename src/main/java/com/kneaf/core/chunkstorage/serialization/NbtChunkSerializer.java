@@ -175,7 +175,7 @@ public class NbtChunkSerializer implements ChunkSerializer {
       if (LOGGER.isDebugEnabled()) {
         long duration = System.nanoTime() - startTime;
         LOGGER.debug(
-            "Serialized chunk at ({ }, { }) to { } bytes in { } ms",
+            "Serialized chunk at ({}, {}) to {} bytes in {} ms",
             chunkX,
             chunkZ,
             serializedData.length,
@@ -185,7 +185,7 @@ public class NbtChunkSerializer implements ChunkSerializer {
       return serializedData;
 
     } catch (Exception e) {
-      LOGGER.error("Failed to serialize chunk due to error: { }", e.getMessage(), e);
+      LOGGER.error("Failed to serialize chunk due to error: {}", e.getMessage(), e);
       if (e instanceof IOException) {
         throw (IOException) e;
       }
@@ -241,13 +241,13 @@ public class NbtChunkSerializer implements ChunkSerializer {
       if (LOGGER.isDebugEnabled()) {
         long duration = System.nanoTime() - startTime;
         LOGGER.debug(
-            "Deserialized chunk data from { } bytes in { } ms", data.length, duration / 1_000_000);
+            "Deserialized chunk data from {} bytes in {} ms", data.length, duration / 1_000_000);
       }
 
       return result;
 
     } catch (Exception e) {
-      LOGGER.error("Failed to deserialize chunk data due to error: { }", e.getMessage(), e);
+      LOGGER.error("Failed to deserialize chunk data due to error: {}", e.getMessage(), e);
       if (e instanceof IOException) {
         throw (IOException) e;
       }
@@ -385,7 +385,7 @@ public class NbtChunkSerializer implements ChunkSerializer {
         }
       }
     } catch (Exception e) {
-      LOGGER.warn("Error while serializing heightmaps: { }", e.getMessage(), e);
+      LOGGER.warn("Error while serializing heightmaps: {}", e.getMessage(), e);
       // Continue with partial heightmap data
     }
 
@@ -441,7 +441,7 @@ public class NbtChunkSerializer implements ChunkSerializer {
                 .invoke(chunkData, key, beTag);
           } catch (Exception e) {
             // Log the exception and continue serializing other block entities
-            LOGGER.warn("Could not serialize block entity at { }: { }", pos, e.getMessage(), e);
+            LOGGER.warn("Could not serialize block entity at {}: {}", pos, e.getMessage(), e);
           }
         }
       }

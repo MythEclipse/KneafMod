@@ -149,7 +149,7 @@ public class ChunkStorageManager {
         }
       } catch (Exception e) {
         LOGGER.warn(
-            "Failed to initialize NbtChunkSerializer, serializer will be null: { }",
+            "Failed to initialize NbtChunkSerializer, serializer will be null: {}",
             e.getMessage());
         tempSerializer = null;
       }
@@ -160,11 +160,11 @@ public class ChunkStorageManager {
       if (config.isUseRustDatabase()) {
         try {
           LOGGER.info(
-              "Attempting to create RustDatabaseAdapter with type: { }, checksums: { }",
+              "Attempting to create RustDatabaseAdapter with type: {}, checksums: {}",
               config.getDatabaseType(),
               config.isEnableChecksums());
           LOGGER.info(
-              "RustDatabaseAdapter.isNativeLibraryAvailable(): { }",
+              "RustDatabaseAdapter.isNativeLibraryAvailable(): {}",
               RustDatabaseAdapter.isNativeLibraryAvailable());
           tempDatabase =
               new RustDatabaseAdapter(config.getDatabaseType(), config.isEnableChecksums());
@@ -173,7 +173,7 @@ public class ChunkStorageManager {
           // Fallback to in-memory database if Rust database fails to initialize
           LOGGER.error(
               "Failed to initialize Rust database adapter, falling back to in-memory database", e);
-          LOGGER.warn("Exception details: { }: { }", e.getClass().getSimpleName(), e.getMessage());
+          LOGGER.warn("Exception details: {}: {}", e.getClass().getSimpleName(), e.getMessage());
           tempDatabase = new InMemoryDatabaseAdapter("in-memory-" + worldName);
           LOGGER.info("Using in-memory database adapter as fallback");
         }
@@ -198,7 +198,7 @@ public class ChunkStorageManager {
         default:
           evictionPolicy = new ChunkCache.LRUEvictionPolicy();
           LOGGER.warn(
-              "Unknown eviction policy '{ }', defaulting to LRU", config.getEvictionPolicy());
+              "Unknown eviction policy '{}', defaulting to LRU", config.getEvictionPolicy());
       }
 
       this.cache = new ChunkCache(config.getCacheCapacity(), evictionPolicy);
@@ -242,7 +242,7 @@ public class ChunkStorageManager {
             MEMORY_POOL_MANAGER.registerLazyInitializer("swap-manager-" + worldName, () -> {
               SwapManager.SwapConfig swapConfig = createSwapConfig(config);
               SwapManager manager = new SwapManager(swapConfig);
-              LOGGER.info("Lazy initialized SwapManager for world '{ }'", worldName);
+              LOGGER.info("Lazy initialized SwapManager for world '{}'", worldName);
               return manager;
             });
             
@@ -254,21 +254,21 @@ public class ChunkStorageManager {
           if (tempSwapManager != null) {
             tempSwapManager.initializeComponents(this.cache, (RustDatabaseAdapter) this.database);
           } else {
-            LOGGER.warn("Failed to lazy initialize SwapManager for world '{ }'", worldName);
+            LOGGER.warn("Failed to lazy initialize SwapManager for world '{}'", worldName);
           }
         } catch (Exception e) {
           LOGGER.warn(
-              "Failed to initialize SwapManager, disabling swap functionality: { }",
+              "Failed to initialize SwapManager, disabling swap functionality: {}",
               e.getMessage());
           tempSwapManager = null;
         }
       } else {
-        LOGGER.info("SwapManager disabled for world '{ }'", worldName);
+        LOGGER.info("SwapManager disabled for world '{}'", worldName);
       }
       this.swapManager = tempSwapManager;
 
       LOGGER.info(
-          "Initialized ChunkStorageManager for world '{ }' with cache capacity { } and { } eviction policy",
+          "Initialized ChunkStorageManager for world '{}' with cache capacity {} and {} eviction policy",
           worldName,
           config.getCacheCapacity(),
           config.getEvictionPolicy());
@@ -281,7 +281,7 @@ public class ChunkStorageManager {
       this.swapManager = null;
       this.savePipeline = null;
       this.loadPipeline = null;
-      LOGGER.info("ChunkStorageManager disabled for world '{ }'", worldName);
+      LOGGER.info("ChunkStorageManager disabled for world '{}'", worldName);
     }
   }
 
@@ -333,7 +333,7 @@ public class ChunkStorageManager {
       // Wait for the result with timeout
       return operation.getResult().get(30, java.util.concurrent.TimeUnit.SECONDS);
     } catch (Exception e) {
-      LOGGER.error("Failed to load chunk { } via reactive pipeline", chunkKey, e);
+      LOGGER.error("Failed to load chunk {} via reactive pipeline", chunkKey, e);
       return Optional.empty();
     }
   }
@@ -379,13 +379,13 @@ public class ChunkStorageManager {
       boolean deleted = removedFromCache != null || removedFromDb;
 
       if (deleted && LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Deleted chunk { } from storage", chunkKey);
+        LOGGER.debug("Deleted chunk {} from storage", chunkKey);
       }
 
       return deleted;
 
     } catch (Exception e) {
-      LOGGER.error("Failed to delete chunk { }", chunkKey, e);
+      LOGGER.error("Failed to delete chunk {}", chunkKey, e);
       return false;
     }
   }
@@ -510,7 +510,7 @@ public class ChunkStorageManager {
     }
 
     try {
-      LOGGER.info("Performing storage maintenance for world '{ }'", worldName);
+      LOGGER.info("Performing storage maintenance for world '{}'", worldName);
 
       // Perform database maintenance
       database.performMaintenance();
@@ -518,10 +518,10 @@ public class ChunkStorageManager {
       // Reset cache statistics
       cache.resetStats();
 
-      LOGGER.info("Storage maintenance completed for world '{ }'", worldName);
+      LOGGER.info("Storage maintenance completed for world '{}'", worldName);
 
     } catch (Exception e) {
-      LOGGER.error("Failed to perform storage maintenance for world '{ }'", worldName, e);
+      LOGGER.error("Failed to perform storage maintenance for world '{}'", worldName, e);
     }
   }
 
@@ -534,7 +534,7 @@ public class ChunkStorageManager {
     shutdown = true;
 
     try {
-      LOGGER.info("Shutting down ChunkStorageManager for world '{ }'", worldName);
+      LOGGER.info("Shutting down ChunkStorageManager for world '{}'", worldName);
 
       // Shutdown swap manager first
       if (swapManager != null) {
@@ -550,10 +550,10 @@ public class ChunkStorageManager {
       // Clear cache
       cache.clear();
 
-      LOGGER.info("ChunkStorageManager shutdown completed for world '{ }'", worldName);
+      LOGGER.info("ChunkStorageManager shutdown completed for world '{}'", worldName);
 
     } catch (Exception e) {
-      LOGGER.error("Error during shutdown of ChunkStorageManager for world '{ }'", worldName, e);
+      LOGGER.error("Error during shutdown of ChunkStorageManager for world '{}'", worldName, e);
     }
   }
 
@@ -575,7 +575,7 @@ public class ChunkStorageManager {
     try {
       return database.isHealthy() && !asyncExecutor.isShutdown();
     } catch (Exception e) {
-      LOGGER.error("Health check failed for world '{ }'", worldName, e);
+      LOGGER.error("Health check failed for world '{}'", worldName, e);
       return false;
     }
   }
@@ -591,11 +591,11 @@ public class ChunkStorageManager {
     }
 
     try {
-      LOGGER.info("Creating backup for world '{ }' at '{ }'", worldName, backupPath);
+      LOGGER.info("Creating backup for world '{}' at '{}'", worldName, backupPath);
       database.createBackup(backupPath);
-      LOGGER.info("Backup completed for world '{ }'", worldName);
+      LOGGER.info("Backup completed for world '{}'", worldName);
     } catch (Exception e) {
-      LOGGER.error("Failed to create backup for world '{ }' at '{ }'", worldName, backupPath, e);
+      LOGGER.error("Failed to create backup for world '{}' at '{}'", worldName, backupPath, e);
     }
   }
 
@@ -620,7 +620,7 @@ public class ChunkStorageManager {
         // ignore
       }
     } catch (Exception e) {
-      LOGGER.warn("Failed to clear cache via core delegation: { }", e.getMessage());
+      LOGGER.warn("Failed to clear cache via core delegation: {}", e.getMessage());
     }
   }
 
@@ -633,16 +633,16 @@ public class ChunkStorageManager {
     try {
       boolean applied = cache.setMaxCapacity(capacity);
       if (applied) {
-        LOGGER.info("Cache capacity changed to { } for world '{ }'", capacity, worldName);
+        LOGGER.info("Cache capacity changed to {} for world '{}'", capacity, worldName);
       } else {
         LOGGER.warn(
-            "Requested cache capacity change to { } for world '{ }' was rejected",
+            "Requested cache capacity change to {} for world '{}' was rejected",
             capacity,
             worldName);
       }
     } catch (Exception e) {
       LOGGER.warn(
-          "Failed to change cache capacity for world '{ }': { }", worldName, e.getMessage());
+          "Failed to change cache capacity for world '{}': {}", worldName, e.getMessage());
     }
   }
 
@@ -655,16 +655,16 @@ public class ChunkStorageManager {
     try {
       boolean applied = cache.setEvictionPolicy(policy);
       if (applied) {
-        LOGGER.info("Eviction policy changed to { } for world '{ }'", policy, worldName);
+        LOGGER.info("Eviction policy changed to {} for world '{}'", policy, worldName);
       } else {
         LOGGER.warn(
-            "Requested eviction policy change to { } for world '{ }' was rejected",
+            "Requested eviction policy change to {} for world '{}' was rejected",
             policy,
             worldName);
       }
     } catch (Exception e) {
       LOGGER.warn(
-          "Failed to change eviction policy for world '{ }': { }", worldName, e.getMessage());
+          "Failed to change eviction policy for world '{}': {}", worldName, e.getMessage());
     }
   }
 
@@ -674,7 +674,7 @@ public class ChunkStorageManager {
         .putChunkAsync(chunkKey, data)
         .exceptionally(
             throwable -> {
-              LOGGER.error("Failed to save chunk { } to database", chunkKey, throwable);
+              LOGGER.error("Failed to save chunk {} to database", chunkKey, throwable);
               return null;
             });
   }
@@ -682,14 +682,14 @@ public class ChunkStorageManager {
   /** Save chunk to database (helper method). */
   private CompletableFuture<Void> saveChunkToDatabase(String chunkKey, Object chunk) {
     if (serializer == null) {
-      LOGGER.warn("Cannot serialize chunk { } - serializer is null", chunkKey);
+      LOGGER.warn("Cannot serialize chunk {} - serializer is null", chunkKey);
       return CompletableFuture.completedFuture(null);
     }
     try {
       byte[] data = serializer.serialize(chunk);
       return saveChunkToDatabase(chunkKey, data);
     } catch (Exception e) {
-      LOGGER.error("Failed to serialize chunk { } for database storage", chunkKey, e);
+      LOGGER.error("Failed to serialize chunk {} for database storage", chunkKey, e);
       return CompletableFuture.failedFuture(e);
     }
   }
@@ -868,10 +868,10 @@ public class ChunkStorageManager {
             evicted =
                 cache.putChunk(chunkKey, (net.minecraft.world.level.chunk.LevelChunk) levelChunk);
           } else {
-            LOGGER.debug("Chunk object is not a LevelChunk, skipping cache for { }", chunkKey);
+            LOGGER.debug("Chunk object is not a LevelChunk, skipping cache for {}", chunkKey);
           }
         } catch (Exception e) {
-          LOGGER.debug("Failed to cache chunk { }: { }", chunkKey, e.getMessage());
+          LOGGER.debug("Failed to cache chunk {}: {}", chunkKey, e.getMessage());
         }
 
         // Handle evicted chunk if needed (save to database if dirty)
@@ -885,7 +885,7 @@ public class ChunkStorageManager {
         return saveChunkToDatabase(chunkKey, serializedData);
 
       } catch (Exception e) {
-        LOGGER.error("Failed to save chunk { }", chunkKey, e);
+        LOGGER.error("Failed to save chunk {}", chunkKey, e);
         throw new RuntimeException(e);
       }
     }, asyncExecutor).thenCompose(future -> future);
@@ -898,14 +898,14 @@ public class ChunkStorageManager {
         // Try cache first
         Optional<ChunkCache.CachedChunk> cached = cache.getChunk(chunkKey);
         if (cached.isPresent()) {
-          LOGGER.trace("Chunk { } found in cache", chunkKey);
+          LOGGER.trace("Chunk {} found in cache", chunkKey);
 
           // Check if chunk is swapped out and needs to be swapped in
           if (cached.get().isSwapped() && swapManager != null) {
-            LOGGER.debug("Chunk { } is swapped out, initiating swap-in", chunkKey);
+            LOGGER.debug("Chunk {} is swapped out, initiating swap-in", chunkKey);
             boolean swapSuccess = swapManager.swapInChunk(chunkKey).join();
             if (swapSuccess) {
-              LOGGER.debug("Successfully swapped in chunk: { }", chunkKey);
+              LOGGER.debug("Successfully swapped in chunk: {}", chunkKey);
               // Chunk should now be available in cache
               cached = cache.getChunk(chunkKey);
               if (cached.isPresent() && !cached.get().isSwapped()) {
@@ -964,7 +964,7 @@ public class ChunkStorageManager {
                 }
               }
             } else {
-              LOGGER.warn("Failed to swap in chunk: { }", chunkKey);
+              LOGGER.warn("Failed to swap in chunk: {}", chunkKey);
             }
           }
         }
@@ -972,7 +972,7 @@ public class ChunkStorageManager {
         // Try database
         Optional<byte[]> dbData = database.getChunk(chunkKey);
         if (dbData.isPresent()) {
-          LOGGER.trace("Chunk { } found in database", chunkKey);
+          LOGGER.trace("Chunk {} found in database", chunkKey);
           try {
             Object chunkData = serializer.deserialize(dbData.get());
 
@@ -981,21 +981,21 @@ public class ChunkStorageManager {
               // Cache the loaded chunk for future access
               return Optional.of(chunkData);
             } else {
-              LOGGER.warn("Deserialized data is not a valid CompoundTag for chunk { }", chunkKey);
+              LOGGER.warn("Deserialized data is not a valid CompoundTag for chunk {}", chunkKey);
               return Optional.empty();
             }
           } catch (Exception e) {
             LOGGER.error(
-                "Failed to deserialize chunk data for { }: { }", chunkKey, e.getMessage(), e);
+                "Failed to deserialize chunk data for {}: {}", chunkKey, e.getMessage(), e);
             return Optional.empty();
           }
         }
 
-        LOGGER.trace("Chunk { } not found in storage", chunkKey);
+        LOGGER.trace("Chunk {} not found in storage", chunkKey);
         return Optional.empty();
 
       } catch (Exception e) {
-        LOGGER.error("Failed to load chunk { }", chunkKey, e);
+        LOGGER.error("Failed to load chunk {}", chunkKey, e);
         throw new RuntimeException(e);
       }
     }, asyncExecutor);

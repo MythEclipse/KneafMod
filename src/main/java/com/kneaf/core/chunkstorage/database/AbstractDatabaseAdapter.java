@@ -125,7 +125,7 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
       return true;
     } catch (Exception e) {
       ChunkStorageExceptionHandler.logDebug(
-          getDatabaseType(), "Swap out failed for chunk { }: { }", chunkKey, e.getMessage());
+          getDatabaseType(), "Swap out failed for chunk {}: {}", chunkKey, e.getMessage());
       return false;
     }
   }
@@ -142,7 +142,7 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
       return Optional.empty();
     } catch (Exception e) {
       ChunkStorageExceptionHandler.logDebug(
-          getDatabaseType(), "Swap in failed for chunk { }: { }", chunkKey, e.getMessage());
+          getDatabaseType(), "Swap in failed for chunk {}: {}", chunkKey, e.getMessage());
       return Optional.empty();
     }
   }

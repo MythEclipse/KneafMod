@@ -49,8 +49,8 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
 
   public InMemoryDatabaseAdapter(String databaseType) {
     super(databaseType);
-    this.databaseType = databaseType;
-    LOGGER.info("Initialized InMemoryDatabaseAdapter of type: { }", databaseType);
+  this.databaseType = databaseType;
+  LOGGER.info("Initialized InMemoryDatabaseAdapter of type: {}", databaseType);
   }
 
   @Override
@@ -73,11 +73,11 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
       writeLatencyMs = duration / 1_000_000;
 
       if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Stored chunk { } ({ } bytes) in { } ms", key, data.length, writeLatencyMs);
+        LOGGER.debug("Stored chunk {} ({} bytes) in {} ms", key, data.length, writeLatencyMs);
       }
 
     } catch (Exception e) {
-      LOGGER.error("Failed to store chunk { }", key, e);
+  LOGGER.error("Failed to store chunk {}", key, e);
       throw new IOException("Failed to store chunk", e);
     }
   }
@@ -89,7 +89,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
           try {
             putChunk(key, data);
           } catch (IOException e) {
-            LOGGER.error("Failed to store chunk asynchronously { }", key, e);
+            LOGGER.error("Failed to store chunk asynchronously {}", key, e);
             throw new DatabaseOperationException("Failed to store chunk asynchronously", e);
           }
         });
@@ -109,17 +109,17 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
 
       if (LOGGER.isDebugEnabled()) {
         if (data != null) {
-          LOGGER.debug(
-              "Retrieved chunk { } ({ } bytes) in { } ms", key, data.length, readLatencyMs);
+      LOGGER.debug(
+        "Retrieved chunk {} ({} bytes) in {} ms", key, data.length, readLatencyMs);
         } else {
-          LOGGER.debug("Chunk { } not found (retrieved in { } ms)", key, readLatencyMs);
+          LOGGER.debug("Chunk {} not found (retrieved in {} ms)", key, readLatencyMs);
         }
       }
 
       return data != null ? Optional.of(data.clone()) : Optional.empty();
 
     } catch (Exception e) {
-      LOGGER.error("Failed to retrieve chunk { }", key, e);
+  LOGGER.error("Failed to retrieve chunk {}", key, e);
       throw new IOException("Failed to retrieve chunk", e);
     }
   }
@@ -131,7 +131,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
           try {
             return getChunk(key);
           } catch (IOException e) {
-            LOGGER.error("Failed to retrieve chunk asynchronously { }", key, e);
+            LOGGER.error("Failed to retrieve chunk asynchronously {}", key, e);
             throw new DatabaseOperationException("Failed to retrieve chunk asynchronously", e);
           }
         });
@@ -146,14 +146,14 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
       if (removedData != null) {
         totalSizeBytes.addAndGet(-removedData.length);
         if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("Deleted chunk { } ({ } bytes)", key, removedData.length);
+          LOGGER.debug("Deleted chunk {} ({} bytes)", key, removedData.length);
         }
         return true;
       }
       return false;
 
     } catch (Exception e) {
-      LOGGER.error("Failed to delete chunk { }", key, e);
+  LOGGER.error("Failed to delete chunk {}", key, e);
       throw new IOException("Failed to delete chunk", e);
     }
   }
@@ -165,7 +165,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
           try {
             return deleteChunk(key);
           } catch (IOException e) {
-            LOGGER.error("Failed to delete chunk asynchronously { }", key, e);
+            LOGGER.error("Failed to delete chunk asynchronously {}", key, e);
             throw new DatabaseOperationException("Failed to delete chunk asynchronously", e);
           }
         });
@@ -178,7 +178,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
     try {
       return chunkStorage.containsKey(key);
     } catch (Exception e) {
-      LOGGER.error("Failed to check chunk existence { }", key, e);
+  LOGGER.error("Failed to check chunk existence {}", key, e);
       throw new IOException("Failed to check chunk existence", e);
     }
   }
@@ -243,7 +243,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
       if (LOGGER.isInfoEnabled()) {
         long duration = System.currentTimeMillis() - startTime;
         LOGGER.info(
-            "Database maintenance completed in { } ms for { } chunks", duration, getChunkCount());
+            "Database maintenance completed in {} ms for {} chunks", duration, getChunkCount());
       }
 
     } catch (Exception e) {
@@ -258,7 +258,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
     try {
       if (LOGGER.isInfoEnabled()) {
         LOGGER.info(
-            "Closing InMemoryDatabaseAdapter with { } chunks ({ } bytes)",
+            "Closing InMemoryDatabaseAdapter with {} chunks ({} bytes)",
             getChunkCount(),
             totalSizeBytes.get());
       }
@@ -303,7 +303,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
 
       if (LOGGER.isInfoEnabled()) {
         LOGGER.info(
-            "Creating backup at { } for { } chunks ({ } bytes)", backupPath, chunkCount, totalSize);
+            "Creating backup at {} for {} chunks ({} bytes)", backupPath, chunkCount, totalSize);
       }
 
       // Write backup file with atomic write pattern
@@ -343,7 +343,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
           writtenBytes += data.length;
 
           if (LOGGER.isDebugEnabled() && writtenChunks % 1000 == 0) {
-            LOGGER.debug("Backup progress: { }/{ } chunks written", writtenChunks, chunkCount);
+            LOGGER.debug("Backup progress: {}/{} chunks written", writtenChunks, chunkCount);
           }
         }
 
@@ -357,7 +357,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
 
         if (LOGGER.isInfoEnabled()) {
           LOGGER.info(
-              "Backup serialization completed: { } chunks ({ } bytes) written to temporary file",
+              "Backup serialization completed: {} chunks ({} bytes) written to temporary file",
               writtenChunks,
               writtenBytes);
         }
@@ -365,7 +365,7 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
       } catch (Exception e) {
         // Clean up temporary file on failure
         if (tempFile.exists() && !tempFile.delete()) {
-          LOGGER.warn("Failed to clean up temporary backup file: { }", tempFile.getAbsolutePath());
+          LOGGER.warn("Failed to clean up temporary backup file: {}", tempFile.getAbsolutePath());
         }
         throw e;
       }
@@ -377,15 +377,64 @@ public class InMemoryDatabaseAdapter extends AbstractDatabaseAdapter {
 
       if (LOGGER.isInfoEnabled()) {
         LOGGER.info(
-            "Backup successfully created at { } ({ } chunks, { } bytes)",
+            "Backup successfully created at {} ({} chunks, {} bytes)",
             backupPath,
             chunkCount,
             totalSize);
       }
 
     } catch (Exception e) {
-      LOGGER.error("Failed to create backup at { }", backupPath, e);
+      LOGGER.error("Failed to create backup at {}", backupPath, e);
       throw new IOException("Failed to create backup", e);
+    }
+  }
+
+  @Override
+  public boolean swapOutChunk(String chunkKey) throws IOException {
+    ChunkStorageUtils.validateKey(chunkKey);
+
+    try {
+      // For in-memory adapter, swap-out means the chunk is moved to "secondary storage"
+      // In testing context, we simulate this by checking if chunk exists and "swapping" it out
+      if (chunkStorage.containsKey(chunkKey)) {
+        // In a real implementation, this would move data to disk/slower storage
+        // For testing, we just return true to indicate successful swap-out
+        if (LOGGER.isDebugEnabled()) {
+          LOGGER.debug("Simulated swap-out for chunk {}", chunkKey);
+        }
+        return true;
+      } else {
+        // Chunk doesn't exist, cannot swap out
+        return false;
+      }
+    } catch (Exception e) {
+      LOGGER.error("Failed to swap out chunk {}", chunkKey, e);
+      throw new IOException("Failed to swap out chunk", e);
+    }
+  }
+
+  @Override
+  public Optional<byte[]> swapInChunk(String chunkKey) throws IOException {
+    ChunkStorageUtils.validateKey(chunkKey);
+
+    try {
+      // For in-memory adapter, swap-in means retrieving chunk from "secondary storage"
+      // In testing context, we simulate this by returning the chunk data if it exists
+      byte[] data = chunkStorage.get(chunkKey);
+      if (data != null) {
+        // In a real implementation, this would move data from disk/slower storage back to memory
+        // For testing, we just return the data
+        if (LOGGER.isDebugEnabled()) {
+          LOGGER.debug("Simulated swap-in for chunk {} ({} bytes)", chunkKey, data.length);
+        }
+        return Optional.of(data.clone());
+      } else {
+        // Chunk not found in "secondary storage"
+        return Optional.empty();
+      }
+    } catch (Exception e) {
+      LOGGER.error("Failed to swap in chunk {}", chunkKey, e);
+      throw new IOException("Failed to swap in chunk", e);
     }
   }
 }

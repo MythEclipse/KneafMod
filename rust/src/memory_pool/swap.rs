@@ -400,11 +400,11 @@ impl SwapMemoryPool {
 
     /// Get memory pressure level
     pub fn get_memory_pressure(&self) -> MemoryPressureLevel {
-        let memory_usage = self.memory_cache.read().unwrap().len() as f64;
+        let total_pages = self.pages.read().unwrap().len() as f64;
         let max_memory = self.config.max_pages_in_memory as f64;
 
         let usage_ratio = if max_memory > 0.0 {
-            memory_usage / max_memory
+            total_pages / max_memory
         } else {
             0.0
         };
@@ -544,7 +544,7 @@ mod tests {
             swap_file_path: PathBuf::from(temp_file),
             max_swap_size: 10_485_760, // 10MB
             page_size: 4096,
-            max_pages_in_memory: 10,
+            max_pages_in_memory: 1, // Very small to force immediate swap out
             compression_enabled: false,
             prefetch_enabled: false,
             prefetch_threshold: 0.7,
@@ -595,7 +595,7 @@ mod tests {
             swap_file_path: PathBuf::from(temp_file),
             max_swap_size: 10_485_760,
             page_size: 4096,
-            max_pages_in_memory: 10,
+            max_pages_in_memory: 1, // Very small to force immediate swap out
             compression_enabled: true,
             prefetch_enabled: false,
             prefetch_threshold: 0.7,

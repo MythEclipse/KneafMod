@@ -82,7 +82,7 @@ public class ChunkCacheCommand {
   public static void registerStorageManager(String worldName, ChunkStorageManager manager) {
     if (worldName != null && manager != null) {
       STORAGE_MANAGERS.put(worldName, manager);
-      LOGGER.info("Registered ChunkStorageManager for world '{ }' in command system", worldName);
+      LOGGER.info("Registered ChunkStorageManager for world '{}' in command system", worldName);
     }
   }
 
@@ -96,7 +96,7 @@ public class ChunkCacheCommand {
       ChunkStorageManager removed = STORAGE_MANAGERS.remove(worldName);
       if (removed != null) {
         LOGGER.info(
-            "Unregistered ChunkStorageManager for world '{ }' from command system", worldName);
+            "Unregistered ChunkStorageManager for world '{}' from command system", worldName);
       }
     }
   }
@@ -163,7 +163,7 @@ public class ChunkCacheCommand {
         entry.getValue().clearCache();
         clearedCount++;
       } catch (Exception e) {
-        LOGGER.warn("Failed to clear cache for world { }: { }", entry.getKey(), e.getMessage());
+        LOGGER.warn("Failed to clear cache for world {}: {}", entry.getKey(), e.getMessage());
       }
     }
 
@@ -201,7 +201,7 @@ public class ChunkCacheCommand {
                     String.format(
                         "§cMaintenance failed for world '%s': %s", worldName, e.getMessage())),
             false);
-        LOGGER.error("Maintenance failed for world '{ }'", worldName, e);
+        LOGGER.error("Maintenance failed for world '{}'", worldName, e);
       }
     }
 
@@ -243,7 +243,7 @@ public class ChunkCacheCommand {
                 Component.literal(
                     String.format("§cBackup failed for world '%s': %s", worldName, e.getMessage())),
             false);
-        LOGGER.error("Backup failed for world '{ }'", worldName, e);
+        LOGGER.error("Backup failed for world '{}'", worldName, e);
       }
     }
 
@@ -268,7 +268,7 @@ public class ChunkCacheCommand {
         applied++;
       } catch (Exception e) {
         LOGGER.warn(
-            "Failed to set cache capacity for world { }: { }", entry.getKey(), e.getMessage());
+            "Failed to set cache capacity for world {}: {}", entry.getKey(), e.getMessage());
       }
     }
 
@@ -308,7 +308,7 @@ public class ChunkCacheCommand {
         applied++;
       } catch (Exception e) {
         LOGGER.warn(
-            "Failed to set eviction policy for world { }: { }", entry.getKey(), e.getMessage());
+            "Failed to set eviction policy for world {}: {}", entry.getKey(), e.getMessage());
       }
     }
 

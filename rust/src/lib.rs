@@ -109,6 +109,15 @@ pub use memory_pool::{
     MemoryPoolManager,
 };
 
+// Initialize global buffer tracker for zero-copy operations
+use crate::jni_batch::init_global_buffer_tracker;
+
+#[ctor::ctor]
+fn init_globals() {
+    // Initialize global buffer tracker with reasonable defaults
+    let _ = init_global_buffer_tracker(1000); // Allow up to 1000 active zero-copy buffers
+}
+
 // Re-export other commonly used types
 pub use logging::{PerformanceLogger, generate_trace_id};
 pub use types::{RustPerformanceError, Result};
