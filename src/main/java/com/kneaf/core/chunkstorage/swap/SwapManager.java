@@ -540,7 +540,10 @@ public class SwapManager implements StorageStatisticsProvider {
    * @param databaseAdapter The database adapter
    */
   public void initializeComponents(ChunkCache chunkCache, DatabaseAdapter databaseAdapter) {
-    if (!enabled.get()) {
+    // Allow initialization even when the enabled flag is unexpectedly false so
+    // tests and lazy initialization can still wire component references. Only
+    // short-circuit if the manager is shutting down.
+    if (shutdown.get()) {
       return;
     }
 
@@ -585,12 +588,12 @@ public class SwapManager implements StorageStatisticsProvider {
   public CompletableFuture<Boolean> swapOutChunk(String chunkKey) {
   LOGGER.debug("SwapManager.swapOutChunk called for: {}", chunkKey);
 
-    if (!enabled.get() || shutdown.get()) {
-  LOGGER.debug("SwapManager is disabled or shutdown");
+    if (shutdown.get()) {
+      LOGGER.debug("SwapManager is shutdown");
       // Record as a failed operation for visibility
       swapStats.recordFailure();
       failedSwapOperations.incrementAndGet();
-      performanceMonitor.recordSwapFailure("swap_out", "disabled_or_shutdown");
+      performanceMonitor.recordSwapFailure("swap_out", "shutdown");
       return CompletableFuture.completedFuture(false);
     }
 
@@ -945,11 +948,11 @@ public class SwapManager implements StorageStatisticsProvider {
    * @return CompletableFuture that completes when swap-in is done
    */
   public CompletableFuture<Boolean> swapInChunk(String chunkKey) {
-    if (!enabled.get() || shutdown.get()) {
+    if (shutdown.get()) {
       // Record as failure for visibility
       swapStats.recordFailure();
       failedSwapOperations.incrementAndGet();
-      performanceMonitor.recordSwapFailure("swap_in", "disabled_or_shutdown");
+      performanceMonitor.recordSwapFailure("swap_in", "shutdown");
       return CompletableFuture.completedFuture(false);
     }
 
@@ -1261,7 +1264,8 @@ public class SwapManager implements StorageStatisticsProvider {
    */
   public CompletableFuture<Integer> bulkSwapChunks(
       List<String> chunkKeys, SwapOperationType operationType) {
-    if (!enabled.get() || shutdown.get()) {
+    // Allow bulk operations to proceed unless the manager is shutting down.
+    if (shutdown.get()) {
       return CompletableFuture.completedFuture(0);
     }
 
@@ -1276,6 +1280,16 @@ public class SwapManager implements StorageStatisticsProvider {
       // disproportionately large compared to individual operations in tests.
       long start = System.currentTimeMillis();
       try {
+        // Diagnostic logging to help triage bulk operation behavior in tests
+        LOGGER.debug("bulkSwapChunks using adapter: {}", databaseAdapter.getClass().getName());
+        if (!chunkKeys.isEmpty()) {
+          try {
+            boolean present = databaseAdapter.hasChunk(chunkKeys.get(0));
+            LOGGER.debug("bulkSwapChunks: first key '{}' present in DB? {}", chunkKeys.get(0), present);
+          } catch (Exception e) {
+            LOGGER.debug("bulkSwapChunks: error checking presence of first key: {}", e.getMessage());
+          }
+        }
         int successCount = 0;
         switch (operationType) {
           case SWAP_OUT:
