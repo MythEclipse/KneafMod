@@ -21,6 +21,7 @@ import com.kneaf.core.unifiedbridge.UnifiedBridgeFactory;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
@@ -38,6 +39,8 @@ public class RustPerformance {
   
   private static volatile boolean initialized = false;
   private static volatile boolean nativeLibraryAvailable = false;
+  // Prevent spamming the logs when the unified bridge is unavailable - log full warning once
+  private static final AtomicBoolean UNIFIED_BRIDGE_FALLBACK_WARNED = new AtomicBoolean(false);
 
   /** Initialize the performance system. */
   public static synchronized void initialize() {
@@ -164,6 +167,7 @@ public class RustPerformance {
         return extractLongListResult(result);
       } catch (BridgeException e) {
         KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+      logUnifiedBridgeFallback(e);
         return FACADE.getEntitiesToTick(entities, players).join();
       }
     });
@@ -183,6 +187,7 @@ public class RustPerformance {
       return extractLongListResult(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+    logUnifiedBridgeFallback(e);
       try {
         return FACADE.getEntitiesToTick(entities, players).join();
       } catch (Exception e2) {
@@ -205,6 +210,7 @@ public class RustPerformance {
       return extractMobProcessResult(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+    logUnifiedBridgeFallback(e);
       try {
         return FACADE.processMobAI(mobs).join();
       } catch (Exception e2) {
@@ -297,7 +303,7 @@ public class RustPerformance {
 
         return extractLongListResult(result);
       } catch (BridgeException e) {
-        KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+  logUnifiedBridgeFallback(e);
         try {
           return FACADE.getBlockEntitiesToTick(blockEntities).join();
         } catch (Exception ex) {
@@ -322,6 +328,7 @@ public class RustPerformance {
       return extractLongListResult(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+    logUnifiedBridgeFallback(e);
       try {
         return FACADE.getBlockEntitiesToTick(blockEntities).join();
       } catch (Exception e2) {
@@ -348,6 +355,7 @@ public class RustPerformance {
       return extractLongListResult(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+    logUnifiedBridgeFallback(e);
       return FACADE.optimizeVillagers(villagers, centerX, centerZ, radius);
     }
   }
@@ -359,6 +367,7 @@ public class RustPerformance {
       safeExecute("optimize_memory");
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+    logUnifiedBridgeFallback(e);
       FACADE.optimizeMemory();
     }
   }
@@ -371,6 +380,7 @@ public class RustPerformance {
       return extractPerformanceStatistics(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+    logUnifiedBridgeFallback(e);
       RustPerformanceFacade.PerformanceStatistics FACADEStats = FACADE.getPerformanceStatistics();
       return new PerformanceStatistics(
           FACADEStats.getTotalEntitiesProcessed(),
@@ -390,6 +400,7 @@ public class RustPerformance {
       return result.getResultString();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+    logUnifiedBridgeFallback(e);
       return FACADE.getMemoryStats();
     }
   }
@@ -402,6 +413,7 @@ public class RustPerformance {
       return result.getResultString();
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+    logUnifiedBridgeFallback(e);
       return FACADE.getCpuStats();
     }
   }
@@ -435,6 +447,7 @@ public class RustPerformance {
         return result.getResultInteger();
       } catch (BridgeException e) {
         KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
+      logUnifiedBridgeFallback(e);
         try {
           return FACADE.preGenerateNearbyChunksAsync(centerX, centerZ, radius).join();
         } catch (Exception ex) {
@@ -817,6 +830,22 @@ public class RustPerformance {
       throw new BridgeException("UnifiedBridge not available", BridgeException.BridgeErrorType.GENERIC_ERROR);
     }
     return UNIFIED_BRIDGE.executeSync(method, args);
+  }
+
+  /** Helper to log unified-bridge fallback in a throttled manner. Logs full stack on first occurrence, then debug-only later. */
+  private static void logUnifiedBridgeFallback(Throwable e) {
+    try {
+      if (UNIFIED_BRIDGE_FALLBACK_WARNED.compareAndSet(false, true)) {
+        // First occurrence: include stacktrace at WARN level
+        KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE", e);
+      } else {
+        // Subsequent occurrences: reduce verbosity to DEBUG with the message only
+        String msg = (e == null ? "unknown" : e.getMessage());
+        KneafCore.LOGGER.debug("UnifiedBridge fallback (repeated): {}", msg);
+      }
+    } catch (Throwable ignore) {
+      // Swallow any logging errors to avoid interfering with fallback behavior
+    }
   }
   
   /** Internal method to check native library availability (used during initialization). */
