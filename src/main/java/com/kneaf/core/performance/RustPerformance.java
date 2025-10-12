@@ -313,12 +313,12 @@ public class RustPerformance {
   public static List<Long> getBlockEntitiesToTick(List<BlockEntityData> blockEntities) {
     ensureInitialized();
     try {
-      // Try unified bridge first
-      BridgeResult result = UNIFIED_BRIDGE.executeSync(
+      // Try unified bridge first (use safeExecute so we get a BridgeException when bridge is missing)
+      BridgeResult result = safeExecute(
           "get_block_entities_to_tick",
           blockEntities.stream().map(BlockEntityData::getId).collect(Collectors.toList())
       );
-      
+
       return extractLongListResult(result);
     } catch (BridgeException e) {
       KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
