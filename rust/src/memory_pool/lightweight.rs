@@ -219,7 +219,7 @@ impl<T: Default + Send + Sync> LightweightPooledObject<T> {
 
 impl<T: Default + Send + Sync> Drop for LightweightPooledObject<T> {
     fn drop(&mut self) {
-        if let Some(data) = self.data.take() {
+        if let Some(_data) = self.data.take() {
             let trace_id = generate_trace_id();
 
             // Check for thread safety violation
@@ -315,7 +315,7 @@ impl<T: Default + Send + Sync + Clone> FastArena<T> {
     pub fn alloc(&self) -> Result<ArenaHandle<T>, PoolError> {
         let trace_id = generate_trace_id();
 
-        let (index, is_new) = {
+        let (index, _is_new) = {
             let mut free_indices = self.free_indices.lock().unwrap();
             if let Some(index) = free_indices.pop() {
                 self.logger
@@ -340,6 +340,7 @@ impl<T: Default + Send + Sync + Clone> FastArena<T> {
     }
 
     /// Get reference to object at index with thread safety
+    #[allow(dead_code)]
     fn get(&self, index: usize) -> Result<T, PoolError> {
         let objects = self.objects.lock().unwrap();
         if index < objects.len() {
@@ -350,6 +351,7 @@ impl<T: Default + Send + Sync + Clone> FastArena<T> {
     }
 
     /// Get mutable reference to object at index with thread safety
+    #[allow(dead_code)]
     fn get_mut(&self, index: usize) -> Result<T, PoolError> {
         let objects = self.objects.lock().unwrap();
         if index < objects.len() {
@@ -360,6 +362,7 @@ impl<T: Default + Send + Sync + Clone> FastArena<T> {
     }
 
     /// Deallocate object (return to free list) with thread safety
+    #[allow(dead_code)]
     fn dealloc(&self, index: usize) -> Result<(), PoolError> {
         let trace_id = generate_trace_id();
 

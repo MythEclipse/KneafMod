@@ -248,7 +248,7 @@ impl EnhancedMemoryPoolManager {
         self.performance_monitor.record_allocation_time(elapsed);
 
         // Update stats with single lock acquisition
-        if let Ok(_) = &result {
+        if let Ok(ref _pooled_vec) = &result {
             let mut stats = self.allocation_stats.write().unwrap();
             stats.total_allocations += 1;
             stats.current_memory_usage += size;
@@ -425,8 +425,8 @@ impl EnhancedMemoryPoolManager {
 
         // Calculate current memory usage with more accurate tracking
         let current_memory_usage = if stats.total_allocations > 0 {
-            let avg_size = stats.current_memory_usage / stats.total_allocations as usize;
-            (stats.total_allocations as usize * avg_size).saturating_sub(total_deallocated_bytes)
+            // Use the actual current memory usage from stats, adjusted for deallocations
+            stats.current_memory_usage.saturating_sub(total_deallocated_bytes)
         } else {
             0
         };
@@ -924,6 +924,7 @@ mod tests {
     }
 
     /// RAII wrapper for enhanced memory pool allocations
+    #[allow(dead_code)]
     pub struct PooledAllocationGuard<T> {
         allocation: SmartPooledVec<T>,
         manager: Arc<EnhancedMemoryPoolManager>,
@@ -931,6 +932,7 @@ mod tests {
 
     impl<T: 'static> PooledAllocationGuard<T> {
         /// Create a new allocation guard
+        #[allow(dead_code)]
         pub fn new(manager: Arc<EnhancedMemoryPoolManager>, allocation: SmartPooledVec<T>) -> Self {
             Self {
                 allocation,
@@ -939,16 +941,19 @@ mod tests {
         }
 
         /// Get immutable reference to the allocated data
+        #[allow(dead_code)]
         pub fn as_slice(&self) -> &[T] {
             self.allocation.as_slice()
         }
 
         /// Get mutable reference to the allocated data
+        #[allow(dead_code)]
         pub fn as_mut_slice(&mut self) -> &mut [T] {
             self.allocation.as_mut_slice()
         }
 
         /// Get length of the allocated data
+        #[allow(dead_code)]
         pub fn len(&self) -> usize {
             self.allocation.len()
         }
