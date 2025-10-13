@@ -47,6 +47,7 @@ pub unsafe fn deserialize_mob_input_zero_copy(
 // Zero-copy serialization - writes directly to provided memory buffer
 pub unsafe fn serialize_mob_result_zero_copy(
     result: &MobProcessResult,
+    tick_count: u64,
     buffer_ptr: *mut u8,
     buffer_capacity: usize,
 ) -> Result<usize, String> {
@@ -57,8 +58,8 @@ pub unsafe fn serialize_mob_result_zero_copy(
     let buffer_slice = unsafe { slice::from_raw_parts_mut(buffer_ptr, buffer_capacity) };
     let mut cur = Cursor::new(buffer_slice);
 
-    // Write tick count placeholder
-    cur.write_u64::<LittleEndian>(0u64)
+    // Write tick count from the original input
+    cur.write_u64::<LittleEndian>(tick_count)
         .map_err(|e| e.to_string())?;
 
     // Write disable list
@@ -108,8 +109,9 @@ mod tests {
         assert_eq!(required_size, 8 + 4 + 3 * 8 + 4 + 3 * 8);
 
         let mut buffer = vec![0u8; required_size];
+        let test_tick_count = 12345u64;
         let bytes_written = unsafe {
-            serialize_mob_result_zero_copy(&test_result, buffer.as_mut_ptr(), buffer.len())
+            serialize_mob_result_zero_copy(&test_result, test_tick_count, buffer.as_mut_ptr(), buffer.len())
         }
         .expect("Serialization failed");
 

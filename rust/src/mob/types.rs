@@ -20,7 +20,7 @@ pub struct MobProcessResult {
     pub mobs_to_simplify_ai: Vec<u64>,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiConfig {
     pub passive_disable_distance: f32,
     pub hostile_simplify_distance: f32,
