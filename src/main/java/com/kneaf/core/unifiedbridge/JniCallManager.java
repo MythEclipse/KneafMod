@@ -57,6 +57,7 @@ public final class JniCallManager {
         public static native void nativeCleanupZeroCopyOperation(long operationId);
         public static native void nativeFlushOperations();
         public static native boolean nativeIsAvailable();
+    public static native void nativeInitAllocator();
         public static native long nativeGetConnectionId();
         public static native void nativeReleaseConnection(long connectionId);
         public static native String nativeGetLastError();
@@ -187,14 +188,23 @@ public final class JniCallManager {
      * @return JniCallManager instance
      */
     public static JniCallManager getInstance(BridgeConfiguration config) {
-        INSTANCE.config = Objects.requireNonNull(config);
+        Objects.requireNonNull(config, "config cannot be null");
+
+        BridgeConfiguration previous = INSTANCE.config;
+        INSTANCE.config = config;
         LOGGER.info("JniCallManager reconfigured with custom settings");
-        
-        // Reinitialize native library with new configuration if needed
-        if (INSTANCE.nativeLibraryLoaded.get() && config.isEnableDebugLogging() != INSTANCE.config.isEnableDebugLogging()) {
-            INSTANCE.initializeNativeLibrary();
+
+        // If the configuration changed, attempt to reinitialize the native library under the new settings
+        if (!Objects.equals(previous, config)) {
+            try {
+                if (INSTANCE.nativeLibraryLoaded.get()) {
+                    INSTANCE.initializeNativeLibrary();
+                }
+            } catch (Exception ex) {
+                LOGGER.log(WARNING, "Failed to reinitialize native library after config change: {0}", ex.getMessage());
+            }
         }
-        
+
         return INSTANCE;
     }
 
@@ -208,7 +218,10 @@ public final class JniCallManager {
         Objects.requireNonNull(methodName, "Method name cannot be null");
         Objects.requireNonNull(callFunction, "Call function cannot be null");
         
-        return registeredMethods.putIfAbsent(methodName, new JniMethod(methodName, callFunction)) != null;
+        // putIfAbsent returns the previous value associated with key, or null if there was no mapping
+        JniMethod previous = registeredMethods.putIfAbsent(methodName, new JniMethod(methodName, callFunction));
+        // Return true when registration succeeded (no previous mapping existed)
+        return previous == null;
     }
 
     /**
@@ -490,8 +503,86 @@ public final class JniCallManager {
      * @return true if native functionality is available, false otherwise
      */
     public boolean isNativeAvailable() {
-        // Check actual native library availability
-        return NativeBridge.nativeIsAvailable();
+        try {
+            return NativeBridge.nativeIsAvailable();
+        } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
+            // Native library not loaded or symbol missing - treat as unavailable
+            LOGGER.log(FINE, "nativeIsAvailable probe unavailable: {0}", e.getMessage());
+            return false;
+        } catch (Throwable t) {
+            LOGGER.log(WARNING, "Unexpected error in nativeIsAvailable probe: {0}", t.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Optional initializer for allocator-related native hooks.
+     * This forwards to a small native shim that is safe to call when the
+     * native library has been loaded and the core probe passed.
+     */
+    public void initializeAllocator() {
+        try {
+            NativeBridge.nativeInitAllocator();
+            return;
+        } catch (UnsatisfiedLinkError e) {
+            LOGGER.log(WARNING, "nativeInitAllocator not available after initial load: " + e.getMessage());
+            // Attempt to explicitly load the project's built native library copies and retry.
+            String[] candidatePaths = new String[] {
+                "rust/target/release/rustperf.dll",
+                "rust/target/release/librustperf.so",
+                "rust/target/release/librustperf.dylib",
+                "rust/target/debug/rustperf.dll",
+                "rust/target/debug/librustperf.so",
+                "rust/target/debug/librustperf.dylib",
+                "src/main/resources/natives/rustperf.dll",
+                "src/main/resources/natives/librustperf.so",
+                "src/main/resources/natives/librustperf.dylib"
+            };
+
+            for (String rel : candidatePaths) {
+                try {
+                    java.nio.file.Path p = java.nio.file.Paths.get(rel).toAbsolutePath();
+                    LOGGER.info("Checking candidate native path: " + p);
+                    boolean loadedCandidate = false;
+                    if (java.nio.file.Files.exists(p)) {
+                        LOGGER.info("Attempting to load native library explicitly from: " + p);
+                        System.load(p.toString());
+                        loadedCandidate = true;
+                    } else {
+                        // Try resolving relative to project root (one level up when running from run/)
+                        try {
+                            java.nio.file.Path userDir = java.nio.file.Paths.get(System.getProperty("user.dir")).toAbsolutePath();
+                            java.nio.file.Path projectRoot = userDir.getParent() != null ? userDir.getParent() : userDir;
+                            java.nio.file.Path alt = projectRoot.resolve(rel).toAbsolutePath();
+                            LOGGER.info("Checking alternate candidate path: " + alt);
+                            if (java.nio.file.Files.exists(alt)) {
+                                LOGGER.info("Attempting to load native library explicitly from: " + alt);
+                                System.load(alt.toString());
+                                loadedCandidate = true;
+                            }
+                        } catch (Throwable ignore) {
+                            // ignore project-root resolution failures and continue
+                        }
+                    }
+                    if (loadedCandidate) {
+                        // Try the init again
+                        try {
+                            NativeBridge.nativeInitAllocator();
+                            LOGGER.info("nativeInitAllocator succeeded after explicit load from: " + p);
+                            return;
+                        } catch (UnsatisfiedLinkError retryEx) {
+                            LOGGER.log(WARNING, "nativeInitAllocator still unavailable after loading candidate: " + retryEx.getMessage());
+                            // continue to next candidate
+                        }
+                    }
+                } catch (Throwable loadEx) {
+                    LOGGER.log(WARNING, "Failed to load native candidate " + rel + ": " + loadEx.getMessage(), loadEx);
+                }
+            }
+
+            // If we reach here, no candidate fixed the issue - rethrow the original error to be handled upstream
+            throw e;
+        }
     }
 
     /**
@@ -653,11 +744,14 @@ public final class JniCallManager {
             LOGGER.log(FINE, "Calling native method: {0} with parameters: {1}",
                     new Object[]{methodName, parameters});
 
-            // Get the method using reflection with proper parameter type handling
-            java.lang.reflect.Method nativeMethod = NativeBridge.class.getMethod(methodName,
-                    getParameterTypes(parameters));
+            // Find a compatible static method on NativeBridge by name and parameter compatibility.
+            java.lang.reflect.Method nativeMethod = findCompatibleNativeMethod(methodName, parameters);
+            if (nativeMethod == null) {
+                throw new java.lang.NoSuchMethodException("No compatible native method found: " + methodName);
+            }
 
-            Object result = nativeMethod.invoke(null, parameters);
+            Object[] invokeParams = parameters == null ? new Object[0] : parameters;
+            Object result = nativeMethod.invoke(null, invokeParams);
             
             long endTimeNanos = System.nanoTime();
             long bytesProcessed = calculateBytesProcessed(methodName, parameters);
@@ -706,12 +800,90 @@ public final class JniCallManager {
         if (parameters == null || parameters.length == 0) {
             return new Class<?>[0];
         }
-        
+
         Class<?>[] types = new Class<?>[parameters.length];
         for (int i = 0; i < parameters.length; i++) {
-            types[i] = parameters[i] != null ? parameters[i].getClass() : null;
+            Object p = parameters[i];
+            if (p == null) {
+                // Use Object.class as a permissive placeholder; findCompatibleNativeMethod will allow matching
+                types[i] = Object.class;
+            } else if (p instanceof Integer) {
+                types[i] = int.class;
+            } else if (p instanceof Long) {
+                types[i] = long.class;
+            } else if (p instanceof Boolean) {
+                types[i] = boolean.class;
+            } else if (p instanceof Byte) {
+                types[i] = byte.class;
+            } else if (p instanceof Short) {
+                types[i] = short.class;
+            } else if (p instanceof Character) {
+                types[i] = char.class;
+            } else if (p instanceof Float) {
+                types[i] = float.class;
+            } else if (p instanceof Double) {
+                types[i] = double.class;
+            } else {
+                types[i] = p.getClass();
+            }
         }
         return types;
+    }
+
+    /**
+     * Find a compatible static method on NativeBridge with the given name and compatible parameter types.
+     * Implements permissive matching to handle primitive/wrapper differences and null parameters.
+     */
+    private java.lang.reflect.Method findCompatibleNativeMethod(String methodName, Object[] parameters) {
+        java.lang.reflect.Method[] methods = NativeBridge.class.getDeclaredMethods();
+        outer: for (java.lang.reflect.Method m : methods) {
+            if (!m.getName().equals(methodName)) continue;
+            Class<?>[] paramTypes = m.getParameterTypes();
+            int expected = paramTypes.length;
+            int provided = parameters == null ? 0 : parameters.length;
+            if (expected != provided) continue;
+
+            for (int i = 0; i < expected; i++) {
+                Class<?> expectedType = paramTypes[i];
+                Object providedValue = parameters != null ? parameters[i] : null;
+                if (providedValue == null) {
+                    // null is acceptable for reference types, not for primitives
+                    if (expectedType.isPrimitive()) {
+                        continue outer;
+                    } else {
+                        continue;
+                    }
+                }
+
+                Class<?> provClass = providedValue.getClass();
+                if (isAssignablePrimitive(expectedType, provClass)) {
+                    continue;
+                }
+
+                if (!expectedType.isAssignableFrom(provClass)) {
+                    continue outer;
+                }
+            }
+
+            if (!m.canAccess(null)) {
+                m.setAccessible(true);
+            }
+            return m;
+        }
+        return null;
+    }
+
+    private boolean isAssignablePrimitive(Class<?> expected, Class<?> provided) {
+        if (!expected.isPrimitive()) return false;
+        if (expected == int.class && Integer.class.isAssignableFrom(provided)) return true;
+        if (expected == long.class && Long.class.isAssignableFrom(provided)) return true;
+        if (expected == boolean.class && Boolean.class.isAssignableFrom(provided)) return true;
+        if (expected == byte.class && Byte.class.isAssignableFrom(provided)) return true;
+        if (expected == short.class && Short.class.isAssignableFrom(provided)) return true;
+        if (expected == char.class && Character.class.isAssignableFrom(provided)) return true;
+        if (expected == float.class && Float.class.isAssignableFrom(provided)) return true;
+        if (expected == double.class && Double.class.isAssignableFrom(provided)) return true;
+        return false;
     }
     
     /**

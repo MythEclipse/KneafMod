@@ -307,6 +307,15 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     logger().debug(&mut env, &format!("Set log level to {}", log_level));
 }
 
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeInitAllocator(
+    mut env: JNIEnv,
+    _class: JClass,
+) {
+    // Provide a unified entrypoint for initializing allocator-related hooks
+    logger().debug(&mut env, "nativeInitAllocator called via JniCallManager (shim)");
+}
+
 // Shim implementations for NativeIntegrationManager$NativeResourceManager expected JNI symbols
 // These are provided as lightweight no-ops so Java can probe the native library and initialize
 // allocator-related hooks. More complete native implementations can be added later.

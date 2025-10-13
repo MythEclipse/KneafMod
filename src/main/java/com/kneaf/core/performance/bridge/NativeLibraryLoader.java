@@ -22,45 +22,76 @@ public class NativeLibraryLoader {
 
     List<String> errors = new ArrayList<>();
 
+    // Strategy 0: Try loading from build resources first (highest priority)
+    try {
+      System.out.println("NativeLibraryLoader: Attempting to load from build resources first");
+      Path buildResourcesPath = Paths.get("build", "resources", "main", "natives", "rustperf.dll");
+      if (Files.exists(buildResourcesPath)) {
+        System.out.println("NativeLibraryLoader: Found library in build resources: " + buildResourcesPath.toAbsolutePath());
+        System.load(buildResourcesPath.toAbsolutePath().toString());
+        libraryLoaded = true;
+        System.out.println("NativeLibraryLoader: Successfully loaded from build resources");
+        return true;
+      } else {
+        System.out.println("NativeLibraryLoader: Build resources library not found at: " + buildResourcesPath.toAbsolutePath());
+      }
+    } catch (Exception e) {
+      errors.add("Build resources loading failed: " + e.getMessage());
+      System.out.println("NativeLibraryLoader: Build resources loading failed: " + e.getMessage());
+    }
+
     // Strategy 1: Try System.loadLibrary (requires library in java.library.path)
     try {
+      System.out.println("NativeLibraryLoader: Attempting System.loadLibrary(\"" + LIBRARY_NAME + "\")");
       System.loadLibrary(LIBRARY_NAME);
       libraryLoaded = true;
+      System.out.println("NativeLibraryLoader: Successfully loaded via System.loadLibrary");
       return true;
     } catch (UnsatisfiedLinkError e) {
       errors.add("System.loadLibrary failed: " + e.getMessage());
+      System.out.println("NativeLibraryLoader: System.loadLibrary failed: " + e.getMessage());
     } catch (Exception e) {
       errors.add("System.loadLibrary exception: " + e.getMessage());
+      System.out.println("NativeLibraryLoader: System.loadLibrary exception: " + e.getMessage());
     }
 
     // Strategy 2: Try loading from JAR resources
     try {
+      System.out.println("NativeLibraryLoader: Attempting to load from JAR resources");
       if (loadFromResources()) {
         libraryLoaded = true;
+        System.out.println("NativeLibraryLoader: Successfully loaded from JAR resources");
         return true;
       }
     } catch (Exception e) {
       errors.add("Resource loading failed: " + e.getMessage());
+      System.out.println("NativeLibraryLoader: Resource loading failed: " + e.getMessage());
     }
 
     // Strategy 3: Try loading from build directory
     try {
+      System.out.println("NativeLibraryLoader: Attempting to load from build directory");
       if (loadFromBuildDirectory()) {
         libraryLoaded = true;
+        System.out.println("NativeLibraryLoader: Successfully loaded from build directory");
         return true;
       }
     } catch (Exception e) {
       errors.add("Build directory loading failed: " + e.getMessage());
+      System.out.println("NativeLibraryLoader: Build directory loading failed: " + e.getMessage());
     }
 
     // Strategy 4: Try loading with platform-specific names
     try {
+      System.out.println("NativeLibraryLoader: Attempting platform-specific loading");
       if (loadWithPlatformNames()) {
         libraryLoaded = true;
+        System.out.println("NativeLibraryLoader: Successfully loaded with platform-specific names");
         return true;
       }
     } catch (Exception e) {
       errors.add("Platform-specific loading failed: " + e.getMessage());
+      System.out.println("NativeLibraryLoader: Platform-specific loading failed: " + e.getMessage());
     }
 
     // Log all attempts
@@ -128,8 +159,11 @@ public class NativeLibraryLoader {
 
     for (Path path : alternativePaths) {
       if (Files.exists(path)) {
+        System.out.println("NativeLibraryLoader: Found library at: " + path.toAbsolutePath());
         System.load(path.toAbsolutePath().toString());
         return true;
+      } else {
+        System.out.println("NativeLibraryLoader: Library not found at: " + path.toAbsolutePath());
       }
     }
 

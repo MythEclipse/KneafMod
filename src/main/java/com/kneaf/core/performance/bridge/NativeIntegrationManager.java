@@ -59,14 +59,17 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
 
         // Now initialize the native allocator. If this fails we fall back to Java.
         try {
-          NativeResourceManager.nativeInitAllocator();
+          // Use the unified JniCallManager to initialize allocator hooks; this centralizes
+          // JNI calls and avoids classloader / symbol visibility issues with inner classes.
+          com.kneaf.core.unifiedbridge.JniCallManager.getInstance().initializeAllocator();
           nativeAvailable.set(true);
-          KneafCore.LOGGER.info("Native allocator initialized successfully");
+          KneafCore.LOGGER.info("Native allocator initialized successfully via JniCallManager");
           KneafCore.LOGGER.info("Native integration manager initialized successfully");
           return true;
         } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
           nativeAvailable.set(false);
-          KneafCore.LOGGER.warn("Native allocator init failed; native integration unavailable, using Java fallback: " + e.getMessage());
+          // Log the full exception so the stack trace and exact cause are available in logs
+          KneafCore.LOGGER.warn("Native allocator init failed; native integration unavailable, using Java fallback: " + e.getMessage(), e);
           return false;
         }
       } catch (Throwable t) {
@@ -613,7 +616,32 @@ public class NativeIntegrationManager implements NativeBridgeProvider {
       // Load native library
     static {
       try {
-        NATIVE_LIBRARY_LOADED = tryLoadNativeLibrary();
+        // Attempt to load the native library via the shared loader
+        boolean loaded = tryLoadNativeLibrary();
+
+        if (loaded) {
+          // Perform a lightweight probe to ensure core JNI symbols are present and usable.
+          // Use the unified JniCallManager probe which is intentionally tiny and returns
+          // a boolean. If this call succeeds and returns true we can safely assume
+          // the native library exports JNI symbols with the correct signatures.
+          try {
+            boolean probe = com.kneaf.core.unifiedbridge.JniCallManager.getInstance().isNativeAvailable();
+            if (probe) {
+              NATIVE_LIBRARY_LOADED = true;
+            } else {
+              NATIVE_LIBRARY_LOADED = false;
+              KneafCore.LOGGER.warn("Native library loaded but probe nativeIsAvailable() returned false; treating native as unavailable");
+            }
+          } catch (UnsatisfiedLinkError probeEx) {
+            NATIVE_LIBRARY_LOADED = false;
+            KneafCore.LOGGER.warn("Native library loaded but core JNI probe failed (nativeIsAvailable missing): " + probeEx.getMessage(), probeEx);
+          } catch (Throwable probeEx) {
+            NATIVE_LIBRARY_LOADED = false;
+            KneafCore.LOGGER.warn("Native library loaded but core JNI probe threw an unexpected error: " + probeEx.getMessage(), probeEx);
+          }
+        } else {
+          NATIVE_LIBRARY_LOADED = false;
+        }
       } catch (Throwable t) {
         NATIVE_LIBRARY_LOADED = false;
         KneafCore.LOGGER.warn("Error while attempting to load native library: " + t.getMessage(), t);
