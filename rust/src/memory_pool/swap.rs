@@ -404,9 +404,9 @@ impl SwapMemoryPool {
         let allocation = self.allocate(data.len())?;
         let page_id = allocation.page_id;
 
-        // Get page metadata and ensure it's updated
-        let mut page = self.pages.write().unwrap();
-        let page = page
+        // Get page metadata and ensure it's updated (metadata clone retained for potential future use)
+        let mut _page = self.pages.write().unwrap();
+        let _page = _page
             .get_mut(&page_id)
             .ok_or_else(|| format!("Page {} not found", page_id))?
             .clone();
@@ -581,6 +581,7 @@ impl SwapMemoryPool {
     }
 
     /// Async wrapper for compress_data to support async operations
+    #[allow(dead_code)]
     async fn compress_data_async(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         let start_time = std::time::Instant::now();
 
@@ -683,6 +684,7 @@ pub struct SwapPooledVec {
     pool: *const SwapMemoryPool, // Raw pointer to avoid lifetime issues
     is_swapped: bool,
     dirty: bool, // Track if data has been modified
+    #[allow(dead_code)]
     logger: PerformanceLogger,
 }
 

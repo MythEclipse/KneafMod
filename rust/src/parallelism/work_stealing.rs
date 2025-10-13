@@ -1,6 +1,7 @@
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+use crate::parallelism::get_rayon_thread_pool;
 
 // Track parallel execution statistics for performance monitoring
 static PARALLEL_TASK_STATS: AtomicUsize = AtomicUsize::new(0);
@@ -46,8 +47,9 @@ impl<T> WorkStealingScheduler<T> {
             return self.execute_optimized_sequential(processor);
         }
 
-        // For larger task counts, use Rayon's optimized work stealing with task type awareness
-        self.execute_parallel(processor)
+        // For larger task counts, use Rayon's optimized work stealing with adaptive thread pool
+        // This provides better load balancing across threads
+        self.execute_parallel_with_adaptive_pool(processor)
     }
 
     /// Sequential execution with no overhead
@@ -66,33 +68,51 @@ impl<T> WorkStealingScheduler<T> {
         self.tasks.into_iter().map(processor).collect()
     }
 
-    /// Parallel execution with Rayon work stealing
+    /// Parallel execution with Rayon work stealing using adaptive thread pool
+    fn execute_parallel_with_adaptive_pool<F, R>(self, processor: F) -> Vec<R>
+    where
+        F: Fn(T) -> R + Send + Sync + 'static,
+        T: Send + 'static,
+        R: Send + 'static,
+    {
+        let task_count = self.tasks.len();
+        let thread_pool = get_rayon_thread_pool();
+
+        // For CPU-bound tasks, use Rayon's default (which is usually optimal)
+        // For I/O-bound tasks, we might want different configuration, but Rayon handles this well
+
+        // Measure execution time for performance monitoring
+        let start = Instant::now();
+        
+        // Use the adaptive thread pool for better load balancing
+        let results = thread_pool.install(|| {
+            self.tasks.into_par_iter().map(processor).collect()
+        });
+        
+        let duration = start.elapsed();
+
+        // Log performance statistics (in a real system, this would go to a proper monitoring system)
+        #[cfg(debug_assertions)]
+        {
+            eprintln!(
+                "Parallel execution: {} tasks in {:?} using adaptive thread pool",
+                task_count, duration
+            );
+        }
+
+        results
+    }
+
+    /// Parallel execution with Rayon work stealing (legacy method for compatibility)
+    #[allow(dead_code)]
     fn execute_parallel<F, R>(self, processor: F) -> Vec<R>
     where
         F: Fn(T) -> R + Send + Sync + 'static,
         T: Send + 'static,
         R: Send + 'static,
     {
-        // For CPU-bound tasks, use Rayon's default (which is usually optimal)
-        // For I/O-bound tasks, we might want different configuration, but Rayon handles this well
-
-        let _task_count = self.tasks.len();
-
-        // Measure execution time for performance monitoring
-        let start = Instant::now();
-        let results = self.tasks.into_par_iter().map(processor).collect();
-        let _duration = start.elapsed();
-
-        // Log performance statistics (in a real system, this would go to a proper monitoring system)
-        #[cfg(debug_assertions)]
-        {
-            eprintln!(
-                "Parallel execution: {} tasks in {:?}",
-                _task_count, _duration
-            );
-        }
-
-        results
+        // Redirect to the adaptive pool version for better integration
+        self.execute_parallel_with_adaptive_pool(processor)
     }
 
     /// Get execution statistics (for debugging/monitoring)

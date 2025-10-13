@@ -13,7 +13,6 @@ use tokio::runtime::Runtime;
 
 // JNI zero-copy imports
 use jni::objects::JByteBuffer;
-use std::marker::PhantomData;
 
 // Re-export from jni_batch for consistency
 use crate::jni_batch::{
@@ -112,17 +111,18 @@ impl AsyncJniBridge {
         let runtime_metrics = Arc::clone(&self.runtime_metrics);
         let active_buffers = Arc::clone(&self.active_buffers);
         let buffer_count = Arc::new(AtomicUsize::new(self.buffer_count.load(Ordering::SeqCst)));
-        let max_active_buffers = self.max_active_buffers;
+    let _max_active_buffers = self.max_active_buffers;
         let is_shutdown = Arc::clone(&self.is_shutdown);
 
         for _ in 0..worker_count {
-            let pending_ops = Arc::clone(&pending_operations);
-            let completed_ops = Arc::clone(&completed_operations);
-            let queue = Arc::clone(&task_queue);
-            let pool = Arc::clone(&buffer_pool);
-            let metrics = Arc::clone(&runtime_metrics);
-            let buffers = Arc::clone(&active_buffers);
-            let buffer_cnt = Arc::clone(&buffer_count);
+            // Clone references; some are intentionally unused in this simplified worker
+            let _pending_ops = Arc::clone(&pending_operations);
+            let _completed_ops = Arc::clone(&completed_operations);
+            let _queue = Arc::clone(&task_queue);
+            let _pool = Arc::clone(&buffer_pool);
+            let _metrics = Arc::clone(&runtime_metrics);
+            let _buffers = Arc::clone(&active_buffers);
+            let _buffer_cnt = Arc::clone(&buffer_count);
             let is_shutdown_clone = Arc::clone(&is_shutdown);
 
             let thread_handle = std::thread::spawn(move || {
@@ -140,18 +140,21 @@ impl AsyncJniBridge {
     }
 
     /// Queue an operation for processing
+    #[allow(dead_code)]
     fn enqueue_operation(&self, operation_id: AsyncOperationHandle) {
         let mut queue = self.task_queue.lock().unwrap();
         queue.push_back(operation_id);
     }
 
     /// Dequeue an operation for processing
+    #[allow(dead_code)]
     fn dequeue_operation(&self) -> Option<AsyncOperationHandle> {
         let mut queue = self.task_queue.lock().unwrap();
         queue.pop_front()
     }
 
     /// Process a single async operation
+    #[allow(dead_code)]
     fn process_operation(&self, operation_id: AsyncOperationHandle) -> Result<(), String> {
         let start_time = Instant::now();
         let operation_data = {

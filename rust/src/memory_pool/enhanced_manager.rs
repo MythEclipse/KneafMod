@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
@@ -967,7 +967,7 @@ mod tests {
         manager: Arc<EnhancedMemoryPoolManager>,
     }
 
-    impl<T> PooledAllocationGuard<T> {
+    impl<T: 'static> PooledAllocationGuard<T> {
         /// Create a new allocation guard
         pub fn new(manager: Arc<EnhancedMemoryPoolManager>, allocation: SmartPooledVec<T>) -> Self {
             Self {

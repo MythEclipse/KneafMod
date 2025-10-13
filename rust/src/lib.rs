@@ -10,6 +10,9 @@ pub mod logging;
 pub mod memory_pool;
 pub mod memory_pressure_config;
 pub mod performance_monitoring;
+
+#[cfg(test)]
+mod test_parallelism;
 pub mod simd;
 pub mod simd_enhanced;
 pub mod spatial;

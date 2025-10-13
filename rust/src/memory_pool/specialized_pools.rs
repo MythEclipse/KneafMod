@@ -1,7 +1,5 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::SystemTime;
+use std::sync::RwLock;
 
 use crate::logging::PerformanceLogger;
 use crate::memory_pool::object_pool::{ObjectPool, PooledObject};

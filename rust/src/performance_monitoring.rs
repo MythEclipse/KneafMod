@@ -9,8 +9,8 @@ use jni::{
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{SystemTime, Instant};
 
 #[derive(Debug, Default, Clone)]
 pub struct JniCallMetrics {
@@ -45,6 +45,167 @@ pub struct PerformanceMetrics {
     pub lock_wait_metrics: LockWaitMetrics,
     pub memory_metrics: MemoryMetrics,
 }
+
+#[derive(Debug, Clone)]
+pub struct SwapOperationStats {
+    pub swap_in_operations: Arc<AtomicU64>,
+    pub swap_out_operations: Arc<AtomicU64>,
+    pub swap_failures: Arc<AtomicU64>,
+    pub swap_in_bytes: Arc<AtomicU64>,
+    pub swap_out_bytes: Arc<AtomicU64>,
+    pub swap_in_total_duration_ms: Arc<AtomicU64>,
+    pub swap_out_total_duration_ms: Arc<AtomicU64>,
+    pub swap_in_max_duration_ms: Arc<AtomicU64>,
+    pub swap_out_max_duration_ms: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    pub cache_hits: Arc<AtomicU64>,
+    pub cache_misses: Arc<AtomicU64>,
+    pub hit_rate: Arc<Mutex<f64>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IoPerformanceStats {
+    pub total_io_bytes: Arc<AtomicU64>,
+    pub total_io_duration_ms: Arc<AtomicU64>,
+    pub max_io_duration_ms: Arc<AtomicU64>,
+    pub io_operations: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PoolMetrics {
+    pub used_bytes: Arc<AtomicU64>,
+    pub capacity_bytes: Arc<AtomicU64>,
+    pub pool_utilization: Arc<Mutex<f64>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentHealth {
+    pub status: Arc<RwLock<SwapHealthStatus>>,
+    pub last_update: Arc<Mutex<Instant>>,
+    pub failure_reason: Arc<Mutex<Option<String>>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PerformanceStats {
+    pub swap_stats: SwapOperationStats,
+    pub cache_stats: CacheStats,
+    pub io_stats: IoPerformanceStats,
+    pub pool_metrics: PoolMetrics,
+    pub component_health: Arc<Mutex<HashMap<String, ComponentHealth>>>,
+    pub memory_pressure_events: Arc<AtomicU64>,
+    pub cleanup_operations: Arc<AtomicU64>,
+    pub pressure_levels: Arc<Mutex<HashMap<String, u64>>>,
+}
+
+impl PerformanceStats {
+    pub fn new() -> Self {
+        Self {
+            swap_stats: SwapOperationStats {
+                swap_in_operations: Arc::new(AtomicU64::new(0)),
+                swap_out_operations: Arc::new(AtomicU64::new(0)),
+                swap_failures: Arc::new(AtomicU64::new(0)),
+                swap_in_bytes: Arc::new(AtomicU64::new(0)),
+                swap_out_bytes: Arc::new(AtomicU64::new(0)),
+                swap_in_total_duration_ms: Arc::new(AtomicU64::new(0)),
+                swap_out_total_duration_ms: Arc::new(AtomicU64::new(0)),
+                swap_in_max_duration_ms: Arc::new(AtomicU64::new(0)),
+                swap_out_max_duration_ms: Arc::new(AtomicU64::new(0)),
+            },
+            cache_stats: CacheStats {
+                cache_hits: Arc::new(AtomicU64::new(0)),
+                cache_misses: Arc::new(AtomicU64::new(0)),
+                hit_rate: Arc::new(Mutex::new(0.0)),
+            },
+            io_stats: IoPerformanceStats {
+                total_io_bytes: Arc::new(AtomicU64::new(0)),
+                total_io_duration_ms: Arc::new(AtomicU64::new(0)),
+                max_io_duration_ms: Arc::new(AtomicU64::new(0)),
+                io_operations: Arc::new(AtomicU64::new(0)),
+            },
+            pool_metrics: PoolMetrics {
+                used_bytes: Arc::new(AtomicU64::new(0)),
+                capacity_bytes: Arc::new(AtomicU64::new(0)),
+                pool_utilization: Arc::new(Mutex::new(0.0)),
+            },
+            component_health: Arc::new(Mutex::new(HashMap::new())),
+            memory_pressure_events: Arc::new(AtomicU64::new(0)),
+            cleanup_operations: Arc::new(AtomicU64::new(0)),
+            pressure_levels: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn calculate_hit_rate(&self) -> f64 {
+        let hits = self.cache_stats.cache_hits.load(Ordering::Relaxed);
+        let misses = self.cache_stats.cache_misses.load(Ordering::Relaxed);
+        let total = hits + misses;
+        
+        if total > 0 {
+            (hits as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    pub fn calculate_swap_throughput_mbps(&self) -> f64 {
+        let total_bytes = self.io_stats.total_io_bytes.load(Ordering::Relaxed);
+        let total_duration_ms = self.io_stats.total_io_duration_ms.load(Ordering::Relaxed);
+        
+        if total_duration_ms > 0 {
+            let bytes_per_second = (total_bytes as f64 * 1000.0) / total_duration_ms as f64;
+            (bytes_per_second * 8.0) / (1024.0 * 1024.0) // Convert to Mbps
+        } else {
+            0.0
+        }
+    }
+
+    pub fn calculate_average_swap_time_ms(&self) -> (f64, f64) {
+        let swap_in_ops = self.swap_stats.swap_in_operations.load(Ordering::Relaxed);
+        let swap_out_ops = self.swap_stats.swap_out_operations.load(Ordering::Relaxed);
+        
+        let avg_in = if swap_in_ops > 0 {
+            self.swap_stats.swap_in_total_duration_ms.load(Ordering::Relaxed) as f64 / swap_in_ops as f64
+        } else {
+            0.0
+        };
+        
+        let avg_out = if swap_out_ops > 0 {
+            self.swap_stats.swap_out_total_duration_ms.load(Ordering::Relaxed) as f64 / swap_out_ops as f64
+        } else {
+            0.0
+        };
+        
+        (avg_in, avg_out)
+    }
+
+    pub fn update_pool_utilization(&self) {
+        let used = self.pool_metrics.used_bytes.load(Ordering::Relaxed);
+        let capacity = self.pool_metrics.capacity_bytes.load(Ordering::Relaxed);
+        
+        let utilization = if capacity > 0 {
+            (used as f64 / capacity as f64) * 100.0
+        } else {
+            0.0
+        };
+        
+        if let Ok(mut util) = self.pool_metrics.pool_utilization.lock() {
+            *util = utilization;
+        }
+    }
+
+    pub fn update_cache_hit_rate(&self) {
+        let hit_rate = self.calculate_hit_rate();
+        if let Ok(mut rate) = self.cache_stats.hit_rate.lock() {
+            *rate = hit_rate;
+        }
+    }
+}
+
+
+
+static SWAP_PERFORMANCE_STATS: Lazy<PerformanceStats> = Lazy::new(|| PerformanceStats::new());
 
 pub struct PerformanceMonitor {
     pub logger: Arc<PerformanceLogger>,
@@ -353,54 +514,240 @@ pub struct SwapPerformanceSummary {
 }
 
 pub fn report_swap_operation(
-    _direction: &str,
-    _bytes: u64,
-    _duration: std::time::Duration,
-    _success: bool,
+    direction: &str,
+    bytes: u64,
+    duration: std::time::Duration,
+    success: bool,
 ) {
-    // Lightweight stub - real implementation records stats
+    let duration_ms = duration.as_millis() as u64;
+    
+    if direction == "in" {
+        SWAP_PERFORMANCE_STATS.swap_stats.swap_in_operations.fetch_add(1, Ordering::Relaxed);
+        SWAP_PERFORMANCE_STATS.swap_stats.swap_in_bytes.fetch_add(bytes, Ordering::Relaxed);
+        SWAP_PERFORMANCE_STATS.swap_stats.swap_in_total_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        
+        // Update max duration
+        let current_max = SWAP_PERFORMANCE_STATS.swap_stats.swap_in_max_duration_ms.load(Ordering::Relaxed);
+        if duration_ms > current_max {
+            let _ = SWAP_PERFORMANCE_STATS.swap_stats.swap_in_max_duration_ms.compare_exchange_weak(
+                current_max,
+                duration_ms,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+        }
+    } else if direction == "out" {
+        SWAP_PERFORMANCE_STATS.swap_stats.swap_out_operations.fetch_add(1, Ordering::Relaxed);
+        SWAP_PERFORMANCE_STATS.swap_stats.swap_out_bytes.fetch_add(bytes, Ordering::Relaxed);
+        SWAP_PERFORMANCE_STATS.swap_stats.swap_out_total_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        
+        // Update max duration
+        let current_max = SWAP_PERFORMANCE_STATS.swap_stats.swap_out_max_duration_ms.load(Ordering::Relaxed);
+        if duration_ms > current_max {
+            let _ = SWAP_PERFORMANCE_STATS.swap_stats.swap_out_max_duration_ms.compare_exchange_weak(
+                current_max,
+                duration_ms,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+        }
+    }
+    
+    if !success {
+        SWAP_PERFORMANCE_STATS.swap_stats.swap_failures.fetch_add(1, Ordering::Relaxed);
+    }
+    
+    // Log the operation
+    let trace_id = generate_trace_id();
+    PERFORMANCE_MONITOR.logger.log_info(
+        "swap_operation",
+        &trace_id,
+        &format!(
+            "Swap {}: {} bytes in {}ms, success: {}",
+            direction, bytes, duration_ms, success
+        ),
+    );
 }
 
-pub fn report_memory_pressure(_level: &str, _cleanup_performed: bool) {
-    // stub
+pub fn report_memory_pressure(level: &str, cleanup_performed: bool) {
+    SWAP_PERFORMANCE_STATS.memory_pressure_events.fetch_add(1, Ordering::Relaxed);
+    
+    // Track pressure levels
+    if let Ok(mut levels) = SWAP_PERFORMANCE_STATS.pressure_levels.lock() {
+        levels.entry(level.to_string())
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
+    }
+    
+    if cleanup_performed {
+        SWAP_PERFORMANCE_STATS.cleanup_operations.fetch_add(1, Ordering::Relaxed);
+    }
+    
+    // Log the pressure event
+    let trace_id = generate_trace_id();
+    PERFORMANCE_MONITOR.logger.log_warning(
+        "memory_pressure",
+        &trace_id,
+        &format!("Memory pressure level: {}, cleanup: {}", level, cleanup_performed),
+    );
 }
 
-pub fn report_swap_cache_statistics(_hits: u64, _misses: u64) {
-    // stub
+pub fn report_swap_cache_statistics(hits: u64, misses: u64) {
+    SWAP_PERFORMANCE_STATS.cache_stats.cache_hits.fetch_add(hits, Ordering::Relaxed);
+    SWAP_PERFORMANCE_STATS.cache_stats.cache_misses.fetch_add(misses, Ordering::Relaxed);
+    
+    // Update hit rate
+    SWAP_PERFORMANCE_STATS.update_cache_hit_rate();
+    
+    // Log cache statistics
+    let trace_id = generate_trace_id();
+    let hit_rate = SWAP_PERFORMANCE_STATS.calculate_hit_rate();
+    PERFORMANCE_MONITOR.logger.log_info(
+        "cache_stats",
+        &trace_id,
+        &format!("Cache hits: {}, misses: {}, hit rate: {:.1}%", hits, misses, hit_rate),
+    );
 }
 
-pub fn report_swap_io_performance(_bytes: u64, _duration: std::time::Duration) {
-    // stub
+pub fn report_swap_io_performance(bytes: u64, duration: std::time::Duration) {
+    let duration_ms = duration.as_millis() as u64;
+    
+    SWAP_PERFORMANCE_STATS.io_stats.total_io_bytes.fetch_add(bytes, Ordering::Relaxed);
+    SWAP_PERFORMANCE_STATS.io_stats.total_io_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
+    SWAP_PERFORMANCE_STATS.io_stats.io_operations.fetch_add(1, Ordering::Relaxed);
+    
+    // Update max duration
+    let current_max = SWAP_PERFORMANCE_STATS.io_stats.max_io_duration_ms.load(Ordering::Relaxed);
+    if duration_ms > current_max {
+        let _ = SWAP_PERFORMANCE_STATS.io_stats.max_io_duration_ms.compare_exchange_weak(
+            current_max,
+            duration_ms,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+    
+    // Log IO performance
+    let trace_id = generate_trace_id();
+    let throughput = SWAP_PERFORMANCE_STATS.calculate_swap_throughput_mbps();
+    PERFORMANCE_MONITOR.logger.log_info(
+        "io_performance",
+        &trace_id,
+        &format!("IO: {} bytes in {}ms, throughput: {:.2} Mbps", bytes, duration_ms, throughput),
+    );
 }
 
-pub fn report_swap_pool_metrics(_used_bytes: u64, _capacity_bytes: u64) {
-    // stub
+pub fn report_swap_pool_metrics(used_bytes: u64, capacity_bytes: u64) {
+    SWAP_PERFORMANCE_STATS.pool_metrics.used_bytes.store(used_bytes, Ordering::Relaxed);
+    SWAP_PERFORMANCE_STATS.pool_metrics.capacity_bytes.store(capacity_bytes, Ordering::Relaxed);
+    
+    // Update utilization
+    SWAP_PERFORMANCE_STATS.update_pool_utilization();
+    
+    // Log pool metrics
+    let trace_id = generate_trace_id();
+    let utilization = if capacity_bytes > 0 {
+        (used_bytes as f64 / capacity_bytes as f64) * 100.0
+    } else {
+        0.0
+    };
+    
+    PERFORMANCE_MONITOR.logger.log_info(
+        "pool_metrics",
+        &trace_id,
+        &format!("Pool: {} / {} bytes ({:.1}% utilization)", used_bytes, capacity_bytes, utilization),
+    );
 }
 
 pub fn report_swap_component_health(
-    _component: &str,
-    _status: SwapHealthStatus,
-    _reason: Option<&str>,
+    component: &str,
+    status: SwapHealthStatus,
+    reason: Option<&str>,
 ) {
-    // stub
+    let mut health_map = SWAP_PERFORMANCE_STATS.component_health.lock().unwrap();
+    
+    let health = health_map.entry(component.to_string()).or_insert_with(|| {
+        ComponentHealth {
+            status: Arc::new(RwLock::new(SwapHealthStatus::Healthy)),
+            last_update: Arc::new(Mutex::new(Instant::now())),
+            failure_reason: Arc::new(Mutex::new(None)),
+        }
+    });
+    
+    // Update status
+    if let Ok(mut health_status) = health.status.write() {
+        *health_status = status;
+    }
+    
+    // Update last update time
+    if let Ok(mut last_update) = health.last_update.lock() {
+        *last_update = Instant::now();
+    }
+    
+    // Update failure reason if provided
+    if let Some(reason_str) = reason {
+        if let Ok(mut failure_reason) = health.failure_reason.lock() {
+            *failure_reason = Some(reason_str.to_string());
+        }
+    }
+    
+    // Log health status
+    let trace_id = generate_trace_id();
+    let status_str = match status {
+        SwapHealthStatus::Healthy => "HEALTHY",
+        SwapHealthStatus::Degraded => "DEGRADED",
+        SwapHealthStatus::Unhealthy => "UNHEALTHY",
+    };
+    
+    let log_message = if let Some(reason_str) = reason {
+        format!("Component {} status: {}, reason: {}", component, status_str, reason_str)
+    } else {
+        format!("Component {} status: {}", component, status_str)
+    };
+    
+    match status {
+        SwapHealthStatus::Healthy => {
+            PERFORMANCE_MONITOR.logger.log_info("component_health", &trace_id, &log_message);
+        }
+        SwapHealthStatus::Degraded => {
+            PERFORMANCE_MONITOR.logger.log_warning("component_health", &trace_id, &log_message);
+        }
+        SwapHealthStatus::Unhealthy => {
+            PERFORMANCE_MONITOR.logger.log_error("component_health", &trace_id, &log_message, "COMPONENT_ERROR");
+        }
+    }
 }
 
 pub fn get_swap_performance_summary() -> SwapPerformanceSummary {
+    let (avg_in_time, avg_out_time) = SWAP_PERFORMANCE_STATS.calculate_average_swap_time_ms();
+    let hit_rate = SWAP_PERFORMANCE_STATS.calculate_hit_rate();
+    let throughput = SWAP_PERFORMANCE_STATS.calculate_swap_throughput_mbps();
+    
+    // Get most frequent pressure level
+    let pressure_level = if let Ok(levels) = SWAP_PERFORMANCE_STATS.pressure_levels.lock() {
+        levels.iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(level, _)| level.clone())
+            .unwrap_or_else(|| "Normal".to_string())
+    } else {
+        "Normal".to_string()
+    };
+    
     SwapPerformanceSummary {
-        swap_in_operations: 0,
-        swap_out_operations: 0,
-        swap_failures: 0,
-        swap_in_bytes: 0,
-        swap_out_bytes: 0,
-        average_swap_in_time_ms: 0.0,
-        average_swap_out_time_ms: 0.0,
-        swap_latency_ms: 0.0,
-        swap_io_throughput_mbps: 0.0,
-        swap_hit_rate: 0.0,
-        swap_miss_rate: 0.0,
-        memory_pressure_level: "Normal".to_string(),
-        pressure_trigger_events: 0,
-        swap_cleanup_operations: 0,
+        swap_in_operations: SWAP_PERFORMANCE_STATS.swap_stats.swap_in_operations.load(Ordering::Relaxed),
+        swap_out_operations: SWAP_PERFORMANCE_STATS.swap_stats.swap_out_operations.load(Ordering::Relaxed),
+        swap_failures: SWAP_PERFORMANCE_STATS.swap_stats.swap_failures.load(Ordering::Relaxed),
+        swap_in_bytes: SWAP_PERFORMANCE_STATS.swap_stats.swap_in_bytes.load(Ordering::Relaxed),
+        swap_out_bytes: SWAP_PERFORMANCE_STATS.swap_stats.swap_out_bytes.load(Ordering::Relaxed),
+        average_swap_in_time_ms: avg_in_time,
+        average_swap_out_time_ms: avg_out_time,
+        swap_latency_ms: SWAP_PERFORMANCE_STATS.io_stats.max_io_duration_ms.load(Ordering::Relaxed) as f64,
+        swap_io_throughput_mbps: throughput,
+        swap_hit_rate: hit_rate,
+        swap_miss_rate: 100.0 - hit_rate,
+        memory_pressure_level: pressure_level,
+        pressure_trigger_events: SWAP_PERFORMANCE_STATS.memory_pressure_events.load(Ordering::Relaxed),
+        swap_cleanup_operations: SWAP_PERFORMANCE_STATS.cleanup_operations.load(Ordering::Relaxed),
     }
 }
 

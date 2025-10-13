@@ -12,10 +12,8 @@ use jni::objects::JByteBuffer;
 use jni::JNIEnv;
 
 // For result conversion
-use crate::jni_batch_processor::EnhancedBatchProcessor;
 
 // For memory safety tracking
-use std::marker::PhantomData;
 
 // Thread safety imports
 use std::collections::{BTreeMap, HashMap, VecDeque};

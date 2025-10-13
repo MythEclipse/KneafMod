@@ -305,8 +305,8 @@ pub fn initialize_cache(flags: CacheFeatureFlags) {
         return;
     }
 
-    // Create a new cache with the specified configuration
-    let new_cache: PriorityCache<Vec<u8>> = PriorityCache::new(
+    // Create a new cache with the specified configuration (kept for potential future use)
+    let _new_cache: PriorityCache<Vec<u8>> = PriorityCache::new(
         flags.max_capacity,
         flags.eviction_policy,
         flags.cache_enabled,
@@ -335,7 +335,7 @@ pub fn initialize_cache(flags: CacheFeatureFlags) {
             entries.clear();
 
             // 4. Update feature flags
-            entries.drain().collect::<Vec<_>>(); // Clear entries first
+            let _ = entries.drain().collect::<Vec<_>>(); // Clear entries first
 
             // Release the entries lock before calling set_feature_enabled
             drop(entries);

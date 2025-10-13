@@ -1,7 +1,7 @@
-use crate::performance_monitoring::{record_operation, PERFORMANCE_MONITOR};
-use log::{debug, info, trace};
+use crate::performance_monitoring::record_operation;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
-use std::arch::{is_x86_feature_detected, x86_64};
+use std::arch::is_x86_feature_detected;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
 

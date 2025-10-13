@@ -1,14 +1,12 @@
 use jni::{
-    objects::{JClass, JObject, JString},
-    sys::{jmethodID, jsize, jvalue},
+    objects::JObject,
     JNIEnv,
 };
-use log::{debug, error};
+use log::debug;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use thiserror::Error;
 
 /// Track global reference count for better memory management
 static GLOBAL_REF_COUNT: AtomicUsize = AtomicUsize::new(0);

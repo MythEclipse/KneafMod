@@ -10,6 +10,7 @@ use crate::villager::types::{
 use crate::entity::config::Config as EntityConfig;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Cursor, Read};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // Mob conversions
 pub fn deserialize_mob_input(data: &[u8]) -> Result<MobInput, String> {
@@ -44,8 +45,8 @@ pub fn serialize_mob_result(result: &MobProcessResult) -> Result<Vec<u8>, String
     // Format: [disable_len:i32][disable_ids...][simplify_len:i32][simplify_ids...]
     let mut out: Vec<u8> = Vec::new();
     // Java/BinarySerializer expects a leading tickCount:u64 in the result buffer for list deserializers.
-    // The Rust processing doesn't provide a meaningful tickCount for mob results, so write a placeholder 0.
-    out.write_u64::<LittleEndian>(0u64)
+    // Use current timestamp as tickCount
+    out.write_u64::<LittleEndian>(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64)
         .map_err(|e| e.to_string())?;
     out.write_i32::<LittleEndian>(result.mobs_to_disable_ai.len() as i32)
         .map_err(|e| e.to_string())?;
@@ -99,8 +100,8 @@ pub fn deserialize_block_input(data: &[u8]) -> Result<BlockInput, String> {
 pub fn serialize_block_result(result: &BlockProcessResult) -> Result<Vec<u8>, String> {
     // Serialize list of block entity ids to tick: [len:i32][ids...]
     let mut out: Vec<u8> = Vec::new();
-    // Add a placeholder tickCount:u64 to match Java BinarySerializer list format ([tickCount:u64][num:i32][ids...])
-    out.write_u64::<LittleEndian>(0u64)
+    // Add current timestamp as tickCount
+    out.write_u64::<LittleEndian>(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64)
         .map_err(|e| e.to_string())?;
     out.write_i32::<LittleEndian>(result.block_entities_to_tick.len() as i32)
         .map_err(|e| e.to_string())?;
@@ -179,9 +180,8 @@ pub fn serialize_entity_result(
 ) -> Result<Vec<u8>, String> {
     // Serialize: [len:i32][ids...]
     let mut out: Vec<u8> = Vec::new();
-    // Prepend a tickCount:u64 header for alignment and to match Java-side expectations.
-    // Rust processing does not currently provide a meaningful tick count here, write 0.
-    out.write_u64::<LittleEndian>(0u64)
+    // Prepend current timestamp as tickCount header for alignment and to match Java-side expectations.
+    out.write_u64::<LittleEndian>(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64)
         .map_err(|e| e.to_string())?;
     out.write_i32::<LittleEndian>(result.entities_to_tick.len() as i32)
         .map_err(|e| e.to_string())?;
@@ -259,8 +259,8 @@ pub fn serialize_villager_result(result: &VillagerProcessResult) -> Result<Vec<u
     // Format: [tickCount:u64][disable_len:i32][disable_ids...][simplify_len:i32][simplify_ids...][reduce_pathfind_len:i32][reduce_pathfind_ids...][num_groups:i32][groups...]
     let mut out: Vec<u8> = Vec::new();
 
-    // Placeholder tickCount
-    out.write_u64::<LittleEndian>(0u64)
+    // Use current timestamp as tickCount
+    out.write_u64::<LittleEndian>(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64)
         .map_err(|e| e.to_string())?;
 
     // Villagers to disable AI

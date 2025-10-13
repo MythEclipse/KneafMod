@@ -157,8 +157,8 @@ impl<T: Default> LightweightMemoryPool<T> {
         // Get current allocated objects (safely handle borrow conflicts)
         let allocated_objects = self.allocated_count.load(Ordering::Relaxed);
 
-        // Create new pool with desired capacity
-        let new_pool: LightweightMemoryPool<T> = LightweightMemoryPool::new(new_max_size);
+    // Create new pool with desired capacity (kept for future state transfer)
+    let _new_pool: LightweightMemoryPool<T> = LightweightMemoryPool::new(new_max_size);
 
         // Transfer allocated objects state to new pool
         self.allocated_count
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn test_pool_resize() {
-        let pool = LightweightMemoryPool::<i32>::new(10);
+        let mut pool = LightweightMemoryPool::<i32>::new(10);
 
         // Add some objects to pool
         {
