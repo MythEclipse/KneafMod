@@ -769,7 +769,12 @@ where
                 if std::mem::size_of::<T>() != std::mem::size_of::<u8>() {
                     panic!("Cannot convert SwapPooledVec to non-u8 type");
                 }
-                unsafe { std::slice::from_raw_parts(u8_slice.as_ptr() as *const T, u8_slice.len()) }
+                // Only use unsafe if we have valid data
+                if u8_slice.is_empty() {
+                    &[]
+                } else {
+                    unsafe { std::slice::from_raw_parts(u8_slice.as_ptr() as *const T, u8_slice.len()) }
+                }
             }
             SmartPooledVec::Vec(v) => v.as_slice(),
         }
@@ -785,8 +790,13 @@ where
                 if std::mem::size_of::<T>() != std::mem::size_of::<u8>() {
                     panic!("Cannot convert SwapPooledVec to non-u8 type");
                 }
-                unsafe {
-                    std::slice::from_raw_parts_mut(u8_slice.as_mut_ptr() as *mut T, u8_slice.len())
+                // Only use unsafe if we have valid data
+                if u8_slice.is_empty() {
+                    &mut []
+                } else {
+                    unsafe {
+                        std::slice::from_raw_parts_mut(u8_slice.as_mut_ptr() as *mut T, u8_slice.len())
+                    }
                 }
             }
             SmartPooledVec::Vec(v) => v.as_mut(),

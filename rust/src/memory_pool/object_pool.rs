@@ -279,14 +279,22 @@ where
         }
     }
 
-    /// Thread-safe object retrieval using Mutex
+    /// Thread-safe object retrieval using Mutex with deadlock prevention
     fn get_lockfree(&self) -> Option<T> {
+        // Use consistent lock ordering to prevent deadlocks: pool first, then access_order
         let mut pool_guard = self.pool.lock().unwrap();
-        let mut access_order_guard = self.access_order.lock().unwrap();
-
-        if let Some((&lru_time, &lru_id)) = access_order_guard.iter().next() {
-            // Remove from access order
-            access_order_guard.remove(&lru_time);
+        
+        // Get the LRU item from the pool directly to avoid double-locking
+        if let Some((lru_time, lru_id)) = {
+            let access_order_guard = self.access_order.lock().unwrap();
+            access_order_guard.iter().next().map(|(&t, &id)| (t, id))
+        } {
+            // Remove from access order (separate lock scope)
+            {
+                let mut access_order_guard = self.access_order.lock().unwrap();
+                access_order_guard.remove(&lru_time);
+            }
+            
             // Remove from pool and get the object
             if let Some((obj, _)) = pool_guard.remove(&lru_id) {
                 return Some(obj);
@@ -295,7 +303,7 @@ where
         None
     }
 
-    /// Get an object from the pool with swap tracking
+    /// Get an object from the pool with swap tracking and deadlock prevention
     pub fn get_with_tracking(
         &self,
         size_bytes: u64,
@@ -312,25 +320,35 @@ where
         // Perform lazy cleanup before allocation if needed
         self.lazy_cleanup(0.9); // Cleanup when usage exceeds 90%
 
-        let mut pool_guard = self.pool.lock().unwrap();
-        let mut access_order_guard = self.access_order.lock().unwrap();
-
-        let obj = if let Some((lru_time, lru_id)) =
-            access_order_guard.iter().next().map(|(&t, &id)| (t, id))
-        {
-            // Remove from access order
-            access_order_guard.remove(&lru_time);
-            // Remove from pool and get the object
-            pool_guard.remove(&lru_id).map(|(obj, _)| obj).unwrap()
-        } else {
-            self.logger
-                .log_operation("pool_miss_tracked", &trace_id, || {
-                    log::debug!(
-                        "Pool miss for tracked type {}, creating new object",
-                        std::any::type_name::<T>()
-                    );
-                    T::default()
-                })
+        // Use consistent lock ordering to prevent deadlocks
+        let obj = {
+            let mut pool_guard = self.pool.lock().unwrap();
+            
+            // Get LRU item with separate lock scope to avoid deadlock
+            let lru_info = {
+                let access_order_guard = self.access_order.lock().unwrap();
+                access_order_guard.iter().next().map(|(&t, &id)| (t, id))
+            };
+            
+            if let Some((lru_time, lru_id)) = lru_info {
+                // Remove from access order (separate lock scope)
+                {
+                    let mut access_order_guard = self.access_order.lock().unwrap();
+                    access_order_guard.remove(&lru_time);
+                }
+                
+                // Remove from pool and get the object
+                pool_guard.remove(&lru_id).map(|(obj, _)| obj).unwrap()
+            } else {
+                self.logger
+                    .log_operation("pool_miss_tracked", &trace_id, || {
+                        log::debug!(
+                            "Pool miss for tracked type {}, creating new object",
+                            std::any::type_name::<T>()
+                        );
+                        T::default()
+                    })
+            }
         };
 
         // Record allocation for monitoring
@@ -426,7 +444,7 @@ where
         self.atomic_state.update_usage_ratio(current);
     }
 
-    /// Perform lazy cleanup when pool usage exceeds threshold
+    /// Perform lazy cleanup when pool usage exceeds threshold with deadlock prevention
     pub fn lazy_cleanup(&self, threshold: f64) -> bool {
         let trace_id = generate_trace_id();
         let current_time = SystemTime::now()
@@ -440,9 +458,11 @@ where
             return false;
         }
 
-        let mut pool_guard = self.pool.lock().unwrap();
-        let mut access_order_guard = self.access_order.lock().unwrap();
-        let usage_ratio = pool_guard.len() as f64 / self.max_size as f64;
+        // Use consistent lock ordering to prevent deadlocks
+        let (usage_ratio, initial_pool_size) = {
+            let pool_guard = self.pool.lock().unwrap();
+            (pool_guard.len() as f64 / self.max_size as f64, pool_guard.len())
+        };
 
         if usage_ratio > threshold {
             self.logger.log_info(
@@ -453,16 +473,17 @@ where
 
             // Remove excess objects: evict LRU objects beyond high water mark
             let target_size = (self.high_water_mark.load(Ordering::Relaxed) as f64 * 0.7) as usize;
-            let initial_pool_size = pool_guard.len();
             let cleanup_start_time = SystemTime::now();
             const MAX_ITERATIONS: usize = 1000; // Prevent infinite loops
             const MAX_CLEANUP_TIME_MS: u128 = 100; // 100ms timeout
             let mut iterations = 0;
             let mut objects_removed = 0;
 
-            while pool_guard.len() > target_size
-                && pool_guard.len() > 5
-                && iterations < MAX_ITERATIONS
+            // Use consistent lock ordering: pool first, then access_order
+            while {
+                let pool_guard = self.pool.lock().unwrap();
+                pool_guard.len() > target_size && pool_guard.len() > 5
+            } && iterations < MAX_ITERATIONS
             {
                 // Keep at least 5 objects
                 // Check timeout
@@ -480,12 +501,25 @@ where
                     break;
                 }
 
-                if let Some((lru_time, lru_id)) =
+                // Get LRU item with separate lock scope
+                let lru_info = {
+                    let access_order_guard = self.access_order.lock().unwrap();
                     access_order_guard.iter().next().map(|(&t, &id)| (t, id))
-                {
-                    access_order_guard.remove(&lru_time);
-                    if pool_guard.remove(&lru_id).is_some() {
-                        objects_removed += 1;
+                };
+
+                if let Some((lru_time, lru_id)) = lru_info {
+                    // Remove from access order (separate lock scope)
+                    {
+                        let mut access_order_guard = self.access_order.lock().unwrap();
+                        access_order_guard.remove(&lru_time);
+                    }
+                    
+                    // Remove from pool (separate lock scope)
+                    {
+                        let mut pool_guard = self.pool.lock().unwrap();
+                        if pool_guard.remove(&lru_id).is_some() {
+                            objects_removed += 1;
+                        }
                     }
                     iterations += 1;
                 } else {
@@ -506,7 +540,12 @@ where
 
             self.last_cleanup_time
                 .store(current_time, Ordering::Relaxed);
-            let final_pool_size = pool_guard.len();
+            
+            let final_pool_size = {
+                let pool_guard = self.pool.lock().unwrap();
+                pool_guard.len()
+            };
+            
             self.logger.log_info(
                 "lazy_cleanup",
                 &trace_id,

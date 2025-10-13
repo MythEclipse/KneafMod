@@ -1356,11 +1356,8 @@ impl<T> SafeMemoryRegion<T> {
     }
 
     fn clear(&mut self) {
-        unsafe {
-            for i in 0..self.len {
-                self.ptr.as_ptr().add(i).drop_in_place();
-            }
-        }
+        // Safe cleanup - just reset length, don't drop elements
+        // since arena memory is managed by the arena itself
         self.len = 0;
     }
 }
@@ -1468,8 +1465,10 @@ impl<T> ArenaVec<T> {
 
 impl<T> Drop for ArenaVec<T> {
     fn drop(&mut self) {
+        // Safe cleanup - just clear the length, don't try to drop individual elements
+        // since arena memory is managed by the arena itself
         if let Some(ref mut memory) = self.memory {
-            memory.clear();
+            memory.len = 0;
         }
     }
 }

@@ -433,12 +433,22 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
         sum
     }
 
-    /// AVX-512 optimized dot product with const batch size
+    /// AVX-512 optimized dot product with const batch size and boundary checks
     #[target_feature(enable = "avx512f,avx512vl")]
     unsafe fn dot_product_avx512(&self, a: &[f32], b: &[f32]) -> f32 {
         let avx512_width: usize = MAX_BATCH_SIZE.min(16);
         let len = a.len();
         let mut sum = _mm512_setzero_ps();
+
+        // Additional boundary check for AVX-512 operations
+        if len < avx512_width {
+            // Fall back to scalar for very small arrays
+            let mut result = 0.0f32;
+            for i in 0..len {
+                result += a[i] * b[i];
+            }
+            return result;
+        }
 
         let mut i = 0;
         while i + avx512_width <= len {
@@ -446,6 +456,12 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
             if i + avx512_width * 2 <= len {
                 _mm_prefetch(a.as_ptr().add(i + avx512_width) as *const i8, _MM_HINT_T0);
                 _mm_prefetch(b.as_ptr().add(i + avx512_width) as *const i8, _MM_HINT_T0);
+            }
+
+            // Additional safety check for pointer arithmetic
+            if i + avx512_width > a.len() || i + avx512_width > b.len() {
+                log::error!("AVX-512 boundary violation at index {} with width {}", i, avx512_width);
+                break;
             }
 
             let va = _mm512_loadu_ps(a.as_ptr().add(i));
