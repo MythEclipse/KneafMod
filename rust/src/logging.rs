@@ -375,8 +375,8 @@ impl JniLogger {
 
     /// Log a message to Java via JNI with prefix formatting
     pub fn log_to_java(&self, env: &mut JNIEnv, level: &str, message: &str) {
-        // Format message with prefix
-        let formatted_message = format!("[KneafMod] {}", message);
+        // Send message to Java as-is; Java side applies its own prefixing.
+        let formatted_message = message.to_string();
 
         if let Ok(cls) = env.find_class("com/kneaf/core/performance/RustPerformance") {
             if let (Ok(jlevel), Ok(jmsg)) =
