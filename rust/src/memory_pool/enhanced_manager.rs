@@ -425,15 +425,11 @@ impl EnhancedMemoryPoolManager {
 
         // Get deallocation statistics atomically (no lock needed)
         let total_deallocations = GLOBAL_DEALLOCATIONS.load(Ordering::Relaxed) as u64;
-        let total_deallocated_bytes = GLOBAL_MEMORY_DEALLOCATED.load(Ordering::Relaxed);
+        let _total_deallocated_bytes = GLOBAL_MEMORY_DEALLOCATED.load(Ordering::Relaxed);
 
-        // Calculate current memory usage with more accurate tracking
-        let current_memory_usage = if stats.total_allocations > 0 {
-            // Use the actual current memory usage from stats, adjusted for deallocations
-            stats.current_memory_usage.saturating_sub(total_deallocated_bytes)
-        } else {
-            0
-        };
+        // Current memory usage is already tracked accurately in stats.current_memory_usage
+        // which gets updated during allocation and deallocation
+        let current_memory_usage = stats.current_memory_usage;
 
         let mut result = AllocationStats {
             total_allocations: stats.total_allocations,
