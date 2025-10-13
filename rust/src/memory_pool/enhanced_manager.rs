@@ -907,6 +907,7 @@ impl<T> Drop for SmartPooledVec<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use super::*;
 
     #[test]

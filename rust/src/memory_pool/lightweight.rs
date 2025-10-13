@@ -63,13 +63,16 @@ impl<T: Default> LightweightMemoryPool<T> {
     }
 
     /// Return object to pool (called by PooledObject drop)
-    fn return_object(&self, obj: T) {
+    fn return_object(&self, _obj: T) {
         let trace_id = generate_trace_id();
+
+        // Reset object to default state before returning to pool
+        let reset_obj = T::default();
 
         let mut pool = self.pool.borrow_mut();
         let max_size = self.max_size.load(Ordering::Relaxed);
         if pool.len() < max_size {
-            pool.push_back(obj);
+            pool.push_back(reset_obj);
             self.logger
                 .log_info("return_object", &trace_id, "Object returned to pool");
         } else {
@@ -577,7 +580,7 @@ mod tests {
         assert_eq!(stats.available_objects, 2);
 
         // Resize down
-        pool.resize(1);
+        let _ = pool.resize(1);
 
         let stats = pool.get_stats();
         assert_eq!(stats.available_objects, 1); // Should be truncated
