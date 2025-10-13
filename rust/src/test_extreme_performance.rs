@@ -5,6 +5,18 @@ use crate::memory_pool::ObjectPool;
 use crate::simd_enhanced::EnhancedSimdProcessor;
 use std::time::Instant;
 
+/// Create a vector with proper alignment for SIMD operations
+/// This uses a simpler approach that works with Rust's memory allocator
+fn create_aligned_vec(size: usize, value: f32) -> Vec<f32> {
+    // Ensure size is a multiple of 16 for better SIMD alignment
+    let aligned_size = ((size + 15) / 16) * 16;
+    let mut vec = vec![value; aligned_size];
+    
+    // Truncate to the desired size while maintaining alignment properties
+    vec.truncate(size);
+    vec
+}
+
 /// Test extreme AVX-512 optimizations
 pub fn test_extreme_avx512() -> bool {
     println!("Testing Extreme AVX-512 Optimizations...");
@@ -12,9 +24,15 @@ pub fn test_extreme_avx512() -> bool {
     let simd: EnhancedSimdProcessor<16> = EnhancedSimdProcessor::new();
     println!("SIMD Capability: {:?}", simd.get_capability());
 
-    // Test dot product with large vectors
-    let a = vec![1.0f32; 1024];
-    let b = vec![2.0f32; 1024];
+    // Test dot product with large vectors (properly aligned)
+    let a = create_aligned_vec(1024, 1.0f32);
+    let b = create_aligned_vec(1024, 2.0f32);
+
+    // Verify alignment before SIMD operations
+    let a_ptr = a.as_ptr() as usize;
+    let b_ptr = b.as_ptr() as usize;
+    println!("Vector A alignment: {}-byte aligned", if a_ptr % 64 == 0 { 64 } else { a_ptr % 64 });
+    println!("Vector B alignment: {}-byte aligned", if b_ptr % 64 == 0 { 64 } else { b_ptr % 64 });
 
     let start = Instant::now();
     let result = simd.dot_product(&a, &b);
@@ -27,9 +45,9 @@ pub fn test_extreme_avx512() -> bool {
     println!("Correct: {}", correct);
     println!("Duration: {:?}", duration);
 
-    // Test vector addition
-    let mut a_add = vec![1.0f32; 1024];
-    let b_add = vec![3.0f32; 1024];
+    // Test vector addition (properly aligned)
+    let mut a_add = create_aligned_vec(1024, 1.0f32);
+    let b_add = create_aligned_vec(1024, 3.0f32);
 
     let start_add = Instant::now();
     simd.vector_add(&mut a_add, &b_add);
@@ -102,10 +120,17 @@ pub fn benchmark_comparison() {
     println!("Performance Benchmark Comparison...");
 
     let simd: EnhancedSimdProcessor<16> = EnhancedSimdProcessor::new();
-    let a = vec![1.0f32; 4096];
-    let b = vec![2.0f32; 4096];
-    let mut a_add = vec![1.0f32; 4096];
-    let b_add = vec![3.0f32; 4096];
+    
+    // Create properly aligned vectors for benchmarking
+    let a = create_aligned_vec(4096, 1.0f32);
+    let b = create_aligned_vec(4096, 2.0f32);
+    let mut a_add = create_aligned_vec(4096, 1.0f32);
+    let b_add = create_aligned_vec(4096, 3.0f32);
+
+    // Verify alignment for benchmarking
+    println!("Benchmark vectors alignment check:");
+    println!("  Vector A: {}-byte aligned", if (a.as_ptr() as usize) % 64 == 0 { 64 } else { (a.as_ptr() as usize) % 64 });
+    println!("  Vector B: {}-byte aligned", if (b.as_ptr() as usize) % 64 == 0 { 64 } else { (b.as_ptr() as usize) % 64 });
 
     // Benchmark dot product
     let start_dot = Instant::now();

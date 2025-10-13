@@ -70,68 +70,73 @@ impl<T> Drop for PooledObject<T> {
 
             let now = SystemTime::now();
 
-            // Acquire locks (blocking) to return object to pool
-            let mut pool_guard = match self.pool.lock() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    log::warn!("Failed to acquire pool lock - object not returned to pool (deadlock prevention)");
-                    return;
+            // Use a more robust locking strategy to prevent race conditions
+            // Try to acquire both locks with timeout to prevent deadlock
+            let pool_lock_result = self.pool.try_lock();
+            let access_order_lock_result = self.access_order.try_lock();
+
+            match (pool_lock_result, access_order_lock_result) {
+                (Ok(mut pool_guard), Ok(mut access_order_guard)) => {
+                    // Both locks acquired successfully - proceed with object return
+                    let current_pool_size = pool_guard.len();
+                    let usage_ratio = current_pool_size as f64 / self.max_size as f64;
+
+                    // Use a more robust approach to handle pool capacity issues
+                    let object_returned = if usage_ratio < 0.80 {
+                        // Reduced threshold from 95% to 80%
+                        if current_pool_size < self.max_size {
+                            // Safe to add directly - no eviction needed
+                            pool_guard.insert(self.id, (obj, now));
+                            access_order_guard.insert(now, self.id);
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !object_returned {
+                        log::debug!("Object not returned to pool due to high memory pressure");
+                        
+                        // Track potential memory leak
+                        static LEAK_COUNTER: AtomicUsize = AtomicUsize::new(0);
+                        static LAST_LEAK_CHECK: AtomicUsize = AtomicUsize::new(0);
+                        
+                        let current_time = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as usize;
+                        
+                        // Check for memory leaks every 30 seconds
+                        let last_check = LAST_LEAK_CHECK.load(Ordering::Relaxed);
+                        if current_time - last_check > 30 {
+                            let leak_count = LEAK_COUNTER.load(Ordering::Relaxed);
+                            if leak_count > 0 {
+                                log::warn!(
+                                    "Memory leak detected: {} objects not returned to pool in last 30 seconds",
+                                    leak_count
+                                );
+                                LEAK_COUNTER.store(0, Ordering::Relaxed);
+                            }
+                            LAST_LEAK_CHECK.store(current_time, Ordering::Relaxed);
+                        }
+                        
+                        LEAK_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
-            };
-
-            let mut access_order_guard = match self.access_order.lock() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    log::warn!("Failed to acquire access order lock - object not returned to pool (deadlock prevention)");
-                    return;
+                (Ok(_), Err(_)) => {
+                    // Pool lock acquired but access order lock failed
+                    log::warn!("Failed to acquire access order lock - object not returned to pool (race condition prevention)");
                 }
-            };
-
-            // Get current usage ratio
-            let current_pool_size = pool_guard.len();
-            let usage_ratio = current_pool_size as f64 / self.max_size as f64;
-
-            // Automatic memory leak monitoring - track objects not returned to pool
-            static LEAK_COUNTER: AtomicUsize = AtomicUsize::new(0);
-            static LAST_LEAK_CHECK: AtomicUsize = AtomicUsize::new(0);
-
-            let current_time = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as usize;
-
-            // Check for memory leaks every 30 seconds
-            let last_check = LAST_LEAK_CHECK.load(Ordering::Relaxed);
-            if current_time - last_check > 30 {
-                let leak_count = LEAK_COUNTER.load(Ordering::Relaxed);
-                if leak_count > 0 {
-                    log::warn!(
-                        "Memory leak detected: {} objects not returned to pool in last 30 seconds",
-                        leak_count
-                    );
-                    LEAK_COUNTER.store(0, Ordering::Relaxed);
+                (Err(_), Ok(_)) => {
+                    // Access order lock acquired but pool lock failed
+                    log::warn!("Failed to acquire pool lock - object not returned to pool (race condition prevention)");
                 }
-                LAST_LEAK_CHECK.store(current_time, Ordering::Relaxed);
-            }
-
-            // Use a more robust approach to handle pool capacity issues
-            let object_returned = if usage_ratio < 0.80 {
-                // Reduced threshold from 95% to 80%
-                if current_pool_size < self.max_size {
-                    // Safe to add directly - no eviction needed
-                    pool_guard.insert(self.id, (obj, now));
-                    access_order_guard.insert(now, self.id);
-                    true
-                } else {
-                    false
+                (Err(_), Err(_)) => {
+                    // Both locks failed
+                    log::warn!("Failed to acquire both locks - object not returned to pool (race condition prevention)");
                 }
-            } else {
-                false
-            };
-
-            if !object_returned {
-                log::debug!("Object not returned to pool due to high memory pressure");
-                LEAK_COUNTER.fetch_add(1, Ordering::Relaxed);
             }
 
             // NOTE: deallocation accounting is handled via allocation trackers

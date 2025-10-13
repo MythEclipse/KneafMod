@@ -210,28 +210,152 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
         )
     }
 
+    /// Check if pointer is properly aligned for SIMD operations
+    #[inline(always)]
+    fn check_alignment(ptr: *const f32, required_alignment: usize) -> bool {
+        (ptr as usize) % required_alignment == 0
+    }
+
+    /// Validate alignment for AVX-512 operations (requires 64-byte alignment)
+    #[inline(always)]
+    fn validate_avx512_alignment(a: &[f32], b: &[f32]) -> bool {
+        const AVX512_ALIGNMENT: usize = 64;
+        Self::check_alignment(a.as_ptr(), AVX512_ALIGNMENT) &&
+        Self::check_alignment(b.as_ptr(), AVX512_ALIGNMENT)
+    }
+
+    /// Validate alignment for AVX2 operations (requires 32-byte alignment)
+    #[inline(always)]
+    fn validate_avx2_alignment(a: &[f32], b: &[f32]) -> bool {
+        const AVX2_ALIGNMENT: usize = 32;
+        Self::check_alignment(a.as_ptr(), AVX2_ALIGNMENT) &&
+        Self::check_alignment(b.as_ptr(), AVX2_ALIGNMENT)
+    }
+
+    /// Validate alignment for SSE operations (requires 16-byte alignment)
+    #[inline(always)]
+    fn validate_sse_alignment(a: &[f32], b: &[f32]) -> bool {
+        const SSE_ALIGNMENT: usize = 16;
+        Self::check_alignment(a.as_ptr(), SSE_ALIGNMENT) &&
+        Self::check_alignment(b.as_ptr(), SSE_ALIGNMENT)
+    }
+
+    /// Validate array length for SIMD operations
+    #[inline(always)]
+    fn validate_simd_length(length: usize, capability: SimdCapability) -> bool {
+        let required_multiple = match capability {
+            SimdCapability::Avx512Extreme | SimdCapability::Avx512 => 16, // AVX-512: 16 floats per operation
+            SimdCapability::Avx2 => 8,  // AVX2: 8 floats per operation
+            SimdCapability::Sse => 4,   // SSE: 4 floats per operation
+            SimdCapability::Scalar => 1, // Scalar: no alignment required
+        };
+        
+        length >= required_multiple && (length % required_multiple == 0)
+    }
+
     /// Optimized dot product with SIMD acceleration - extreme optimization with minimal branching
     #[inline(always)]
     pub fn dot_product(&self, a: &[f32], b: &[f32]) -> f32 {
-        debug_assert_eq!(
-            a.len(),
-            b.len(),
-            "Vectors must have equal length for dot product"
-        );
+        // Strict boundary validation for SIMD operations
+        if a.len() != b.len() {
+            log::error!("SIMD dot_product: Vector length mismatch - a.len={}, b.len={}", a.len(), b.len());
+            return 0.0;
+        }
+
+        let length = a.len();
+        
+        // Validate SIMD length requirements
+        let length_valid = Self::validate_simd_length(length, self.capability);
+        if !length_valid && !matches!(self.capability, SimdCapability::Scalar) {
+            log::warn!(
+                "SIMD length validation failed for {}: length={}, required multiple={}, falling back to scalar",
+                match self.capability {
+                    SimdCapability::Avx512Extreme | SimdCapability::Avx512 => "AVX-512",
+                    SimdCapability::Avx2 => "AVX2",
+                    SimdCapability::Sse => "SSE",
+                    _ => "Unknown",
+                },
+                length,
+                match self.capability {
+                    SimdCapability::Avx512Extreme | SimdCapability::Avx512 => 16,
+                    SimdCapability::Avx2 => 8,
+                    SimdCapability::Sse => 4,
+                    _ => 1,
+                }
+            );
+            // Fall back to scalar implementation for invalid lengths
+            return self.dot_product_scalar(a, b);
+        }
 
         let start_time = Instant::now();
 
+        // Validate alignment based on SIMD capability
+        let alignment_valid = match self.capability {
+            SimdCapability::Avx512Extreme | SimdCapability::Avx512 => {
+                Self::validate_avx512_alignment(a, b)
+            }
+            SimdCapability::Avx2 => {
+                Self::validate_avx2_alignment(a, b)
+            }
+            SimdCapability::Sse => {
+                Self::validate_sse_alignment(a, b)
+            }
+            SimdCapability::Scalar => true, // Scalar doesn't require special alignment
+        };
+
+        // Log alignment warnings for debugging
+        if !alignment_valid && !matches!(self.capability, SimdCapability::Scalar) {
+            log::warn!(
+                "SIMD alignment violation detected for {}: a_ptr={:p} (align {}), b_ptr={:p} (align {})",
+                match self.capability {
+                    SimdCapability::Avx512Extreme | SimdCapability::Avx512 => "AVX-512",
+                    SimdCapability::Avx2 => "AVX2",
+                    SimdCapability::Sse => "SSE",
+                    _ => "Unknown",
+                },
+                a.as_ptr(),
+                a.as_ptr() as usize % 64,
+                b.as_ptr(),
+                b.as_ptr() as usize % 64
+            );
+        }
+
         // Extreme optimization: direct SIMD dispatch with minimal conditionals
         let result = match self.capability {
-            SimdCapability::Avx512Extreme => unsafe { self.dot_product_avx512(a, b) },
-            SimdCapability::Avx512 => unsafe { self.dot_product_avx512(a, b) },
-            SimdCapability::Avx2 => unsafe { self.dot_product_avx2(a, b) },
-            SimdCapability::Sse => unsafe { self.dot_product_sse(a, b) },
+            SimdCapability::Avx512Extreme => {
+                if alignment_valid {
+                    unsafe { self.dot_product_avx512(a, b) }
+                } else {
+                    // Fallback to scalar if alignment is invalid
+                    self.dot_product_scalar(a, b)
+                }
+            }
+            SimdCapability::Avx512 => {
+                if alignment_valid {
+                    unsafe { self.dot_product_avx512(a, b) }
+                } else {
+                    self.dot_product_scalar(a, b)
+                }
+            }
+            SimdCapability::Avx2 => {
+                if alignment_valid {
+                    unsafe { self.dot_product_avx2(a, b) }
+                } else {
+                    self.dot_product_scalar(a, b)
+                }
+            }
+            SimdCapability::Sse => {
+                if alignment_valid {
+                    unsafe { self.dot_product_sse(a, b) }
+                } else {
+                    self.dot_product_scalar(a, b)
+                }
+            }
             SimdCapability::Scalar => self.dot_product_scalar(a, b),
         };
 
         let cycles = start_time.elapsed().as_nanos() as u64;
-        self.record_operation(cycles, matches!(self.capability, SimdCapability::Scalar));
+        self.record_operation(cycles, matches!(self.capability, SimdCapability::Scalar) || !alignment_valid);
         result
     }
 
@@ -444,24 +568,104 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
     /// Optimized vector addition with SIMD acceleration - aggressive optimization for small batches
     #[inline(always)]
     pub fn vector_add(&self, a: &mut [f32], b: &[f32]) {
-        debug_assert_eq!(
-            a.len(),
-            b.len(),
-            "Vectors must have equal length for addition"
-        );
+        // Strict boundary validation for SIMD operations
+        if a.len() != b.len() {
+            log::error!("SIMD vector_add: Vector length mismatch - a.len={}, b.len={}", a.len(), b.len());
+            return;
+        }
 
         let len = a.len();
+
+        // Validate SIMD length requirements for larger arrays
+        if len > 7 {
+            let length_valid = Self::validate_simd_length(len, self.capability);
+            if !length_valid && !matches!(self.capability, SimdCapability::Scalar) {
+                log::warn!(
+                    "SIMD length validation failed for vector_add {}: length={}, required multiple={}, falling back to scalar",
+                    match self.capability {
+                        SimdCapability::Avx512Extreme | SimdCapability::Avx512 => "AVX-512",
+                        SimdCapability::Avx2 => "AVX2",
+                        SimdCapability::Sse => "SSE",
+                        _ => "Unknown",
+                    },
+                    len,
+                    match self.capability {
+                        SimdCapability::Avx512Extreme | SimdCapability::Avx512 => 16,
+                        SimdCapability::Avx2 => 8,
+                        SimdCapability::Sse => 4,
+                        _ => 1,
+                    }
+                );
+                // Fall back to scalar implementation for invalid lengths
+                return self.vector_add_scalar(a, b);
+            }
+        }
 
         // Aggressive optimization for small batches (2-7 elements) with branch prediction
         if len <= 7 {
             return self.vector_add_small_batch(a, b);
         }
 
+        // Validate alignment based on SIMD capability
+        let alignment_valid = match self.capability {
+            SimdCapability::Avx512Extreme | SimdCapability::Avx512 => {
+                Self::validate_avx512_alignment(a, b)
+            }
+            SimdCapability::Avx2 => {
+                Self::validate_avx2_alignment(a, b)
+            }
+            SimdCapability::Sse => {
+                Self::validate_sse_alignment(a, b)
+            }
+            SimdCapability::Scalar => true, // Scalar doesn't require special alignment
+        };
+
+        // Log alignment warnings for debugging
+        if !alignment_valid && !matches!(self.capability, SimdCapability::Scalar) {
+            log::warn!(
+                "SIMD alignment violation detected for vector_add {}: a_ptr={:p} (align {}), b_ptr={:p} (align {})",
+                match self.capability {
+                    SimdCapability::Avx512Extreme | SimdCapability::Avx512 => "AVX-512",
+                    SimdCapability::Avx2 => "AVX2",
+                    SimdCapability::Sse => "SSE",
+                    _ => "Unknown",
+                },
+                a.as_ptr(),
+                a.as_ptr() as usize % 64,
+                b.as_ptr(),
+                b.as_ptr() as usize % 64
+            );
+        }
+
         match self.capability {
-            SimdCapability::Avx512Extreme => unsafe { self.vector_add_avx512(a, b) },
-            SimdCapability::Avx512 => unsafe { self.vector_add_avx512(a, b) },
-            SimdCapability::Avx2 => unsafe { self.vector_add_avx2(a, b) },
-            SimdCapability::Sse => unsafe { self.vector_add_sse(a, b) },
+            SimdCapability::Avx512Extreme => {
+                if alignment_valid {
+                    unsafe { self.vector_add_avx512(a, b) }
+                } else {
+                    self.vector_add_scalar(a, b)
+                }
+            }
+            SimdCapability::Avx512 => {
+                if alignment_valid {
+                    unsafe { self.vector_add_avx512(a, b) }
+                } else {
+                    self.vector_add_scalar(a, b)
+                }
+            }
+            SimdCapability::Avx2 => {
+                if alignment_valid {
+                    unsafe { self.vector_add_avx2(a, b) }
+                } else {
+                    self.vector_add_scalar(a, b)
+                }
+            }
+            SimdCapability::Sse => {
+                if alignment_valid {
+                    unsafe { self.vector_add_sse(a, b) }
+                } else {
+                    self.vector_add_scalar(a, b)
+                }
+            }
             SimdCapability::Scalar => self.vector_add_scalar(a, b),
         }
     }
@@ -655,11 +859,38 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
         }
     }
 
-    /// Parallel batch processing with SIMD acceleration
+    /// Parallel batch processing with SIMD acceleration - enhanced with boundary checks
     pub fn process_batch_parallel<F>(&self, data: &mut [f32], batch_size: usize, processor: F)
     where
         F: Fn(&mut [f32]) + Send + Sync,
     {
+        // Validate batch size for SIMD operations
+        if batch_size == 0 {
+            log::error!("SIMD batch processing: batch_size cannot be 0");
+            return;
+        }
+
+        // Validate that batch size is appropriate for SIMD operations
+        let simd_batch_valid = Self::validate_simd_length(batch_size, self.capability);
+        if !simd_batch_valid && !matches!(self.capability, SimdCapability::Scalar) {
+            log::warn!(
+                "SIMD batch size {} is not optimal for {} capability, performance may be degraded",
+                batch_size,
+                match self.capability {
+                    SimdCapability::Avx512Extreme | SimdCapability::Avx512 => "AVX-512",
+                    SimdCapability::Avx2 => "AVX2",
+                    SimdCapability::Sse => "SSE",
+                    _ => "Scalar",
+                }
+            );
+        }
+
+        // Validate data array length
+        if data.len() < batch_size {
+            log::error!("SIMD batch processing: data length {} is less than batch_size {}", data.len(), batch_size);
+            return;
+        }
+
         data.par_chunks_mut(batch_size).for_each(|chunk| {
             processor(chunk);
         });
