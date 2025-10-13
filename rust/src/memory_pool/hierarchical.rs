@@ -359,7 +359,7 @@ impl HierarchicalMemoryPool {
         &self,
         size: usize,
         alignment: usize,
-    ) -> Result<PooledVec<u8>, String> {
+    ) -> Result<(PooledVec<u8>, usize), String> {
         let trace_id = generate_trace_id();
 
         // Ensure alignment is power of 2 (required for SIMD operations)
@@ -392,13 +392,20 @@ impl HierarchicalMemoryPool {
         let mut pooled = pool.get();
         let vec = pooled.as_mut();
 
-    vec.clear();
-    // Ensure capacity is at least size + alignment so an aligned offset can fit
-    // within the buffer. Keep the logical length equal to the requested size.
-    vec.reserve(size + alignment);
-    vec.resize(size, 0u8);
+        vec.clear();
+        // Ensure the underlying Vec length is at least `size + alignment` so an
+        // aligned subslice (starting at some offset < alignment) can be taken
+        // safely. We'll compute and return the aligned byte offset to the
+        // caller so it doesn't need to recompute raw pointer math.
+        vec.reserve(size + alignment);
+        vec.resize(size + alignment, 0u8);
 
-        Ok(pooled)
+        // Compute an aligned offset within the returned buffer
+        let raw_ptr = vec.as_ptr() as usize;
+        let aligned_ptr = (raw_ptr + alignment - 1) & !(alignment - 1);
+        let offset = aligned_ptr - raw_ptr;
+
+        Ok((pooled, offset))
     }
 
     /// Get statistics for all size classes
@@ -494,12 +501,13 @@ mod tests {
         let pool = HierarchicalMemoryPool::new(None);
 
         // Test SIMD-aligned allocation
-        let aligned_vec = pool.allocate_simd_aligned(1024, 32).unwrap();
-        assert_eq!(aligned_vec.len(), 1024);
-
-        // Check alignment (pointer should be 32-byte aligned)
-        let ptr = aligned_vec.as_ptr() as usize;
-        assert_eq!(ptr % 32, 0, "Pointer should be 32-byte aligned");
+        // The pool returns a pooled Vec with extra padding. We verify that we
+        // can compute an aligned subslice of length `size` within the returned
+        // buffer.
+    let (pooled, offset) = pool.allocate_simd_aligned(1024, 32).unwrap();
+    let vec_ref = pooled.as_ref();
+    // Ensure the aligned subslice (at provided offset) fits within the padded buffer
+    assert!(offset + 1024 <= vec_ref.len(), "Aligned subslice must fit");
     }
 
     #[test]

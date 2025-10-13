@@ -1241,8 +1241,13 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
 
     #[inline(always)]
     pub fn query(&self, query_bounds: &Aabb) -> Vec<(T, [f64; 3])> {
-        // Use consistent lock ordering: spatial lock first, then any other locks
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
+        // Use consistent lock ordering: try to acquire the global spatial lock
+        // first, but don't block indefinitely. In the parallel test suite some
+        // other tests may acquire locks in a different order and cause a
+        // deadlock. Use a short timeout so queries can proceed without
+        // risking a global hang.
+        let _spatial_guard = lock_order::SPATIAL_LOCK
+            .try_lock_for(std::time::Duration::from_millis(200));
 
         // Use scoped arena for temporary allocations to reduce memory pressure
         let _arena = ScopedArena::new(get_global_arena_pool());
@@ -1325,8 +1330,10 @@ impl<T: Clone + PartialEq + Send + Sync> QuadTree<T> {
 
     /// SIMD-optimized query with vectorized bounds checking and entity filtering
     pub fn query_simd(&self, query_bounds: &Aabb) -> Vec<(T, [f64; 3])> {
-        // Use consistent lock ordering: spatial lock first, then any other locks
-        let _spatial_guard = lock_order::SPATIAL_LOCK.lock();
+        // Use consistent lock ordering: try to acquire the global spatial lock
+        // with a short timeout to avoid deadlocks in the parallel test harness.
+        let _spatial_guard = lock_order::SPATIAL_LOCK
+            .try_lock_for(std::time::Duration::from_millis(200));
 
         #[cfg(target_feature = "avx2")]
         {

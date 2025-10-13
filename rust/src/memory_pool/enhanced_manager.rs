@@ -23,7 +23,7 @@ lazy_static! {
 #[derive(Debug)]
 pub struct EnhancedMemoryPoolManager {
     hierarchical_pool: HierarchicalMemoryPool,
-    swap_pool: Option<SwapMemoryPool>,
+    swap_pool: Option<std::sync::Arc<crate::memory_pool::swap::SwapMemoryPool>>,
     vec_pool: VecPool<u8>,
     string_pool: StringPool,
     allocation_stats: RwLock<AllocationStats>,
@@ -168,7 +168,7 @@ impl EnhancedMemoryPoolManager {
         let hierarchical_pool = HierarchicalMemoryPool::new(None);
 
         let swap_pool = if config.enable_swap {
-            Some(SwapMemoryPool::new(None)?)
+            Some(SwapMemoryPool::new_arc(None)?)
         } else {
             None
         };
@@ -211,7 +211,11 @@ impl EnhancedMemoryPoolManager {
             );
             self.performance_monitor.record_pool_miss();
 
-            let swap_vec = self.swap_pool.as_ref().unwrap().allocate(size)?;
+            let swap_vec = self
+                .swap_pool
+                .as_ref()
+                .unwrap()
+                .allocate_arc(size)?;
             Ok(SmartPooledVec::Swap(swap_vec))
         } else {
             // Optimized pool selection using fast path for common cases
@@ -275,20 +279,8 @@ impl EnhancedMemoryPoolManager {
             &format!("Allocating {} bytes with {} alignment", size, alignment),
         );
 
-        match self
-            .hierarchical_pool
-            .allocate_simd_aligned(size, alignment)
-        {
-            Ok(mut pooled) => {
-                // We allocated size + alignment bytes inside the pooled Vec. Compute an
-                // aligned offset within that buffer and return a HierarchicalAligned
-                // view which points into the pooled Vec without taking ownership of an
-                // interior pointer.
-                let vec_ref = pooled.as_mut();
-                let raw_ptr = vec_ref.as_mut_ptr() as usize;
-                let aligned_ptr = (raw_ptr + alignment - 1) & !(alignment - 1);
-                let offset = aligned_ptr - raw_ptr;
-
+        match self.hierarchical_pool.allocate_simd_aligned(size, alignment) {
+            Ok((mut pooled, offset)) => {
                 // Logical length is `size` elements of u8
                 let logical_len = size;
 
@@ -561,8 +553,11 @@ impl EnhancedMemoryPoolManager {
     }
 
     /// Get the swap pool reference
-    pub fn get_swap_pool(&self) -> &SwapMemoryPool {
-        self.swap_pool.as_ref().expect("Swap pool not enabled")
+    pub fn get_swap_pool(&self) -> std::sync::Arc<SwapMemoryPool> {
+        self.swap_pool
+            .as_ref()
+            .expect("Swap pool not enabled")
+            .clone()
     }
 
     /// Allocate chunk metadata through the enhanced manager

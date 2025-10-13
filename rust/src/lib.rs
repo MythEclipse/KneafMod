@@ -75,6 +75,9 @@ pub mod shared;
 
 // Extreme performance testing
 pub mod test_extreme_performance;
+pub mod test_utils;
+#[cfg(test)]
+pub mod test_timeout;
 
 // Re-export commonly used types from memory_pool module
 pub use memory_pool::{
