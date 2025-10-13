@@ -112,11 +112,18 @@ public class NativeLibraryLoader {
       return true;
     }
 
-    // Try alternative paths
+    // Try alternative paths inside the project where the native build may output
     Path[] alternativePaths = {
       Paths.get("build", "generated", "resources", "natives", "rustperf.dll"),
       Paths.get("build", "generated", "resources", "natives", "librustperf.so"),
-      Paths.get("build", "generated", "resources", "natives", "librustperf.dylib")
+      Paths.get("build", "generated", "resources", "natives", "librustperf.dylib"),
+      // Also check Rust target folders (common for local development builds)
+      Paths.get("rust", "target", "release", "rustperf.dll"),
+      Paths.get("rust", "target", "release", "librustperf.so"),
+      Paths.get("rust", "target", "release", "librustperf.dylib"),
+      Paths.get("rust", "target", "debug", "rustperf.dll"),
+      Paths.get("rust", "target", "debug", "librustperf.so"),
+      Paths.get("rust", "target", "debug", "librustperf.dylib")
     };
 
     for (Path path : alternativePaths) {
