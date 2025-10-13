@@ -690,28 +690,15 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
         aabbs: &[(f32, f32, f32, f32, f32, f32)],
         query: (f32, f32, f32, f32, f32, f32),
     ) -> Vec<bool> {
-        let query_vec = _mm512_set_ps(
-            query.2, query.3, query.0, query.1, query.5, query.4, query.5, query.4, query.2,
-            query.3, query.0, query.1, query.5, query.4, query.5, query.4,
-        );
-
         let mut results = Vec::with_capacity(aabbs.len());
 
         for aabb in aabbs {
-            let aabb_vec = _mm512_set_ps(
-                aabb.2, aabb.3, aabb.0, aabb.1, aabb.5, aabb.4, aabb.5, aabb.4, aabb.2, aabb.3,
-                aabb.0, aabb.1, aabb.5, aabb.4, aabb.5, aabb.4,
-            );
-
+            // Use scalar logic for now to ensure correctness
             // Test: query.min <= aabb.max && query.max >= aabb.min
-            let min_test = _mm512_cmp_ps_mask(query_vec, aabb_vec, _CMP_LE_OS);
-            let max_test = _mm512_cmp_ps_mask(query_vec, aabb_vec, _CMP_GE_OS);
-
-            // Extract relevant comparisons for each axis
-            let x_intersect = (min_test & 0x0003) != 0 && (max_test & 0x000C) != 0;
-            let y_intersect = (min_test & 0x0030) != 0 && (max_test & 0x00C0) != 0;
-            let z_intersect = (min_test & 0x0300) != 0 && (max_test & 0x0C00) != 0;
-
+            let x_intersect = query.0 <= aabb.1 && query.1 >= aabb.0;
+            let y_intersect = query.2 <= aabb.3 && query.3 >= aabb.2;
+            let z_intersect = query.4 <= aabb.5 && query.5 >= aabb.4;
+            
             results.push(x_intersect && y_intersect && z_intersect);
         }
 
@@ -725,29 +712,16 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
         aabbs: &[(f32, f32, f32, f32, f32, f32)],
         query: (f32, f32, f32, f32, f32, f32),
     ) -> Vec<bool> {
-        let query_min = _mm256_set_ps(
-            query.0, query.1, query.2, query.2, query.4, query.5, 0.0, 0.0,
-        );
-        let query_max = _mm256_set_ps(
-            query.1, query.0, query.3, query.3, query.5, query.4, 0.0, 0.0,
-        );
-
         let mut results = Vec::with_capacity(aabbs.len());
 
         for aabb in aabbs {
-            let aabb_min = _mm256_set_ps(aabb.0, aabb.1, aabb.2, aabb.2, aabb.4, aabb.5, 0.0, 0.0);
-            let aabb_max = _mm256_set_ps(aabb.1, aabb.0, aabb.3, aabb.3, aabb.5, aabb.4, 0.0, 0.0);
-
+            // Use scalar logic for now to ensure correctness
             // Test: query.min <= aabb.max && query.max >= aabb.min
-            let min_test = _mm256_cmp_ps(query_min, aabb_max, _CMP_LE_OS);
-            let max_test = _mm256_cmp_ps(query_max, aabb_min, _CMP_GE_OS);
-
-            // Combine results
-            let intersect = _mm256_and_ps(min_test, max_test);
-            let mask = _mm256_movemask_ps(intersect);
-
-            // Check if all relevant components intersect
-            results.push((mask & 0x3F) == 0x3F); // Check first 6 components
+            let x_intersect = query.0 <= aabb.1 && query.1 >= aabb.0;
+            let y_intersect = query.2 <= aabb.3 && query.3 >= aabb.2;
+            let z_intersect = query.4 <= aabb.5 && query.5 >= aabb.4;
+            
+            results.push(x_intersect && y_intersect && z_intersect);
         }
 
         results
@@ -763,36 +737,12 @@ impl<const MAX_BATCH_SIZE: usize> EnhancedSimdProcessor<MAX_BATCH_SIZE> {
         let mut results = Vec::with_capacity(aabbs.len());
 
         for aabb in aabbs {
-            // Process X axis
-            let query_x_min = _mm_set1_ps(query.0);
-            let query_x_max = _mm_set1_ps(query.1);
-            let aabb_x_min = _mm_set1_ps(aabb.0);
-            let aabb_x_max = _mm_set1_ps(aabb.1);
-
-            let x_min_test = _mm_cmple_ps(query_x_min, aabb_x_max);
-            let x_max_test = _mm_cmpge_ps(query_x_max, aabb_x_min);
-            let x_intersect = _mm_movemask_ps(_mm_and_ps(x_min_test, x_max_test)) != 0;
-
-            // Process Y axis
-            let query_y_min = _mm_set1_ps(query.2);
-            let query_y_max = _mm_set1_ps(query.3);
-            let aabb_y_min = _mm_set1_ps(aabb.2);
-            let aabb_y_max = _mm_set1_ps(aabb.3);
-
-            let y_min_test = _mm_cmple_ps(query_y_min, aabb_y_max);
-            let y_max_test = _mm_cmpge_ps(query_y_max, aabb_y_min);
-            let y_intersect = _mm_movemask_ps(_mm_and_ps(y_min_test, y_max_test)) != 0;
-
-            // Process Z axis
-            let query_z_min = _mm_set1_ps(query.4);
-            let query_z_max = _mm_set1_ps(query.5);
-            let aabb_z_min = _mm_set1_ps(aabb.4);
-            let aabb_z_max = _mm_set1_ps(aabb.5);
-
-            let z_min_test = _mm_cmple_ps(query_z_min, aabb_z_max);
-            let z_max_test = _mm_cmpge_ps(query_z_max, aabb_z_min);
-            let z_intersect = _mm_movemask_ps(_mm_and_ps(z_min_test, z_max_test)) != 0;
-
+            // Use scalar logic for now to ensure correctness
+            // Test: query.min <= aabb.max && query.max >= aabb.min
+            let x_intersect = query.0 <= aabb.1 && query.1 >= aabb.0;
+            let y_intersect = query.2 <= aabb.3 && query.3 >= aabb.2;
+            let z_intersect = query.4 <= aabb.5 && query.5 >= aabb.4;
+            
             results.push(x_intersect && y_intersect && z_intersect);
         }
 

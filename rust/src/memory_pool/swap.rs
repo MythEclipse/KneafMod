@@ -884,12 +884,19 @@ mod tests {
             data[i] = (i % 256) as u8; // Fill with compressible pattern
         }
 
-        // Force swap out to trigger compression
-        pool.check_memory_pressure().unwrap();
+        // Force swap out to trigger compression by allocating another page
+        // This will trigger memory pressure and force the first page to be swapped out
+        let _vec2 = pool.allocate(1024).unwrap();
+
+        // Also test direct compression through write_data_sync
+        let test_data = vec![1u8; 2048]; // Create compressible data
+        let _page_id = pool.write_data_sync(test_data).unwrap();
 
         // Check compression stats
         let stats = pool.get_compression_stats();
-        assert!(stats.total_uncompressed > 0);
+        assert!(stats.total_uncompressed > 0, "total_uncompressed should be > 0, got {}", stats.total_uncompressed);
+        assert!(stats.total_compressed > 0, "total_compressed should be > 0, got {}", stats.total_compressed);
+        assert!(stats.compression_ratio > 0.0, "compression_ratio should be > 0.0, got {}", stats.compression_ratio);
 
         // Clean up
         fs::remove_file(temp_file).ok();

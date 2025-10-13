@@ -265,13 +265,15 @@ mod tests {
         let config = MemoryPressureConfig::new(0.6, 0.8, 0.9, 0.95).unwrap();
         assert!(config.validate().is_ok());
 
-        // Invalid configuration - normal >= moderate
-        let config = MemoryPressureConfig::new(0.8, 0.7, 0.9, 0.95).unwrap();
-        assert!(config.validate().is_err());
+        // Invalid configuration - normal >= moderate (should fail during creation)
+        let result = MemoryPressureConfig::new(0.8, 0.7, 0.9, 0.95);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Moderate threshold must be greater than normal"));
 
-        // Invalid configuration - moderate >= high
-        let config = MemoryPressureConfig::new(0.6, 0.9, 0.8, 0.95).unwrap();
-        assert!(config.validate().is_err());
+        // Invalid configuration - moderate >= high (should fail during creation)
+        let result = MemoryPressureConfig::new(0.6, 0.9, 0.8, 0.95);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("High threshold must be between moderate"));
     }
 
     #[test]

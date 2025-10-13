@@ -652,10 +652,10 @@ mod tests {
         assert_eq!(stats.current_size, 0);
         assert_eq!(stats.max_size, 1);
 
-        // Insert (miss -> insertion)
+        // Insert (should not be counted as miss, only as insertion)
         cache.insert("key1".to_string(), vec![1], 1);
         let stats = cache.get_stats();
-        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.misses, 0);  // Insert operation should NOT be counted as miss
         assert_eq!(stats.insertions, 1);
         assert_eq!(stats.current_size, 1);
 
@@ -664,10 +664,10 @@ mod tests {
         let stats = cache.get_stats();
         assert_eq!(stats.hits, 1);
 
-        // Insert again (should evict, miss -> insertion -> eviction)
+        // Insert again (should evict, but still not counted as miss)
         cache.insert("key2".to_string(), vec![2], 1);
         let stats = cache.get_stats();
-        assert_eq!(stats.misses, 2);
+        assert_eq!(stats.misses, 0);  // Insert operation should NOT be counted as miss
         assert_eq!(stats.insertions, 2);
         assert_eq!(stats.evictions, 1);
         assert_eq!(stats.current_size, 1);

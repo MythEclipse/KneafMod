@@ -1953,10 +1953,10 @@ mod tests {
         let mut quadtree = QuadTree::new(bounds, 10, 5);
 
         // Insert some test entities
-        quadtree.insert(Entity::from_raw(1), [10.0, 10.0, 10.0], 0);
-        quadtree.insert(Entity::from_raw(2), [20.0, 20.0, 20.0], 0);
-        quadtree.insert(Entity::from_raw(3), [50.0, 50.0, 50.0], 0);
-        quadtree.insert(Entity::from_raw(4), [200.0, 200.0, 200.0], 0); // Outside query bounds
+        let _ = quadtree.insert(Entity::from_raw(1), [10.0, 10.0, 10.0], 0);
+        let _ = quadtree.insert(Entity::from_raw(2), [20.0, 20.0, 20.0], 0);
+        let _ = quadtree.insert(Entity::from_raw(3), [50.0, 50.0, 50.0], 0);
+        let _ = quadtree.insert(Entity::from_raw(4), [200.0, 200.0, 200.0], 0); // Outside query bounds
 
         let query_bounds = Aabb::new(0.0, 0.0, 0.0, 30.0, 30.0, 30.0);
         let results = quadtree.query_simd(&query_bounds);

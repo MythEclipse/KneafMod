@@ -562,10 +562,10 @@ impl OptimizedSpatialGrid {
 
                             // If cell has many entities, check children at lower levels
                             if cell_data.entities.len() > self.config.entities_per_cell_threshold
-                                && level > 0
+                                && level < self.config.max_levels - 1
                             {
                                 self.query_children_recursive(
-                                    level - 1,
+                                    level + 1,
                                     cell_key,
                                     min_bounds,
                                     max_bounds,
@@ -578,6 +578,10 @@ impl OptimizedSpatialGrid {
                 }
             }
         }
+
+        // Remove duplicates and sort
+        results.sort_unstable();
+        results.dedup();
 
         // Update metrics
         let query_time = start_time.elapsed().as_micros() as u64;
@@ -597,12 +601,11 @@ impl OptimizedSpatialGrid {
         let max_bounds = (center.0 + radius, center.1 + radius, center.2 + radius);
 
         let candidates = self.query_aabb(min_bounds, max_bounds);
+        let mut results = Vec::new();
 
-        // Filter by actual sphere distance using SIMD
-        candidates
-            .into_iter()
-            .filter_map(|entity_id| {
-                let location = self.entity_index.read().unwrap().get(&entity_id)?.clone();
+        // Filter by actual sphere distance
+        for entity_id in candidates {
+            if let Some(location) = self.entity_index.read().unwrap().get(&entity_id) {
                 let cells = self.levels[location.level].cells.read().unwrap();
 
                 if let Some(cell_data) = cells.get(&location.cell_key) {
@@ -614,14 +617,16 @@ impl OptimizedSpatialGrid {
                             let distance_sq = dx * dx + dy * dy + dz * dz;
 
                             if distance_sq <= radius_sq {
-                                return Some(entity_id);
+                                results.push(entity_id);
+                                break;
                             }
                         }
                     }
                 }
-                None
-            })
-            .collect::<Vec<_>>()
+            }
+        }
+
+        results
     }
 
     /// Batch query multiple AABBs with SIMD acceleration
@@ -633,6 +638,7 @@ impl OptimizedSpatialGrid {
         queries
             .par_iter()
             .map(|query| {
+                // Fix coordinate mapping: (min_x, max_x, min_y, max_y, min_z, max_z)
                 let min_bounds = (query.0, query.2, query.4);
                 let max_bounds = (query.1, query.3, query.5);
                 self.query_aabb(min_bounds, max_bounds)
@@ -648,8 +654,9 @@ impl OptimizedSpatialGrid {
         max_distance: f32,
     ) -> Vec<(u64, f32)> {
         let candidates = self.query_sphere(position, max_distance);
-        let mut results = Vec::with_capacity(candidates.len().min(max_count));
+        let mut results = Vec::new();
 
+        // Collect all candidates with their distances
         for entity_id in candidates {
             if let Some(location) = self.entity_index.read().unwrap().get(&entity_id) {
                 let cells = self.levels[location.level].cells.read().unwrap();
@@ -722,9 +729,13 @@ impl OptimizedSpatialGrid {
         // Separating axis theorem for AABB intersection
         // Cell bounds: (min_x, max_x, min_y, max_y, min_z, max_z)
         // Query bounds: (min_x, min_y, min_z) to (max_x, max_y, max_z)
-        cell_data.bounds.0 <= max_bounds.0 && cell_data.bounds.1 >= min_bounds.0 && // X axis
-        cell_data.bounds.2 <= max_bounds.1 && cell_data.bounds.3 >= min_bounds.1 && // Y axis
-        cell_data.bounds.4 <= max_bounds.2 && cell_data.bounds.5 >= min_bounds.2  // Z axis
+        // Check if there is overlap on all three axes
+        !(cell_data.bounds.1 < min_bounds.0 || // cell max_x < query min_x
+          cell_data.bounds.0 > max_bounds.0 || // cell min_x > query max_x
+          cell_data.bounds.3 < min_bounds.1 || // cell max_y < query min_y
+          cell_data.bounds.2 > max_bounds.1 || // cell min_y > query max_y
+          cell_data.bounds.5 < min_bounds.2 || // cell max_z < query min_z
+          cell_data.bounds.4 > max_bounds.2)   // cell min_z > query max_z
     }
 
     /// Check if entity intersects with AABB
@@ -736,9 +747,13 @@ impl OptimizedSpatialGrid {
     ) -> bool {
         // Entity bounds: (min_x, max_x, min_y, max_y, min_z, max_z)
         // Query bounds: (min_x, min_y, min_z) to (max_x, max_y, max_z)
-        entity.bounds.0 <= max_bounds.0 && entity.bounds.1 >= min_bounds.0 && // X axis
-        entity.bounds.2 <= max_bounds.1 && entity.bounds.3 >= min_bounds.1 && // Y axis
-        entity.bounds.4 <= max_bounds.2 && entity.bounds.5 >= min_bounds.2  // Z axis
+        // Check if there is overlap on all three axes
+        !(entity.bounds.1 < min_bounds.0 || // entity max_x < query min_x
+          entity.bounds.0 > max_bounds.0 || // entity min_x > query max_x
+          entity.bounds.3 < min_bounds.1 || // entity max_y < query min_y
+          entity.bounds.2 > max_bounds.1 || // entity min_y > query max_y
+          entity.bounds.5 < min_bounds.2 || // entity max_z < query min_z
+          entity.bounds.4 > max_bounds.2)   // entity min_z > query max_z
     }
 
     /// Query children cells recursively
