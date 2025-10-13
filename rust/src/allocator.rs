@@ -369,8 +369,9 @@ impl UnifiedMemoryArena {
     }
 
     /// Legacy allocate method for backward compatibility - deprecated, use allocate_tracked instead
+    /// This function is marked unsafe because it returns a raw pointer that must be manually managed
     #[deprecated(note = "Use allocate_tracked for proper memory leak prevention")]
-    pub fn allocate(&self, size: usize) -> *mut u8 {
+    pub unsafe fn allocate(&self, size: usize) -> *mut u8 {
         self.total_allocated
             .fetch_add(size as u64, Ordering::Relaxed);
 
@@ -395,10 +396,8 @@ impl UnifiedMemoryArena {
         }
 
         // Fallback to system allocator for very large allocations
-        unsafe {
-            let layout = Layout::from_size_align_unchecked(size, 8);
-            System.alloc(layout)
-        }
+        let layout = Layout::from_size_align_unchecked(size, 8);
+        System.alloc(layout)
     }
 
     /// Safe allocation method that returns a tracked allocation
@@ -530,7 +529,8 @@ impl UnifiedMemoryArena {
         result
     }
 
-    pub fn deallocate(&self, ptr: *mut u8, size: usize) {
+    /// Deallocate memory with raw pointer - marked unsafe because it dereferences raw pointer
+    pub unsafe fn deallocate(&self, ptr: *mut u8, size: usize) {
         self.total_deallocated
             .fetch_add(size as u64, Ordering::Relaxed);
 
@@ -539,25 +539,17 @@ impl UnifiedMemoryArena {
         }
 
         if size <= SMALL_OBJECT_THRESHOLD && self.config.enable_slab_allocation {
-            unsafe {
-                let buffer = Vec::from_raw_parts(ptr, 0, SMALL_OBJECT_THRESHOLD);
-                self.small_allocator.deallocate(buffer);
-            }
+            let buffer = Vec::from_raw_parts(ptr, 0, SMALL_OBJECT_THRESHOLD);
+            self.small_allocator.deallocate(buffer);
         } else if size <= MEDIUM_OBJECT_THRESHOLD {
-            unsafe {
-                let buffer = Vec::from_raw_parts(ptr, 0, MEDIUM_OBJECT_THRESHOLD);
-                self.medium_allocator.deallocate(buffer);
-            }
+            let buffer = Vec::from_raw_parts(ptr, 0, MEDIUM_OBJECT_THRESHOLD);
+            self.medium_allocator.deallocate(buffer);
         } else if size <= LARGE_OBJECT_THRESHOLD {
-            unsafe {
-                let buffer = Vec::from_raw_parts(ptr, 0, LARGE_OBJECT_THRESHOLD);
-                self.large_allocator.deallocate(buffer);
-            }
+            let buffer = Vec::from_raw_parts(ptr, 0, LARGE_OBJECT_THRESHOLD);
+            self.large_allocator.deallocate(buffer);
         } else {
-            unsafe {
-                let layout = Layout::from_size_align_unchecked(size, 8);
-                System.dealloc(ptr, layout);
-            }
+            let layout = Layout::from_size_align_unchecked(size, 8);
+            System.dealloc(ptr, layout);
         }
     }
 

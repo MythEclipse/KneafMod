@@ -24,7 +24,7 @@ pub enum PoolError {
 pub struct LightweightMemoryPool<T: Default> {
     pool: RefCell<VecDeque<T>>,
     allocated_count: AtomicUsize,
-    max_size: usize,
+    max_size: AtomicUsize,
     logger: PerformanceLogger,
 }
 
@@ -36,7 +36,7 @@ impl<T: Default> LightweightMemoryPool<T> {
         Self {
             pool: RefCell::new(VecDeque::with_capacity(max_size)),
             allocated_count: AtomicUsize::new(0),
-            max_size,
+            max_size: AtomicUsize::new(max_size),
             logger,
         }
     }
@@ -67,7 +67,8 @@ impl<T: Default> LightweightMemoryPool<T> {
         let trace_id = generate_trace_id();
 
         let mut pool = self.pool.borrow_mut();
-        if pool.len() < self.max_size {
+        let max_size = self.max_size.load(Ordering::Relaxed);
+        if pool.len() < max_size {
             pool.push_back(obj);
             self.logger
                 .log_info("return_object", &trace_id, "Object returned to pool");
@@ -83,13 +84,14 @@ impl<T: Default> LightweightMemoryPool<T> {
     pub fn get_stats(&self) -> LightweightPoolStats {
         let pool_len = self.pool.borrow().len();
         let allocated = self.allocated_count.load(Ordering::Relaxed);
+        let max_size = self.max_size.load(Ordering::Relaxed);
 
         LightweightPoolStats {
             available_objects: pool_len,
             allocated_objects: allocated,
-            max_size: self.max_size,
-            utilization_ratio: if self.max_size > 0 {
-                allocated as f64 / self.max_size as f64
+            max_size,
+            utilization_ratio: if max_size > 0 {
+                allocated as f64 / max_size as f64
             } else {
                 0.0
             },
@@ -99,9 +101,20 @@ impl<T: Default> LightweightMemoryPool<T> {
     /// Clear all objects from the pool
     pub fn clear(&self) {
         let trace_id = generate_trace_id();
-        let cleared_count = self.pool.borrow().len();
+        
+        // Get current size for logging (separate borrow scope)
+        let cleared_count = {
+            let pool = self.pool.borrow();
+            pool.len()
+        }; // pool borrow ends here
 
-        self.pool.borrow_mut().clear();
+        // Clear the pool (separate borrow scope)
+        {
+            let mut pool = self.pool.borrow_mut();
+            pool.clear();
+        } // pool borrow_mut ends here
+        
+        // Reset allocated count (atomic operation, no borrow needed)
         self.allocated_count.store(0, Ordering::Relaxed);
 
         self.logger.log_info(
@@ -115,12 +128,19 @@ impl<T: Default> LightweightMemoryPool<T> {
     pub fn resize(&mut self, new_max_size: usize) -> Result<(), PoolError> {
         let trace_id = generate_trace_id();
 
-        let mut pool = self.pool.borrow_mut();
-        let current_len = pool.len();
+        // Get current pool state (separate borrow scope)
+        let (current_len, should_shrink) = {
+            let pool = self.pool.borrow();
+            (pool.len(), new_max_size < pool.len())
+        }; // pool borrow ends here
 
-        if new_max_size < current_len {
-            // Shrink pool by removing excess objects
-            pool.truncate(new_max_size);
+        if should_shrink {
+            // Shrink pool by removing excess objects (separate borrow scope)
+            {
+                let mut pool = self.pool.borrow_mut();
+                pool.truncate(new_max_size);
+            } // pool borrow_mut ends here
+            
             self.logger.log_info(
                 "resize",
                 &trace_id,
@@ -130,8 +150,12 @@ impl<T: Default> LightweightMemoryPool<T> {
                 ),
             );
         } else {
-            // Grow pool capacity
-            pool.reserve(new_max_size - current_len);
+            // Grow pool capacity (separate borrow scope)
+            {
+                let mut pool = self.pool.borrow_mut();
+                pool.reserve(new_max_size - current_len);
+            } // pool borrow_mut ends here
+            
             self.logger.log_info(
                 "resize",
                 &trace_id,
@@ -139,8 +163,8 @@ impl<T: Default> LightweightMemoryPool<T> {
             );
         }
 
-        // Update max_size with proper atomic operation for thread safety
-        self.max_size = new_max_size;
+        // Update max_size with atomic operation for thread safety
+        self.max_size.store(new_max_size, Ordering::Relaxed);
         self.logger.log_info(
             "resize",
             &trace_id,
@@ -154,20 +178,29 @@ impl<T: Default> LightweightMemoryPool<T> {
     pub fn recreate(&self, new_max_size: usize) -> Result<(), PoolError> {
         let trace_id = generate_trace_id();
 
-        // Get current allocated objects (safely handle borrow conflicts)
+        // Get current allocated objects count first (atomic operation, no borrow needed)
         let allocated_objects = self.allocated_count.load(Ordering::Relaxed);
+        
+        // Get current pool size for logging (separate borrow scope)
+        let current_pool_size = {
+            let pool = self.pool.borrow();
+            pool.len()
+        }; // pool borrow ends here
 
-    // Create new pool with desired capacity (kept for future state transfer)
-    let _new_pool: LightweightMemoryPool<T> = LightweightMemoryPool::new(new_max_size);
+        // Clear the existing pool (separate borrow scope)
+        {
+            let mut pool = self.pool.borrow_mut();
+            pool.clear();
+        } // pool borrow_mut ends here
 
-        // Transfer allocated objects state to new pool
-        self.allocated_count
-            .store(allocated_objects, Ordering::Relaxed);
+        // Update max_size with atomic operation to avoid borrow conflicts
+        self.max_size.store(new_max_size, Ordering::Relaxed);
 
         self.logger.log_info(
             "recreate",
             &trace_id,
-            &format!("Recreated pool with new capacity: {}", new_max_size),
+            &format!("Recreated pool from {} to {} objects, preserving {} allocated objects",
+                     current_pool_size, new_max_size, allocated_objects),
         );
 
         Ok(())
