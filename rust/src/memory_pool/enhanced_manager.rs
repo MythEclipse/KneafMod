@@ -279,9 +279,21 @@ impl EnhancedMemoryPoolManager {
             .hierarchical_pool
             .allocate_simd_aligned(size, alignment)
         {
-            Ok(pooled) => {
+            Ok(mut pooled) => {
+                // We allocated size + alignment bytes inside the pooled Vec. Compute an
+                // aligned offset within that buffer and return a HierarchicalAligned
+                // view which points into the pooled Vec without taking ownership of an
+                // interior pointer.
+                let vec_ref = pooled.as_mut();
+                let raw_ptr = vec_ref.as_mut_ptr() as usize;
+                let aligned_ptr = (raw_ptr + alignment - 1) & !(alignment - 1);
+                let offset = aligned_ptr - raw_ptr;
+
+                // Logical length is `size` elements of u8
+                let logical_len = size;
+
                 self.performance_monitor.record_pool_hit();
-                Ok(SmartPooledVec::Hierarchical(pooled))
+                Ok(SmartPooledVec::HierarchicalAligned(pooled, offset, logical_len))
             }
             Err(e) => {
                 self.performance_monitor.record_pool_miss();
@@ -739,6 +751,8 @@ pub struct MaintenanceResult {
 #[derive(Debug)]
 pub enum SmartPooledVec<T> {
     Hierarchical(crate::memory_pool::hierarchical::PooledVec<T>),
+    /// Hierarchical buffer with an aligned view: (pooled_vec, offset_bytes, logical_len)
+    HierarchicalAligned(crate::memory_pool::hierarchical::PooledVec<T>, usize, usize),
     Swap(crate::memory_pool::swap::SwapPooledVec),
     Vec(crate::memory_pool::specialized_pools::PooledVec<T>),
 }
@@ -748,6 +762,7 @@ impl<T> SmartPooledVec<T> {
     fn size_bytes(&self) -> usize {
         match self {
             SmartPooledVec::Hierarchical(v) => v.len() * std::mem::size_of::<T>(),
+            SmartPooledVec::HierarchicalAligned(_v, _offset, len) => *len * std::mem::size_of::<T>(),
             SmartPooledVec::Swap(v) => v.len() * std::mem::size_of::<T>(),
             SmartPooledVec::Vec(v) => v.len() * std::mem::size_of::<T>(),
         }
@@ -762,6 +777,21 @@ where
     pub fn as_slice(&self) -> &[T] {
         match self {
             SmartPooledVec::Hierarchical(v) => v.as_slice(),
+            SmartPooledVec::HierarchicalAligned(v, offset, len) => {
+                // For aligned hierarchical views, compute subslice starting at offset
+                let bytes = v.as_slice();
+                // Safety: offset is in bytes relative to u8 buffer; for generic T we need to
+                // convert offset to element count. Since aligned allocations are only created
+                // for u8 in this codebase, this is safe. For safety, compute element_offset
+                // in terms of size_of::<T>().
+                let elem_size = std::mem::size_of::<T>();
+                if elem_size == 0 {
+                    return &[];
+                }
+                let elem_offset = offset / elem_size;
+                let end = elem_offset + *len;
+                &bytes[elem_offset..end]
+            }
             SmartPooledVec::Swap(v) => {
                 // For SwapPooledVec, we know it always contains u8 data in this codebase
                 // We use a safer approach with proper type conversion
@@ -784,6 +814,16 @@ where
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         match self {
             SmartPooledVec::Hierarchical(v) => v.as_mut(),
+            SmartPooledVec::HierarchicalAligned(v, offset, len) => {
+                let bytes = v.as_mut();
+                let elem_size = std::mem::size_of::<T>();
+                if elem_size == 0 {
+                    return &mut [];
+                }
+                let elem_offset = *offset / elem_size;
+                let end = elem_offset + *len;
+                &mut bytes[elem_offset..end]
+            }
             SmartPooledVec::Swap(v) => {
                 // For SwapPooledVec, we know it always contains u8 data in this codebase
                 let u8_slice = v.as_mut_slice();
@@ -807,6 +847,7 @@ where
     pub fn len(&self) -> usize {
         match self {
             SmartPooledVec::Hierarchical(v) => v.len(),
+            SmartPooledVec::HierarchicalAligned(_v, _offset, len) => *len,
             SmartPooledVec::Swap(v) => v.len(),
             SmartPooledVec::Vec(v) => v.len(),
         }
@@ -830,6 +871,10 @@ impl<T> Drop for SmartPooledVec<T> {
         match self {
             SmartPooledVec::Hierarchical(pooled) => {
                 // Explicitly return to hierarchical pool
+                pooled.return_to_pool();
+            }
+            SmartPooledVec::HierarchicalAligned(pooled, _offset, _len) => {
+                // Return the underlying pooled vector to the hierarchical pool
                 pooled.return_to_pool();
             }
             SmartPooledVec::Swap(_pooled) => {

@@ -74,13 +74,14 @@ impl LogEntry {
     pub fn log(self) {
         let json = serde_json::to_string(&self)
             .unwrap_or_else(|_| "Failed to serialize log entry".to_string());
+        // Avoid calling the `log` macros here because the global
+        // `StructuredLogger::log` implementation routes records back
+        // into `LogEntry::log`, which would cause infinite recursion.
+        // Instead, write the serialized JSON directly to stdout/stderr
+        // based on level.
         match self.level.as_str() {
-            "ERROR" => log::error!("{}", json),
-            "WARN" => log::warn!("{}", json),
-            "INFO" => log::info!("{}", json),
-            "DEBUG" => log::debug!("{}", json),
-            "TRACE" => log::trace!("{}", json),
-            _ => log::info!("{}", json),
+            "ERROR" | "WARN" => eprintln!("{}", json),
+            _ => println!("{}", json),
         }
     }
 }

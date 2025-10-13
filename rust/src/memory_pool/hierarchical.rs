@@ -385,31 +385,18 @@ impl HierarchicalMemoryPool {
             ),
         );
 
+        // Get a pooled vector object. We'll reserve additional bytes so the caller
+        // can create an aligned view within the returned Vec without taking an
+        // interior pointer ownership. We allocate size + alignment bytes and leave
+        // the Vec owning the full buffer.
         let mut pooled = pool.get();
         let vec = pooled.as_mut();
 
-        // Clear and resize vector
-        vec.clear();
-        vec.resize(size + alignment, 0u8); // Add extra space for alignment
-
-        // Calculate aligned pointer
-        let raw_ptr = vec.as_mut_ptr() as usize;
-        let aligned_ptr = (raw_ptr + alignment - 1) & !(alignment - 1);
-        let offset = aligned_ptr - raw_ptr;
-
-        // Ensure we have enough space for alignment
-        if offset + size > vec.capacity() {
-            return Err(format!(
-                "Not enough space for alignment: requested {}, available {}",
-                offset + size,
-                vec.capacity()
-            ));
-        }
-
-        // Create a new vector with aligned memory
-        let aligned_vec =
-            unsafe { Vec::from_raw_parts(aligned_ptr as *mut u8, size, size + alignment - offset) };
-        *vec = aligned_vec;
+    vec.clear();
+    // Ensure capacity is at least size + alignment so an aligned offset can fit
+    // within the buffer. Keep the logical length equal to the requested size.
+    vec.reserve(size + alignment);
+    vec.resize(size, 0u8);
 
         Ok(pooled)
     }

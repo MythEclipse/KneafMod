@@ -143,6 +143,13 @@ impl SwapMemoryPool {
         let mut vec = Vec::with_capacity(size);
         vec.resize(size, 0u8);
 
+        // Store the allocated data in the in-memory cache so memory pressure
+        // accounting and swap logic can observe it.
+        self.memory_cache
+            .write()
+            .unwrap()
+            .insert(page_id, vec.clone());
+
         self.logger.log_info(
             "allocate",
             &trace_id,
