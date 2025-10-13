@@ -42,9 +42,9 @@ impl MemoryPressureConfig {
                 normal
             ));
         }
-        if moderate < normal || moderate > 1.0 {
+        if moderate <= normal || moderate > 1.0 {
             return Err(format!(
-                "Moderate threshold must be between normal ({})) and 1.0, got {}",
+                "Moderate threshold must be greater than normal ({}) and less than or equal to 1.0, got {}",
                 normal, moderate
             ));
         }

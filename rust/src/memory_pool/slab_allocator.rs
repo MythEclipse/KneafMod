@@ -551,7 +551,14 @@ mod tests {
     fn test_size_class_find_smallest_fit() {
         assert_eq!(SizeClass::find_smallest_fit(32), SizeClass::Tiny64B);
         assert_eq!(SizeClass::find_smallest_fit(128), SizeClass::Small256B);
-        assert_eq!(SizeClass::find_smallest_fit(2000), SizeClass::Medium4KB);
+        // For size 3000 bytes, should return Medium4KB (4096 bytes)
+        assert_eq!(SizeClass::find_smallest_fit(3000), SizeClass::Medium4KB);
+        // For size 2000 bytes, should return Medium2KB (2048 bytes) - still fits
+        assert_eq!(SizeClass::find_smallest_fit(2000), SizeClass::Medium2KB);
+        // Additional test cases for edge cases
+        assert_eq!(SizeClass::find_smallest_fit(2049), SizeClass::Medium4KB); // Just above Medium2KB
+        assert_eq!(SizeClass::find_smallest_fit(4096), SizeClass::Medium4KB); // Exact Medium4KB
+        assert_eq!(SizeClass::find_smallest_fit(4097), SizeClass::Medium8KB); // Just above Medium4KB
     }
 
     #[test]

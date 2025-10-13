@@ -238,6 +238,9 @@ impl OptimizedSpatialGrid {
         // Insert at appropriate level based on entity size
         let best_level = self.select_optimal_level(&bounds);
         let cell_key = CellKey::from_position(position, self.levels[best_level].cell_size);
+        
+        println!("Inserting entity {} at position {:?} with bounds {:?} -> level {}, cell {:?}",
+                 entity_id, position, bounds, best_level, cell_key);
 
         // Insert into grid level
         {
@@ -528,8 +531,8 @@ impl OptimizedSpatialGrid {
         let mut results = Vec::new();
         let mut visited_cells = std::collections::HashSet::new();
 
-        // Start from highest level and refine
-        for level in (0..self.config.max_levels).rev() {
+        // Check all levels that have entities
+        for level in 0..self.config.max_levels {
             let cell_size = self.levels[level].cell_size;
             let min_cell = CellKey::from_position(min_bounds, cell_size);
             let max_cell = CellKey::from_position(max_bounds, cell_size);
@@ -547,11 +550,20 @@ impl OptimizedSpatialGrid {
                     }
                 }
             }
+            
+            println!("Level {}: cell_size={}, min_cell={:?}, max_cell={:?}, cells_to_check={}",
+                     level, cell_size, min_cell, max_cell, cells_to_check.len());
 
             // Check cells at this level
             if let Ok(cells) = self.levels[level].cells.read() {
+                println!("Level {}: total_cells_in_level={}", level, cells.len());
+                
                 for cell_key in cells_to_check {
+                    println!("Checking cell {:?}", cell_key);
+                    
                     if let Some(cell_data) = cells.get(&cell_key) {
+                        println!("Found cell data with {} entities", cell_data.entities.len());
+                        
                         if self.cell_intersects_aabb(cell_data, min_bounds, max_bounds) {
                             // Add entities from this cell
                             for entity in &cell_data.entities {
@@ -720,10 +732,16 @@ impl OptimizedSpatialGrid {
         max_bounds: (f32, f32, f32),
     ) -> bool {
         // Separating axis theorem for AABB intersection
-        cell_data.bounds.0 <= max_bounds.0 && cell_data.bounds.1 >= min_bounds.0 && // X axis
-        cell_data.bounds.2 <= max_bounds.1 && cell_data.bounds.3 >= min_bounds.1 && // Y axis
-        cell_data.bounds.4 <= max_bounds.2 && cell_data.bounds.5 >= min_bounds.2
-        // Z axis
+        // Cell bounds: (min_x, max_x, min_y, max_y, min_z, max_z)
+        // Query bounds: (min_x, min_y, min_z) to (max_x, max_y, max_z)
+        let cell_intersects = cell_data.bounds.0 <= max_bounds.0 && cell_data.bounds.1 >= min_bounds.0 && // X axis
+                             cell_data.bounds.2 <= max_bounds.1 && cell_data.bounds.3 >= min_bounds.1 && // Y axis
+                             cell_data.bounds.4 <= max_bounds.2 && cell_data.bounds.5 >= min_bounds.2;  // Z axis
+        
+        println!("Cell intersection check: cell_bounds={:?}, query_bounds={:?} to {:?}, intersects={}",
+                 cell_data.bounds, min_bounds, max_bounds, cell_intersects);
+        
+        cell_intersects
     }
 
     /// Check if entity intersects with AABB
@@ -733,9 +751,16 @@ impl OptimizedSpatialGrid {
         min_bounds: (f32, f32, f32),
         max_bounds: (f32, f32, f32),
     ) -> bool {
-        entity.bounds.0 <= max_bounds.0 && entity.bounds.1 >= min_bounds.0 && // X axis
-        entity.bounds.2 <= max_bounds.1 && entity.bounds.3 >= min_bounds.1 && // Y axis
-        entity.bounds.4 <= max_bounds.2 && entity.bounds.5 >= min_bounds.2 // Z axis
+        // Entity bounds: (min_x, max_x, min_y, max_y, min_z, max_z)
+        // Query bounds: (min_x, min_y, min_z) to (max_x, max_y, max_z)
+        let entity_intersects = entity.bounds.0 <= max_bounds.0 && entity.bounds.1 >= min_bounds.0 && // X axis
+                               entity.bounds.2 <= max_bounds.1 && entity.bounds.3 >= min_bounds.1 && // Y axis
+                               entity.bounds.4 <= max_bounds.2 && entity.bounds.5 >= min_bounds.2;  // Z axis
+        
+        println!("Entity intersection check: entity_bounds={:?}, query_bounds={:?} to {:?}, intersects={}, entity_id={}",
+                 entity.bounds, min_bounds, max_bounds, entity_intersects, entity.id);
+        
+        entity_intersects
     }
 
     /// Query children cells recursively
@@ -883,6 +908,8 @@ mod tests {
     #[test]
     fn test_basic_insertion_and_query() {
         let config = GridConfig::default();
+        println!("Grid config: base_cell_size={}, max_levels={}", config.base_cell_size, config.max_levels);
+        
         let grid = OptimizedSpatialGrid::new(config);
 
         // Insert some entities
@@ -894,10 +921,18 @@ mod tests {
             (95.0, 105.0, 95.0, 105.0, 95.0, 105.0),
         );
 
+        // Check grid stats after insertion
+        let stats = grid.get_stats();
+        println!("Grid stats after insertion: total_entities={}, total_cells={}", stats.total_entities, stats.total_cells);
+
         // Query for entities in a region
         let results = grid.query_aabb((0.0, 0.0, 0.0), (30.0, 30.0, 30.0));
 
-        assert!(results.contains(&1));
+        println!("Query results: {:?}", results);
+        println!("Expected entity 1 at (10, 10, 10) with bounds (5, 15, 5, 15, 5, 15)");
+        println!("Query bounds: (0, 0, 0) to (30, 30, 30)");
+
+        assert!(results.contains(&1), "Entity 1 at (10, 10, 10) should be found in query bounds (0,0,0) to (30,30,30)");
         assert!(results.contains(&2));
         assert!(!results.contains(&3));
     }

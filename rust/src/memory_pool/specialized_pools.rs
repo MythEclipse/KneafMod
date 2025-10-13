@@ -96,11 +96,12 @@ where
         // Fast path: reuse existing vector if it has sufficient capacity
         if vec.capacity() >= capacity {
             vec.clear();
+            vec.resize(capacity, T::default());
             return pooled;
         }
 
-        // Slow path: create new vector with exact capacity
-        *vec = Vec::with_capacity(capacity);
+        // Slow path: create new vector with exact capacity and size
+        *vec = vec![T::default(); capacity];
         pooled
     }
 

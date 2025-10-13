@@ -591,7 +591,7 @@ mod tests {
         assert_eq!(cache.get("key2"), Some(vec![4, 5, 6]));
 
         // Test eviction
-        let evicted = cache.insert("key3".to_string(), vec![7, 1, 9], 1);
+        let evicted = cache.insert("key3".to_string(), vec![7, 8, 9], 1);
         assert_eq!(evicted, Some(vec![1, 2, 3])); // LRU evicts key1
 
         // Test that evicted key is no longer accessible

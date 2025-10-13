@@ -217,48 +217,20 @@ impl EnhancedMemoryPoolManager {
             // Optimized pool selection using fast path for common cases
             let result = if size <= 256 {
                 // Very small allocations - try string pool first
-                match self.string_pool.get_string(size) {
-                    pooled if pooled.object.is_some() => {
-                        self.logger.log_info(
-                            "allocate",
-                            &trace_id,
-                            &format!("Using string pool for {} bytes", size),
-                        );
-                        self.performance_monitor.record_pool_hit();
-                        let mut vec = Vec::with_capacity(size);
-                        vec.resize(size, 0u8);
-                        Ok(SmartPooledVec::String(PooledStringWrapper {
-                            string: pooled,
-                            data: vec,
-                        }))
-                    }
-                    _ => {
-                        // Fall back to vec pool
-                        match self.vec_pool.get_vec(size) {
-                            pooled if pooled.object.is_some() => {
-                                self.logger.log_info(
-                                    "allocate",
-                                    &trace_id,
-                                    &format!("Using vec pool for {} bytes", size),
-                                );
-                                self.performance_monitor.record_pool_hit();
-                                Ok(SmartPooledVec::Vec(pooled))
-                            }
-                            _ => {
-                                // Fall back to hierarchical pool
-                                self.logger.log_info(
-                                    "allocate",
-                                    &trace_id,
-                                    &format!("Using hierarchical pool for {} bytes", size),
-                                );
-                                self.performance_monitor.record_pool_miss();
-                                Ok(SmartPooledVec::Hierarchical(
-                                    self.hierarchical_pool.allocate(size),
-                                ))
-                            }
-                        }
-                    }
-                }
+                let pooled_string = self.string_pool.get_string(size);
+                // Always use the pooled string - it will create a new one if pool is empty
+                self.logger.log_info(
+                    "allocate",
+                    &trace_id,
+                    &format!("Using string pool for {} bytes", size),
+                );
+                self.performance_monitor.record_pool_hit();
+                // Create vector with exact size and capacity
+                let vec = vec![0u8; size];
+                Ok(SmartPooledVec::String(PooledStringWrapper {
+                    string: pooled_string,
+                    data: vec,
+                }))
             } else if size <= 1024 {
                 // Small allocations - use vec pool
                 match self.vec_pool.get_vec(size) {
@@ -925,6 +897,28 @@ mod tests {
         // Test large allocation
         let large_vec = manager.allocate(10000).unwrap();
         assert_eq!(large_vec.len(), 10000);
+    }
+
+    #[test]
+    fn test_smart_pooled_vec_string_initialization() {
+        let manager = EnhancedMemoryPoolManager::new(None).unwrap();
+
+        // Test SmartPooledVec with String type - should initialize with correct length
+        let string_vec = manager.allocate(1024).unwrap();
+        
+        // The vector should have the correct length after allocation
+        assert_eq!(string_vec.len(), 1024, "SmartPooledVec should have length 1024 after allocation");
+        
+        // Test that the data is properly initialized
+        let slice = string_vec.as_slice();
+        assert_eq!(slice.len(), 1024, "Slice should have length 1024");
+        
+        // Test with different sizes to ensure String pool works correctly
+        let small_string_vec = manager.allocate(128).unwrap();
+        assert_eq!(small_string_vec.len(), 128, "Small SmartPooledVec should have length 128");
+        
+        let large_string_vec = manager.allocate(2048).unwrap();
+        assert_eq!(large_string_vec.len(), 2048, "Large SmartPooledVec should have length 2048");
     }
 
     #[test]

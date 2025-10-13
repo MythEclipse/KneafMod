@@ -45,6 +45,11 @@ impl ChunkCompressor {
 
     /// Decompress chunk data (automatically detects if compressed)
     pub fn decompress(&self, data: &[u8]) -> Result<Vec<u8>, String> {
+        // Check if data is likely uncompressed (too small to be compressed or not compressed format)
+        if data.len() < self.config.min_size_for_compression || !self.is_compressed(data) {
+            return Ok(data.to_vec());
+        }
+        
         decompress_size_prepended(data).map_err(|e| format!("LZ4 decompression failed: {}", e))
     }
 
