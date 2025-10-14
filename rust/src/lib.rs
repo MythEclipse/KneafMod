@@ -67,6 +67,10 @@ pub mod jni_bridge;
 pub mod jni_exports;
 pub mod jni_raii;
 
+// Test modules
+#[cfg(test)]
+mod test_jni_exports;
+
 // Parallelism modules
 pub mod parallelism;
 

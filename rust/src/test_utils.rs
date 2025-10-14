@@ -1,4 +1,6 @@
 
+use std::time::Duration;
+
 /// Run closure `f` in a new thread and wait for completion up to `dur`.
 /// If the timeout elapses, this function panics to fail the test.
 #[cfg(test)]

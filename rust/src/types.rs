@@ -1,7 +1,7 @@
 use glam::Vec3A;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct Aabb {
     pub min: Vec3A,
     pub max: Vec3A,

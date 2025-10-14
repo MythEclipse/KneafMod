@@ -1,7 +1,7 @@
 use crate::types::Aabb;
 use std::sync::RwLock;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     pub close_radius: f32,
