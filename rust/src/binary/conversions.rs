@@ -18,12 +18,24 @@ pub fn deserialize_mob_input(data: &[u8]) -> Result<MobInput, String> {
     let mut cur = Cursor::new(data);
     let tick_count = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
     let num = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+
+    // Validate num to prevent excessive allocation
+    if num > 10000 {
+        return Err("Too many mobs".to_string());
+    }
+
     let mut mobs = Vec::with_capacity(num);
     for _ in 0..num {
         let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
         let distance = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
         let passive = cur.read_u8().map_err(|e| e.to_string())? != 0;
         let etype_len = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+
+        // Validate etype_len to prevent capacity overflow
+        if etype_len > 1000 {
+            return Err("Entity type name too long".to_string());
+        }
+
         let mut etype = String::new();
         if etype_len > 0 {
             let mut buf = vec![0u8; etype_len];
@@ -60,6 +72,12 @@ pub fn deserialize_block_input(data: &[u8]) -> Result<BlockInput, String> {
     let mut cur = Cursor::new(data);
     let tick_count = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
     let num = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+
+    // Validate num to prevent excessive allocation
+    if num > 10000 {
+        return Err("Too many block entities".to_string());
+    }
+
     let mut blocks = Vec::with_capacity(num);
     for _ in 0..num {
         let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
@@ -103,6 +121,12 @@ pub fn deserialize_entity_input(data: &[u8]) -> Result<crate::entity::types::Inp
     let mut cur = Cursor::new(data);
     let tick_count = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
     let num_entities = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+
+    // Validate num_entities to prevent excessive allocation
+    if num_entities > 10000 {
+        return Err("Too many entities".to_string());
+    }
+
     let mut entities = Vec::with_capacity(num_entities);
     for _ in 0..num_entities {
         let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
@@ -112,6 +136,12 @@ pub fn deserialize_entity_input(data: &[u8]) -> Result<crate::entity::types::Inp
         let distance = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
         let is_block = cur.read_u8().map_err(|e| e.to_string())? != 0;
         let etype_len = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+
+        // Validate etype_len to prevent capacity overflow
+        if etype_len > 1000 {
+            return Err("Entity type name too long".to_string());
+        }
+
         let mut etype = String::new();
         if etype_len > 0 {
             let mut buf = vec![0u8; etype_len];
@@ -129,6 +159,12 @@ pub fn deserialize_entity_input(data: &[u8]) -> Result<crate::entity::types::Inp
         });
     }
     let num_players = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+
+    // Validate num_players
+    if num_players > 1000 {
+        return Err("Too many players".to_string());
+    }
+
     let mut players = Vec::with_capacity(num_players);
     for _ in 0..num_players {
         let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
@@ -177,6 +213,12 @@ pub fn deserialize_villager_input(data: &[u8]) -> Result<VillagerInput, String> 
     let mut cur = Cursor::new(data);
     let tick_count = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
     let num = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+
+    // Validate num to prevent excessive allocation
+    if num > 10000 {
+        return Err("Too many villagers".to_string());
+    }
+
     let mut villagers = Vec::with_capacity(num);
 
     for _ in 0..num {
@@ -186,6 +228,12 @@ pub fn deserialize_villager_input(data: &[u8]) -> Result<VillagerInput, String> 
         let z = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
         let distance = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
         let profession_len = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+
+        // Validate profession_len to prevent capacity overflow
+        if profession_len > 1000 {
+            return Err("Villager profession name too long".to_string());
+        }
+
         let mut profession = String::new();
         if profession_len > 0 {
             let mut buf = vec![0u8; profession_len];
@@ -219,6 +267,12 @@ pub fn deserialize_villager_input(data: &[u8]) -> Result<VillagerInput, String> 
 
     // Read players
     let num_players = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+
+    // Validate num_players
+    if num_players > 1000 {
+        return Err("Too many players".to_string());
+    }
+
     let mut players = Vec::with_capacity(num_players);
     for _ in 0..num_players {
         let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;

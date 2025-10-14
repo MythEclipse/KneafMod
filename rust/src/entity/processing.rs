@@ -146,6 +146,17 @@ pub fn process_entities(input: Input) -> ProcessResult {
 
     // Better estimate: use entity diversity analysis for more accurate memory allocation
     let entity_count = input.entities.len();
+
+    // Validate entity count to prevent excessive allocation
+    if entity_count > 10000 {
+        ENTITY_PROCESSOR_LOGGER.log_warning(
+            "excessive_entity_count",
+            &trace_id,
+            &format!("Too many entities: {}, returning empty result", entity_count),
+        );
+        return ProcessResult { entities_to_tick: Vec::new() };
+    }
+
     let estimated_types = if entity_count > 500 {
         (entity_count / 15).max(5).min(80) // More conservative estimate for large datasets
     } else if entity_count > 100 {

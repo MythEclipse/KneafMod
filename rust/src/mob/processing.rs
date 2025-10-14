@@ -172,7 +172,13 @@ impl MobProcessingManager {
 
     /// Convert basic mob input to enhanced mob data with AI state
     fn convert_to_enhanced_mobs(&mut self, input: MobInput) -> Vec<EnhancedMobData> {
-        let mut enhanced_mobs = Vec::with_capacity(input.mobs.len());
+            // Validate input size to prevent excessive allocation
+    if input.mobs.len() > 10000 {
+        eprintln!("[mob] Too many mobs in input: {}", input.mobs.len());
+        return Vec::new(); // Return empty vector instead of wrong type
+    }
+
+    let mut enhanced_mobs = Vec::with_capacity(input.mobs.len());
         
         for mob in input.mobs {
             let entity_type = mob.entity_type.clone();
