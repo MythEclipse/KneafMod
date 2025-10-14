@@ -444,7 +444,8 @@ public class RustPerformance {
       centerZ,
       radius
     );
-        return result.getResultInteger();
+        Integer value = result.getResultInteger();
+        return value != null ? value : 0;
       } catch (BridgeException e) {
         KneafCore.LOGGER.warn("UnifiedBridge failed, falling back to FACADE: " + e.getMessage());
       logUnifiedBridgeFallback(e);
@@ -747,7 +748,8 @@ public class RustPerformance {
   public static int preGenerateNearbyChunks(int centerX, int centerZ, int radius) {
     ensureInitialized();
     try {
-      return preGenerateNearbyChunksAsync(centerX, centerZ, radius).get();
+      Integer result = preGenerateNearbyChunksAsync(centerX, centerZ, radius).get();
+      return result != null ? result : 0;
     } catch (Exception e) {
       KneafCore.LOGGER.error("Error pre-generating chunks", e);
       return 0;

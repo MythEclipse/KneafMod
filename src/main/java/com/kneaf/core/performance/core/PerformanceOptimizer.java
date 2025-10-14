@@ -454,10 +454,9 @@ public class PerformanceOptimizer {
     return villagers.stream()
         .filter(
             v -> {
-              int[] position =
-                  new int[] {(int) v.hashCode(), (int) v.hashCode(), (int) v.hashCode()};
+              int[] position = getVillagerPosition(v);
               int dx = position[0] - centerX;
-              int dz = position[1] - centerZ;
+              int dz = position[2] - centerZ;
               return (dx * dx + dz * dz) <= radiusSquared;
             })
         .limit(getMaxEntitiesPerTick())
@@ -505,6 +504,127 @@ public class PerformanceOptimizer {
     // This would be implemented based on specific caching needs
   }
 
+  /**
+   * Retrieves the villager ID with comprehensive validation and error handling.
+   * Integrates with performance monitoring and provides fallback mechanisms.
+   *
+   * @param villager the villager data instance
+   * @return the villager ID, or fallback hashCode if retrieval fails
+   * @throws IllegalArgumentException if villager is null or invalid
+   */
+  private long getVillagerId(VillagerData villager) {
+    // Primary validation
+    if (villager == null) {
+      KneafCore.LOGGER.warn("Attempted to get ID from null villager data");
+      monitor.recordVillagerProcessing(0, 0, 0, 0, 0); // Record error metric
+      throw new IllegalArgumentException("VillagerData cannot be null");
+    }
+
+    try {
+      // Validate villager data integrity
+      villager.validate();
+
+      // Access actual ID field from BaseEntityData
+      long id = villager.getId();
+
+      // Additional validation for ID
+      if (id < 0) {
+        KneafCore.LOGGER.warn("Invalid villager ID detected: {} for villager {}", id, villager);
+        monitor.recordVillagerProcessing(0, 0, 0, 0, 0); // Record validation error
+        throw new IllegalArgumentException("Villager ID must be non-negative: " + id);
+      }
+
+      // Log successful retrieval for debugging
+      if (KneafCore.LOGGER.isDebugEnabled()) {
+        KneafCore.LOGGER.debug("Successfully retrieved villager ID: {} for villager at position [{}, {}, {}]",
+            id, villager.getX(), villager.getY(), villager.getZ());
+      }
+
+      return id;
+
+    } catch (Exception e) {
+      // Comprehensive error handling with fallback
+      KneafCore.LOGGER.error("Failed to retrieve villager ID, using fallback hashCode", e);
+      monitor.recordVillagerProcessing(0, 0, 0, 0, 0); // Record error metric
+
+      // Fallback to hashCode for backward compatibility
+      long fallbackId = villager.hashCode();
+      KneafCore.LOGGER.warn("Using fallback villager ID: {} (hashCode)", fallbackId);
+
+      return fallbackId;
+    }
+  }
+
+  /**
+   * Retrieves the villager position with comprehensive validation and error handling.
+   * Integrates with spatial optimization components and provides fallback mechanisms.
+   *
+   * @param villager the villager data instance
+   * @return the villager position as int array [x, y, z], or fallback if retrieval fails
+   * @throws IllegalArgumentException if villager is null or invalid
+   */
+  private int[] getVillagerPosition(VillagerData villager) {
+    // Primary validation
+    if (villager == null) {
+      KneafCore.LOGGER.warn("Attempted to get position from null villager data");
+      monitor.recordVillagerProcessing(0, 0, 0, 0, 0); // Record error metric
+      throw new IllegalArgumentException("VillagerData cannot be null");
+    }
+
+    try {
+      // Validate villager data integrity
+      villager.validate();
+
+      // Access actual position fields from BaseEntityData
+      double x = villager.getX();
+      double y = villager.getY();
+      double z = villager.getZ();
+
+      // Validate coordinate ranges (reasonable bounds for Minecraft world)
+      if (!isValidCoordinate(x) || !isValidCoordinate(y) || !isValidCoordinate(z)) {
+        KneafCore.LOGGER.warn("Invalid villager coordinates detected: [{}, {}, {}] for villager ID {}",
+            x, y, z, villager.getId());
+        monitor.recordVillagerProcessing(0, 0, 0, 0, 0); // Record validation error
+        throw new IllegalArgumentException(String.format("Invalid coordinates: [%f, %f, %f]", x, y, z));
+      }
+
+      // Convert to int array for spatial operations (block coordinates)
+      int[] position = new int[] {(int) Math.round(x), (int) Math.round(y), (int) Math.round(z)};
+
+      // Log successful retrieval for debugging
+      if (KneafCore.LOGGER.isDebugEnabled()) {
+        KneafCore.LOGGER.debug("Successfully retrieved villager position: [{}, {}, {}] for villager ID {}",
+            position[0], position[1], position[2], villager.getId());
+      }
+
+      return position;
+
+    } catch (Exception e) {
+      // Comprehensive error handling with fallback
+      KneafCore.LOGGER.error("Failed to retrieve villager position, using fallback", e);
+      monitor.recordVillagerProcessing(0, 0, 0, 0, 0); // Record error metric
+
+      // Fallback to default position for backward compatibility
+      int[] fallbackPosition = new int[] {0, 64, 0}; // Default surface level
+      KneafCore.LOGGER.warn("Using fallback villager position: [{}, {}, {}]",
+          fallbackPosition[0], fallbackPosition[1], fallbackPosition[2]);
+
+      return fallbackPosition;
+    }
+  }
+
+  /**
+   * Validates if a coordinate is within reasonable Minecraft world bounds.
+   *
+   * @param coord the coordinate to validate
+   * @return true if valid, false otherwise
+   */
+  private boolean isValidCoordinate(double coord) {
+    // Minecraft world limits: roughly -30M to +30M blocks
+    return !Double.isNaN(coord) && !Double.isInfinite(coord) &&
+           coord >= -30000000.0 && coord <= 30000000.0;
+  }
+
   /** Optimization level enumeration. */
   public enum OptimizationLevel {
     NORMAL(1.0),
@@ -528,19 +648,7 @@ public class PerformanceOptimizer {
     private final AtomicInteger sampleCount = new AtomicInteger(0);
     private final AtomicInteger totalInput = new AtomicInteger(0);
 
-    /** Helper method to get villager ID (since we don't know the exact field structure) */
-    private long getVillagerId(VillagerData villager) {
-      // This is a placeholder - in real implementation would access the actual ID field
-      // For now, we'll use hashCode as a simple ID
-      return villager.hashCode();
-    }
-
-    /** Helper method to get villager position (since we don't know the exact field structure) */
-    private int[] getVillagerPosition(VillagerData villager) {
-      // This is a placeholder - in real implementation would access the actual position fields
-      // For now, we'll return default position
-      return new int[] {0, 0};
-    }
+    
 
     private final AtomicInteger totalOptimized = new AtomicInteger(0);
     private final AtomicLong totalProcessingTime = new AtomicLong(0);
