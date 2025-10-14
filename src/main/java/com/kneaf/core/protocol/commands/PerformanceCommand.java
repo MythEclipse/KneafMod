@@ -2,7 +2,7 @@ package com.kneaf.core.protocol.commands;
 
 import com.kneaf.core.network.NetworkHandler;
 import com.kneaf.core.performance.RustPerformance;
-import com.kneaf.core.performance.monitoring.PerformanceManager;
+import com.kneaf.core.performance.unified.PerformanceManager;
 import com.kneaf.core.performance.monitoring.PerformanceMetricsLogger;
 import com.kneaf.core.protocol.core.ProtocolConstants;
 import com.kneaf.core.protocol.core.ProtocolUtils;
@@ -84,8 +84,12 @@ public class PerformanceCommand extends BaseCommand {
    */
   private int executeToggle(CommandContext<CommandSourceStack> context) {
     try {
-      boolean newVal = !PerformanceManager.isEnabled();
-      PerformanceManager.setEnabled(newVal);
+      boolean newVal = !PerformanceManager.getInstance().isEnabled();
+      if (newVal) {
+        PerformanceManager.getInstance().enable();
+      } else {
+        PerformanceManager.getInstance().disable();
+      }
 
       sendSuccessFormatted(context, "Kneaf performance manager enabled=%s", newVal);
       getLogger()
@@ -117,7 +121,7 @@ public class PerformanceCommand extends BaseCommand {
       String message =
           String.format(
               "Kneaf Performance - enabled=%s TPS=%.2f CPU=%s MEM=%s log=run/logs/kneaf-performance.log",
-              PerformanceManager.isEnabled(), tps, cpu, mem);
+              PerformanceManager.getInstance().isEnabled(), tps, cpu, mem);
 
       sendSuccess(context, message);
 
@@ -125,7 +129,7 @@ public class PerformanceCommand extends BaseCommand {
       getLogger()
           .logMetrics(
               "performance_status",
-              java.util.Map.of("tps", tps, "enabled", PerformanceManager.isEnabled() ? 1 : 0),
+              java.util.Map.of("tps", tps, "enabled", PerformanceManager.getInstance().isEnabled() ? 1 : 0),
               ProtocolUtils.generateTraceId());
 
       return 1;

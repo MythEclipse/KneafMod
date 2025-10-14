@@ -1,10 +1,14 @@
 package com.kneaf.core.performance.unified;
 
-import com.kneaf.core.performance.monitoring.PerformanceConfig;
+import com.kneaf.core.config.UnifiedPerformanceConfig;
 import com.kneaf.core.performance.RustPerformance;
 
 import java.lang.management.*;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.logging.Level;
@@ -26,7 +30,7 @@ public class PerformanceManager {
 
     // Adaptive optimization
     private final AdaptiveOptimizer optimizer;
-    private final PerformanceConfig config;
+    private final UnifiedPerformanceConfig config;
 
     // Management state
     private final AtomicBoolean enabled = new AtomicBoolean(false);
@@ -43,6 +47,7 @@ public class PerformanceManager {
 
     // Performance metrics storage
     private final ConcurrentHashMap<String, PerformanceMetrics> metrics = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CustomMetric> customMetrics = new ConcurrentHashMap<>();
     private final Deque<PerformanceSnapshot> history = new ConcurrentLinkedDeque<>();
 
     // Thresholds and alerts
@@ -55,7 +60,7 @@ public class PerformanceManager {
         this.cpuMonitor = new CPUMonitor();
         this.chunkMonitor = new ChunkMonitor();
         this.optimizer = new AdaptiveOptimizer();
-        this.config = new PerformanceConfig();
+        this.config = UnifiedPerformanceConfig.builder().build(); // Use default config
 
         initializeDefaultThresholds();
         startMonitoring();
@@ -147,6 +152,22 @@ public class PerformanceManager {
      */
     public List<PerformanceAlert> getActiveAlerts() {
         return new ArrayList<>(activeAlerts);
+    }
+
+    /**
+     * Register a custom performance metric.
+     */
+    public void registerMetric(String name, java.util.function.Supplier<Long> valueSupplier) {
+        customMetrics.put(name, new CustomMetric(name, valueSupplier));
+        LOGGER.fine("Registered custom performance metric: " + name);
+    }
+
+    /**
+     * Get the current value of a custom metric.
+     */
+    public long getCustomMetricValue(String name) {
+        CustomMetric metric = customMetrics.get(name);
+        return metric != null ? metric.getCurrentValue() : 0;
     }
 
     /**
@@ -268,6 +289,10 @@ public class PerformanceManager {
         monitorScheduler.scheduleAtFixedRate(() -> {
             try {
                 tpsMonitor.updateTPS();
+                // Update custom metrics
+                for (CustomMetric metric : customMetrics.values()) {
+                    metric.update();
+                }
                 checkThresholds();
             } catch (Exception e) {
                 LOGGER.log(Level.WARNING, "Error in TPS monitoring", e);
@@ -584,6 +609,44 @@ public class PerformanceManager {
             } catch (Exception e) {
                 LOGGER.log(Level.WARNING, "Error during adaptive optimization", e);
             }
+        }
+    }
+
+    /**
+     * Custom metric container for flexible performance monitoring.
+     */
+    private static class CustomMetric {
+        private final String name;
+        private final java.util.function.Supplier<Long> valueSupplier;
+        private volatile long currentValue;
+        private volatile long lastUpdateTime;
+
+        public CustomMetric(String name, java.util.function.Supplier<Long> valueSupplier) {
+            this.name = name;
+            this.valueSupplier = valueSupplier;
+            this.currentValue = 0;
+            this.lastUpdateTime = System.currentTimeMillis();
+        }
+
+        public void update() {
+            try {
+                currentValue = valueSupplier.get();
+                lastUpdateTime = System.currentTimeMillis();
+            } catch (Exception e) {
+                LOGGER.log(Level.WARNING, "Error updating custom metric " + name, e);
+            }
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public long getCurrentValue() {
+            return currentValue;
+        }
+
+        public long getLastUpdateTime() {
+            return lastUpdateTime;
         }
     }
 }

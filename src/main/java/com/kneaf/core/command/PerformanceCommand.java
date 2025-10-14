@@ -1,7 +1,7 @@
 package com.kneaf.core.command;
 
 import com.kneaf.core.performance.RustPerformance;
-import com.kneaf.core.performance.monitoring.PerformanceManager;
+import com.kneaf.core.performance.unified.PerformanceManager;
 import com.kneaf.core.performance.monitoring.PerformanceMetricsLogger;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
@@ -28,8 +28,12 @@ public class PerformanceCommand {
 
   private static int toggle(CommandContext<CommandSourceStack> context) {
     CommandSourceStack source = context.getSource();
-    boolean newVal = !PerformanceManager.isEnabled();
-    PerformanceManager.setEnabled(newVal);
+    boolean newVal = !PerformanceManager.getInstance().isEnabled();
+    if (newVal) {
+      PerformanceManager.getInstance().enable();
+    } else {
+      PerformanceManager.getInstance().disable();
+    }
     source.sendSuccess(
         () -> Component.literal("Kneaf performance manager enabled=" + newVal), true);
     return 1;
@@ -43,7 +47,7 @@ public class PerformanceCommand {
     String msg =
         String.format(
             "Kneaf Performance - enabled=%s TPS=%.2f CPU=%s MEM=%s log=run/logs/kneaf-performance.log",
-            PerformanceManager.isEnabled(), tps, cpu, mem);
+            PerformanceManager.getInstance().isEnabled(), tps, cpu, mem);
     source.sendSuccess(() -> Component.literal(msg), false);
     return 1;
   }
