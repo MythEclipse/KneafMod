@@ -1,6 +1,6 @@
 use super::config::*;
 use super::types::*;
-use crate::parallelism::{get_adaptive_pool, WorkStealingScheduler};
+use crate::parallelism::WorkStealingScheduler;
 use crate::memory_pool::get_global_enhanced_pool;
 use crate::simd_enhanced::EnhancedSimdProcessor;
 use crate::spatial_optimized::{OptimizedSpatialGrid, GridConfig};
@@ -121,7 +121,7 @@ fn update_spatial_grid(input: &BlockInput) {
     let grid_lock = SPATIAL_GRID.get_or_init(|| {
         std::sync::RwLock::new(OptimizedSpatialGrid::new_for_villagers(GridConfig::default()))
     });
-    let mut grid = grid_lock.write().unwrap();
+    let grid = grid_lock.write().unwrap();
     
     // Clear existing entities (lazy approach for performance)
     // In production, you'd want incremental updates

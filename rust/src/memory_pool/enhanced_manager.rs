@@ -280,7 +280,7 @@ impl EnhancedMemoryPoolManager {
         );
 
         match self.hierarchical_pool.allocate_simd_aligned(size, alignment) {
-            Ok((mut pooled, offset)) => {
+            Ok((pooled, offset)) => {
                 // Logical length is `size` elements of u8
                 let logical_len = size;
 

@@ -16,8 +16,8 @@ import static java.util.logging.Level.FINE;
 // Native bridge untuk actual JNI calls
 class NativeUnifiedBridge {
     // Native method declarations untuk unified operations
-    public static native long nativeExecuteSync(String operationName, Object[] parameters);
-    public static native CompletableFuture<Long> nativeExecuteAsync(String operationName, Object[] parameters);
+    public static native byte[] nativeExecuteSync(String operationName, Object[] parameters);
+    public static native byte[] nativeExecuteAsync(String operationName, Object[] parameters);
     public static native long nativeAllocateZeroCopyBuffer(long size, int bufferType);
     public static native void nativeFreeBuffer(long bufferHandle);
     public static native ByteBuffer nativeGetBufferContent(long bufferHandle);
@@ -87,14 +87,13 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
                         new Object[]{operationName, parameters.length});
                 
                 // Call actual native async method
-                CompletableFuture<Long> nativeFuture = NativeUnifiedBridge.nativeExecuteAsync(operationName, parameters);
+                byte[] nativeResult = NativeUnifiedBridge.nativeExecuteAsync(operationName, parameters);
                 
                 // Convert native result to BridgeResult
-                long taskId = nativeFuture.get(); // Wait for completion
                 Map<String, Object> metadata = new HashMap<>();
-                metadata.put("taskId", taskId);
                 metadata.put("nativeOperation", operationName);
-                BridgeResult result = BridgeResultFactory.createSuccess(operationName, (byte[]) null, metadata);
+                metadata.put("nativeResult", nativeResult != null ? nativeResult.length : 0);
+                BridgeResult result = BridgeResultFactory.createSuccess(operationName, nativeResult, metadata);
                 
                 metrics.recordOperation(operationName, startTime, System.nanoTime(),
                         calculateBytesProcessed(parameters), result.isSuccess());
@@ -128,13 +127,13 @@ public class UnifiedBridgeImpl implements UnifiedBridge {
                     new Object[]{operationName, parameters.length});
             
             // Call actual native sync method
-            long nativeResult = NativeUnifiedBridge.nativeExecuteSync(operationName, parameters);
+            byte[] nativeResult = NativeUnifiedBridge.nativeExecuteSync(operationName, parameters);
             
             // Convert native result to BridgeResult
             Map<String, Object> metadata = new HashMap<>();
             metadata.put("nativeOperation", operationName);
-            metadata.put("nativeResult", nativeResult);
-            BridgeResult result = BridgeResultFactory.createSuccess(operationName, (byte[]) null, metadata);
+            metadata.put("nativeResult", nativeResult != null ? nativeResult.length : 0);
+            BridgeResult result = BridgeResultFactory.createSuccess(operationName, nativeResult, metadata);
             
             metrics.recordOperation(operationName, startTime, System.nanoTime(), 
                     calculateBytesProcessed(parameters), result.isSuccess());

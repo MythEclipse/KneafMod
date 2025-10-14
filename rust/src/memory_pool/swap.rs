@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::{RwLock, Arc, Weak};
 #[cfg(test)]
 use std::sync::Mutex;
-use std::fs::OpenOptions as FsOpenOptions;
 
 use crate::logging::generate_trace_id;
 use crate::logging::PerformanceLogger;

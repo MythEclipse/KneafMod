@@ -1,6 +1,5 @@
 use super::config::*;
 use super::types::*;
-use crate::parallelism::work_stealing::WorkStealingScheduler;
 use crate::simd_enhanced::{BatchSimdProcessor, EnhancedSimdProcessor};
 use crate::spatial_optimized::{OptimizedSpatialGrid, GridConfig};
 use rayon::prelude::*;

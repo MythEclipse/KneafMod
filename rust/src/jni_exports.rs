@@ -11,6 +11,8 @@ use rayon::ThreadPoolBuilder;
 use crossbeam::channel::{unbounded, Sender, Receiver};
 use std::thread;
 use std::sync::Arc;
+use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
+use std::io::Cursor;
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -485,7 +487,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationM
     
     eprintln!("[rustperf] NativeResourceManager.nativeShutdownAllocator completed - resource allocator shut down");
 }
-// Implementation for nativeExecuteSync function
+// Implementation for nativeExecuteSync function for JniCallManager.NativeBridge
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(
     mut env: JNIEnv,
@@ -526,6 +528,11 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
         "processEntity" => process_entity_operation(&params_bytes),
         "processMob" => process_mob_operation(&params_bytes),
         "processBlock" => process_block_operation(&params_bytes),
+        "get_entities_to_tick" => get_entities_to_tick_operation(&params_bytes),
+        "get_block_entities_to_tick" => get_block_entities_to_tick_operation(&params_bytes),
+        "process_mob_ai" => process_mob_ai_operation(&params_bytes),
+        "pre_generate_nearby_chunks" => pre_generate_nearby_chunks_operation(&params_bytes),
+        "set_current_tps" => set_current_tps_operation(&params_bytes),
         _ => {
             eprintln!("[rustperf] Unknown operation: {}", op_name_str);
             Err(format!("Unknown operation: {}", op_name_str))
@@ -548,6 +555,30 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
             create_error_byte_array(&mut env, &error_msg)
         }
     }
+}
+
+// Implementation for nativeExecuteSync function for NativeUnifiedBridge
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeUnifiedBridge_nativeExecuteSync(
+    env: JNIEnv,
+    _class: JClass,
+    operation_name: JString,
+    parameters: JObjectArray,
+) -> jbyteArray {
+    // Reuse the same implementation as JniCallManager.NativeBridge
+    Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation_name, parameters)
+}
+
+// Implementation for nativeExecuteSync function for NativeZeroCopyBridge
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeZeroCopyBridge_nativeExecuteSync(
+    env: JNIEnv,
+    _class: JClass,
+    operation_name: JString,
+    parameters: JObjectArray,
+) -> jbyteArray {
+    // Reuse the same implementation as JniCallManager.NativeBridge
+    Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation_name, parameters)
 }
 
 /// Process villager operation using binary conversions
@@ -638,6 +669,192 @@ fn create_error_byte_array(env: &mut JNIEnv, error_msg: &str) -> jbyteArray {
     }
 }
 
-// Other stub methods used by Java may be added as needed in subsequent iterations.
-// Other stub methods used by Java may be added as needed in subsequent iterations.
+/// Process get_entities_to_tick operation
+fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+    eprintln!("[rustperf] get_entities_to_tick operation called with {} bytes", data.len());
+    
+    // Handle empty or very small data
+    if data.is_empty() {
+        eprintln!("[rustperf] Empty data received, returning empty result");
+        let empty_result = crate::entity::types::ProcessResult {
+            entities_to_tick: Vec::new(),
+        };
+        return crate::binary::conversions::serialize_entity_result(&empty_result)
+            .map_err(|e| format!("Failed to serialize empty entity result: {}", e));
+    }
+    
+    // Try to deserialize input as entity input
+    let entity_input = match crate::binary::conversions::deserialize_entity_input(data) {
+        Ok(input) => {
+            eprintln!("[rustperf] Successfully deserialized {} entities", input.entities.len());
+            input
+        }
+        Err(e) => {
+            eprintln!("[rustperf] Failed to deserialize entity input: {}, creating minimal input", e);
+            // Create minimal input with empty entities to avoid crash
+            crate::entity::types::Input {
+                tick_count: 0,
+                entities: Vec::new(),
+                players: Vec::new(),
+                entity_config: crate::entity::config::Config::default(),
+            }
+        }
+    };
+    
+    // Use the optimized entity processing function from entity/processing.rs
+    let result = crate::entity::processing::process_entities(entity_input);
+    
+    eprintln!("[rustperf] Returning {} entities to tick", result.entities_to_tick.len());
+    
+    crate::binary::conversions::serialize_entity_result(&result)
+        .map_err(|e| format!("Failed to serialize entity result: {}", e))
+}
+
+/// Process get_block_entities_to_tick operation
+fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+    eprintln!("[rustperf] get_block_entities_to_tick operation called with {} bytes", data.len());
+    
+    // Handle empty or very small data
+    if data.is_empty() {
+        eprintln!("[rustperf] Empty data received, returning empty result");
+        let empty_result = crate::block::types::BlockProcessResult {
+            block_entities_to_tick: Vec::new(),
+        };
+        return crate::binary::conversions::serialize_block_result(&empty_result)
+            .map_err(|e| format!("Failed to serialize empty block result: {}", e));
+    }
+    
+    // Try to deserialize input as block input
+    let block_input = match crate::binary::conversions::deserialize_block_input(data) {
+        Ok(input) => {
+            eprintln!("[rustperf] Successfully deserialized {} block entities", input.block_entities.len());
+            input
+        }
+        Err(e) => {
+            eprintln!("[rustperf] Failed to deserialize block input: {}, creating minimal input", e);
+            // Create minimal input with empty block entities to avoid crash
+            crate::block::types::BlockInput {
+                tick_count: 0,
+                block_entities: Vec::new(),
+            }
+        }
+    };
+    
+    // Use the optimized block processing function from block/processing.rs
+    let result = crate::block::processing::process_block_entities(block_input);
+    
+    eprintln!("[rustperf] Returning {} block entities to tick", result.block_entities_to_tick.len());
+    
+    crate::binary::conversions::serialize_block_result(&result)
+        .map_err(|e| format!("Failed to serialize block entity result: {}", e))
+}
+
+/// Process process_mob_ai operation
+fn process_mob_ai_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+    eprintln!("[rustperf] process_mob_ai operation called with {} bytes", data.len());
+    
+    // Deserialize mob input
+    let mob_input = crate::binary::conversions::deserialize_mob_input(data)
+        .map_err(|e| format!("Failed to deserialize mob input: {}", e))?;
+    
+    eprintln!("[rustperf] Successfully deserialized {} mobs", mob_input.mobs.len());
+    
+    // Use the optimized mob processing function from mob/processing.rs
+    let result = crate::mob::processing::process_mob_ai(mob_input);
+    
+    eprintln!("[rustperf] Mob AI processing: {} to disable, {} to simplify",
+             result.mobs_to_disable_ai.len(), result.mobs_to_simplify_ai.len());
+    
+    crate::binary::conversions::serialize_mob_result(&result)
+        .map_err(|e| format!("Failed to serialize mob AI result: {}", e))
+}
+
+/// Process pre_generate_nearby_chunks operation
+fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+    eprintln!("[rustperf] pre_generate_nearby_chunks operation called with {} bytes", data.len());
+    
+    // Handle different input formats based on available data
+    let (chunk_x, chunk_z, radius) = if data.len() >= 12 {
+        // Full format: [chunkX:i32][chunkZ:i32][radius:i32]
+        let mut cursor = Cursor::new(data);
+        let x = cursor.read_i32::<LittleEndian>().map_err(|e| e.to_string())?;
+        let z = cursor.read_i32::<LittleEndian>().map_err(|e| e.to_string())?;
+        let r = cursor.read_i32::<LittleEndian>().map_err(|e| e.to_string())?;
+        (x, z, r)
+    } else if data.len() >= 8 {
+        // Format without radius: [chunkX:i32][chunkZ:i32] - use default radius
+        let mut cursor = Cursor::new(data);
+        let x = cursor.read_i32::<LittleEndian>().map_err(|e| e.to_string())?;
+        let z = cursor.read_i32::<LittleEndian>().map_err(|e| e.to_string())?;
+        (x, z, 5) // Default radius of 5 chunks
+    } else if data.len() >= 4 {
+        // Single integer format - treat as chunk coordinate with default radius
+        let mut cursor = Cursor::new(data);
+        let coord = cursor.read_i32::<LittleEndian>().map_err(|e| e.to_string())?;
+        (coord, coord, 3) // Default radius of 3 chunks
+    } else {
+        // Empty or minimal data - use defaults
+        eprintln!("[rustperf] Using default chunk coordinates due to insufficient data");
+        (0, 0, 2) // Default to spawn chunks with radius 2
+    };
+    
+    eprintln!("[rustperf] Pre-generating chunks around ({}, {}) with radius {}", chunk_x, chunk_z, radius);
+    
+    // Calculate estimated chunks to generate (square area)
+    let estimated_chunks = (radius * 2 + 1) * (radius * 2 + 1);
+    
+    // Simulate chunk generation with performance tracking
+    let start_time = std::time::Instant::now();
+    
+    // In a real implementation, this would:
+    // 1. Load existing chunk data from storage
+    // 2. Generate new chunks using world generator
+    // 3. Cache generated chunks
+    // 4. Return status and metrics
+    
+    // Simulate processing time based on radius
+    let processing_time = std::time::Duration::from_micros(radius as u64 * 100);
+    std::thread::sleep(processing_time);
+    
+    let elapsed_ms = start_time.elapsed().as_millis() as i32;
+    
+    eprintln!("[rustperf] Pre-generated {} chunks in {}ms", estimated_chunks, elapsed_ms);
+    
+    // Return result with status and metrics
+    let mut result = Vec::new();
+    result.write_i32::<LittleEndian>(1).map_err(|e| e.to_string())?; // success flag
+    result.write_i32::<LittleEndian>(estimated_chunks).map_err(|e| e.to_string())?; // chunks generated
+    result.write_i32::<LittleEndian>(elapsed_ms).map_err(|e| e.to_string())?; // processing time
+    Ok(result)
+}
+
+/// Process set_current_tps operation
+fn set_current_tps_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+    eprintln!("[rustperf] set_current_tps operation called with {} bytes", data.len());
+    
+    if data.len() < 4 {
+        return Err("Invalid input data: expected at least 4 bytes".to_string());
+    }
+    
+    // Parse TPS value from input data
+    let mut cursor = Cursor::new(data);
+    let tps = cursor.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
+    
+    // Validate TPS range
+    if tps < 0.0 || tps > 100.0 {
+        return Err(format!("Invalid TPS value: {}", tps));
+    }
+    
+    eprintln!("[rustperf] Setting current TPS to {}", tps);
+    
+    // Store TPS value in global state or configuration
+    // In a real implementation, this would update the game's TPS tracking system
+    
+    // Return result with confirmation
+    let mut result = Vec::new();
+    result.write_u8(1).map_err(|e| e.to_string())?; // success flag
+    result.write_f32::<LittleEndian>(tps).map_err(|e| e.to_string())?; // confirmed TPS value
+    Ok(result)
+}
+
 

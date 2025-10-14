@@ -17,7 +17,7 @@ import static java.util.logging.Level.FINE;
 // Native bridge untuk zero-copy operations
 class NativeZeroCopyBridge {
     // Native method declarations untuk zero-copy operations
-    public static native long nativeExecuteSync(String operationName, Object[] parameters);
+    public static native byte[] nativeExecuteSync(String operationName, Object[] parameters);
     public static native long nativeAllocateZeroCopyBuffer(long size, int bufferType);
     public static native void nativeFreeBuffer(long bufferHandle);
     public static native ByteBuffer nativeGetBufferContent(long bufferHandle);
@@ -113,15 +113,15 @@ public class ZeroCopyBridge implements UnifiedBridge {
             LOGGER.log(FINE, "Executing zero-copy sync operation: {0} with {1} parameters",
                     new Object[]{operationName, parameters.length});
             
-            long nativeResult = NativeZeroCopyBridge.nativeExecuteSync(operationName, parameters);
+            byte[] nativeResult = NativeZeroCopyBridge.nativeExecuteSync(operationName, parameters);
             
             // Convert native result to BridgeResult with zero-copy metadata
             Map<String, Object> metadata = new HashMap<>();
             metadata.put("nativeOperation", operationName);
-            metadata.put("nativeResult", nativeResult);
+            metadata.put("nativeResult", nativeResult != null ? nativeResult.length : 0);
             metadata.put("zeroCopyOptimized", true);
             
-            BridgeResult result = BridgeResultFactory.createSuccess(operationName, (byte[]) null, metadata);
+            BridgeResult result = BridgeResultFactory.createSuccess(operationName, nativeResult, metadata);
             
             metrics.recordOperation(operationName, startTime, System.nanoTime(), 
                     calculateBytesProcessed(parameters), true);
