@@ -29,43 +29,17 @@ public final class PerformanceUtils {
     return sb.toString();
   }
 
-  /** Parse entity result from JSON response. */
+  /** Parse entity result from byte array response. */
+  public static List<Long> parseEntityResultFromBytes(byte[] resultBytes) {
+    // Use binary parser directly
+    return parseEntityResultWithFallback(resultBytes);
+  }
+  
+  /** Parse entity result from JSON response (deprecated - use byte array version). */
   public static List<Long> parseEntityResultFromJson(String jsonResult) {
-    try {
-      JsonObject result = GSON.fromJson(jsonResult, JsonObject.class);
-      if (result == null) {
-        return new ArrayList<>();
-      }
-
-      // Check for error field first
-      if (result.has("error")) {
-        return new ArrayList<>();
-      }
-
-      if (!result.has("entitiesToTick")) {
-        return new ArrayList<>();
-      }
-
-      JsonElement entitiesElement = result.get("entitiesToTick");
-      if (entitiesElement == null || !entitiesElement.isJsonArray()) {
-        return new ArrayList<>();
-      }
-
-      JsonArray entitiesToTick = entitiesElement.getAsJsonArray();
-      List<Long> resultList = new ArrayList<>();
-      for (JsonElement e : entitiesToTick) {
-        if (e != null && e.isJsonPrimitive()) {
-          try {
-            resultList.add(e.getAsLong());
-          } catch (NumberFormatException nfe) {
-            // Skip invalid entity ID
-          }
-        }
-      }
-      return resultList;
-    } catch (Exception e) {
-      return new ArrayList<>();
-    }
+    // Convert string to bytes and use binary parser
+    if (jsonResult == null) return new ArrayList<>();
+    return parseEntityResultWithFallback(jsonResult.getBytes());
   }
 
   /** Parse item result from JSON response. */
@@ -93,39 +67,81 @@ public final class PerformanceUtils {
     }
   }
 
-  /** Parse mob result from JSON response. */
-  public static MobParseResult parseMobResultFromJson(String jsonResult) {
+  /** Parse mob result from byte array response. */
+  public static MobParseResult parseMobResultFromBytes(byte[] resultBytes) {
+    // Parse binary format: [disable_count:i32][disable_ids...][simplify_count:i32][simplify_ids...]
+    if (resultBytes == null) return new MobParseResult(new ArrayList<>(), new ArrayList<>());
+    
     try {
-      JsonObject result = GSON.fromJson(jsonResult, JsonObject.class);
-      JsonArray disableAi = result.getAsJsonArray("mobs_to_disable_ai");
-      JsonArray simplifyAi = result.getAsJsonArray("mobs_to_simplify_ai");
+      ByteBuffer buffer = ByteBuffer.wrap(resultBytes).order(ByteOrder.LITTLE_ENDIAN);
+      
+      if (buffer.remaining() < 8) { // At least 2 counts (4 bytes each)
+        return new MobParseResult(new ArrayList<>(), new ArrayList<>());
+      }
+      
+      // Read disable count and IDs
+      int disableCount = buffer.getInt();
       List<Long> disableList = new ArrayList<>();
+      if (disableCount >= 0 && disableCount <= 10000 && buffer.remaining() >= disableCount * 8) {
+        for (int i = 0; i < disableCount; i++) {
+          disableList.add(buffer.getLong());
+        }
+      }
+      
+      // Read simplify count and IDs
+      int simplifyCount = buffer.getInt();
       List<Long> simplifyList = new ArrayList<>();
-      for (JsonElement e : disableAi) {
-        disableList.add(e.getAsLong());
+      if (simplifyCount >= 0 && simplifyCount <= 10000 && buffer.remaining() >= simplifyCount * 8) {
+        for (int i = 0; i < simplifyCount; i++) {
+          simplifyList.add(buffer.getLong());
+        }
       }
-      for (JsonElement e : simplifyAi) {
-        simplifyList.add(e.getAsLong());
-      }
+      
       return new MobParseResult(disableList, simplifyList);
     } catch (Exception e) {
       return new MobParseResult(new ArrayList<>(), new ArrayList<>());
     }
   }
+  
+  /** Parse mob result from JSON response (deprecated - use byte array version). */
+  public static MobParseResult parseMobResultFromJson(String jsonResult) {
+    // Convert string to bytes and use binary parser
+    if (jsonResult == null) return new MobParseResult(new ArrayList<>(), new ArrayList<>());
+    return parseMobResultFromBytes(jsonResult.getBytes());
+  }
 
-  /** Parse block result from JSON response. */
-  public static List<Long> parseBlockResultFromJson(String jsonResult) {
+  /** Parse block result from byte array response. */
+  public static List<Long> parseBlockResultFromBytes(byte[] resultBytes) {
+    // Parse binary format: [count:i32][ids...]
+    if (resultBytes == null) return new ArrayList<>();
+    
     try {
-      JsonObject result = GSON.fromJson(jsonResult, JsonObject.class);
-      JsonArray entitiesToTick = result.getAsJsonArray("block_entities_to_tick");
-      List<Long> resultList = new ArrayList<>();
-      for (JsonElement e : entitiesToTick) {
-        resultList.add(e.getAsLong());
+      ByteBuffer buffer = ByteBuffer.wrap(resultBytes).order(ByteOrder.LITTLE_ENDIAN);
+      
+      if (buffer.remaining() < 4) { // At least count field
+        return new ArrayList<>();
+      }
+      
+      int count = buffer.getInt();
+      if (count < 0 || count > 10000 || buffer.remaining() < count * 8) {
+        return new ArrayList<>();
+      }
+      
+      List<Long> resultList = new ArrayList<>(count);
+      for (int i = 0; i < count; i++) {
+        resultList.add(buffer.getLong());
       }
       return resultList;
     } catch (Exception e) {
       return new ArrayList<>();
     }
+  }
+  
+  /** Parse block result from JSON response (deprecated - use byte array version). */
+  public static List<Long> parseBlockResultFromJson(String jsonResult) {
+    // Convert string to bytes and use binary parser
+    if (jsonResult == null) return new ArrayList<>();
+    return parseBlockResultFromBytes(jsonResult.getBytes());
   }
 
   /** Try to parse entity result with fallback formats. */

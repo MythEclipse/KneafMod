@@ -595,8 +595,13 @@ fn process_villager_operation(data: &[u8]) -> Result<Vec<u8>, String> {
 /// Process entity operation using binary conversions
 fn process_entity_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Deserialize entity input
-    let input = crate::binary::conversions::deserialize_entity_input(data)
-        .map_err(|e| format!("Failed to deserialize entity input: {}", e))?;
+    let input = match crate::binary::conversions::deserialize_entity_input(data) {
+        Ok(input) => input,
+        Err(e) => {
+            eprintln!("[rustperf] Failed to deserialize entity input: {}", e);
+            return Err(format!("Failed to deserialize entity input: {}", e));
+        }
+    };
     
     // Process entities
     let result = crate::entity::processing::process_entities(input);
@@ -738,29 +743,25 @@ fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
             .map_err(|e| format!("Failed to serialize empty entity result: {}", e));
     }
     
-    // Try to deserialize input as entity input
+    // Try to deserialize input as entity input with safe error handling
     let entity_input = match crate::binary::conversions::deserialize_entity_input(data) {
-        Ok(input) => {
-            
-            input
-        }
+        Ok(input) => input,
         Err(e) => {
-            eprintln!("[rustperf] Failed to deserialize entity input: {}, creating minimal input", e);
-            // Create minimal input with empty entities to avoid crash
-            crate::entity::types::Input {
-                tick_count: 0,
-                entities: Vec::new(),
-                players: Vec::new(),
-                entity_config: crate::entity::config::Config::default(),
-            }
+            eprintln!("[rustperf] Failed to deserialize entity input: {}", e);
+            
+            // Return empty result with proper error formatting to prevent JNI buffer overflow
+            let empty_result = crate::entity::types::ProcessResult {
+                entities_to_tick: Vec::new(),
+            };
+            return crate::binary::conversions::serialize_entity_result(&empty_result)
+                .map_err(|e| format!("Failed to serialize empty entity result: {}", e));
         }
     };
     
     // Use the optimized entity processing function from entity/processing.rs
     let result = crate::entity::processing::process_entities(entity_input);
     
-    
-    
+    // Serialize the result to prevent JNI buffer overflow
     crate::binary::conversions::serialize_entity_result(&result)
         .map_err(|e| format!("Failed to serialize entity result: {}", e))
 }
@@ -779,19 +780,18 @@ fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> 
             .map_err(|e| format!("Failed to serialize empty block result: {}", e));
     }
     
-    // Try to deserialize input as block input
+    // Try to deserialize input as block input with safe error handling
     let block_input = match crate::binary::conversions::deserialize_block_input(data) {
-        Ok(input) => {
-            
-            input
-        }
+        Ok(input) => input,
         Err(e) => {
-            eprintln!("[rustperf] Failed to deserialize block input: {}, creating minimal input", e);
-            // Create minimal input with empty block entities to avoid crash
-            crate::block::types::BlockInput {
-                tick_count: 0,
-                block_entities: Vec::new(),
-            }
+            eprintln!("[rustperf] Failed to deserialize block input: {}", e);
+            
+            // Return empty result with proper error formatting to prevent JNI buffer overflow
+            let empty_result = crate::block::types::BlockProcessResult {
+                block_entities_to_tick: Vec::new(),
+            };
+            return crate::binary::conversions::serialize_block_result(&empty_result)
+                .map_err(|e| format!("Failed to serialize empty block result: {}", e));
         }
     };
     
@@ -808,21 +808,39 @@ fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> 
 fn process_mob_ai_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     eprintln!("[rustperf] process_mob_ai operation called - input {} bytes", data.len());
     
-    // Deserialize mob input
-    let mob_input = crate::binary::conversions::deserialize_mob_input(data)
-        .map_err(|e| format!("Failed to deserialize mob input: {}", e))?;
+    // Handle empty or very small data
+    if data.is_empty() {
+        eprintln!("[rustperf] Empty data received, returning empty result");
+        let empty_result = crate::mob::types::MobProcessResult {
+            mobs_to_disable_ai: Vec::new(),
+            mobs_to_simplify_ai: Vec::new(),
+        };
+        return crate::binary::conversions::serialize_mob_result(&empty_result)
+            .map_err(|e| format!("Failed to serialize empty mob result: {}", e));
+    }
     
-    
+    // Try to deserialize input with safe error handling
+    let mob_input = match crate::binary::conversions::deserialize_mob_input(data) {
+        Ok(input) => input,
+        Err(e) => {
+            eprintln!("[rustperf] Failed to deserialize mob input: {}", e);
+            
+            // Return empty result with proper error formatting to prevent JNI buffer overflow
+            let empty_result = crate::mob::types::MobProcessResult {
+                mobs_to_disable_ai: Vec::new(),
+                mobs_to_simplify_ai: Vec::new(),
+            };
+            return crate::binary::conversions::serialize_mob_result(&empty_result)
+                .map_err(|e| format!("Failed to serialize empty mob result: {}", e));
+        }
+    };
     
     // Use the optimized mob processing function from mob/processing.rs
     let result = crate::mob::processing::process_mob_ai(mob_input);
     
-    
-    
     crate::binary::conversions::serialize_mob_result(&result)
         .map_err(|e| format!("Failed to serialize mob AI result: {}", e))
 }
-
 /// Generate chunk data dengan world generator sederhana
 fn generate_chunk_data(chunk_x: i32, chunk_z: i32) -> Vec<u8> {
     // Gunakan spatial optimization untuk mengurangi redundant generation
@@ -1175,7 +1193,7 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
 }
 
 /// Process batch operations with comprehensive error handling and metrics
-fn process_batch_operations(batch_name: &str, operations: &[Vec<u8>], batch_id: u64, _start_time: u64) -> Result<Vec<u8>, String> {
+fn process_batch_operations(_batch_name: &str, operations: &[Vec<u8>], batch_id: u64, _start_time: u64) -> Result<Vec<u8>, String> {
     
     
     let batch_start = std::time::Instant::now();

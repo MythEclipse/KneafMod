@@ -3,6 +3,8 @@ package com.kneaf.core.unifiedbridge;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /**
  * Immutable result structure for individual bridge operations.
@@ -137,81 +139,124 @@ public final class BridgeResult {
 
     /**
      * Get result as String.
-     * @return String representation of result data
+     * @return String representation of result data, or null if data is binary
      */
     public String getResultString() {
-        if (resultData == null) {
+        if (resultData == null || resultData.length == 0) {
             return null;
         }
-        return new String(resultData);
+        
+        // Check if this is binary data by looking for common binary format signatures
+        // Binary format: [count:i32][ids...] - first 4 bytes should be a reasonable count
+        if (resultData.length >= 4) {
+            ByteBuffer buffer = ByteBuffer.wrap(resultData).order(ByteOrder.LITTLE_ENDIAN);
+            int count = buffer.getInt();
+            // If count is reasonable and we have the right number of bytes, it's binary
+            if (count >= 0 && count <= 10000 && resultData.length == 4 + count * 8) {
+                return null; // This is binary data
+            }
+        }
+        
+        // Try to convert to string, but return null if it's binary data
+        try {
+            String str = new String(resultData, "UTF-8");
+            // Check if it's valid UTF-8 by trying to encode it back
+            byte[] reencoded = str.getBytes("UTF-8");
+            if (reencoded.length == resultData.length && !str.contains("\uFFFD")) {
+                return str;
+            }
+        } catch (Exception e) {
+            // Invalid UTF-8, likely binary data
+        }
+        return null;
     }
 
     /**
      * Get result as Integer.
-     * @return Integer value from result data
+     * @return Integer value from result data, or null if data is binary
      */
     public Integer getResultInteger() {
         if (resultData == null) {
             return null;
         }
         try {
-            return Integer.parseInt(new String(resultData).trim());
+            String str = getResultString();
+            if (str != null) {
+                return Integer.parseInt(str.trim());
+            }
         } catch (NumberFormatException e) {
-            return null;
+            // Not a valid integer
         }
+        return null;
     }
 
     /**
      * Get result as Long.
-     * @return Long value from result data
+     * @return Long value from result data, or null if data is binary
      */
     public Long getResultLong() {
         if (resultData == null) {
             return null;
         }
         try {
-            return Long.parseLong(new String(resultData).trim());
+            String str = getResultString();
+            if (str != null) {
+                return Long.parseLong(str.trim());
+            }
         } catch (NumberFormatException e) {
-            return null;
+            // Not a valid long
         }
+        return null;
     }
 
     /**
      * Get result as Double.
-     * @return Double value from result data
+     * @return Double value from result data, or null if data is binary
      */
     public Double getResultDouble() {
         if (resultData == null) {
             return null;
         }
         try {
-            return Double.parseDouble(new String(resultData).trim());
+            String str = getResultString();
+            if (str != null) {
+                return Double.parseDouble(str.trim());
+            }
         } catch (NumberFormatException e) {
-            return null;
+            // Not a valid double
         }
+        return null;
     }
 
     /**
      * Get result as Boolean.
-     * @return Boolean value from result data
+     * @return Boolean value from result data, or null if data is binary
      */
     public Boolean getResultBoolean() {
         if (resultData == null) {
             return null;
         }
-        String str = new String(resultData).trim().toLowerCase();
-        return "true".equals(str) || "1".equals(str);
+        try {
+            String str = getResultString();
+            if (str != null) {
+                str = str.trim().toLowerCase();
+                return "true".equals(str) || "1".equals(str);
+            }
+        } catch (Exception e) {
+            // Invalid data
+        }
+        return null;
     }
 
     /**
      * Get result as Object.
-     * @return Object representation of result data
+     * @return Object representation of result data, or null if data is binary
      */
     public Object getResultObject() {
         if (resultData == null) {
             return null;
         }
-        return new String(resultData);
+        return getResultString(); // Use the safe string conversion
     }
 
     /**
@@ -303,7 +348,12 @@ public final class BridgeResult {
          */
         public Builder resultObject(Object resultObject) {
             if (resultObject != null) {
-                this.resultData = resultObject.toString().getBytes();
+                try {
+                    this.resultData = resultObject.toString().getBytes("UTF-8");
+                } catch (Exception e) {
+                    // Fallback to default encoding
+                    this.resultData = resultObject.toString().getBytes();
+                }
             }
             return this;
         }

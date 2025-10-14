@@ -154,6 +154,7 @@ pub fn process_entities(input: Input) -> ProcessResult {
             &trace_id,
             &format!("Too many entities: {}, returning empty result", entity_count),
         );
+        // Return empty result - this will be properly serialized by the caller
         return ProcessResult { entities_to_tick: Vec::new() };
     }
 

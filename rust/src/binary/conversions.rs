@@ -29,18 +29,35 @@ pub fn deserialize_mob_input(data: &[u8]) -> Result<MobInput, String> {
         let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
         let distance = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
         let passive = cur.read_u8().map_err(|e| e.to_string())? != 0;
-        let etype_len = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+        let etype_len = match cur.read_i32::<LittleEndian>() {
+            Ok(len) => len as usize,
+            Err(e) => return Err(format!("Failed to read entity type length: {}", e)),
+        };
 
         // Validate etype_len to prevent capacity overflow
         if etype_len > 1000 {
-            return Err("Entity type name too long".to_string());
+            return Err("Entity type name too long (max 1000 chars)".to_string());
+        }
+
+        // Additional validation: ensure we have enough data left for this entity type
+        if cur.position() + etype_len as u64 > data.len() as u64 {
+            return Err("Insufficient data for entity type".to_string());
         }
 
         let mut etype = String::new();
         if etype_len > 0 {
             let mut buf = vec![0u8; etype_len];
-            cur.read_exact(&mut buf).map_err(|e| e.to_string())?;
-            etype = String::from_utf8(buf).map_err(|e| e.to_string())?;
+            
+            // Read entity type data with additional safety checks
+            if cur.read_exact(&mut buf).is_err() {
+                return Err("Failed to read entity type data".to_string());
+            }
+            
+            // Validate UTF-8 with more informative error
+            match String::from_utf8(buf) {
+                Ok(s) => etype = s,
+                Err(e) => return Err(format!("Invalid UTF-8 in entity type: {}", e)),
+            }
         }
         mobs.push(crate::mob::types::MobData {
             id,
@@ -53,18 +70,30 @@ pub fn deserialize_mob_input(data: &[u8]) -> Result<MobInput, String> {
 }
 
 pub fn serialize_mob_result(result: &MobProcessResult) -> Result<Vec<u8>, String> {
-    // Return JSON object instead of binary data to avoid JNI string conversion issues
-    let json = format!("{{\"disableList\":{},\"simplifyList\":{}}}",
-        format!("[{}]", result.mobs_to_disable_ai.iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<String>>()
-            .join(",")),
-        format!("[{}]", result.mobs_to_simplify_ai.iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<String>>()
-            .join(","))
-    );
-    Ok(json.into_bytes())
+    // Use binary format instead of JSON to avoid large string allocations
+    let mut out = Vec::new();
+    
+    // Write number of mobs to disable AI
+    out.write_i32::<LittleEndian>(result.mobs_to_disable_ai.len() as i32)
+        .map_err(|e| e.to_string())?;
+    
+    // Write each mob ID to disable
+    for id in &result.mobs_to_disable_ai {
+        out.write_u64::<LittleEndian>(*id)
+            .map_err(|e| e.to_string())?;
+    }
+    
+    // Write number of mobs to simplify AI
+    out.write_i32::<LittleEndian>(result.mobs_to_simplify_ai.len() as i32)
+        .map_err(|e| e.to_string())?;
+    
+    // Write each mob ID to simplify
+    for id in &result.mobs_to_simplify_ai {
+        out.write_u64::<LittleEndian>(*id)
+            .map_err(|e| e.to_string())?;
+    }
+    
+    Ok(out)
 }
 
 // Block conversions
@@ -108,12 +137,20 @@ pub fn deserialize_block_input(data: &[u8]) -> Result<BlockInput, String> {
 }
 
 pub fn serialize_block_result(result: &BlockProcessResult) -> Result<Vec<u8>, String> {
-    // Return JSON array instead of binary data to avoid JNI string conversion issues
-    let json = format!("[{}]", result.block_entities_to_tick.iter()
-        .map(|id| id.to_string())
-        .collect::<Vec<String>>()
-        .join(","));
-    Ok(json.into_bytes())
+    // Use binary format instead of JSON to avoid large string allocations
+    let mut out = Vec::new();
+    
+    // Write number of block entities
+    out.write_i32::<LittleEndian>(result.block_entities_to_tick.len() as i32)
+        .map_err(|e| e.to_string())?;
+    
+    // Write each block entity ID
+    for id in &result.block_entities_to_tick {
+        out.write_u64::<LittleEndian>(*id)
+            .map_err(|e| e.to_string())?;
+    }
+    
+    Ok(out)
 }
 
 // Placeholder for entity conversions (if needed in the future)
@@ -135,18 +172,42 @@ pub fn deserialize_entity_input(data: &[u8]) -> Result<crate::entity::types::Inp
         let z = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())? as f64;
         let distance = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
         let is_block = cur.read_u8().map_err(|e| e.to_string())? != 0;
-        let etype_len = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
+        let etype_len = match cur.read_i32::<LittleEndian>() {
+            Ok(len) => {
+                // Handle negative lengths safely
+                if len < 0 {
+                    return Err("Negative entity type length".to_string());
+                }
+                len as usize
+            }
+            Err(e) => return Err(format!("Failed to read entity type length: {}", e)),
+        };
 
         // Validate etype_len to prevent capacity overflow
-        if etype_len > 1000 {
-            return Err("Entity type name too long".to_string());
+        const MAX_ENTITY_TYPE_LEN: usize = 1000;
+        if etype_len > MAX_ENTITY_TYPE_LEN {
+            return Err(format!("Entity type name too long (max {} chars)", MAX_ENTITY_TYPE_LEN));
+        }
+
+        // Additional validation: ensure we have enough data left for this entity type
+        if cur.position() + etype_len as u64 > data.len() as u64 {
+            return Err("Insufficient data for entity type".to_string());
         }
 
         let mut etype = String::new();
         if etype_len > 0 {
             let mut buf = vec![0u8; etype_len];
-            cur.read_exact(&mut buf).map_err(|e| e.to_string())?;
-            etype = String::from_utf8(buf).map_err(|e| e.to_string())?;
+            
+            // Read entity type data with additional safety checks
+            if cur.read_exact(&mut buf).is_err() {
+                return Err("Failed to read entity type data".to_string());
+            }
+            
+            // Validate UTF-8 with more informative error
+            match String::from_utf8(buf) {
+                Ok(s) => etype = s,
+                Err(e) => return Err(format!("Invalid UTF-8 in entity type: {}", e)),
+            }
         }
         entities.push(REntityData {
             id,
@@ -200,12 +261,20 @@ pub fn deserialize_entity_input(data: &[u8]) -> Result<crate::entity::types::Inp
 pub fn serialize_entity_result(
     result: &crate::entity::types::ProcessResult,
 ) -> Result<Vec<u8>, String> {
-    // Return JSON string instead of binary data to avoid JNI string conversion issues
-    let json = format!("[{}]", result.entities_to_tick.iter()
-        .map(|id| id.to_string())
-        .collect::<Vec<String>>()
-        .join(","));
-    Ok(json.into_bytes())
+    // Use binary format instead of JSON to avoid large string allocations
+    let mut out = Vec::new();
+    
+    // Write number of entities
+    out.write_i32::<LittleEndian>(result.entities_to_tick.len() as i32)
+        .map_err(|e| e.to_string())?;
+    
+    // Write each entity ID
+    for id in &result.entities_to_tick {
+        out.write_u64::<LittleEndian>(*id)
+            .map_err(|e| e.to_string())?;
+    }
+    
+    Ok(out)
 }
 
 // Villager conversions

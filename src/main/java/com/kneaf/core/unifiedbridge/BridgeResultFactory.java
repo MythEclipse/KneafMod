@@ -45,12 +45,44 @@ public final class BridgeResultFactory {
      * Create a successful BridgeResult with object result.
      *
      * @param operationName the name of the operation
-     * @param resultObject the result object (will be converted to string bytes)
+     * @param resultObject the result object (will be converted to string bytes safely)
      * @param metadata additional metadata (can be null)
      * @return a successful BridgeResult
      */
     public static BridgeResult createSuccess(String operationName, Object resultObject, Map<String, Object> metadata) {
-        byte[] resultData = resultObject != null ? resultObject.toString().getBytes() : null;
+        byte[] resultData = null;
+        if (resultObject != null) {
+            try {
+                // Try to convert to UTF-8 safely
+                if (resultObject instanceof byte[]) {
+                    // If it's already a byte array, use it directly
+                    resultData = (byte[]) resultObject;
+                } else if (resultObject instanceof String) {
+                    // If it's a string, convert to UTF-8
+                    resultData = ((String) resultObject).getBytes("UTF-8");
+                } else {
+                    // For other objects, try to convert to string first
+                    String str = resultObject.toString();
+                    try {
+                        // Test if it's valid UTF-8 by encoding and decoding
+                        byte[] testBytes = str.getBytes("UTF-8");
+                        String testStr = new String(testBytes, "UTF-8");
+                        if (str.equals(testStr)) {
+                            resultData = testBytes;
+                        } else {
+                            // Not valid UTF-8, skip
+                            resultData = null;
+                        }
+                    } catch (Exception e) {
+                        // Invalid UTF-8, skip
+                        resultData = null;
+                    }
+                }
+            } catch (Exception e) {
+                // Any conversion error, skip
+                resultData = null;
+            }
+        }
         return createSuccess(operationName, resultData, metadata);
     }
 
