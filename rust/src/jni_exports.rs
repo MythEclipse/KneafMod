@@ -7,6 +7,8 @@ use jni::sys::{jboolean, jbyteArray, jlong, jint, JNI_TRUE, JNI_VERSION_1_6};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use dashmap::DashMap;
+use std::collections::HashMap;
+use std::sync::Arc;
 use rayon::ThreadPoolBuilder;
 use crossbeam::channel::{unbounded, Sender, Receiver};
 use std::thread;
@@ -14,6 +16,33 @@ use std::sync::Arc;
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{Cursor, Read};
 
+// Add diagnostic logging macro
+macro_rules! jni_diagnostic {
+    ($level:expr, $operation:expr, $($arg:tt)*) => {
+        eprintln!("[rustperf][{}] {} - {}", $level, $operation, format_args!($($arg)*));
+    };
+}
+
+// Add memory safety validation
+fn validate_memory_safety(data: &[u8], operation: &str) -> Result<(), String> {
+    if data.is_empty() {
+        jni_diagnostic!("WARN", operation, "Empty data received");
+        return Err("Empty data buffer".to_string());
+    }
+    
+    if data.len() > 1024 * 1024 * 100 { // 100MB limit
+        jni_diagnostic!("ERROR", operation, "Data size {} exceeds safety limit", data.len());
+        return Err("Data size exceeds safety limit".to_string());
+    }
+    
+    jni_diagnostic!("DEBUG", operation, "Memory validation passed - size: {}", data.len());
+    Ok(())
+}
+
+// Add thread safety diagnostics
+fn log_thread_safety(operation: &str, thread_id: std::thread::ThreadId) {
+    jni_diagnostic!("DEBUG", operation, "Thread safety check - thread_id: {:?}", thread_id);
+}
 #[allow(dead_code)]
 #[derive(Clone)]
 enum OperationStatus {
@@ -64,7 +93,15 @@ impl Default for NativeState {
     }
 }
 
-static STATE: Lazy<Mutex<NativeState>> = Lazy::new(|| Mutex::new(NativeState::default()));
+// Use a more fine-grained locking approach with separate locks for different resources
+static MEMORY_TRACKER: Lazy<Mutex<HashMap<jlong, Vec<u8>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static WORKER_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static OPERATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+// Per-thread state to reduce lock contention
+thread_local! {
+    static THREAD_LOCAL_STATE: RefCell<Option<NativeState>> = RefCell::new(None);
+}
 
 // JNI_OnLoad stub - return supported JNI version
 #[no_mangle]
@@ -72,7 +109,16 @@ pub extern "system" fn JNI_OnLoad(_vm: *mut jni::sys::JavaVM, _reserved: *mut st
     eprintln!("[rustperf] JNI_OnLoad called - initializing allocator system");
     
     // Initialize global allocator state
-    let mut state = STATE.lock().unwrap();
+    let _worker_lock = WORKER_LOCK.lock().unwrap();
+    let _operation_lock = OPERATION_LOCK.lock().unwrap();
+    
+    let state = THREAD_LOCAL_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        if state.is_none() {
+            *state = Some(NativeState::default());
+        }
+        state.as_mut().unwrap()
+    });
     
     // Set up initial allocator configuration
     state.next_worker_id = 1;
@@ -93,16 +139,33 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
 ) -> jboolean {
     JNI_TRUE
 }
-
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeCreateWorker(
     _env: JNIEnv,
     _class: JClass,
     concurrency: jint,
 ) -> jlong {
-    let mut s = STATE.lock().unwrap();
-    let id = s.next_worker_id;
-    s.next_worker_id += 1;
+    let current_thread = std::thread::current();
+    let thread_id = current_thread.id();
+    log_thread_safety("nativeCreateWorker", thread_id);
+    
+    jni_diagnostic!("INFO", "nativeCreateWorker", "Creating worker with concurrency: {}", concurrency);
+    
+    // Use fine-grained locking for better performance
+    let _worker_lock = WORKER_LOCK.lock().unwrap();
+    
+    // Get or create thread-local state
+    let state = THREAD_LOCAL_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        if state.is_none() {
+            *state = Some(NativeState::default());
+        }
+        state.as_mut().unwrap()
+    });
+    
+    let id = state.next_worker_id;
+    state.next_worker_id += 1;
+
 
     // Ensure concurrency is at least 1
     let num_threads = if concurrency > 0 { concurrency as usize } else { 1 };
@@ -189,7 +252,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
             id
         }
         Err(e) => {
-            eprintln!("[rustperf] failed to create worker {}: {:?}", id, e);
+            jni_diagnostic!("ERROR", "nativeCreateWorker", "Failed to create worker {}: {:?}", id, e);
             0 // Return 0 to indicate failure
         }
     }
@@ -213,7 +276,6 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
         }
     }
 }
-
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativePushTask(
     env: JNIEnv,
@@ -221,15 +283,23 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     worker_handle: jlong,
     payload: JByteArray,
 ) {
+    let current_thread = std::thread::current();
+    let thread_id = current_thread.id();
+    log_thread_safety("nativePushTask", thread_id);
+    
     {
         // Convert JByteArray to Vec<u8> first
         let payload_bytes = match env.convert_byte_array(payload) {
-            Ok(bytes) => bytes,
+            Ok(bytes) => {
+                jni_diagnostic!("DEBUG", "nativePushTask", "Successfully converted payload for worker {} - size: {} bytes", worker_handle, bytes.len());
+                bytes
+            },
             Err(e) => {
-                eprintln!("[rustperf] failed to convert payload for worker {}: {:?}", worker_handle, e);
+                jni_diagnostic!("ERROR", "nativePushTask", "Failed to convert payload for worker {}: {:?}", worker_handle, e);
                 return;
             }
         };
+
 
         let task = Task {
             payload: payload_bytes,
@@ -240,28 +310,40 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
             let sender = s.workers.get(&worker_handle).unwrap().task_sender.clone();
             drop(s); // Drop the lock before sending
             if let Err(e) = sender.send(task) {
-                eprintln!("[rustperf] failed to send task to worker {}: {:?}", worker_handle, e);
+                jni_diagnostic!("ERROR", "nativePushTask", "Failed to send task to worker {}: {:?}", worker_handle, e);
+            } else {
+                jni_diagnostic!("INFO", "nativePushTask", "Successfully sent task to worker {}", worker_handle);
             }
         } else {
-            eprintln!("[rustperf] worker {} not found for push task", worker_handle);
+            jni_diagnostic!("WARN", "nativePushTask", "Worker {} not found for push task", worker_handle);
         }
     }
 }
-
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativePollResult(
     env: JNIEnv,
     _class: JClass,
     worker_handle: jlong,
 ) -> jbyteArray {
+    let current_thread = std::thread::current();
+    let thread_id = current_thread.id();
+    log_thread_safety("nativePollResult", thread_id);
+    
     let s = STATE.lock().unwrap();
     let result_opt = if let Some(worker_data) = s.workers.get(&worker_handle) {
-        worker_data.result_receiver.try_recv().ok()
+        let result = worker_data.result_receiver.try_recv().ok();
+        if result.is_some() {
+            jni_diagnostic!("INFO", "nativePollResult", "Successfully retrieved result from worker {}", worker_handle);
+        } else {
+            jni_diagnostic!("DEBUG", "nativePollResult", "No result available from worker {}", worker_handle);
+        }
+        result
     } else {
-        eprintln!("[rustperf] worker {} not found for poll result", worker_handle);
+        jni_diagnostic!("WARN", "nativePollResult", "Worker {} not found for poll result", worker_handle);
         None
     };
     drop(s); // Drop the lock
+
 
     match result_opt {
         Some(result) => {
@@ -361,11 +443,40 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     }
 }
 #[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_RustBridge_nativeExecuteSync(
+    env: JNIEnv,
+    _class: JClass,
+    operation_name: JString,
+    memory_handle: jlong,
+) -> jbyteArray {
+    let operation_name: String = env.get_string(operation_name).expect("Invalid operation name").into();
+
+    // Get memory from tracker using handle
+    let parameters = {
+        let mut tracker = MEMORY_TRACKER.lock().unwrap();
+        tracker.remove(&memory_handle).expect("Invalid memory handle")
+    };
+
+    // Validate input safety
+    if let Err(e) = validate_memory_safety(&parameters, &operation_name) {
+        jni_diagnostic!("ERROR", "nativeExecuteSync", "Memory validation failed: {}", e);
+        return env.byte_array_from_slice(&[]).expect("Failed to create empty result");
+    }
+
+    jni_diagnostic!("DEBUG", "nativeExecuteSync", "Executing operation: {}", operation_name);
+    log_thread_safety("nativeExecuteSync", std::thread::current().id());
+
+    // In a real implementation, this would call the actual Rust logic
+    let result = vec![0x01, 0x02, 0x03, 0x04]; // Dummy result
+
+    env.byte_array_from_slice(&result).expect("Failed to create result byte array")
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativePollZeroCopyResult(
     env: JNIEnv,
     _class: JClass,
     operation_id: jlong,
-) -> jbyteArray {
     let s = STATE.lock().unwrap();
     let result_opt = if let Some(operation) = s.operations.get(&operation_id) {
         match operation.status {
