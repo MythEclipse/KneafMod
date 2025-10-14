@@ -76,6 +76,12 @@ public class PerformanceManager {
     public void enable() {
         if (enabled.compareAndSet(false, true)) {
             LOGGER.info("Enabling unified performance management");
+            // Initialize Rust performance system
+            try {
+                RustPerformance.initialize();
+            } catch (Exception e) {
+                LOGGER.log(Level.WARNING, "Failed to initialize Rust performance system, continuing without it", e);
+            }
             startMonitoring();
             optimizer.enable();
         }
@@ -123,7 +129,7 @@ public class PerformanceManager {
      */
     public PerformanceMetrics getCurrentMetrics() {
         return new PerformanceMetrics(
-            tpsMonitor.getCurrentTPS(),
+            RustPerformance.getCurrentTPS(),
             memoryMonitor.getUsedMemoryMB(),
             memoryMonitor.getTotalMemoryMB(),
             cpuMonitor.getCpuUsage(),
@@ -288,7 +294,7 @@ public class PerformanceManager {
         // TPS monitoring - every second
         monitorScheduler.scheduleAtFixedRate(() -> {
             try {
-                tpsMonitor.updateTPS();
+                // TPS is now handled by RustPerformance.getCurrentTPS()
                 // Update custom metrics
                 for (CustomMetric metric : customMetrics.values()) {
                     metric.update();
