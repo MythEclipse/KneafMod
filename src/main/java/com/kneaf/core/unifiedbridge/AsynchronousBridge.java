@@ -2,6 +2,8 @@ package com.kneaf.core.unifiedbridge;
 
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -9,6 +11,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 // The public UnifiedBridge interface is defined in `UnifiedBridge.java`.
 
@@ -125,7 +131,212 @@ class AsynchronousBridge implements UnifiedBridge {
         return totalBytes;
     }
 
-    @Override public BatchResult executeBatch(String batchName, List<UnifiedBridge.BridgeOperation> operations) throws BridgeException { throw new UnsupportedOperationException("Batch execution not implemented via JNI in this example."); }
+    @Override
+    public BatchResult executeBatch(String batchName, List<UnifiedBridge.BridgeOperation> operations) throws BridgeException {
+        Objects.requireNonNull(batchName, "Batch name cannot be null");
+        Objects.requireNonNull(operations, "Operations list cannot be null");
+        
+        if (operations.isEmpty()) {
+            return new BatchResult.Builder()
+                .batchId(System.nanoTime())
+                .startTimeNanos(System.nanoTime())
+                .endTimeNanos(System.nanoTime())
+                .totalTasks(0)
+                .successfulTasks(0)
+                .failedTasks(0)
+                .totalBytesProcessed(0)
+                .status("COMPLETED")
+                .detailedStats(Map.of("batchName", batchName, "reason", "empty_batch"))
+                .build();
+        }
+
+        long startTime = System.nanoTime();
+        long batchId = System.nanoTime();
+        
+        try {
+            // Initialize batch processing metrics
+            metrics.recordOperation(batchName + ".batch.start", startTime, System.nanoTime(), 0, true);
+            
+            // Convert operations to native format for JNI processing
+            byte[][] operationData = convertOperationsToNativeFormat(operations);
+            
+            // Execute batch via JNI with comprehensive error handling
+            BatchResult result = executeNativeBatch(batchName, operationData, batchId, startTime);
+            
+            // Record completion metrics
+            long endTime = System.nanoTime();
+            metrics.recordBatchOperation(batchId, batchName, startTime, endTime, operations.size(),
+                                       result.getSuccessfulTasks(), result.getFailedTasks(),
+                                       result.getTotalBytesProcessed(), result.isSuccessful());
+            
+            // Update detailed statistics
+            Map<String, Object> enhancedStats = new HashMap<>(result.getDetailedStats());
+            enhancedStats.put("jniCrossings", operations.size());
+            enhancedStats.put("zeroCopyUsed", config.isEnableZeroCopy());
+            enhancedStats.put("compressionEnabled", false); // Not implemented yet
+            enhancedStats.put("batchOptimizationLevel", determineOptimizationLevel(operations.size()));
+            
+            return new BatchResult.Builder()
+                .batchId(batchId)
+                .startTimeNanos(startTime)
+                .endTimeNanos(endTime)
+                .totalTasks(result.getTotalTasks())
+                .successfulTasks(result.getSuccessfulTasks())
+                .failedTasks(result.getFailedTasks())
+                .totalBytesProcessed(result.getTotalBytesProcessed())
+                .status(result.getStatus())
+                .errorMessage(result.getErrorMessage())
+                .detailedStats(enhancedStats)
+                .build();
+                
+        } catch (Exception e) {
+            long endTime = System.nanoTime();
+            String errorMessage = "Batch execution failed: " + e.getMessage();
+            
+            // Record failure metrics
+            metrics.recordBatchOperation(batchId, batchName, startTime, endTime, operations.size(),
+                                       0, operations.size(), 0, false);
+            
+            // Create failure result with detailed error information
+            Map<String, Object> errorStats = Map.of(
+                "batchName", batchName,
+                "errorType", e.getClass().getSimpleName(),
+                "errorMessage", e.getMessage(),
+                "operationsCount", operations.size(),
+                "jniAvailable", isNativeLibraryAvailable()
+            );
+            
+            BridgeException bridgeException = errorHandler.createBridgeError(errorMessage, e,
+                BridgeException.BridgeErrorType.BATCH_PROCESSING_FAILED);
+            bridgeException.addSuppressed(new RuntimeException("Batch error details: " + errorStats.toString()));
+            throw bridgeException;
+        }
+    }
+
+    /**
+     * Convert Java operations to native format for JNI processing.
+     * Supports zero-copy optimization for large batches.
+     */
+    private byte[][] convertOperationsToNativeFormat(List<UnifiedBridge.BridgeOperation> operations) {
+        byte[][] operationData = new byte[operations.size()][];
+        long totalBytes = 0;
+        
+        for (int i = 0; i < operations.size(); i++) {
+            UnifiedBridge.BridgeOperation operation = operations.get(i);
+            String operationName = operation.getOperationName();
+            Object[] parameters = operation.getParameters();
+            
+            // Serialize operation to binary format
+            byte[] serializedOp = serializeOperationToBinary(operationName, parameters);
+            operationData[i] = serializedOp;
+            totalBytes += serializedOp.length;
+            
+            // Apply zero-copy optimization for large operations
+            if (config.isEnableZeroCopy() && serializedOp.length > 1024) {
+                operationData[i] = applyZeroCopyOptimization(serializedOp);
+            }
+        }
+        
+        // Log optimization metrics
+        if (totalBytes > 1024 * 1024) { // > 1MB total
+            LOGGER.log(Level.INFO, "Large batch detected: {0} operations, {1} bytes total, zero-copy: {2}",
+                       new Object[]{operations.size(), totalBytes, config.isEnableZeroCopy()});
+        }
+        
+        return operationData;
+    }
+
+    /**
+     * Serialize operation to compact binary format for JNI processing.
+     */
+    private byte[] serializeOperationToBinary(String operationName, Object[] parameters) {
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            DataOutputStream dos = new DataOutputStream(baos);
+            
+            // Write operation name
+            dos.writeUTF(operationName);
+            
+            // Write parameter count
+            dos.writeInt(parameters != null ? parameters.length : 0);
+            
+            // Write parameters
+            if (parameters != null) {
+                for (Object param : parameters) {
+                    if (param instanceof byte[]) {
+                        byte[] bytes = (byte[]) param;
+                        dos.writeInt(bytes.length);
+                        dos.write(bytes);
+                    } else if (param instanceof ByteBuffer) {
+                        ByteBuffer buffer = (ByteBuffer) param;
+                        byte[] bytes = new byte[buffer.remaining()];
+                        buffer.get(bytes);
+                        dos.writeInt(bytes.length);
+                        dos.write(bytes);
+                    } else if (param instanceof String) {
+                        String str = (String) param;
+                        byte[] bytes = str.getBytes(StandardCharsets.UTF_8);
+                        dos.writeInt(bytes.length);
+                        dos.write(bytes);
+                    } else {
+                        // Fallback to string representation
+                        String str = String.valueOf(param);
+                        byte[] bytes = str.getBytes(StandardCharsets.UTF_8);
+                        dos.writeInt(bytes.length);
+                        dos.write(bytes);
+                    }
+                }
+            }
+            
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to serialize operation: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Apply zero-copy optimization for large operations.
+     */
+    private byte[] applyZeroCopyOptimization(byte[] data) {
+        try {
+            // Create direct ByteBuffer for zero-copy transfer
+            ByteBuffer directBuffer = ByteBuffer.allocateDirect(data.length);
+            directBuffer.put(data);
+            directBuffer.flip();
+            
+            // Use JNI to transfer direct buffer without copying
+            return transferZeroCopyBuffer(directBuffer);
+        } catch (Exception e) {
+            LOGGER.warning("Zero-copy optimization failed, falling back to regular transfer: " + e.getMessage());
+            return data;
+        }
+    }
+
+    /**
+     * Execute native batch processing via JNI with comprehensive error handling.
+     */
+    private native BatchResult executeNativeBatch(String batchName, byte[][] operations, long batchId, long startTime);
+
+    /**
+     * Transfer zero-copy buffer via JNI.
+     */
+    private native byte[] transferZeroCopyBuffer(ByteBuffer buffer);
+
+    /**
+     * Check if native library is available.
+     */
+    private native boolean isNativeLibraryAvailable();
+
+    /**
+     * Determine optimization level based on batch size.
+     */
+    private String determineOptimizationLevel(int operationCount) {
+        if (operationCount >= 1000) return "MAXIMUM";
+        if (operationCount >= 500) return "HIGH";
+        if (operationCount >= 100) return "MEDIUM";
+        if (operationCount >= 50) return "LOW";
+        return "MINIMAL";
+    }
     @Override public BridgeConfiguration getConfiguration() { return config; }
     @Override public void setConfiguration(BridgeConfiguration config) { this.config = Objects.requireNonNull(config); }
     @Override public BridgeMetrics getMetrics() { return metrics; }

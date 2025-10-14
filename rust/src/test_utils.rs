@@ -1,4 +1,5 @@
 
+#[cfg(test)]
 use std::time::Duration;
 
 /// Run closure `f` in a new thread and wait for completion up to `dur`.

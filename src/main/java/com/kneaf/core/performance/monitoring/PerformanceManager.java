@@ -27,10 +27,19 @@ public class PerformanceManager {
   private static final Object CONFIG_LOCK = new Object();
   private static volatile ConfigurationManager CONFIGURATION_MANAGER = null;
   
-  // State for backward compatibility
-  private boolean isEnabled = true;
-  private double averageTPS = 20.0;
-  private long lastTickDurationMs = 0;
+  // State for backward compatibility - static for thread safety
+  private static volatile boolean isEnabled = true;
+  private static volatile double averageTPS = 20.0;
+  private static volatile long lastTickDurationMs = 0;
+
+  // Enhanced tick monitoring state - static for backward compatibility
+  private static volatile long lastTickTimeNs = 0;
+  private static final java.util.Deque<Long> tickDurationsMs = new java.util.LinkedList<>();
+  private static final int MAX_TICK_HISTORY = 100;
+  private static volatile double currentTPS = 20.0;
+  private static volatile long tickCount = 0;
+  private static volatile long totalTickTimeMs = 0;
+  private static final Object tickMonitorLock = new Object();
   
   // Imported types for compatibility
   public interface EntityDataCollection {
@@ -182,10 +191,180 @@ public class PerformanceManager {
   public static void recordLockWait(String lockName, long durationMs) { /* Not implemented */ }
   public static void addThresholdAlert(String alert) { /* Not implemented */ }
   
-  // Server integration methods - not implemented
-  public static void onServerTick(Object server) { /* Not implemented */ }
-  public static void broadcastPerformanceLine(Object server, String line) { /* Not implemented */ }
-  
+  // Server integration methods - fully implemented
+  public static void onServerTick(Object server) {
+    if (!isEnabled()) {
+      return;
+    }
+
+    // Validate server parameter
+    if (server == null) {
+      System.err.println("PerformanceManager.onServerTick: server parameter cannot be null");
+      return;
+    }
+
+    if (!(server instanceof net.minecraft.server.MinecraftServer)) {
+      System.err.println("PerformanceManager.onServerTick: server parameter must be MinecraftServer instance, got: " +
+          (server.getClass() != null ? server.getClass().getName() : "null"));
+      return;
+    }
+
+    net.minecraft.server.MinecraftServer minecraftServer = (net.minecraft.server.MinecraftServer) server;
+
+    try {
+      synchronized (tickMonitorLock) {
+        long currentTimeNs = System.nanoTime();
+        long tickDurationNs = 0;
+
+        if (lastTickTimeNs > 0) {
+          tickDurationNs = currentTimeNs - lastTickTimeNs;
+        }
+        lastTickTimeNs = currentTimeNs;
+
+        long tickDurationMs = TimeUnit.NANOSECONDS.toMillis(tickDurationNs);
+        lastTickDurationMs = tickDurationMs;
+
+        // Update tick history for TPS calculation
+        tickDurationsMs.addLast(tickDurationMs);
+        if (tickDurationsMs.size() > MAX_TICK_HISTORY) {
+          tickDurationsMs.removeFirst();
+        }
+
+        tickCount++;
+        totalTickTimeMs += tickDurationMs;
+
+        // Calculate current TPS based on recent tick durations
+        if (!tickDurationsMs.isEmpty()) {
+          double averageTickDurationMs = tickDurationsMs.stream().mapToLong(Long::longValue).average().orElse(50.0);
+          currentTPS = 1000.0 / averageTickDurationMs;
+          // Clamp TPS to reasonable bounds
+          currentTPS = Math.max(0.0, Math.min(100.0, currentTPS));
+        }
+
+        // Update average TPS with exponential moving average
+        double alpha = 0.1; // Smoothing factor
+        averageTPS = alpha * currentTPS + (1 - alpha) * averageTPS;
+
+        // Record tick performance metrics
+        recordJniCall("server_tick", tickDurationMs);
+
+        // Check for performance thresholds and broadcast alerts if needed
+        checkPerformanceThresholds(minecraftServer, tickDurationMs, currentTPS);
+
+        // Integrate with RustPerformance for native metrics if available
+        try {
+          if (RustPerformance.isNativeAvailable()) {
+            RustPerformance.setCurrentTPS(currentTPS);
+            // Get additional native metrics
+            String memoryStats = RustPerformance.getMemoryStats();
+            String cpuStats = RustPerformance.getCpuStats();
+
+            // Log comprehensive performance data periodically
+            if (tickCount % 100 == 0) { // Every 100 ticks (~5 seconds at 20 TPS)
+              logPerformanceMetrics(minecraftServer, tickDurationMs, currentTPS, memoryStats, cpuStats);
+            }
+          }
+        } catch (Exception e) {
+          // Don't let Rust integration failures affect server tick
+          System.err.println("Failed to integrate with RustPerformance: " + e.getMessage());
+        }
+      }
+    } catch (Exception e) {
+      System.err.println("PerformanceManager.onServerTick: Unexpected error during tick monitoring: " + e.getMessage());
+      e.printStackTrace();
+    }
+  }
+
+  public static void broadcastPerformanceLine(Object server, String line) {
+    // Validate parameters
+    if (server == null) {
+      System.err.println("PerformanceManager.broadcastPerformanceLine: server parameter cannot be null");
+      return;
+    }
+
+    if (line == null || line.trim().isEmpty()) {
+      System.err.println("PerformanceManager.broadcastPerformanceLine: line parameter cannot be null or empty");
+      return;
+    }
+
+    if (!(server instanceof net.minecraft.server.MinecraftServer)) {
+      System.err.println("PerformanceManager.broadcastPerformanceLine: server parameter must be MinecraftServer instance, got: " +
+          (server.getClass() != null ? server.getClass().getName() : "null"));
+      return;
+    }
+
+    net.minecraft.server.MinecraftServer minecraftServer = (net.minecraft.server.MinecraftServer) server;
+
+    try {
+      // Use NetworkHandler for broadcasting to all players
+      com.kneaf.core.network.NetworkHandler.broadcastPerformanceLine(minecraftServer, line.trim());
+
+      // Also log to server console for debugging
+      System.out.println("[Performance] " + line.trim());
+    } catch (Exception e) {
+      System.err.println("PerformanceManager.broadcastPerformanceLine: Failed to broadcast performance line: " + e.getMessage());
+      e.printStackTrace();
+
+      // Fallback: try to log to console at least
+      try {
+        System.err.println("Performance broadcast failed, logging to console: " + line.trim());
+      } catch (Exception fallbackError) {
+        // Last resort - do nothing if even console logging fails
+      }
+    }
+  }
+
+  // Performance threshold checking and alerting
+  private static void checkPerformanceThresholds(net.minecraft.server.MinecraftServer server, long tickDurationMs, double currentTPS) {
+    try {
+      PerformanceManager instance = getInstance();
+      if (instance.config == null) {
+        return; // No config available
+      }
+
+      double tpsThreshold = instance.config.getTpsThresholdForAsync();
+      if (currentTPS < tpsThreshold) {
+        String alertMessage = String.format("Performance Alert: TPS dropped below threshold (%.1f < %.1f), Tick Duration: %dms",
+            currentTPS, tpsThreshold, tickDurationMs);
+        broadcastPerformanceLine(server, alertMessage);
+        addThresholdAlert(alertMessage);
+      }
+
+      if (tickDurationMs > 100) { // Hard-coded threshold for very slow ticks
+        String slowTickMessage = String.format("Performance Warning: Slow tick detected (%dms)", tickDurationMs);
+        broadcastPerformanceLine(server, slowTickMessage);
+      }
+    } catch (Exception e) {
+      System.err.println("Failed to check performance thresholds: " + e.getMessage());
+    }
+  }
+
+  // Comprehensive performance metrics logging
+  private static void logPerformanceMetrics(net.minecraft.server.MinecraftServer server, long tickDurationMs, double currentTPS, String memoryStats, String cpuStats) {
+    try {
+      StringBuilder metrics = new StringBuilder();
+      metrics.append(String.format("Performance Metrics - TPS: %.2f, Tick Duration: %dms", currentTPS, tickDurationMs));
+
+      if (memoryStats != null && !memoryStats.isEmpty()) {
+        metrics.append(", Memory: ").append(memoryStats);
+      }
+
+      if (cpuStats != null && !cpuStats.isEmpty()) {
+        metrics.append(", CPU: ").append(cpuStats);
+      }
+
+      // Log to server console
+      System.out.println("[PerformanceManager] " + metrics.toString());
+
+      // Broadcast to players if TPS is concerning
+      if (currentTPS < 18.0) {
+        broadcastPerformanceLine(server, metrics.toString());
+      }
+    } catch (Exception e) {
+      System.err.println("Failed to log performance metrics: " + e.getMessage());
+    }
+  }
+
   // Backward compatibility methods - return empty collections for missing metrics
   public static Map<String, Object> getJniCallMetrics() {
       try {
@@ -242,40 +421,17 @@ public class PerformanceManager {
   }
 
   // Backward compatibility methods - static getters and setters with null safety
-  public static boolean isEnabled() { 
-    try {
-      PerformanceManager instance = getInstance();
-      return instance.isEnabled; 
-    } catch (Throwable t) {
-      System.err.println("Failed to get enabled status: " + t.getMessage());
-      return false;
-    }
+  public static boolean isEnabled() {
+    return isEnabled;
   }
-  public static void setEnabled(boolean enabled) { 
-    try {
-      PerformanceManager instance = getInstance();
-      instance.isEnabled = enabled; 
-    } catch (Throwable t) {
-      System.err.println("Failed to set enabled status: " + t.getMessage());
-    }
+  public static void setEnabled(boolean enabled) {
+    isEnabled = enabled;
   }
-  public static double getAverageTPS() { 
-    try {
-      PerformanceManager instance = getInstance();
-      return instance.averageTPS; 
-    } catch (Throwable t) {
-      System.err.println("Failed to get average TPS: " + t.getMessage());
-      return 20.0;
-    }
+  public static double getAverageTPS() {
+    return averageTPS;
   }
-  public static long getLastTickDurationMs() { 
-    try {
-      PerformanceManager instance = getInstance();
-      return instance.lastTickDurationMs; 
-    } catch (Throwable t) {
-      System.err.println("Failed to get last tick duration: " + t.getMessage());
-      return 0;
-    }
+  public static long getLastTickDurationMs() {
+    return lastTickDurationMs;
   }
 
   /** Process optimization data using RustPerformance with unified bridge integration */

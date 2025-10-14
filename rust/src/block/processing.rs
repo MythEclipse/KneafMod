@@ -101,7 +101,7 @@ pub fn process_block_entities(input: BlockInput) -> BlockProcessResult {
     let physics_results = simulate_physics(&block_entities_to_tick, &input);
     
     // Handle entity interactions and state updates
-    let interaction_results = process_entity_interactions(&block_entities_to_tick, &physics_results);
+    let _interaction_results = process_entity_interactions(&block_entities_to_tick, &physics_results);
     
     // Update performance metrics
     BLOCKS_PROCESSED.fetch_add(processed_count as u64, Ordering::Relaxed);
@@ -380,6 +380,7 @@ fn detect_collision_simple(
 }
 
 /// Check sphere collision between entities (simplified)
+#[allow(dead_code)]
 fn check_sphere_collision(
     _start_pos: (f32, f32, f32),
     _end_pos: (f32, f32, f32),
@@ -388,7 +389,7 @@ fn check_sphere_collision(
 ) -> Option<f32> {
     // Simplified collision detection - for now return no collision
     // In a full implementation, you'd use proper line-sphere intersection
-    
+
     None
 }
 

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::config::*;
 use super::types::*;
 use crate::simd_enhanced::{BatchSimdProcessor, EnhancedSimdProcessor};

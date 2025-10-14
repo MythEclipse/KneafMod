@@ -272,7 +272,7 @@ where
             // Create a mock JNIEnv for demonstration
             // In production, this would come from the Java VM
             let env = unsafe { JNIEnv::from_raw(std::ptr::null_mut()) }
-                .map_err(|e| JNIError::ConnectionError)?;
+                .map_err(|_e| JNIError::ConnectionError)?;
             
             // Execute the provided function with the JNIEnv
             let result = func(env);

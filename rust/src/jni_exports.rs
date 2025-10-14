@@ -12,7 +12,7 @@ use crossbeam::channel::{unbounded, Sender, Receiver};
 use std::thread;
 use std::sync::Arc;
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -501,7 +501,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
         Ok(s) => s.into(),
         Err(e) => {
             eprintln!("[rustperf] Failed to parse operation name: {:?}", e);
-            return create_error_byte_array(&mut env, "Failed to parse operation name");
+            return create_error_byte_array(&env, "Failed to parse operation name");
         }
     };
 
@@ -510,16 +510,16 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
         Ok(obj) => obj,
         Err(e) => {
             eprintln!("[rustperf] Failed to get parameters array: {:?}", e);
-            return create_error_byte_array(&mut env, "Failed to get parameters array");
+            return create_error_byte_array(&env, "Failed to get parameters array");
         }
     };
 
     // Convert JObject to byte array using helper function
-    let params_bytes = match convert_jobject_to_bytes(&mut env, params_obj) {
+    let params_bytes = match convert_jobject_to_bytes(&env, params_obj) {
         Ok(bytes) => bytes,
         Err(e) => {
             eprintln!("[rustperf] Failed to convert parameters to bytes: {}", e);
-            return create_error_byte_array(&mut env, "Failed to convert parameters to bytes");
+            return create_error_byte_array(&env, "Failed to convert parameters to bytes");
         }
     };
 
@@ -547,13 +547,13 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
                 Ok(arr) => arr.into_raw(),
                 Err(e) => {
                     eprintln!("[rustperf] Failed to create byte array from result: {:?}", e);
-                    create_error_byte_array(&mut env, "Failed to create result byte array")
+                    create_error_byte_array(&env, "Failed to create result byte array")
                 }
             }
         }
         Err(error_msg) => {
             eprintln!("[rustperf] Operation failed: {}", error_msg);
-            create_error_byte_array(&mut env, &error_msg)
+            create_error_byte_array(&env, &error_msg)
         }
     }
 }
@@ -691,7 +691,7 @@ pub fn process_block_operation(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Helper function to convert JObject to byte array
-fn convert_jobject_to_bytes(env: &mut JNIEnv, obj: JObject) -> Result<Vec<u8>, String> {
+fn convert_jobject_to_bytes(env: &JNIEnv, obj: JObject) -> Result<Vec<u8>, String> {
     // Try to convert as JByteArray directly - cast to JByteArray first
     let byte_array: JByteArray = obj.into();
     match env.convert_byte_array(&byte_array) {
@@ -702,7 +702,7 @@ fn convert_jobject_to_bytes(env: &mut JNIEnv, obj: JObject) -> Result<Vec<u8>, S
 
 /// Fallback helper function for when direct buffer access fails
 #[allow(dead_code)]
-fn convert_jobject_to_bytes_fallback(env: &mut JNIEnv, obj: JObject) -> Result<Vec<u8>, String> {
+fn convert_jobject_to_bytes_fallback(env: &JNIEnv, obj: JObject) -> Result<Vec<u8>, String> {
     // Try to get as direct buffer
     let buffer = JByteBuffer::from(obj);
     match env.get_direct_buffer_address(&buffer) {
@@ -721,7 +721,7 @@ fn convert_jobject_to_bytes_fallback(env: &mut JNIEnv, obj: JObject) -> Result<V
 }
 
 /// Create error byte array for JNI response
-fn create_error_byte_array(env: &mut JNIEnv, error_msg: &str) -> jbyteArray {
+fn create_error_byte_array(env: &JNIEnv, error_msg: &str) -> jbyteArray {
     let error_bytes = error_msg.as_bytes();
     match env.byte_array_from_slice(error_bytes) {
         Ok(arr) => arr.into_raw(),
@@ -930,7 +930,7 @@ fn generate_height_map(chunk_x: i32, chunk_z: i32, is_important: bool) -> Vec<u1
 }
 
 /// Generate block data berdasarkan height map
-fn generate_block_data(chunk_x: i32, chunk_z: i32, height_map: &[u16], is_important: bool) -> Vec<u8> {
+fn generate_block_data(_chunk_x: i32, _chunk_z: i32, height_map: &[u16], is_important: bool) -> Vec<u8> {
     let mut block_data = Vec::new();
     
     for local_x in 0..16 {
@@ -1018,7 +1018,7 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
     };
     
     // Simulate chunk generation with performance tracking
-    let start_time = std::time::Instant::now();
+    let _start_time = std::time::Instant::now();
     
     // Implementasi lengkap dengan database, compression, spatial optimization, dan caching
     let generation_start = std::time::Instant::now();
@@ -1087,7 +1087,7 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
     for (chunk_x, chunk_z) in new_chunks_to_generate {
         // Cek apakah sudah ada di cache
         let cache_key = format!("chunk_cache:{},{},overworld", chunk_x, chunk_z);
-        if let Some(cached_chunk) = crate::cache_eviction::GLOBAL_CACHE.get(&cache_key) {
+        if let Some(_cached_chunk) = crate::cache_eviction::GLOBAL_CACHE.get(&cache_key) {
             eprintln!("[rustperf] Found chunk in cache at ({}, {})", chunk_x, chunk_z);
             spatial_optimization_hits += 1;
             generated_chunks += 1;
@@ -1187,6 +1187,316 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
     result.write_f32::<LittleEndian>(compression_ratio).map_err(|e| e.to_string())?; // compression ratio
     result.write_u64::<LittleEndian>(compression_savings).map_err(|e| e.to_string())?; // compression savings
     Ok(result)
+}
+
+/// Process batch operations with comprehensive error handling and metrics
+fn process_batch_operations(batch_name: &str, operations: &[Vec<u8>], batch_id: u64, _start_time: u64) -> Result<Vec<u8>, String> {
+    eprintln!("[rustperf] Processing batch '{}' with {} operations (id: {})", batch_name, operations.len(), batch_id);
+    
+    let batch_start = std::time::Instant::now();
+    let mut successful_operations = 0;
+    let mut failed_operations = 0;
+    let mut total_bytes_processed = 0u64;
+    let mut results = Vec::new();
+    
+    // Process each operation in the batch
+    for (i, operation_data) in operations.iter().enumerate() {
+        let operation_start = std::time::Instant::now();
+        
+        // Extract operation name and parameters from binary format
+        let operation_result = match parse_batch_operation(operation_data) {
+            Ok((operation_name, parameters)) => {
+                eprintln!("[rustperf] Processing operation {}: '{}' with {} parameters", i, operation_name, parameters.len());
+                
+                // Execute the operation using existing processing functions
+                match execute_operation_by_name(&operation_name, &parameters) {
+                    Ok(result) => {
+                        successful_operations += 1;
+                        total_bytes_processed += result.len() as u64;
+                        eprintln!("[rustperf] Operation {} completed successfully: {} bytes", i, result.len());
+                        Ok(result)
+                    }
+                    Err(e) => {
+                        failed_operations += 1;
+                        eprintln!("[rustperf] Operation {} failed: {}", i, e);
+                        Err(e)
+                    }
+                }
+            }
+            Err(e) => {
+                failed_operations += 1;
+                eprintln!("[rustperf] Failed to parse operation {}: {}", i, e);
+                Err(format!("Parse error: {}", e))
+            }
+        };
+        
+        let operation_time = operation_start.elapsed().as_nanos() as u64;
+        
+        // Store operation result with metadata
+        match operation_result {
+            Ok(data) => {
+                results.push((true, data, operation_time));
+            }
+            Err(error) => {
+                results.push((false, error.into_bytes(), operation_time));
+            }
+        }
+    }
+    
+    let batch_duration = batch_start.elapsed().as_nanos() as u64;
+    
+    // Serialize batch result
+    let batch_result = serialize_batch_result(
+        batch_id,
+        successful_operations,
+        failed_operations,
+        total_bytes_processed,
+        batch_duration,
+        results
+    )?;
+    
+    eprintln!("[rustperf] Batch '{}' completed: {} successful, {} failed, {} bytes processed in {} ns",
+              batch_name, successful_operations, failed_operations, total_bytes_processed, batch_duration);
+    
+    Ok(batch_result)
+}
+
+/// Parse batch operation from binary format
+fn parse_batch_operation(data: &[u8]) -> Result<(String, Vec<Vec<u8>>), String> {
+    if data.len() < 4 {
+        return Err("Operation data too small".to_string());
+    }
+    
+    let mut cursor = std::io::Cursor::new(data);
+    
+    // Read operation name length and name
+    let name_len = cursor.read_u16::<byteorder::LittleEndian>()
+        .map_err(|e| format!("Failed to read operation name length: {}", e))? as usize;
+    
+    if cursor.position() as usize + name_len > data.len() {
+        return Err("Invalid operation name length".to_string());
+    }
+    
+    let mut name_bytes = vec![0u8; name_len];
+    cursor.read_exact(&mut name_bytes)
+        .map_err(|e| format!("Failed to read operation name: {}", e))?;
+    
+    let operation_name = String::from_utf8(name_bytes)
+        .map_err(|e| format!("Invalid operation name encoding: {}", e))?;
+    
+    // Read parameter count
+    let param_count = cursor.read_u32::<byteorder::LittleEndian>()
+        .map_err(|e| format!("Failed to read parameter count: {}", e))? as usize;
+    
+    let mut parameters = Vec::with_capacity(param_count);
+    
+    // Read each parameter
+    for i in 0..param_count {
+        let param_len = cursor.read_u32::<byteorder::LittleEndian>()
+            .map_err(|e| format!("Failed to read parameter {} length: {}", i, e))? as usize;
+        
+        if cursor.position() as usize + param_len > data.len() {
+            return Err(format!("Parameter {} data exceeds buffer", i));
+        }
+        
+        let mut param_data = vec![0u8; param_len];
+        cursor.read_exact(&mut param_data)
+            .map_err(|e| format!("Failed to read parameter {}: {}", i, e))?;
+        
+        parameters.push(param_data);
+    }
+    
+    Ok((operation_name, parameters))
+}
+
+/// Execute operation by name using existing processing functions
+fn execute_operation_by_name(operation_name: &str, parameters: &[Vec<u8>]) -> Result<Vec<u8>, String> {
+    // Use the first parameter as the main data payload
+    let main_data: &[u8] = if parameters.is_empty() {
+        &[]
+    } else {
+        parameters[0].as_slice()
+    };
+    
+    match operation_name {
+        "processVillager" => process_villager_operation(main_data),
+        "processEntity" => process_entity_operation(main_data),
+        "processMob" => process_mob_operation(main_data),
+        "processBlock" => process_block_operation(main_data),
+        "get_entities_to_tick" => get_entities_to_tick_operation(main_data),
+        "get_block_entities_to_tick" => get_block_entities_to_tick_operation(main_data),
+        "process_mob_ai" => process_mob_ai_operation(main_data),
+        "pre_generate_nearby_chunks" => pre_generate_nearby_chunks_operation(main_data),
+        "set_current_tps" => set_current_tps_operation(main_data),
+        _ => {
+            eprintln!("[rustperf] Unknown batch operation: {}", operation_name);
+            Err(format!("Unknown operation: {}", operation_name))
+        }
+    }
+}
+
+/// Serialize batch result to binary format
+fn serialize_batch_result(
+    batch_id: u64,
+    successful_operations: i32,
+    failed_operations: i32,
+    total_bytes_processed: u64,
+    batch_duration: u64,
+    results: Vec<(bool, Vec<u8>, u64)>
+) -> Result<Vec<u8>, String> {
+    let mut result_data = Vec::new();
+    
+    // Write batch header
+    result_data.write_u64::<byteorder::LittleEndian>(batch_id)
+        .map_err(|e| format!("Failed to write batch ID: {}", e))?;
+    
+    result_data.write_i32::<byteorder::LittleEndian>(successful_operations)
+        .map_err(|e| format!("Failed to write successful count: {}", e))?;
+    
+    result_data.write_i32::<byteorder::LittleEndian>(failed_operations)
+        .map_err(|e| format!("Failed to write failed count: {}", e))?;
+    
+    result_data.write_u64::<byteorder::LittleEndian>(total_bytes_processed)
+        .map_err(|e| format!("Failed to write bytes processed: {}", e))?;
+    
+    result_data.write_u64::<byteorder::LittleEndian>(batch_duration)
+        .map_err(|e| format!("Failed to write batch duration: {}", e))?;
+    
+    // Write results count
+    result_data.write_i32::<byteorder::LittleEndian>(results.len() as i32)
+        .map_err(|e| format!("Failed to write results count: {}", e))?;
+    
+    // Write each result
+    for (success, data, duration) in results {
+        result_data.write_u8(if success { 1 } else { 0 })
+            .map_err(|e| format!("Failed to write result success flag: {}", e))?;
+        
+        result_data.write_u64::<byteorder::LittleEndian>(duration)
+            .map_err(|e| format!("Failed to write result duration: {}", e))?;
+        
+        result_data.write_u32::<byteorder::LittleEndian>(data.len() as u32)
+            .map_err(|e| format!("Failed to write result data length: {}", e))?;
+        
+        result_data.extend_from_slice(&data);
+    }
+    
+    Ok(result_data)
+}
+
+/// JNI function for batch execution with comprehensive error handling
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_executeNativeBatch(
+    mut env: JNIEnv,
+    _class: JClass,
+    batch_name: JString,
+    operations_array: JObjectArray,
+    batch_id: jlong,
+    start_time: jlong,
+) -> jbyteArray {
+    // Convert Java batch name to Rust string
+    let batch_name_str: String = match env.get_string(&batch_name) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            eprintln!("[rustperf] Failed to get batch name: {:?}", e);
+            return create_error_byte_array(&env, "Failed to get batch name");
+        }
+    };
+    
+    // Convert Java operations array to Rust Vec<Vec<u8>>
+    let operations_count = match env.get_array_length(&operations_array) {
+        Ok(len) => len,
+        Err(e) => {
+            eprintln!("[rustperf] Failed to get operations array length: {:?}", e);
+            return create_error_byte_array(&env, "Failed to get operations array length");
+        }
+    };
+    
+    let mut operations = Vec::with_capacity(operations_count as usize);
+    
+    for i in 0..operations_count {
+        let operation_obj = match env.get_object_array_element(&operations_array, i) {
+            Ok(obj) => obj,
+            Err(e) => {
+                eprintln!("[rustperf] Failed to get operation {}: {:?}", i, e);
+                return create_error_byte_array(&env, &format!("Failed to get operation {}", i));
+            }
+        };
+        
+        // Convert JObject to JByteArray and then to Vec<u8>
+        let byte_array: JByteArray = operation_obj.into();
+        match env.convert_byte_array(&byte_array) {
+            Ok(bytes) => operations.push(bytes),
+            Err(e) => {
+                eprintln!("[rustperf] Failed to convert operation {}: {:?}", i, e);
+                return create_error_byte_array(&env, &format!("Failed to convert operation {}", i));
+            }
+        }
+    }
+    
+    // Process the batch
+    match process_batch_operations(&batch_name_str, &operations, batch_id as u64, start_time as u64) {
+        Ok(result_bytes) => {
+            match env.byte_array_from_slice(&result_bytes) {
+                Ok(arr) => arr.into_raw(),
+                Err(e) => {
+                    eprintln!("[rustperf] Failed to create result byte array: {:?}", e);
+                    create_error_byte_array(&env, "Failed to create result byte array")
+                }
+            }
+        }
+        Err(error_msg) => {
+            eprintln!("[rustperf] Batch processing failed: {}", error_msg);
+            create_error_byte_array(&env, &error_msg)
+        }
+    }
+}
+
+/// JNI function for zero-copy buffer transfer
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_transferZeroCopyBuffer(
+    env: JNIEnv,
+    _class: JClass,
+    buffer: JObject,
+) -> jbyteArray {
+    // Convert Java ByteBuffer to Rust Vec<u8>
+    let buffer_ref = buffer.into();
+    let buffer_data = match env.get_direct_buffer_address(&buffer_ref) {
+        Ok(address) => {
+            let capacity = match env.get_direct_buffer_capacity(&buffer_ref) {
+                Ok(cap) => cap,
+                Err(_) => 0,
+            };
+            if capacity > 0 {
+                let slice = unsafe { std::slice::from_raw_parts(address, capacity as usize) };
+                Some(slice.to_vec())
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
+    };
+    
+    if let Some(data) = buffer_data {
+        match env.byte_array_from_slice(&data) {
+            Ok(arr) => arr.into_raw(),
+            Err(e) => {
+                eprintln!("[rustperf] Failed to create zero-copy result array: {:?}", e);
+                std::ptr::null_mut()
+            }
+        }
+    } else {
+        eprintln!("[rustperf] Failed to extract zero-copy buffer data");
+        std::ptr::null_mut()
+    }
+}
+
+/// JNI function to check if native library is available
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_isNativeLibraryAvailable(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jboolean {
+    JNI_TRUE // Native library is available since we're executing this function
 }
 
 /// Process set_current_tps operation
