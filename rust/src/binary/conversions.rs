@@ -41,26 +41,18 @@ pub fn deserialize_mob_input(data: &[u8]) -> Result<MobInput, String> {
 }
 
 pub fn serialize_mob_result(result: &MobProcessResult) -> Result<Vec<u8>, String> {
-    // Java expects a list of mob ids to disable/simplify? We'll serialize two vectors lengths + ids for simplicity
-    // Format: [disable_len:i32][disable_ids...][simplify_len:i32][simplify_ids...]
-    let mut out: Vec<u8> = Vec::new();
-    // Java/BinarySerializer expects a leading tickCount:u64 in the result buffer for list deserializers.
-    // Use current timestamp as tickCount
-    out.write_u64::<LittleEndian>(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64)
-        .map_err(|e| e.to_string())?;
-    out.write_i32::<LittleEndian>(result.mobs_to_disable_ai.len() as i32)
-        .map_err(|e| e.to_string())?;
-    for id in &result.mobs_to_disable_ai {
-        out.write_u64::<LittleEndian>(*id)
-            .map_err(|e| e.to_string())?;
-    }
-    out.write_i32::<LittleEndian>(result.mobs_to_simplify_ai.len() as i32)
-        .map_err(|e| e.to_string())?;
-    for id in &result.mobs_to_simplify_ai {
-        out.write_u64::<LittleEndian>(*id)
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(out)
+    // Return JSON object instead of binary data to avoid JNI string conversion issues
+    let json = format!("{{\"disableList\":{},\"simplifyList\":{}}}",
+        format!("[{}]", result.mobs_to_disable_ai.iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<String>>()
+            .join(",")),
+        format!("[{}]", result.mobs_to_simplify_ai.iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<String>>()
+            .join(","))
+    );
+    Ok(json.into_bytes())
 }
 
 // Block conversions
@@ -98,18 +90,12 @@ pub fn deserialize_block_input(data: &[u8]) -> Result<BlockInput, String> {
 }
 
 pub fn serialize_block_result(result: &BlockProcessResult) -> Result<Vec<u8>, String> {
-    // Serialize list of block entity ids to tick: [len:i32][ids...]
-    let mut out: Vec<u8> = Vec::new();
-    // Add current timestamp as tickCount
-    out.write_u64::<LittleEndian>(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64)
-        .map_err(|e| e.to_string())?;
-    out.write_i32::<LittleEndian>(result.block_entities_to_tick.len() as i32)
-        .map_err(|e| e.to_string())?;
-    for id in &result.block_entities_to_tick {
-        out.write_u64::<LittleEndian>(*id)
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(out)
+    // Return JSON array instead of binary data to avoid JNI string conversion issues
+    let json = format!("[{}]", result.block_entities_to_tick.iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<String>>()
+        .join(","));
+    Ok(json.into_bytes())
 }
 
 // Placeholder for entity conversions (if needed in the future)
@@ -178,18 +164,12 @@ pub fn deserialize_entity_input(data: &[u8]) -> Result<crate::entity::types::Inp
 pub fn serialize_entity_result(
     result: &crate::entity::types::ProcessResult,
 ) -> Result<Vec<u8>, String> {
-    // Serialize: [len:i32][ids...]
-    let mut out: Vec<u8> = Vec::new();
-    // Prepend current timestamp as tickCount header for alignment and to match Java-side expectations.
-    out.write_u64::<LittleEndian>(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64)
-        .map_err(|e| e.to_string())?;
-    out.write_i32::<LittleEndian>(result.entities_to_tick.len() as i32)
-        .map_err(|e| e.to_string())?;
-    for id in &result.entities_to_tick {
-        out.write_u64::<LittleEndian>(*id)
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(out)
+    // Return JSON string instead of binary data to avoid JNI string conversion issues
+    let json = format!("[{}]", result.entities_to_tick.iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<String>>()
+        .join(","));
+    Ok(json.into_bytes())
 }
 
 // Villager conversions

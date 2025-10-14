@@ -1038,7 +1038,7 @@ public class RustPerformance {
     if (result == null || !result.isSuccess()) {
       throw new BridgeException("Operation failed or returned null result");
     }
-    
+
     Object resultObj = result.getResultObject();
     if (resultObj instanceof List<?>) {
       List<?> list = (List<?>) resultObj;
@@ -1057,8 +1057,21 @@ public class RustPerformance {
         }
       }
       return longList;
+    } else if (resultObj instanceof String) {
+      // Parse JSON array string
+      String jsonStr = (String) resultObj;
+      try {
+        com.google.gson.JsonArray jsonArray = com.google.gson.JsonParser.parseString(jsonStr).getAsJsonArray();
+        List<Long> longList = new java.util.ArrayList<>(jsonArray.size());
+        for (com.google.gson.JsonElement element : jsonArray) {
+          longList.add(element.getAsLong());
+        }
+        return longList;
+      } catch (Exception e) {
+        throw new BridgeException("Failed to parse JSON array from result: " + jsonStr, e);
+      }
     } else {
-      throw new BridgeException("Expected List result, got " + (resultObj == null ? "null" : resultObj.getClass().getName()));
+      throw new BridgeException("Expected List or JSON string result, got " + (resultObj == null ? "null" : resultObj.getClass().getName()));
     }
   }
 
@@ -1067,15 +1080,42 @@ public class RustPerformance {
     if (result == null || !result.isSuccess()) {
       throw new BridgeException("Operation failed or returned null result");
     }
-    
+
     Object resultObj = result.getResultObject();
     if (resultObj instanceof Map<?, ?>) {
       Map<?, ?> map = (Map<?, ?>) resultObj;
-      
+
       List<Long> disableList = extractLongListFromMap(map, "disableList", new java.util.ArrayList<>());
       List<Long> simplifyList = extractLongListFromMap(map, "simplifyList", new java.util.ArrayList<>());
-      
+
       return new MobProcessResult(disableList, simplifyList);
+    } else if (resultObj instanceof String) {
+      // Parse JSON object string
+      String jsonStr = (String) resultObj;
+      try {
+        com.google.gson.JsonObject jsonObject = com.google.gson.JsonParser.parseString(jsonStr).getAsJsonObject();
+
+        List<Long> disableList = new java.util.ArrayList<>();
+        List<Long> simplifyList = new java.util.ArrayList<>();
+
+        if (jsonObject.has("disableList")) {
+          com.google.gson.JsonArray disableArray = jsonObject.getAsJsonArray("disableList");
+          for (com.google.gson.JsonElement element : disableArray) {
+            disableList.add(element.getAsLong());
+          }
+        }
+
+        if (jsonObject.has("simplifyList")) {
+          com.google.gson.JsonArray simplifyArray = jsonObject.getAsJsonArray("simplifyList");
+          for (com.google.gson.JsonElement element : simplifyArray) {
+            simplifyList.add(element.getAsLong());
+          }
+        }
+
+        return new MobProcessResult(disableList, simplifyList);
+      } catch (Exception e) {
+        throw new BridgeException("Failed to parse JSON object from result: " + jsonStr, e);
+      }
     } else if (resultObj instanceof List<?>) {
       List<?> list = (List<?>) resultObj;
       // Assume first element is disableList, second is simplifyList
@@ -1083,7 +1123,7 @@ public class RustPerformance {
       List<Long> simplifyList = extractLongListResult(new BridgeResult.Builder().resultObject(list.get(1)).success(true).build());
       return new MobProcessResult(disableList, simplifyList);
     } else {
-      throw new BridgeException("Expected Map or List result for MobProcessResult, got " + (resultObj == null ? "null" : resultObj.getClass().getName()));
+      throw new BridgeException("Expected Map, JSON string, or List result for MobProcessResult, got " + (resultObj == null ? "null" : resultObj.getClass().getName()));
     }
   }
 

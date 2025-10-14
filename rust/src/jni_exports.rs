@@ -82,7 +82,7 @@ pub extern "system" fn JNI_OnLoad(_vm: *mut jni::sys::JavaVM, _reserved: *mut st
     state.workers.clear();
     state.operations.clear();
     
-    eprintln!("[rustperf] JNI_OnLoad completed - allocator system initialized");
+    
     JNI_VERSION_1_6
 }
 
@@ -125,7 +125,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
                     let result_sender = result_sender_clone.clone();
                     pool.spawn(move || {
                         // Process the task payload with proper implementation
-                        eprintln!("[rustperf] processing task with payload len {}", task.payload.len());
+                        
                         
                         // Extract operation type from payload header (first byte)
                         let operation_type = if task.payload.len() > 0 {
@@ -138,17 +138,17 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
                         let processed_payload = match operation_type {
                             0x01 => {
                                 // Echo operation - return payload as-is
-                                eprintln!("[rustperf] executing echo operation");
+                                
                                 task.payload.clone()
                             }
                             0x02 => {
                                 // Transform operation - simple byte manipulation
-                                eprintln!("[rustperf] executing transform operation");
+                                
                                 task.payload.iter().map(|b| b ^ 0xFF).collect()
                             }
                             0x03 => {
                                 // Compress operation - simulate compression
-                                eprintln!("[rustperf] executing compress operation");
+                                
                                 let mut result = Vec::with_capacity(task.payload.len() / 2);
                                 result.extend_from_slice(&[0x03, 0x00]); // Compression header
                                 result.extend_from_slice(&task.payload.len().to_le_bytes());
@@ -157,7 +157,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
                             }
                             _ => {
                                 // Default operation - return original payload
-                                eprintln!("[rustperf] executing default operation");
+                                
                                 task.payload.clone()
                             }
                         };
@@ -171,8 +171,6 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
                         // Send processed result
                         if let Err(e) = result_sender.send(processed_payload) {
                             eprintln!("[rustperf] failed to send result: {:?}", e);
-                        } else {
-                            eprintln!("[rustperf] task processed successfully");
                         }
                     });
                 }
@@ -187,7 +185,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
             };
 
             s.workers.insert(id, worker_data);
-            eprintln!("[rustperf] created worker {} with {} threads", id, num_threads);
+            
             id
         }
         Err(e) => {
@@ -209,7 +207,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
             // Dropping worker_data will drop the sender, causing the receiver to disconnect
             // and the worker thread to exit
             drop(worker_data);
-            eprintln!("[rustperf] destroyed worker {}", worker_handle);
+            
         } else {
             eprintln!("[rustperf] worker {} not found for destruction", worker_handle);
         }
@@ -243,8 +241,6 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
             drop(s); // Drop the lock before sending
             if let Err(e) = sender.send(task) {
                 eprintln!("[rustperf] failed to send task to worker {}: {:?}", worker_handle, e);
-            } else {
-                eprintln!("[rustperf] pushed task to worker {}", worker_handle);
             }
         } else {
             eprintln!("[rustperf] worker {} not found for push task", worker_handle);
@@ -357,7 +353,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
             op.result = Some(Arc::clone(&buffer_arc));
         }
 
-        eprintln!("[rustperf] submitted zero-copy operation {} with type {}", id, operation_type);
+        
         id
     } else {
         eprintln!("[rustperf] failed to extract data from ByteBuffer");
@@ -436,7 +432,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     state.workers.clear();
     state.operations.clear();
     
-    eprintln!("[rustperf] nativeInitAllocator completed - memory allocator initialized");
+    
 }
 
 #[no_mangle]
@@ -457,7 +453,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationM
     state.workers.clear();
     state.operations.clear();
     
-    eprintln!("[rustperf] NativeResourceManager.nativeInitAllocator completed - resource allocator initialized");
+    
 }
 
 #[no_mangle]
@@ -486,7 +482,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationM
     state.next_worker_id = 1;
     state.next_operation_id = 1;
     
-    eprintln!("[rustperf] NativeResourceManager.nativeShutdownAllocator completed - resource allocator shut down");
+    
 }
 // Implementation for nativeExecuteSync function for JniCallManager.NativeBridge
 #[no_mangle]
@@ -628,7 +624,7 @@ pub fn process_mob_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Try to deserialize input as mob input
     let mob_input = match crate::binary::conversions::deserialize_mob_input(data) {
         Ok(input) => {
-            eprintln!("[rustperf] Successfully deserialized {} mobs", input.mobs.len());
+            
             input
         }
         Err(e) => {
@@ -644,8 +640,7 @@ pub fn process_mob_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Use the optimized mob processing function from mob/processing.rs
     let result = crate::mob::processing::process_mob_ai(mob_input);
     
-    eprintln!("[rustperf] Mob processing: {} to disable AI, {} to simplify AI",
-             result.mobs_to_disable_ai.len(), result.mobs_to_simplify_ai.len());
+    
     
     crate::binary::conversions::serialize_mob_result(&result)
         .map_err(|e| format!("Failed to serialize mob result: {}", e))
@@ -653,7 +648,7 @@ pub fn process_mob_operation(data: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Process block operation using binary conversions
 pub fn process_block_operation(data: &[u8]) -> Result<Vec<u8>, String> {
-    eprintln!("[rustperf] process_block_operation called with {} bytes", data.len());
+    eprintln!("[rustperf] process_block_operation called - input {} bytes", data.len());
     
     // Handle empty or very small data
     if data.is_empty() {
@@ -668,7 +663,7 @@ pub fn process_block_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Try to deserialize input as block input
     let block_input = match crate::binary::conversions::deserialize_block_input(data) {
         Ok(input) => {
-            eprintln!("[rustperf] Successfully deserialized {} block entities", input.block_entities.len());
+            
             input
         }
         Err(e) => {
@@ -684,7 +679,7 @@ pub fn process_block_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Use the optimized block processing function from block/processing.rs
     let result = crate::block::processing::process_block_entities(block_input);
     
-    eprintln!("[rustperf] Block processing: {} entities to tick", result.block_entities_to_tick.len());
+    
     
     crate::binary::conversions::serialize_block_result(&result)
         .map_err(|e| format!("Failed to serialize block result: {}", e))
@@ -731,7 +726,7 @@ fn create_error_byte_array(env: &JNIEnv, error_msg: &str) -> jbyteArray {
 
 /// Process get_entities_to_tick operation
 fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
-    eprintln!("[rustperf] get_entities_to_tick operation called with {} bytes", data.len());
+    eprintln!("[rustperf] get_entities_to_tick operation called - input {} bytes", data.len());
     
     // Handle empty or very small data
     if data.is_empty() {
@@ -746,7 +741,7 @@ fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Try to deserialize input as entity input
     let entity_input = match crate::binary::conversions::deserialize_entity_input(data) {
         Ok(input) => {
-            eprintln!("[rustperf] Successfully deserialized {} entities", input.entities.len());
+            
             input
         }
         Err(e) => {
@@ -764,7 +759,7 @@ fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Use the optimized entity processing function from entity/processing.rs
     let result = crate::entity::processing::process_entities(entity_input);
     
-    eprintln!("[rustperf] Returning {} entities to tick", result.entities_to_tick.len());
+    
     
     crate::binary::conversions::serialize_entity_result(&result)
         .map_err(|e| format!("Failed to serialize entity result: {}", e))
@@ -772,7 +767,7 @@ fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Process get_block_entities_to_tick operation
 fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
-    eprintln!("[rustperf] get_block_entities_to_tick operation called with {} bytes", data.len());
+    eprintln!("[rustperf] get_block_entities_to_tick operation called - input {} bytes", data.len());
     
     // Handle empty or very small data
     if data.is_empty() {
@@ -787,7 +782,7 @@ fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> 
     // Try to deserialize input as block input
     let block_input = match crate::binary::conversions::deserialize_block_input(data) {
         Ok(input) => {
-            eprintln!("[rustperf] Successfully deserialized {} block entities", input.block_entities.len());
+            
             input
         }
         Err(e) => {
@@ -803,7 +798,7 @@ fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> 
     // Use the optimized block processing function from block/processing.rs
     let result = crate::block::processing::process_block_entities(block_input);
     
-    eprintln!("[rustperf] Returning {} block entities to tick", result.block_entities_to_tick.len());
+    
     
     crate::binary::conversions::serialize_block_result(&result)
         .map_err(|e| format!("Failed to serialize block entity result: {}", e))
@@ -811,19 +806,18 @@ fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> 
 
 /// Process process_mob_ai operation
 fn process_mob_ai_operation(data: &[u8]) -> Result<Vec<u8>, String> {
-    eprintln!("[rustperf] process_mob_ai operation called with {} bytes", data.len());
+    eprintln!("[rustperf] process_mob_ai operation called - input {} bytes", data.len());
     
     // Deserialize mob input
     let mob_input = crate::binary::conversions::deserialize_mob_input(data)
         .map_err(|e| format!("Failed to deserialize mob input: {}", e))?;
     
-    eprintln!("[rustperf] Successfully deserialized {} mobs", mob_input.mobs.len());
+    
     
     // Use the optimized mob processing function from mob/processing.rs
     let result = crate::mob::processing::process_mob_ai(mob_input);
     
-    eprintln!("[rustperf] Mob AI processing: {} to disable, {} to simplify",
-             result.mobs_to_disable_ai.len(), result.mobs_to_simplify_ai.len());
+    
     
     crate::binary::conversions::serialize_mob_result(&result)
         .map_err(|e| format!("Failed to serialize mob AI result: {}", e))
@@ -863,8 +857,7 @@ fn generate_chunk_data(chunk_x: i32, chunk_z: i32) -> Vec<u8> {
         .as_secs();
     chunk_data.extend_from_slice(&timestamp.to_le_bytes());
     
-    eprintln!("[rustperf] Generated chunk data for ({}, {}): {} bytes, important: {}",
-              chunk_x, chunk_z, chunk_data.len(), is_important_chunk);
+    
     
     chunk_data
 }
@@ -975,7 +968,7 @@ fn calculate_cache_priority(chunk_x: i32, chunk_z: i32, center_x: i32, center_z:
 
 /// Process pre_generate_nearby_chunks operation
 fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> {
-    eprintln!("[rustperf] pre_generate_nearby_chunks operation called with {} bytes", data.len());
+    eprintln!("[rustperf] pre_generate_nearby_chunks operation called - input {} bytes", data.len());
     
     // Handle different input formats based on available data
     let (chunk_x, chunk_z, radius) = if data.len() >= 12 {
@@ -998,11 +991,11 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
         (coord, coord, 3) // Default radius of 3 chunks
     } else {
         // Empty or minimal data - use defaults
-        eprintln!("[rustperf] Using default chunk coordinates due to insufficient data");
+    eprintln!("[rustperf] Using default chunk coordinates due to insufficient data");
         (0, 0, 2) // Default to spawn chunks with radius 2
     };
     
-    eprintln!("[rustperf] Pre-generating chunks around ({}, {}) with radius {}", chunk_x, chunk_z, radius);
+    
     
     // Validate radius to prevent overflow
     if radius < 0 || radius > 1000 {
@@ -1058,12 +1051,12 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
             match db_adapter.get_chunk(&chunk_key) {
                 Ok(Some(_)) => {
                     loaded_chunks += 1;
-                    eprintln!("[rustperf] Loaded existing chunk at ({}, {})", chunk_x, chunk_z);
+                    
                 }
                 Ok(None) => {
                     // Chunk tidak ada, perlu di-generate
                     new_chunks_to_generate.push((chunk_x, chunk_z));
-                    eprintln!("[rustperf] New chunk needed at ({}, {})", chunk_x, chunk_z);
+                    
                 }
                 Err(e) => {
                     eprintln!("[rustperf] Error loading chunk at ({}, {}): {}", chunk_x, chunk_z, e);
@@ -1088,7 +1081,7 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
         // Cek apakah sudah ada di cache
         let cache_key = format!("chunk_cache:{},{},overworld", chunk_x, chunk_z);
         if let Some(_cached_chunk) = crate::cache_eviction::GLOBAL_CACHE.get(&cache_key) {
-            eprintln!("[rustperf] Found chunk in cache at ({}, {})", chunk_x, chunk_z);
+            
             spatial_optimization_hits += 1;
             generated_chunks += 1;
             continue;
@@ -1140,11 +1133,11 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
             compressed_data.clone(),
             cache_priority
         ) {
-            eprintln!("[rustperf] Evicted old chunk from cache during generation");
+            
         }
         
         generated_chunks += 1;
-        eprintln!("[rustperf] Generated and cached chunk at ({}, {})", chunk_x, chunk_z);
+        
     }
     
     // 3. Cache generated chunks (sudah dilakukan di atas)
@@ -1165,15 +1158,7 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
         0.0
     };
     
-    eprintln!("[rustperf] Chunk generation completed:");
-    eprintln!("  - Total chunks in radius: {}", estimated_chunks);
-    eprintln!("  - Existing chunks loaded: {}", loaded_chunks);
-    eprintln!("  - New chunks generated: {}", generated_chunks);
-    eprintln!("  - Cache hits: {}", spatial_optimization_hits);
-    eprintln!("  - Compression savings: {} bytes", compression_savings);
-    eprintln!("  - Cache hit rate: {:.2}%", cache_hit_rate);
-    eprintln!("  - Compression ratio: {:.2}%", compression_ratio);
-    eprintln!("  - Total time: {}ms", total_generation_time);
+    
     
     // Return result dengan metrics yang lengkap
     let mut result = Vec::new();
@@ -1191,7 +1176,7 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
 
 /// Process batch operations with comprehensive error handling and metrics
 fn process_batch_operations(batch_name: &str, operations: &[Vec<u8>], batch_id: u64, _start_time: u64) -> Result<Vec<u8>, String> {
-    eprintln!("[rustperf] Processing batch '{}' with {} operations (id: {})", batch_name, operations.len(), batch_id);
+    
     
     let batch_start = std::time::Instant::now();
     let mut successful_operations = 0;
@@ -1206,14 +1191,13 @@ fn process_batch_operations(batch_name: &str, operations: &[Vec<u8>], batch_id: 
         // Extract operation name and parameters from binary format
         let operation_result = match parse_batch_operation(operation_data) {
             Ok((operation_name, parameters)) => {
-                eprintln!("[rustperf] Processing operation {}: '{}' with {} parameters", i, operation_name, parameters.len());
+                
                 
                 // Execute the operation using existing processing functions
                 match execute_operation_by_name(&operation_name, &parameters) {
                     Ok(result) => {
                         successful_operations += 1;
                         total_bytes_processed += result.len() as u64;
-                        eprintln!("[rustperf] Operation {} completed successfully: {} bytes", i, result.len());
                         Ok(result)
                     }
                     Err(e) => {
@@ -1255,8 +1239,7 @@ fn process_batch_operations(batch_name: &str, operations: &[Vec<u8>], batch_id: 
         results
     )?;
     
-    eprintln!("[rustperf] Batch '{}' completed: {} successful, {} failed, {} bytes processed in {} ns",
-              batch_name, successful_operations, failed_operations, total_bytes_processed, batch_duration);
+    
     
     Ok(batch_result)
 }
@@ -1524,7 +1507,7 @@ fn set_current_tps_operation(data: &[u8]) -> Result<Vec<u8>, String> {
         return Err(format!("Invalid TPS value: {}", tps));
     }
     
-    eprintln!("[rustperf] Setting current TPS to {}", tps);
+    
     
     // Store TPS value in global state or configuration
     // In a real implementation, this would update the game's TPS tracking system
