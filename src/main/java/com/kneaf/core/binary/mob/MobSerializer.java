@@ -123,7 +123,22 @@ public class MobSerializer extends BaseBinarySerializer<MobInput, MobProcessResu
         simplifyList.add(buffer.getLong());
       }
 
-      return new MobProcessResult(disableList, simplifyList);
+      // Build result using new builder pattern
+      MobProcessResult.Builder builder = new MobProcessResult.Builder()
+          .totalCount(disableList.size() + simplifyList.size())
+          .processingTimeMs(0); // Not available in serialized data
+
+      // Add disabled mobs
+      for (Long mobId : disableList) {
+        builder.addDespawnedMob(mobId);
+      }
+
+      // Add simplified mobs
+      for (Long mobId : simplifyList) {
+        builder.addSimplifiedMob(mobId);
+      }
+
+      return builder.build();
 
     } catch (SerializationException e) {
       throw e;

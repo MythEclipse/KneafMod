@@ -7,6 +7,7 @@ import com.kneaf.core.performance.unified.PerformanceManager;
 import com.kneaf.core.command.unified.UnifiedCommandSystem;
 import com.kneaf.core.unifiedbridge.UnifiedBridgeImpl;
 import com.kneaf.core.unifiedbridge.BridgeConfiguration;
+import com.kneaf.core.unifiedbridge.BridgeException;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
@@ -201,9 +202,12 @@ public class ModInitializer {
             BridgeConfiguration bridgeConfig = createBridgeConfiguration();
             UnifiedBridgeImpl bridge = new UnifiedBridgeImpl(bridgeConfig);
             unifiedBridge.set(bridge);
-            
+
             LOGGER.info("Unified bridge system initialized successfully");
-            
+
+        } catch (BridgeException e) {
+            LOGGER.error("Bridge configuration error during initialization", e);
+            throw new RuntimeException("Unified bridge system initialization failed", e);
         } catch (Exception e) {
             LOGGER.error("Failed to initialize unified bridge system", e);
             throw new RuntimeException("Unified bridge system initialization failed", e);

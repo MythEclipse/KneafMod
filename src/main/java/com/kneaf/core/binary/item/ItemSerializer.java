@@ -121,8 +121,22 @@ public class ItemSerializer extends BaseBinarySerializer<ItemInput, ItemProcessR
       long mergedCount = buffer.getLong();
       long despawnedCount = buffer.getLong();
 
-      return new ItemProcessResult(
-          itemsToRemove, (int) mergedCount, (int) despawnedCount, itemUpdates);
+      // Build result using new builder pattern
+      ItemProcessResult.Builder builder = new ItemProcessResult.Builder()
+          .totalCount((int) (mergedCount + despawnedCount))
+          .processingTimeMs(0); // Not available in serialized data
+
+      // Add disabled items
+      for (Long itemId : itemsToRemove) {
+        builder.addDisabledItem(itemId);
+      }
+
+      // Add merged items (approximate)
+      for (int i = 0; i < mergedCount && i < itemUpdates.size(); i++) {
+        builder.addMergedItem(itemUpdates.get(i).getItemId());
+      }
+
+      return builder.build();
 
     } catch (SerializationException e) {
       throw e;

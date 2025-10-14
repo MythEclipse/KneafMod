@@ -149,8 +149,7 @@ public class ChunkStorageCoordinator implements StorageStatisticsProvider {
       return false;
     }
 
-    // This would need to be exposed through SwapManager
-    return true; // Placeholder
+    return swapManager.isEnableAutomaticSwapping();
   }
 
   /**

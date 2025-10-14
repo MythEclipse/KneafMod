@@ -327,7 +327,7 @@ public abstract sealed class RustResult<T, E extends Throwable>
         public static <T> RustResult<T, BridgeException> fromBridgeResult(BridgeResult bridgeResult) {
             if (bridgeResult.isSuccess()) {
                 try {
-                    T value = convertToType(bridgeResult.getResultData(), bridgeResult.getMetadata());
+                    T value = convertToType((byte[]) bridgeResult.getResultData(), bridgeResult.getMetadata());
                     return ok(value, bridgeResult.getMetadata());
                 } catch (Exception e) {
                     return err(new BridgeException("Failed to convert result data", e), bridgeResult.getMetadata());

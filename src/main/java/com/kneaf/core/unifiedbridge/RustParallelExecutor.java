@@ -2,19 +2,11 @@ package com.kneaf.core.unifiedbridge;
 
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import com.kneaf.core.unifiedbridge.RustResult;
-import com.kneaf.core.unifiedbridge.BridgeException;
-import com.kneaf.core.unifiedbridge.UnifiedBridgeException;
-import com.kneaf.core.unifiedbridge.UnifiedBridgeException.ErrorCategory;
-import com.kneaf.core.unifiedbridge.UnifiedBridgeException.ErrorCode;
-import com.kneaf.core.unifiedbridge.RustResult.Factory;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Rust-inspired parallel execution system with thread pooling and safe error handling.
@@ -32,7 +24,7 @@ public final class RustParallelExecutor {
     
     // Internal state
     private final Map<Long, Future<?>> activeFutures = new ConcurrentHashMap<>();
-    private final AtomicLong nextTaskId = new AtomicLong(1);
+    private static final AtomicLong nextTaskId = new AtomicLong(1);
 
     private RustParallelExecutor() {
         this.corePoolSize = Runtime.getRuntime().availableProcessors() - 1;
@@ -69,9 +61,9 @@ public final class RustParallelExecutor {
      * Spawn a new task for parallel execution (similar to Rust's std::thread::spawn).
      * @param task The task to execute
      * @param <T> The return type of the task
-     * @return RustResult containing either the task result or an error
+     * @return TaskHandle for managing the spawned task
      */
-    public <T> RustResult<T, ExecutionException> spawn(Callable<T> task) {
+    public <T> TaskHandle<T> spawn(Callable<T> task) {
         return spawn(task, false);
     }
 
@@ -80,9 +72,9 @@ public final class RustParallelExecutor {
      * @param task The task to execute
      * @param unownedData true if task uses unowned (externally managed) data, false otherwise
      * @param <T> The return type of the task
-     * @return RustResult containing either the task result or an error
+     * @return TaskHandle for managing the spawned task
      */
-    public <T> RustResult<T, ExecutionException> spawn(Callable<T> task, boolean unownedData) {
+    public <T> TaskHandle<T> spawn(Callable<T> task, boolean unownedData) {
         Objects.requireNonNull(task, "Task cannot be null");
         
         long taskId = nextTaskId.getAndIncrement();
@@ -96,11 +88,7 @@ public final class RustParallelExecutor {
         
         activeFutures.put(taskId, future);
         
-        return RustResult.Factory.ok(new TaskHandle<>(taskId, future), Map.of(
-            "taskId", taskId,
-            "unownedData", unownedData,
-            "threadPoolSize", executor.getPoolSize()
-        ));
+        return new TaskHandle<>(taskId, future);
     }
 
     /**
@@ -115,18 +103,23 @@ public final class RustParallelExecutor {
             return RustResult.Factory.ok(Collections.emptyList());
         }
 
-        List<Future<T>> futures = executor.invokeAll(tasks);
-        List<T> results = new ArrayList<>(tasks.size());
-        
-        for (Future<T> future : futures) {
-            try {
-                results.add(future.get());
-            } catch (Exception e) {
-                return RustResult.Factory.err(new ExecutionException("JoinAll failed", e));
+        try {
+            List<Future<T>> futures = executor.invokeAll(tasks);
+            List<T> results = new ArrayList<>(tasks.size());
+            
+            for (Future<T> future : futures) {
+                try {
+                    results.add(future.get());
+                } catch (Exception e) {
+                    return RustResult.Factory.err(new ExecutionException("Task failed", e));
+                }
             }
+            
+            return RustResult.Factory.ok(results);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return RustResult.Factory.err(new ExecutionException("JoinAll interrupted", e));
         }
-        
-        return RustResult.Factory.ok(results);
     }
 
     /**
@@ -200,9 +193,9 @@ public final class RustParallelExecutor {
     public <T> RustResult<T, ExecutionException> wait(TaskHandle<T> taskHandle) {
         Objects.requireNonNull(taskHandle, "Task handle cannot be null");
         
-        Future<T> future = activeFutures.remove(taskHandle.getTaskId());
+        Future<T> future = (Future<T>) activeFutures.remove(taskHandle.getTaskId());
         if (future == null) {
-            return RustResult.Factory.err(new ExecutionException("No active task with ID: " + taskHandle.getTaskId()));
+            return RustResult.Factory.err(new ExecutionException(new Exception("No active task with ID: " + taskHandle.getTaskId())));
         }
         
         try {
@@ -230,9 +223,9 @@ public final class RustParallelExecutor {
         Objects.requireNonNull(taskHandle, "Task handle cannot be null");
         Objects.requireNonNull(unit, "Time unit cannot be null");
         
-        Future<T> future = activeFutures.remove(taskHandle.getTaskId());
+        Future<T> future = (Future<T>) activeFutures.remove(taskHandle.getTaskId());
         if (future == null) {
-            return RustResult.Factory.err(new ExecutionException("No active task with ID: " + taskHandle.getTaskId()));
+            return RustResult.Factory.err(new ExecutionException(new Exception("No active task with ID: " + taskHandle.getTaskId())));
         }
         
         try {
@@ -260,13 +253,13 @@ public final class RustParallelExecutor {
         
         Future<?> future = activeFutures.remove(taskHandle.getTaskId());
         if (future == null) {
-            return RustResult.Factory.err(new ExecutionException("No active task with ID: " + taskHandle.getTaskId()));
+            return RustResult.Factory.err(new ExecutionException(new Exception("No active task with ID: " + taskHandle.getTaskId())));
         }
         
         boolean cancelled = future.cancel(mayInterruptIfRunning);
         return cancelled 
             ? RustResult.Factory.ok(null)
-            : RustResult.Factory.err(new ExecutionException("Failed to cancel task with ID: " + taskHandle.getTaskId()));
+            : RustResult.Factory.err(new ExecutionException(new Exception("Failed to cancel task with ID: " + taskHandle.getTaskId())));
     }
 
     /**

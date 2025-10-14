@@ -1470,6 +1470,15 @@ public class SwapManager implements StorageStatisticsProvider {
     return shutdown.get();
   }
 
+  /**
+   * Check if automatic swapping is enabled.
+   *
+   * @return true if automatic swapping is enabled
+   */
+  public boolean isEnableAutomaticSwapping() {
+    return config.isEnableAutomaticSwapping();
+  }
+
   // Private helper methods
 
   private void initializeExecutors() {
