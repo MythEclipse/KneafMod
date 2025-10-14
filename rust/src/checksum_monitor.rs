@@ -250,17 +250,6 @@ impl ChecksumMonitor {
         Ok(verified_count)
     }
 
-    /// Process verification results from completed tasks
-    #[allow(dead_code)]
-    fn process_verification_results(
-        &self,
-        tasks: &mut Vec<std::thread::JoinHandle<Result<(), String>>>,
-        verified_count: &mut u64,
-        failed_count: &mut u64,
-    ) {
-        Self::process_verification_results_static(tasks, verified_count, failed_count);
-    }
-
     /// Static version of process_verification_results for use in threads
     fn process_verification_results_static(
         tasks: &mut Vec<std::thread::JoinHandle<Result<(), String>>>,

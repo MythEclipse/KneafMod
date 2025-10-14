@@ -24,7 +24,15 @@ impl AdaptiveThreadPool {
             thread_pool: Arc::new(thread_pool),
         }
     }
+}
 
+impl Default for AdaptiveThreadPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AdaptiveThreadPool {
     /// Execute a closure - compatible version for existing code
     pub fn execute<F, R>(&self, f: F) -> R
     where

@@ -103,18 +103,6 @@ impl<T> WorkStealingScheduler<T> {
         results
     }
 
-    /// Parallel execution with Rayon work stealing (legacy method for compatibility)
-    #[allow(dead_code)]
-    fn execute_parallel<F, R>(self, processor: F) -> Vec<R>
-    where
-        F: Fn(T) -> R + Send + Sync + 'static,
-        T: Send + 'static,
-        R: Send + 'static,
-    {
-        // Redirect to the adaptive pool version for better integration
-        self.execute_parallel_with_adaptive_pool(processor)
-    }
-
     /// Get execution statistics (for debugging/monitoring)
     #[cfg(debug_assertions)]
     pub fn get_stats() -> usize {

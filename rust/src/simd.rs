@@ -190,7 +190,15 @@ impl SimdManager {
             initialized: AtomicBool::new(false),
         }
     }
+}
 
+impl Default for SimdManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SimdManager {
     pub fn initialize(&self, config: SimdConfig) {
         // We intentionally avoid mutating `self.config`/`self.features` here because
         // SIMD_MANAGER is a lazily-initialized static and we only have &self.
@@ -271,6 +279,12 @@ pub trait SimdOperations {
 pub struct SimdProcessor {
     level: SimdLevel,
     features: SimdFeatures,
+}
+
+impl Default for SimdProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SimdProcessor {

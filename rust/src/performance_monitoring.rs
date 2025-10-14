@@ -203,9 +203,15 @@ impl PerformanceStats {
     }
 }
 
+impl Default for PerformanceStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 
-static SWAP_PERFORMANCE_STATS: Lazy<PerformanceStats> = Lazy::new(|| PerformanceStats::new());
+
+static SWAP_PERFORMANCE_STATS: Lazy<PerformanceStats> = Lazy::new(PerformanceStats::new);
 
 pub struct PerformanceMonitor {
     pub logger: Arc<PerformanceLogger>,

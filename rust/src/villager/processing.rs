@@ -2,8 +2,7 @@ use super::config::*;
 use super::pathfinding::*;
 use super::spatial::*;
 use super::types::*;
-use crate::arena::get_global_arena_pool;
-use crate::memory_pool::{with_thread_local_pool, EnhancedMemoryPoolManager};
+use crate::memory_pool::with_thread_local_pool;
 use crossbeam_queue::SegQueue;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -21,17 +20,6 @@ static ADVANCED_PATHFINDING_OPTIMIZER: Lazy<Mutex<AdvancedPathfindingOptimizer>>
 
 // Lock-free villager group cache with CoW support for O(1) access
 static VILLAGER_GROUP_CACHE: Lazy<DashMap<u32, Arc<VillagerGroup>>> = Lazy::new(DashMap::new);
-
-// Global memory pool access for villager processing
-#[allow(dead_code)]
-static MEMORY_POOL: Lazy<Arc<EnhancedMemoryPoolManager>> = Lazy::new(|| {
-    Arc::new(
-        EnhancedMemoryPoolManager::new(None).expect("Failed to initialize villager memory pool"),
-    )
-});
-
-#[allow(dead_code)]
-static ARENA_POOL: Lazy<Arc<crate::arena::ArenaPool>> = Lazy::new(|| get_global_arena_pool());
 
 // Atomic counters for performance monitoring
 static TOTAL_VILLAGERS_PROCESSED: AtomicU64 = AtomicU64::new(0);
@@ -463,7 +451,7 @@ struct VillagerGroupResult {
 pub fn process_villager_ai_batch(inputs: Vec<VillagerInput>) -> Vec<VillagerProcessResult> {
     inputs
         .into_par_iter()
-        .map(|input| process_villager_ai(input))
+        .map(process_villager_ai)
         .collect()
 }
 

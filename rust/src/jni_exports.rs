@@ -2,17 +2,17 @@
 // Provides the native symbols referenced by the Java side so the library builds.
 
 use jni::JNIEnv;
-use jni::objects::{JClass, JByteArray, JObject, JString, JObjectArray, JByteBuffer};
+use jni::objects::{JClass, JByteArray, JObject, JString, JObjectArray};
 use jni::sys::{jboolean, jbyteArray, jlong, jint, JNI_TRUE, JNI_VERSION_1_6};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::cell::RefCell;
 use rayon::ThreadPoolBuilder;
 use crossbeam::channel::{unbounded, Sender, Receiver};
 use std::thread;
-use std::sync::Arc;
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{Cursor, Read};
 
@@ -43,19 +43,14 @@ fn validate_memory_safety(data: &[u8], operation: &str) -> Result<(), String> {
 fn log_thread_safety(operation: &str, thread_id: std::thread::ThreadId) {
     jni_diagnostic!("DEBUG", operation, "Thread safety check - thread_id: {:?}", thread_id);
 }
-#[allow(dead_code)]
 #[derive(Clone)]
 enum OperationStatus {
     Pending,
     Completed,
-    Failed,
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
 struct ZeroCopyOperation {
-    buffer: Arc<Vec<u8>>,
-    operation_type: i32,
     status: OperationStatus,
     result: Option<Arc<Vec<u8>>>,
 }
@@ -66,9 +61,7 @@ struct Task {
 }
 
 // Worker data including thread pool and task queue
-#[allow(dead_code)]
 struct WorkerData {
-    pool: Arc<rayon::ThreadPool>,
     task_sender: Sender<Task>,
     result_receiver: Receiver<Vec<u8>>,
     _handle: thread::JoinHandle<()>,
@@ -98,6 +91,9 @@ static MEMORY_TRACKER: Lazy<Mutex<HashMap<jlong, Vec<u8>>>> = Lazy::new(|| Mutex
 static WORKER_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 static OPERATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+// Global shared native state (used by JNI entry points)
+static STATE: Lazy<Mutex<NativeState>> = Lazy::new(|| Mutex::new(NativeState::default()));
+
 // Per-thread state to reduce lock contention
 thread_local! {
     static THREAD_LOCAL_STATE: RefCell<Option<NativeState>> = RefCell::new(None);
@@ -111,20 +107,11 @@ pub extern "system" fn JNI_OnLoad(_vm: *mut jni::sys::JavaVM, _reserved: *mut st
     // Initialize global allocator state
     let _worker_lock = WORKER_LOCK.lock().unwrap();
     let _operation_lock = OPERATION_LOCK.lock().unwrap();
-    
-    let state = THREAD_LOCAL_STATE.with(|cell| {
-        let mut state = cell.borrow_mut();
-        if state.is_none() {
-            *state = Some(NativeState::default());
-        }
-        state.as_mut().unwrap()
-    });
-    
-    // Set up initial allocator configuration
+
+    // Initialize global STATE
+    let mut state = STATE.lock().unwrap();
     state.next_worker_id = 1;
     state.next_operation_id = 1;
-    
-    // Clear any existing data structures for clean startup
     state.workers.clear();
     state.operations.clear();
     
@@ -151,18 +138,9 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     
     jni_diagnostic!("INFO", "nativeCreateWorker", "Creating worker with concurrency: {}", concurrency);
     
-    // Use fine-grained locking for better performance
+    // Use fine-grained locking for worker creation and update global STATE
     let _worker_lock = WORKER_LOCK.lock().unwrap();
-    
-    // Get or create thread-local state
-    let state = THREAD_LOCAL_STATE.with(|cell| {
-        let mut state = cell.borrow_mut();
-        if state.is_none() {
-            *state = Some(NativeState::default());
-        }
-        state.as_mut().unwrap()
-    });
-    
+    let mut state = STATE.lock().unwrap();
     let id = state.next_worker_id;
     state.next_worker_id += 1;
 
@@ -241,13 +219,14 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
             });
 
             let worker_data = WorkerData {
-                pool,
                 task_sender,
                 result_receiver,
                 _handle: handle,
             };
 
-            s.workers.insert(id, worker_data);
+            // Insert worker into global STATE
+            let global_state = STATE.lock().unwrap();
+            global_state.workers.insert(id, worker_data);
             
             id
         }
@@ -388,7 +367,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     _class: JClass,
     _worker_handle: jlong,
     buffer: JObject,
-    operation_type: jint,
+    _operation_type: jint,
 ) -> jlong {
     // Copy data from ByteBuffer to Arc<Vec<u8>>
     let buffer_ref = buffer.into();
@@ -418,8 +397,6 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
         let buffer_arc = Arc::new(data);
 
         let operation = ZeroCopyOperation {
-            buffer: Arc::clone(&buffer_arc),
-            operation_type: operation_type as i32,
             status: OperationStatus::Pending,
             result: None,
         };
@@ -444,12 +421,12 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
 }
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_RustBridge_nativeExecuteSync(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     operation_name: JString,
     memory_handle: jlong,
 ) -> jbyteArray {
-    let operation_name: String = env.get_string(operation_name).expect("Invalid operation name").into();
+    let operation_name: String = env.get_string(&operation_name).expect("Invalid operation name").into();
 
     // Get memory from tracker using handle
     let parameters = {
@@ -460,7 +437,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_RustBridge_nativeExecut
     // Validate input safety
     if let Err(e) = validate_memory_safety(&parameters, &operation_name) {
         jni_diagnostic!("ERROR", "nativeExecuteSync", "Memory validation failed: {}", e);
-        return env.byte_array_from_slice(&[]).expect("Failed to create empty result");
+        return env.byte_array_from_slice(&[]).expect("Failed to create empty result").into_raw();
     }
 
     jni_diagnostic!("DEBUG", "nativeExecuteSync", "Executing operation: {}", operation_name);
@@ -469,7 +446,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_RustBridge_nativeExecut
     // In a real implementation, this would call the actual Rust logic
     let result = vec![0x01, 0x02, 0x03, 0x04]; // Dummy result
 
-    env.byte_array_from_slice(&result).expect("Failed to create result byte array")
+    env.byte_array_from_slice(&result).expect("Failed to create result byte array").into_raw()
 }
 
 #[no_mangle]
@@ -477,50 +454,45 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     env: JNIEnv,
     _class: JClass,
     operation_id: jlong,
+) -> jbyteArray {
+    // Lock global state and try to find the operation
     let s = STATE.lock().unwrap();
     let result_opt = if let Some(operation) = s.operations.get(&operation_id) {
         match operation.status {
-            OperationStatus::Completed => {
-                if let Some(result) = &operation.result {
-                    Some(result.clone())
-                } else {
-                    None
-                }
-            }
-            OperationStatus::Pending => {
-                None
-            }
-            OperationStatus::Failed => {
-                eprintln!("[rustperf] operation {} failed", operation_id);
-                None
-            }
+            OperationStatus::Completed => operation.result.clone(),
+            OperationStatus::Pending => None,
         }
     } else {
         eprintln!("[rustperf] operation {} not found", operation_id);
         None
     };
-    
+    drop(s);
+
     match result_opt {
-        Some(result) => {
-            // Create JByteArray from result Arc<Vec<u8>>
+        Some(result_arc) => {
+            let result = &*result_arc;
             match env.new_byte_array(result.len() as i32) {
                 Ok(arr) => {
                     let result_i8 = unsafe { std::slice::from_raw_parts(result.as_ptr() as *const i8, result.len()) };
                     if let Err(e) = env.set_byte_array_region(&arr, 0, result_i8) {
                         eprintln!("[rustperf] failed to set byte array region for operation {}: {:?}", operation_id, e);
-                        std::ptr::null_mut()
+                        let empty = env.new_byte_array(0).unwrap();
+                        empty.into_raw()
                     } else {
                         arr.into_raw()
                     }
                 }
                 Err(e) => {
                     eprintln!("[rustperf] failed to create byte array for operation {}: {:?}", operation_id, e);
-                    std::ptr::null_mut()
+                    let empty = env.new_byte_array(0).unwrap();
+                    empty.into_raw()
                 }
             }
         }
         None => {
-            std::ptr::null_mut()
+            // No result available
+            let empty = env.new_byte_array(0).unwrap();
+            empty.into_raw()
         }
     }
 }
@@ -810,28 +782,6 @@ fn convert_jobject_to_bytes(env: &JNIEnv, obj: JObject) -> Result<Vec<u8>, Strin
         Err(e) => Err(format!("Failed to convert byte array: {}", e))
     }
 }
-
-/// Fallback helper function for when direct buffer access fails
-#[allow(dead_code)]
-fn convert_jobject_to_bytes_fallback(env: &JNIEnv, obj: JObject) -> Result<Vec<u8>, String> {
-    // Try to get as direct buffer
-    let buffer = JByteBuffer::from(obj);
-    match env.get_direct_buffer_address(&buffer) {
-        Ok(address) => {
-            let capacity = env.get_direct_buffer_capacity(&buffer).unwrap_or(0);
-            if capacity > 0 {
-                // Use the capacity from JNI directly instead of calling get_capacity()
-                let slice = unsafe { std::slice::from_raw_parts(address, capacity as usize) };
-                Ok(slice.to_vec())
-            } else {
-                Err("Empty buffer capacity".to_string())
-            }
-        }
-        Err(e) => Err(format!("Failed to get buffer data: {}", e))
-    }
-}
-
-/// Create error byte array for JNI response
 fn create_error_byte_array(env: &JNIEnv, error_msg: &str) -> jbyteArray {
     let error_bytes = error_msg.as_bytes();
     match env.byte_array_from_slice(error_bytes) {

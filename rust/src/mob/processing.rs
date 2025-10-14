@@ -2,7 +2,7 @@
 
 use super::config::*;
 use super::types::*;
-use crate::simd_enhanced::{BatchSimdProcessor, EnhancedSimdProcessor};
+use crate::simd_enhanced::EnhancedSimdProcessor;
 use crate::spatial_optimized::{OptimizedSpatialGrid, GridConfig};
 use rayon::prelude::*;
 use serde_json;
@@ -116,7 +116,6 @@ pub struct MobProcessingManager {
     config: MobProcessingConfig,
     spatial_grid: Arc<OptimizedSpatialGrid>,
     simd_processor: EnhancedSimdProcessor,
-    batch_processor: BatchSimdProcessor,
     processing_stats: Arc<ProcessingStats>,
     last_ai_update: Instant,
     last_pathfinding_update: Instant,
@@ -136,13 +135,11 @@ impl MobProcessingManager {
 
         let spatial_grid = Arc::new(OptimizedSpatialGrid::new_for_villagers(spatial_config));
         let simd_processor = EnhancedSimdProcessor::<16>::new();
-        let batch_processor = BatchSimdProcessor::new(config.simd_chunk_size);
         
         Ok(Self {
             config,
             spatial_grid,
             simd_processor,
-            batch_processor,
             processing_stats: Arc::new(ProcessingStats::default()),
             last_ai_update: Instant::now(),
             last_pathfinding_update: Instant::now(),

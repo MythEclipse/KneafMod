@@ -664,7 +664,11 @@ impl SwapAllocationMetrics {
     }
 }
 
-/// Memory pressure levels
+impl Default for SwapAllocationMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryPressureLevel {
     Normal,
@@ -746,66 +750,13 @@ impl MemoryPressureMonitor {
 
         false
     }
-
-    pub fn get_stats(&self) -> MemoryPressureMonitoringStats {
-        let checks = self.pressure_checks.lock().unwrap();
-        let total_checks = checks.len();
-
-        if total_checks == 0 {
-            return MemoryPressureMonitoringStats {
-                total_checks: 0,
-                normal_checks: 0,
-                moderate_checks: 0,
-                high_checks: 0,
-                critical_checks: 0,
-                avg_checks_per_minute: 0.0,
-                last_check_time: SystemTime::now(),
-            };
-        }
-
-        let normal_checks = checks
-            .iter()
-            .filter(|&&(_, p)| p == MemoryPressureLevel::Normal)
-            .count();
-        let moderate_checks = checks
-            .iter()
-            .filter(|&&(_, p)| p == MemoryPressureLevel::Moderate)
-            .count();
-        let high_checks = checks
-            .iter()
-            .filter(|&&(_, p)| p == MemoryPressureLevel::High)
-            .count();
-        let critical_checks = checks
-            .iter()
-            .filter(|&&(_, p)| p == MemoryPressureLevel::Critical)
-            .count();
-
-        let avg_checks_per_minute = if total_checks > 0 {
-            let duration = checks
-                .last()
-                .unwrap()
-                .0
-                .duration_since(checks.first().unwrap().0)
-                .unwrap_or(Duration::from_secs(60));
-            let minutes = duration.as_secs() as f64 / 60.0;
-            (total_checks as f64 / minutes).max(0.0)
-        } else {
-            0.0
-        };
-
-        MemoryPressureMonitoringStats {
-            total_checks,
-            normal_checks,
-            moderate_checks,
-            high_checks,
-            critical_checks,
-            avg_checks_per_minute,
-            last_check_time: checks.last().unwrap().0,
-        }
-    }
 }
 
-#[derive(Debug, Clone)]
+impl Default for MemoryPressureMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub struct ObjectPoolMonitoringStats {
     pub available_objects: usize,
     pub max_size: usize,

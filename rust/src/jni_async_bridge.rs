@@ -35,6 +35,12 @@ impl AsyncOperationHandle {
     }
 }
 
+impl Default for AsyncOperationHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Async JNI bridge manager with actual async task queue implementation
 pub struct AsyncJniBridge {
     pending_operations: Arc<Mutex<HashMap<AsyncOperationHandle, AsyncOperationData>>>,

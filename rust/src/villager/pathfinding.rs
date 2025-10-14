@@ -85,7 +85,15 @@ impl PathfindingOptimizer {
             current_tick: 0,
         }
     }
+}
 
+impl Default for PathfindingOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PathfindingOptimizer {
     pub fn update_tick(&mut self, current_tick: u64) {
         self.current_tick = current_tick;
 
@@ -264,6 +272,12 @@ impl AdvancedPathfindingOptimizer {
         }
 
         villagers_to_reduce
+    }
+}
+
+impl Default for AdvancedPathfindingOptimizer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -267,7 +267,7 @@ pub fn process_entities(input: Input) -> ProcessResult {
 /// Batch process multiple entity collections in parallel with work-stealing
 pub fn process_entities_batch(inputs: Vec<Input>) -> Vec<ProcessResult> {
     let scheduler = WorkStealingScheduler::new(inputs);
-    scheduler.execute(|input| process_entities(input))
+    scheduler.execute(process_entities)
 }
 
 /// Process entities from JSON input and return JSON result

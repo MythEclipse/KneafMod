@@ -1,7 +1,6 @@
 //! Optimized spatial grid with O(log M) queries using hierarchical partitioning
 //! Implements SIMD-accelerated spatial queries with hierarchical spatial hashing
 
-use crate::simd_enhanced::EnhancedSimdProcessor;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
@@ -14,10 +13,6 @@ pub struct OptimizedSpatialGrid {
 
     // Global entity index for fast lookup
     entity_index: RwLock<HashMap<u64, EntityLocation>>,
-
-    // SIMD processor for accelerated operations
-    #[allow(dead_code)]
-    simd_processor: EnhancedSimdProcessor,
 
     // Grid configuration
     config: GridConfig,
@@ -77,8 +72,6 @@ struct SpatialGridLevel {
     cells: RwLock<HashMap<CellKey, CellData>>,
     #[allow(dead_code)]
     entity_count: AtomicU64,
-    #[allow(dead_code)]
-    last_access: Instant,
 }
 
 /// Cell key for spatial hashing
@@ -175,9 +168,7 @@ struct EntityData {
 
 /// Entity location in hierarchical grid
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct EntityLocation {
-    entity_id: u64,
     level: usize,
     cell_key: CellKey,
 }
@@ -194,7 +185,6 @@ impl OptimizedSpatialGrid {
                 cell_size: current_cell_size,
                 cells: RwLock::new(HashMap::new()),
                 entity_count: AtomicU64::new(0),
-                last_access: Instant::now(),
             });
             current_cell_size *= 2.0;
         }
@@ -202,7 +192,6 @@ impl OptimizedSpatialGrid {
         Self {
             levels,
             entity_index: RwLock::new(HashMap::new()),
-            simd_processor: EnhancedSimdProcessor::<16>::new(),
             config: config.clone(),
             metrics: GridMetrics::default(),
             lazy_update_queue: RwLock::new(HashSet::new()),
@@ -260,7 +249,6 @@ impl OptimizedSpatialGrid {
             index.insert(
                 entity_id,
                 EntityLocation {
-                    entity_id,
                     level: best_level,
                     cell_key,
                 },

@@ -210,7 +210,7 @@ fn simulate_physics(
     active_entities: &Vec<u64>,
     input: &BlockInput,
 ) -> Vec<BlockEntityState> {
-    let config_lock = PHYSICS_CONFIG.get_or_init(|| PhysicsConfig::default());
+    let config_lock = PHYSICS_CONFIG.get_or_init(PhysicsConfig::default);
     let config = config_lock;
     let mut states = Vec::new();
     
@@ -525,7 +525,7 @@ pub struct BlockProcessingStats {
 /// Batch process multiple block entity collections
 pub fn process_block_entities_batch(inputs: Vec<BlockInput>) -> Vec<BlockProcessResult> {
     let scheduler = WorkStealingScheduler::new(inputs);
-    scheduler.execute(|input| process_block_entities(input))
+    scheduler.execute(process_block_entities)
 }
 
 /// Process block entities from JSON input

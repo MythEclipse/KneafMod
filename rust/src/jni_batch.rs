@@ -227,7 +227,7 @@ impl ZeroCopyBufferPool {
         // Get or create pool for this operation type
         let pool = pools
             .entry(operation_type)
-            .or_insert_with(|| VecDeque::new());
+            .or_insert_with(VecDeque::new);
 
         // Try to reuse existing buffer if available and sufficient size
         if let Some(pos) = pool.iter().position(|b| b.size >= required_size) {
@@ -314,7 +314,7 @@ impl ZeroCopyBufferPool {
 
         let pool = pools
             .entry(buffer.operation_type)
-            .or_insert_with(|| VecDeque::new());
+            .or_insert_with(VecDeque::new);
 
         // Only add buffer back if it's not already at maximum size
         if pool.len() < self.max_pool_size {
