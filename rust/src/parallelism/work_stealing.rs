@@ -1,7 +1,7 @@
 use crate::errors::{Result, RustError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
-use crate::parallelism::executor_factory::{ParallelExecutorFactory, ExecutorType};
+use crate::parallelism::executor_factory::{ParallelExecutorFactory, ExecutorType, get_global_executor};
 
 // Track parallel execution statistics for performance monitoring
 static PARALLEL_TASK_STATS: AtomicUsize = AtomicUsize::new(0);

@@ -2,7 +2,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Cursor, Read};
 use std::slice;
 
-use crate::mob::types::{MobInput, MobProcessResult};
+use crate::entities::mob::types::{MobInput, MobProcessResult};
 use super::conversions::{BinaryConversionError, conversion_utils};
 
 // Trait defining the zero-copy conversion interface

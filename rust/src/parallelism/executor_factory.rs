@@ -81,14 +81,14 @@ impl ParallelExecutorBuilder {
             }
         });
 
+        let thread_name_prefix = self.thread_name_prefix.clone();
         let builder = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .thread_name(move |idx| {
-                self.thread_name_prefix
-                    .as_ref()
-                    .map(|prefix| format!("{}-{}", prefix, idx))
-                    .unwrap_or_else(|| format!("kneaf-exec-{}", idx))
-            });
+             .num_threads(num_threads)
+             .thread_name(move |idx| {
+                 thread_name_prefix.as_ref()
+                     .map(|p| format!("{}-{}", p, idx))
+                     .unwrap_or_else(|| format!("kneaf-exec-{}", idx))
+             });
 
         builder.build().map_err(|e| RustError::OperationFailed(e.to_string()))
     }

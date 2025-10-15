@@ -1,12 +1,12 @@
-use crate::block::types::{BlockInput, BlockProcessResult};
-use crate::entity::types::{
+use crate::entities::block::types::{BlockInput, BlockProcessResult};
+use crate::entities::entity::types::{
     EntityData as REntityData, Input as EntityInput, PlayerData as RPlayerData, ProcessResult as EntityProcessResult,
 };
-use crate::mob::types::{MobInput, MobProcessResult};
-use crate::villager::types::{
+use crate::entities::mob::types::{MobInput, MobProcessResult};
+use crate::entities::villager::types::{
     PlayerData as VillagerPlayerData, VillagerData, VillagerInput, VillagerProcessResult,
 };
-use crate::entity::config::Config as EntityConfig;
+use crate::entities::entity::config::Config as EntityConfig;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Cursor, Read};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,30 +36,182 @@ pub trait BinaryConverter {
     fn serialize(&self, data: &Self::Output) -> Result<Vec<u8>, BinaryConversionError>;
 }
 
-// Factory for creating binary converters
+// Basic factory for creating binary converters (legacy)
 pub struct BinaryConverterFactory;
 
 impl BinaryConverterFactory {
     // Mob converter
     pub fn mob_converter() -> impl BinaryConverter<Input=MobInput, Output=MobProcessResult> {
-        MobConverter
+        MobConverter::new()
     }
     
     // Block converter
     pub fn block_converter() -> impl BinaryConverter<Input=BlockInput, Output=BlockProcessResult> {
-        BlockConverter
+        BlockConverter::new()
     }
     
     // Entity converter
     pub fn entity_converter() -> impl BinaryConverter<Input=EntityInput, Output=EntityProcessResult> {
-        EntityConverter
+        EntityConverter::new()
     }
     
     // Villager converter
     pub fn villager_converter() -> impl BinaryConverter<Input=VillagerInput, Output=VillagerProcessResult> {
-        VillagerConverter
+        VillagerConverter::new()
     }
 }
+
+// Enhanced converter implementations with configuration support
+mod enhanced {
+    use super::*;
+
+    // Mob converter with configuration support
+    pub struct MobConverter {
+        config: BinaryConverterConfig,
+    }
+
+    impl MobConverter {
+        pub fn new() -> Self {
+            Self::new_with_config(BinaryConverterConfig::default())
+        }
+        
+        pub fn new_with_config(config: BinaryConverterConfig) -> Self {
+            Self { config }
+        }
+    }
+
+    impl BinaryConverter for MobConverter {
+        type Input = MobInput;
+        type Output = MobProcessResult;
+        
+        fn deserialize(&self, data: &[u8]) -> Result<Self::Input, BinaryConversionError> {
+            if self.config.validate_input {
+                // Add validation logic here if needed
+            }
+            super::MobConverter.deserialize(data)
+        }
+        
+        fn serialize(&self, data: &Self::Output) -> Result<Vec<u8>, BinaryConversionError> {
+            if self.config.compress_large_data && data.mobs_to_disable_ai.len() > self.config.compression_threshold {
+                // Add compression logic here if needed
+            }
+            super::MobConverter.serialize(data)
+        }
+    }
+
+    // Block converter with configuration support
+    pub struct BlockConverter {
+        config: BinaryConverterConfig,
+    }
+
+    impl BlockConverter {
+        pub fn new() -> Self {
+            Self::new_with_config(BinaryConverterConfig::default())
+        }
+        
+        pub fn new_with_config(config: BinaryConverterConfig) -> Self {
+            Self { config }
+        }
+    }
+
+    impl BinaryConverter for BlockConverter {
+        type Input = BlockInput;
+        type Output = BlockProcessResult;
+        
+        fn deserialize(&self, data: &[u8]) -> Result<Self::Input, BinaryConversionError> {
+            if self.config.validate_input {
+                // Add validation logic here if needed
+            }
+            super::BlockConverter.deserialize(data)
+        }
+        
+        fn serialize(&self, data: &Self::Output) -> Result<Vec<u8>, BinaryConversionError> {
+            if self.config.compress_large_data && data.block_entities_to_tick.len() > self.config.compression_threshold {
+                // Add compression logic here if needed
+            }
+            super::BlockConverter.serialize(data)
+        }
+    }
+
+    // Entity converter with configuration support
+    pub struct EntityConverter {
+        config: BinaryConverterConfig,
+    }
+
+    impl EntityConverter {
+        pub fn new() -> Self {
+            Self::new_with_config(BinaryConverterConfig::default())
+        }
+        
+        pub fn new_with_config(config: BinaryConverterConfig) -> Self {
+            Self { config }
+        }
+    }
+
+    impl BinaryConverter for EntityConverter {
+        type Input = EntityInput;
+        type Output = EntityProcessResult;
+        
+        fn deserialize(&self, data: &[u8]) -> Result<Self::Input, BinaryConversionError> {
+            if self.config.validate_input {
+                // Add validation logic here if needed
+            }
+            super::EntityConverter.deserialize(data)
+        }
+        
+        fn serialize(&self, data: &Self::Output) -> Result<Vec<u8>, BinaryConversionError> {
+            if self.config.compress_large_data && data.entities_to_tick.len() > self.config.compression_threshold {
+                // Add compression logic here if needed
+            }
+            super::EntityConverter.serialize(data)
+        }
+    }
+
+    // Villager converter with configuration support
+    pub struct VillagerConverter {
+        config: BinaryConverterConfig,
+    }
+
+    impl VillagerConverter {
+        pub fn new() -> Self {
+            Self::new_with_config(BinaryConverterConfig::default())
+        }
+        
+        pub fn new_with_config(config: BinaryConverterConfig) -> Self {
+            Self { config }
+        }
+    }
+
+    impl BinaryConverter for VillagerConverter {
+        type Input = VillagerInput;
+        type Output = VillagerProcessResult;
+        
+        fn deserialize(&self, data: &[u8]) -> Result<Self::Input, BinaryConversionError> {
+            if self.config.validate_input {
+                // Add validation logic here if needed
+            }
+            super::VillagerConverter.deserialize(data)
+        }
+        
+        fn serialize(&self, data: &Self::Output) -> Result<Vec<u8>, BinaryConversionError> {
+            if self.config.compress_large_data {
+                let total_entries = data.villagers_to_disable_ai.len()
+                    + data.villagers_to_simplify_ai.len()
+                    + data.villagers_to_reduce_pathfinding.len()
+                    + data.villager_groups.len();
+                
+                if total_entries > self.config.compression_threshold {
+                    // Add compression logic here if needed
+                }
+            }
+            super::VillagerConverter.serialize(data)
+        }
+    }
+}
+
+// Re-export for use in factory module
+pub use enhanced::*;
+pub use crate::binary::factory::BinaryConverterConfig;
 
 // Common validation utilities
 mod validation {
@@ -231,6 +383,47 @@ impl BinaryConverter for BlockConverter {
         
         Ok(out)
     }
+}
+
+// --- Compatibility helper functions (legacy API) ---
+pub fn deserialize_entity_input(data: &[u8]) -> Result<EntityInput, BinaryConversionError> {
+    let conv = BinaryConverterFactory::entity_converter();
+    conv.deserialize(data)
+}
+
+pub fn serialize_entity_result(result: &EntityProcessResult) -> Result<Vec<u8>, BinaryConversionError> {
+    let conv = BinaryConverterFactory::entity_converter();
+    conv.serialize(result)
+}
+
+pub fn deserialize_block_input(data: &[u8]) -> Result<BlockInput, BinaryConversionError> {
+    let conv = BinaryConverterFactory::block_converter();
+    conv.deserialize(data)
+}
+
+pub fn serialize_block_result(result: &BlockProcessResult) -> Result<Vec<u8>, BinaryConversionError> {
+    let conv = BinaryConverterFactory::block_converter();
+    conv.serialize(result)
+}
+
+pub fn deserialize_villager_input(data: &[u8]) -> Result<VillagerInput, BinaryConversionError> {
+    let conv = BinaryConverterFactory::villager_converter();
+    conv.deserialize(data)
+}
+
+pub fn serialize_villager_result(result: &VillagerProcessResult) -> Result<Vec<u8>, BinaryConversionError> {
+    let conv = BinaryConverterFactory::villager_converter();
+    conv.serialize(result)
+}
+
+pub fn deserialize_mob_input(data: &[u8]) -> Result<MobInput, BinaryConversionError> {
+    let conv = BinaryConverterFactory::mob_converter();
+    conv.deserialize(data)
+}
+
+pub fn serialize_mob_result(result: &MobProcessResult) -> Result<Vec<u8>, BinaryConversionError> {
+    let conv = BinaryConverterFactory::mob_converter();
+    conv.serialize(result)
 }
 
 // Entity converter implementation
