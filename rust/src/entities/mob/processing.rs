@@ -8,7 +8,7 @@ use crate::types::EntityConfigTrait as EntityConfig;
 
 #[derive(Debug, Clone)]
 pub struct MobEntityProcessor {
-    config: Arc<EntityConfig>,
+    config: Arc<dyn EntityConfig>,
     ai_config: Arc<MobConfig>,
 }
 

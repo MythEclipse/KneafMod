@@ -1,5 +1,6 @@
 use super::types::*;
 use std::sync::RwLock;
+use crate::EntityConfig;
 
 lazy_static::lazy_static! {
     pub static ref VILLAGER_CONFIG: RwLock<VillagerConfig> = RwLock::new(VillagerConfig {

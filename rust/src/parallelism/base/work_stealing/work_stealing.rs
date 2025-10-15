@@ -1,5 +1,7 @@
 use crate::parallelism::base::ExecutorType;
-use crate::parallelism::base::executor_factory::{ParallelExecutor, ParallelExecutorFactory, get_global_executor};
+use crate::ParallelExecutor;
+use crate::ParallelExecutorFactory;
+use crate::ExecutorType;
 
 /// Work-stealing scheduler for parallel task execution
 #[derive(Debug, Default)]
@@ -16,7 +18,7 @@ impl WorkStealingScheduler {
 
     /// Get a global shared work-stealing scheduler instance
     pub fn get_global_scheduler() -> Self {
-        let executor = get_global_executor();
+        let executor = ParallelExecutorFactory::create_executor(ExecutorType::WorkStealing);
         Self { executor }
     }
 

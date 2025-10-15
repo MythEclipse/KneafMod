@@ -35,4 +35,4 @@ impl BinaryConverter for BasicBinaryConverter {
     }
 }
 
-pub use crate::types::BinaryConverterConfig;
+// pub use crate::types::BinaryConverterConfig;

@@ -9,7 +9,7 @@ pub struct MobConfig {
     pub hostile_simplify_distance: f32,
     pub ai_tick_rate_far: f32,
     /// Optional override of the shared entity config (kept for backward compatibility)
-    pub entity_config: Option<EntityConfig>,
+    pub entity_config: Option<Box<dyn EntityConfig>>,
 }
 
 impl Default for MobConfig {

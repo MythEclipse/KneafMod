@@ -199,4 +199,4 @@ impl PerformanceMonitorFactory {
 }
 
 /// Re-export the original PerformanceMonitor struct for use with the builder
-pub use super::PerformanceMonitor;
+// pub use super::PerformanceMonitor;

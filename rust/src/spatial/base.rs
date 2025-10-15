@@ -49,6 +49,41 @@ impl Aabb {
     }
 }
 
+/// Ray-AABB intersection test
+/// Returns the distance to the intersection point if the ray intersects the AABB, None otherwise
+pub fn ray_aabb_intersect(ray_origin: glam::Vec3, ray_dir: glam::Vec3, aabb: &Aabb) -> Option<f32> {
+    // Avoid division by zero
+    let inv_dir_x = if ray_dir.x != 0.0 { 1.0 / ray_dir.x } else { f32::INFINITY };
+    let inv_dir_y = if ray_dir.y != 0.0 { 1.0 / ray_dir.y } else { f32::INFINITY };
+    let inv_dir_z = if ray_dir.z != 0.0 { 1.0 / ray_dir.z } else { f32::INFINITY };
+
+    let t1 = (aabb.min.x - ray_origin.x) * inv_dir_x;
+    let t2 = (aabb.max.x - ray_origin.x) * inv_dir_x;
+    let mut tmin = t1.min(t2);
+    let mut tmax = t1.max(t2);
+
+    let t1 = (aabb.min.y - ray_origin.y) * inv_dir_y;
+    let t2 = (aabb.max.y - ray_origin.y) * inv_dir_y;
+    tmin = tmin.max(t1.min(t2));
+    tmax = tmax.min(t1.max(t2));
+
+    let t1 = (aabb.min.z - ray_origin.z) * inv_dir_z;
+    let t2 = (aabb.max.z - ray_origin.z) * inv_dir_z;
+    tmin = tmin.max(t1.min(t2));
+    tmax = tmax.min(t1.max(t2));
+
+    if tmax >= tmin && tmax >= 0.0 {
+        Some(tmin.max(0.0))
+    } else {
+        None
+    }
+}
+
+/// SIMD-accelerated version (currently falls back to scalar)
+pub fn ray_aabb_intersect_simd(ray_origin: glam::Vec3, ray_dir: glam::Vec3, aabb: &Aabb) -> Option<f32> {
+    ray_aabb_intersect(ray_origin, ray_dir, aabb)
+}
+
 impl Default for Aabb {
     fn default() -> Self {
         Self {

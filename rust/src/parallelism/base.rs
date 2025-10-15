@@ -5,7 +5,7 @@ use std::sync::Arc;
 pub mod work_stealing;
 pub use crate::parallelism::base::work_stealing::work_stealing::WorkStealingScheduler;
 pub mod executor_factory;
-pub use crate::parallelism::base::executor_factory::executor_factory::{ParallelExecutor, ParallelExecutorFactory, ExecutorType, get_global_executor};
+pub use crate::parallelism::base::executor_factory::executor_factory::{ParallelExecutor, ParallelExecutorFactory, ExecutorType};
 
 /// Adaptive thread pool with real parallelism using Rayon
 #[deprecated(since = "0.8.0", note = "Please use ParallelExecutorFactory instead for new code")]

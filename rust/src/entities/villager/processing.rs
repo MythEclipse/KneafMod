@@ -1,8 +1,15 @@
 use super::types::*;
 use crate::entities::common::factory::EntityProcessorFactory;
+use crate::entities::common::types::EntityProcessor;
 use crate::types::EntityTypeTrait as EntityType;
 use crate::simd_standardized::{get_standard_simd_ops, StandardSimdOps};
 use crate::parallelism::executor_factory::ParallelExecutorFactory;
+use crate::ParallelExecutor;
+use crate::EntityConfig;
+use crate::EntityProcessingInput;
+use crate::EntityProcessingResult;
+use crate::GroupType;
+use crate::PathfindingCacheStats;
 use std::sync::Arc;
 use serde_json;
 
@@ -17,6 +24,25 @@ pub struct VillagerProcessingConfig {
     pub ai_update_interval: u64,
     pub pathfinding_update_interval: u64,
     pub memory_pool_threshold: usize,
+}
+
+/// Villager entity processor
+pub struct VillagerEntityProcessor {
+    simd_ops: Arc<StandardSimdOps>,
+    executor: Arc<dyn ParallelExecutor>,
+}
+
+impl VillagerEntityProcessor {
+    pub fn new(simd_ops: Arc<StandardSimdOps>, executor: Arc<dyn ParallelExecutor>) -> Self {
+        Self { simd_ops, executor }
+    }
+}
+
+impl EntityProcessor for VillagerEntityProcessor {
+    fn process(&self) -> Result<(), String> {
+        // Placeholder implementation
+        Ok(())
+    }
 }
 
 impl Default for VillagerProcessingConfig {

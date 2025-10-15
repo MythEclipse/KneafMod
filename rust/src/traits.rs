@@ -82,8 +82,24 @@ pub trait EntityConfigTrait {
     /// Get the medium radius from the configuration
     fn medium_radius(&self) -> f32;
     
+    /// Get the close rate from the configuration
+    fn close_rate(&self) -> f32;
+    
+    /// Get the medium rate from the configuration
+    fn medium_rate(&self) -> f32;
+    
     /// Check if spatial partitioning is enabled
     fn use_spatial_partitioning(&self) -> bool;
+}
+
+/// Default entity configuration struct
+#[derive(Debug, Clone)]
+pub struct EntityConfigImpl {
+    pub close_radius: f32,
+    pub medium_radius: f32,
+    pub close_rate: f32,
+    pub medium_rate: f32,
+    pub use_spatial_partitioning: bool,
 }
 
 // Implement EntityDataTrait for EntityData
@@ -101,14 +117,22 @@ impl EntityDataTrait for EntityData {
     }
 }
 
-// Implement EntityConfigTrait for EntityConfig
-impl EntityConfigTrait for EntityConfig {
+// Implement EntityConfigTrait for EntityConfigImpl
+impl EntityConfigTrait for EntityConfigImpl {
     fn close_radius(&self) -> f32 {
         self.close_radius
     }
     
     fn medium_radius(&self) -> f32 {
         self.medium_radius
+    }
+    
+    fn close_rate(&self) -> f32 {
+        self.close_rate
+    }
+    
+    fn medium_rate(&self) -> f32 {
+        self.medium_rate
     }
     
     fn use_spatial_partitioning(&self) -> bool {

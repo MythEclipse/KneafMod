@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use crate::entities::common::types::*;
+use crate::EntityType;
+use crate::EntityData;
+use crate::PlayerData;
 
 /// Villager-specific data extending the common EntityData
 #[derive(Serialize, Deserialize, Clone, Debug)]

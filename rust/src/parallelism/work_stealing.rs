@@ -1,7 +1,7 @@
 use crate::errors::{Result, RustError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
-use crate::parallelism::executor_factory::{ParallelExecutorFactory, ExecutorType, get_global_executor};
+use crate::parallelism::executor_factory::{ParallelExecutorFactory, ExecutorType};
 
 // Track parallel execution statistics for performance monitoring
 static PARALLEL_TASK_STATS: AtomicUsize = AtomicUsize::new(0);
@@ -116,7 +116,7 @@ impl<T> WorkStealingScheduler<T> {
         let start = Instant::now();
         
         // Get the global executor for backward compatibility
-        let executor = get_global_executor();
+        let executor = ParallelExecutorFactory::create_executor(ExecutorType::WorkStealing);
         
         let results = executor.execute(|| {
             self.tasks.into_iter().map(processor).collect()

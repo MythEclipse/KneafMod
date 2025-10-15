@@ -3,8 +3,6 @@ use std::sync::{Arc, Mutex};
 
 /// Enum representing different types of parallel executors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Enum representing different types of parallel executors
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutorType {
     /// Thread pool executor
     ThreadPool,
@@ -176,27 +174,27 @@ impl ParallelExecutor for AsyncExecutor {
 }
 
 /// Global executor instance for the application
-static GLOBAL_EXECUTOR: Mutex<Option<Arc<Box<dyn ParallelExecutor>>>> = Mutex::new(None);
+// static GLOBAL_EXECUTOR: Mutex<Option<Arc<Box<dyn ParallelExecutor>>>> = Mutex::new(None);
 
 /// Initializes the global executor with the specified type
-pub fn initialize_global_executor(executor_type: ExecutorType) {
-    let mut global_executor = GLOBAL_EXECUTOR.lock().expect("Failed to lock global executor");
-    *global_executor = Some(ParallelExecutorFactory::create_executor(executor_type));
-}
+// pub fn initialize_global_executor(executor_type: ExecutorType) {
+//     let mut global_executor = GLOBAL_EXECUTOR.lock().expect("Failed to lock global executor");
+//     *global_executor = Some(ParallelExecutorFactory::create_executor(executor_type));
+// }
 
 /// Gets the global executor instance
-pub fn get_global_executor() -> Arc<Box<dyn ParallelExecutor>> {
-    GLOBAL_EXECUTOR.lock()
-        .expect("Failed to lock global executor")
-        .as_ref()
-        .cloned()
-        .expect("Global executor not initialized")
-}
+// pub fn get_global_executor() -> Arc<Box<dyn ParallelExecutor>> {
+//     GLOBAL_EXECUTOR.lock()
+//         .expect("Failed to lock global executor")
+//         .as_ref()
+//         .cloned()
+//         .expect("Global executor not initialized")
+// }
 
 /// Initializes the global executor with a default work-stealing executor
-pub fn initialize_default_executor() {
-    initialize_global_executor(ExecutorType::WorkStealing);
-}
+// pub fn initialize_default_executor() {
+//     initialize_global_executor(ExecutorType::WorkStealing);
+// }
 
 // Initialize the global executor with a default work-stealing executor on first use
 #[ctor::ctor]

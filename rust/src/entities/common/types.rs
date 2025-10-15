@@ -27,3 +27,9 @@ impl EntityConfig for DefaultEntityConfig {
 
 /// Type alias for Arc-wrapped EntityConfig
 pub type ArcEntityConfig = Arc<dyn EntityConfig>;
+
+/// Trait defining the interface for entity processors
+pub trait EntityProcessor: Send + Sync {
+    /// Process entities
+    fn process(&self) -> Result<(), String>;
+}

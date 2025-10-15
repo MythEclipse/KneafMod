@@ -3,6 +3,7 @@ use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
+use crate::PlayerData;
 
 const CHUNK_SIZE: f32 = 16.0;
 const MAX_GROUP_RADIUS: f32 = 32.0;

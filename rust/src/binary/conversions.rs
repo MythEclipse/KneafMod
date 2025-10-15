@@ -1,7 +1,6 @@
 use crate::entities::block::types::{BlockInput, BlockProcessResult};
-use crate::entities::entity::types::{
-    EntityData as REntityData, Input as EntityInput, PlayerData as RPlayerData, ProcessResult as EntityProcessResult,
-};
+use crate::types::{EntityData as REntityData, PlayerData as RPlayerData};
+use crate::entities::entity::types::{Input as EntityInput, ProcessResult as EntityProcessResult};
 use crate::entities::mob::types::{MobInput, MobProcessResult};
 use crate::entities::villager::types::{
     PlayerData as VillagerPlayerData, VillagerData, VillagerInput, VillagerProcessResult,
@@ -211,7 +210,7 @@ mod enhanced {
 
 // Re-export for use in factory module
 pub use enhanced::*;
-pub use crate::binary::factory::BinaryConverterConfig;
+pub use crate::types::BinaryConverterConfig;
 
 // Common validation utilities
 mod validation {
@@ -248,7 +247,7 @@ mod validation {
 }
 
 // Common conversion utilities
-mod conversion_utils {
+pub mod conversion_utils {
     use super::*;
     
     pub fn read_string(cur: &mut Cursor<&[u8]>, len: usize) -> Result<String, BinaryConversionError> {
