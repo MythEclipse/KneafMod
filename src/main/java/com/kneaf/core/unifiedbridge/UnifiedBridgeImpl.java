@@ -17,7 +17,7 @@ public class UnifiedBridgeImpl implements AutoCloseable {
     private static final Logger LOGGER = Logger.getLogger(UnifiedBridgeImpl.class.getName());
 
     // Native library name
-    private static final String LIB_NAME = "kneaf_core";
+    private static final String LIB_NAME = "rustperf";
     private static final String LIB_PATH_ENV = "KNEAF_NATIVE_LIB_PATH";
 
     // Connection state
@@ -124,7 +124,7 @@ public class UnifiedBridgeImpl implements AutoCloseable {
         }
 
         // Try loading from natives directory in classpath
-        String resourcePath = "/natives/" + osArch + "/" + libFileName;
+        String resourcePath = "/natives/" + libFileName;
         try (var is = getClass().getResourceAsStream(resourcePath)) {
             if (is != null) {
                 Path tempLib = Files.createTempFile(LIB_NAME, getLibExtension());

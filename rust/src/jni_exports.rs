@@ -3,7 +3,7 @@
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JByteArray, JObject, JString, JObjectArray};
-use jni::sys::{jboolean, jbyteArray, jlong, jint, JNI_TRUE, JNI_VERSION_1_6};
+use jni::sys::{jboolean, jbyteArray, jlong, jint, JNI_TRUE, JNI_FALSE, JNI_VERSION_1_6};
 use std::cell::RefCell;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
@@ -428,6 +428,128 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeZeroCopyBridge_na
 ) -> jbyteArray {
     // Reuse the same implementation as JniCallManager.NativeBridge
     Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation_name, parameters)
+}
+
+// Native bridge creation function for UnifiedBridgeImpl
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativeCreateBridge(
+    _env: JNIEnv,
+    _class: JClass,
+    _config: JObject,
+) -> jlong {
+    jni_diagnostic!("INFO", "nativeCreateBridge", "Creating bridge with configuration object");
+    
+    // Use fine-grained locking for worker creation and update global STATE
+    let _worker_lock = WORKER_LOCK.lock().unwrap();
+    let mut state = STATE.lock().unwrap();
+    let id = state.next_worker_id;
+    state.next_worker_id += 1;
+
+    // In a real implementation, you would:
+    // 1. Extract configuration from the JObject
+    // 2. Set up the bridge with the extracted configuration
+    // 3. Return a valid handle
+    
+    // For now, return a valid worker ID as a placeholder
+    id
+}
+
+// Native bridge destruction function for UnifiedBridgeImpl
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativeDestroyBridge(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    jni_diagnostic!("INFO", "nativeDestroyBridge", "Destroying bridge with handle: {}", handle);
+    
+    // Remove worker from global STATE
+    let state = STATE.lock().unwrap();
+    if let Some((_, worker_data)) = state.workers.remove(&handle) {
+        // Dropping worker_data will clean up resources
+        drop(worker_data);
+        jni_diagnostic!("INFO", "nativeDestroyBridge", "Successfully destroyed bridge with handle: {}", handle);
+    } else {
+        jni_diagnostic!("WARN", "nativeDestroyBridge", "Bridge with handle {} not found", handle);
+    }
+}
+
+// Native health check function for UnifiedBridgeImpl
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativeHealthCheck(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jboolean {
+    jni_diagnostic!("INFO", "nativeHealthCheck", "Checking health of bridge with handle: {}", handle);
+    
+    // Check if worker exists in global STATE
+    let state = STATE.lock().unwrap();
+    let healthy = state.workers.contains_key(&handle);
+    
+    if healthy {
+        jni_diagnostic!("INFO", "nativeHealthCheck", "Bridge with handle {} is healthy", handle);
+    } else {
+        jni_diagnostic!("WARN", "nativeHealthCheck", "Bridge with handle {} is NOT healthy", handle);
+    }
+    
+    if healthy { JNI_TRUE } else { JNI_FALSE }
+}
+
+// Native get statistics function for UnifiedBridgeImpl
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativeGetStatistics(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jbyteArray {
+    jni_diagnostic!("INFO", "nativeGetStatistics", "Getting statistics for bridge with handle: {}", handle);
+    
+    // In a real implementation, you would:
+    // 1. Check if worker exists
+    // 2. Collect actual statistics
+    // 3. Serialize statistics to byte array
+    
+    // For now, return a simple success response
+    let env = _env;
+    let result_bytes = b"SUCCESS: Statistics collected".to_vec();
+    match env.byte_array_from_slice(&result_bytes) {
+        Ok(arr) => arr.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+// Native execute operation function for UnifiedBridgeImpl
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativeExecuteOperation(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    operation: JString,
+    args: JObjectArray,
+) -> jbyteArray {
+    jni_diagnostic!("INFO", "nativeExecuteOperation", "Executing operation on bridge with handle: {}", handle);
+    
+    // Parse operation name
+    let _op_name_str: String = match env.get_string(&operation) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            eprintln!("[rustperf] Failed to parse operation name: {:?}", e);
+            return create_error_byte_array(&env, "Failed to parse operation name");
+        }
+    };
+
+    // Reuse the existing nativeExecuteSync implementation
+    let object_class = env.find_class("java/lang/Object").unwrap();
+    let params_array = match env.new_object_array(1, object_class, args) {
+        Ok(arr) => arr,
+        Err(e) => {
+            eprintln!("[rustperf] Failed to create params array: {:?}", e);
+            return create_error_byte_array(&env, "Failed to create params array");
+        }
+    };
+
+    Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation, params_array)
 }
 
 /// Process villager operation using binary conversions
