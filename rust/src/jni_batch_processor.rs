@@ -15,12 +15,13 @@ use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 
 // Import our new modules
-use crate::errors::{BatchError, RustError, messages};
+use crate::errors::{RustError, messages};
+use crate::BatchError;
 use std::result::Result;
-pub use crate::errors::{Result as RustResult, BatchResult};
+pub use crate::errors::Result as RustResult;
 use crate::traits::Initializable;
 use crate::{jni_error, check_initialized, impl_initializable};
-use jni::objects::{JByteArray, ReleaseMode};
+use jni::objects::JByteArray;
 
 // Helper trait for mutex operations with timeout
 // Use a more efficient lock strategy with better backoff

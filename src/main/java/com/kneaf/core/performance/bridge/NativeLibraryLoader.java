@@ -72,11 +72,31 @@ public class NativeLibraryLoader {
 
     initializeIfNeeded();
 
-    // Try multiple loading strategies in order
-    return tryLoadFromSystemPath(libraryName) ||
-           tryLoadFromClasspath(libraryName) ||
-           tryLoadFromCustomPaths(libraryName) ||
-           tryExtractAndLoad(libraryName);
+    LOGGER.info("Attempting to load library: '{}'", libraryName);
+    
+    // Try multiple loading strategies in order with detailed logging
+    if (tryLoadFromSystemPath(libraryName)) {
+      LOGGER.info("Successfully loaded '{}' from system path", libraryName);
+      return true;
+    }
+    
+    if (tryLoadFromClasspath(libraryName)) {
+      LOGGER.info("Successfully loaded '{}' from classpath", libraryName);
+      return true;
+    }
+    
+    if (tryLoadFromCustomPaths(libraryName)) {
+      LOGGER.info("Successfully loaded '{}' from custom paths", libraryName);
+      return true;
+    }
+    
+    if (tryExtractAndLoad(libraryName)) {
+      LOGGER.info("Successfully loaded '{}' by extraction", libraryName);
+      return true;
+    }
+    
+    LOGGER.error("Failed to load library '{}' - all strategies exhausted", libraryName);
+    return false;
   }
 
   /**
@@ -85,10 +105,11 @@ public class NativeLibraryLoader {
    * @return true if the library was loaded successfully
    */
   public static boolean loadNativeLibrary() {
-    // Try to load the main kneaf library
+    // Try to load the main kneaf library and rust performance library
     return loadNativeLibrary("kneaf") ||
            loadNativeLibrary("libkneaf") ||
-           loadNativeLibrary("kneafcore");
+           loadNativeLibrary("kneafcore") ||
+           loadNativeLibrary("rustperf"); // Add rust performance library
   }
 
   /**
@@ -141,14 +162,16 @@ public class NativeLibraryLoader {
    * Try to load library from system library path.
    */
   private static boolean tryLoadFromSystemPath(String libraryName) {
+    String fullLibraryName = LIBRARY_PREFIX + libraryName + LIBRARY_SUFFIX;
+    LOGGER.debug("Trying system loadLibrary: '{}'", fullLibraryName);
+    
     try {
-      String fullLibraryName = LIBRARY_PREFIX + libraryName + LIBRARY_SUFFIX;
       System.loadLibrary(fullLibraryName);
       loadedLibraries.add(libraryName);
       LOGGER.info("Successfully loaded library '{}' from system path", fullLibraryName);
       return true;
     } catch (UnsatisfiedLinkError e) {
-      LOGGER.debug("Library '{}' not found in system path: {}", libraryName, e.getMessage());
+      LOGGER.debug("Library '{}' not found in system path: {}", fullLibraryName, e.getMessage());
       return false;
     }
   }
@@ -158,23 +181,26 @@ public class NativeLibraryLoader {
    */
   private static boolean tryLoadFromClasspath(String libraryName) {
     String resourcePath = getResourcePath(libraryName);
+    LOGGER.debug("Trying classpath resource path: {}", resourcePath);
+    
     if (resourcePath == null) {
+      LOGGER.debug("No valid resource path for library '{}'", libraryName);
       return false;
     }
 
     try (InputStream is = NativeLibraryLoader.class.getResourceAsStream(resourcePath)) {
       if (is == null) {
-        LOGGER.debug("Library resource not found: {}", resourcePath);
+        LOGGER.debug("Library resource not found at path: {}", resourcePath);
         return false;
       }
 
       Path extractedLib = extractLibraryToTemp(is, libraryName);
       System.load(extractedLib.toAbsolutePath().toString());
       loadedLibraries.add(libraryName);
-      LOGGER.info("Successfully loaded library '{}' from classpath", libraryName);
+      LOGGER.info("Successfully loaded library '{}' from classpath resource: {}", libraryName, resourcePath);
       return true;
     } catch (Exception e) {
-      LOGGER.debug("Failed to load library '{}' from classpath: {}", libraryName, e.getMessage());
+      LOGGER.debug("Failed to load library '{}' from classpath resource '{}': {}", libraryName, resourcePath, e.getMessage());
       return false;
     }
   }
@@ -184,21 +210,27 @@ public class NativeLibraryLoader {
    */
   private static boolean tryLoadFromCustomPaths(String libraryName) {
     List<String> searchPaths = getCustomSearchPaths();
+    LOGGER.debug("Trying custom search paths for '{}': {}", libraryName, searchPaths);
 
     for (String searchPath : searchPaths) {
       try {
         Path libPath = Paths.get(searchPath, LIBRARY_PREFIX + libraryName + LIBRARY_SUFFIX);
+        LOGGER.debug("Checking path: {}", libPath);
         if (Files.exists(libPath)) {
+          LOGGER.debug("Found library at: {}", libPath);
           System.load(libPath.toAbsolutePath().toString());
           loadedLibraries.add(libraryName);
           LOGGER.info("Successfully loaded library '{}' from custom path: {}", libraryName, searchPath);
           return true;
+        } else {
+          LOGGER.debug("Library not found at: {}", libPath);
         }
       } catch (UnsatisfiedLinkError e) {
         LOGGER.debug("Failed to load '{}' from {}: {}", libraryName, searchPath, e.getMessage());
       }
     }
 
+    LOGGER.debug("Library '{}' not found in any custom search paths", libraryName);
     return false;
   }
 
@@ -236,9 +268,20 @@ public class NativeLibraryLoader {
    */
   private static String getResourcePath(String libraryName) {
     String osFamily = getOSFamily();
-    String resourcePath = String.format("/native/%s/%s/%s%s%s",
-        osFamily, OS_ARCH, LIBRARY_PREFIX, libraryName, LIBRARY_SUFFIX);
-    return resourcePath;
+    // Try multiple resource paths to match the actual file structure
+    String[] possiblePaths = {
+        String.format("/natives/%s%s", LIBRARY_PREFIX, libraryName, LIBRARY_SUFFIX),
+        String.format("/native/%s/%s/%s%s%s", osFamily, OS_ARCH, LIBRARY_PREFIX, libraryName, LIBRARY_SUFFIX),
+        String.format("/natives/%s/%s/%s%s%s", osFamily, OS_ARCH, LIBRARY_PREFIX, libraryName, LIBRARY_SUFFIX),
+        String.format("/%s%s%s", LIBRARY_PREFIX, libraryName, LIBRARY_SUFFIX)
+    };
+    
+    for (String path : possiblePaths) {
+      if (NativeLibraryLoader.class.getResource(path) != null) {
+        return path;
+      }
+    }
+    return possiblePaths[0]; // Return first path as fallback
   }
 
   /**
@@ -266,6 +309,9 @@ public class NativeLibraryLoader {
 
     // Add current working directory
     paths.add(".");
+    
+    // Add the natives directory from resources
+    paths.add("src/main/resources/natives");
 
     // Add common library directories
     if (OS_NAME.contains("win")) {

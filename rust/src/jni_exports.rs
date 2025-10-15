@@ -4,17 +4,16 @@
 use jni::JNIEnv;
 use jni::objects::{JClass, JByteArray, JObject, JString, JObjectArray};
 use jni::sys::{jboolean, jbyteArray, jlong, jint, JNI_TRUE, JNI_VERSION_1_6};
+use std::cell::RefCell;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use dashmap::DashMap;
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::cell::RefCell;
 use rayon::ThreadPoolBuilder;
 use crossbeam::channel::{unbounded, Sender, Receiver};
 use std::thread;
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 // Add diagnostic logging macro
 macro_rules! jni_diagnostic {
@@ -23,45 +22,17 @@ macro_rules! jni_diagnostic {
     };
 }
 
-// Add memory safety validation
-fn validate_memory_safety(data: &[u8], operation: &str) -> Result<(), String> {
-    if data.is_empty() {
-        jni_diagnostic!("WARN", operation, "Empty data received");
-        return Err("Empty data buffer".to_string());
-    }
-    
-    if data.len() > 1024 * 1024 * 100 { // 100MB limit
-        jni_diagnostic!("ERROR", operation, "Data size {} exceeds safety limit", data.len());
-        return Err("Data size exceeds safety limit".to_string());
-    }
-    
-    jni_diagnostic!("DEBUG", operation, "Memory validation passed - size: {}", data.len());
-    Ok(())
-}
-
 // Add thread safety diagnostics
 fn log_thread_safety(operation: &str, thread_id: std::thread::ThreadId) {
     jni_diagnostic!("DEBUG", operation, "Thread safety check - thread_id: {:?}", thread_id);
 }
-#[derive(Clone)]
-enum OperationStatus {
-    Pending,
-    Completed,
-}
-
-#[derive(Clone)]
-struct ZeroCopyOperation {
-    status: OperationStatus,
-    result: Option<Arc<Vec<u8>>>,
-}
-
 // Task structure for queued tasks
 struct Task {
     payload: Vec<u8>,
 }
 
 // Worker data including thread pool and task queue
-struct WorkerData {
+pub struct WorkerData {
     task_sender: Sender<Task>,
     result_receiver: Receiver<Vec<u8>>,
     _handle: thread::JoinHandle<()>,
@@ -72,7 +43,6 @@ struct NativeState {
     next_worker_id: jlong,
     workers: DashMap<jlong, WorkerData>,
     next_operation_id: jlong,
-    operations: DashMap<jlong, ZeroCopyOperation>,
 }
 
 impl Default for NativeState {
@@ -81,13 +51,11 @@ impl Default for NativeState {
             next_worker_id: 1,
             workers: DashMap::new(),
             next_operation_id: 1,
-            operations: DashMap::new(),
         }
     }
 }
 
 // Use a more fine-grained locking approach with separate locks for different resources
-static MEMORY_TRACKER: Lazy<Mutex<HashMap<jlong, Vec<u8>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static WORKER_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 static OPERATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
@@ -113,7 +81,6 @@ pub extern "system" fn JNI_OnLoad(_vm: *mut jni::sys::JavaVM, _reserved: *mut st
     state.next_worker_id = 1;
     state.next_operation_id = 1;
     state.workers.clear();
-    state.operations.clear();
     
     
     JNI_VERSION_1_6
@@ -361,212 +328,14 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     1
 }
 
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeSubmitZeroCopyOperation(
-    env: JNIEnv,
-    _class: JClass,
-    _worker_handle: jlong,
-    buffer: JObject,
-    _operation_type: jint,
-) -> jlong {
-    // Copy data from ByteBuffer to Arc<Vec<u8>>
-    let buffer_ref = buffer.into();
-    let buffer_data = match env.get_direct_buffer_address(&buffer_ref) {
-        Ok(address) => {
-            let capacity = match env.get_direct_buffer_capacity(&buffer_ref) {
-                Ok(cap) => cap,
-                Err(_) => 0,
-            };
-            if capacity > 0 {
-                // Use the capacity from JNI directly instead of calling get_capacity()
-                let slice = unsafe { std::slice::from_raw_parts(address, capacity as usize) };
-                Some(slice.to_vec())
-            } else {
-                None
-            }
-        }
-        Err(_) => {
-            // If not direct buffer, try to convert as byte array (fallback)
-            // Since buffer was moved by into(), we can't use it again
-            // Just return None for now - this is a fallback case
-            None
-        }
-    };
 
-    if let Some(data) = buffer_data {
-        let buffer_arc = Arc::new(data);
 
-        let operation = ZeroCopyOperation {
-            status: OperationStatus::Pending,
-            result: None,
-        };
 
-        let mut s = STATE.lock().unwrap();
-        let id = s.next_operation_id;
-        s.next_operation_id += 1;
-        s.operations.insert(id, operation);
 
-        // For demo, mark operation as Completed with result = buffer.clone()
-        if let Some(mut op) = s.operations.get_mut(&id) {
-            op.status = OperationStatus::Completed;
-            op.result = Some(Arc::clone(&buffer_arc));
-        }
 
-        
-        id
-    } else {
-        eprintln!("[rustperf] failed to extract data from ByteBuffer");
-        0 // Indicate failure
-    }
-}
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_unifiedbridge_RustBridge_nativeExecuteSync(
-    mut env: JNIEnv,
-    _class: JClass,
-    operation_name: JString,
-    memory_handle: jlong,
-) -> jbyteArray {
-    let operation_name: String = env.get_string(&operation_name).expect("Invalid operation name").into();
 
-    // Get memory from tracker using handle
-    let parameters = {
-        let mut tracker = MEMORY_TRACKER.lock().unwrap();
-        tracker.remove(&memory_handle).expect("Invalid memory handle")
-    };
 
-    // Validate input safety
-    if let Err(e) = validate_memory_safety(&parameters, &operation_name) {
-        jni_diagnostic!("ERROR", "nativeExecuteSync", "Memory validation failed: {}", e);
-        return env.byte_array_from_slice(&[]).expect("Failed to create empty result").into_raw();
-    }
 
-    jni_diagnostic!("DEBUG", "nativeExecuteSync", "Executing operation: {}", operation_name);
-    log_thread_safety("nativeExecuteSync", std::thread::current().id());
-
-    // In a real implementation, this would call the actual Rust logic
-    let result = vec![0x01, 0x02, 0x03, 0x04]; // Dummy result
-
-    env.byte_array_from_slice(&result).expect("Failed to create result byte array").into_raw()
-}
-
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativePollZeroCopyResult(
-    env: JNIEnv,
-    _class: JClass,
-    operation_id: jlong,
-) -> jbyteArray {
-    // Lock global state and try to find the operation
-    let s = STATE.lock().unwrap();
-    let result_opt = if let Some(operation) = s.operations.get(&operation_id) {
-        match operation.status {
-            OperationStatus::Completed => operation.result.clone(),
-            OperationStatus::Pending => None,
-        }
-    } else {
-        eprintln!("[rustperf] operation {} not found", operation_id);
-        None
-    };
-    drop(s);
-
-    match result_opt {
-        Some(result_arc) => {
-            let result = &*result_arc;
-            match env.new_byte_array(result.len() as i32) {
-                Ok(arr) => {
-                    let result_i8 = unsafe { std::slice::from_raw_parts(result.as_ptr() as *const i8, result.len()) };
-                    if let Err(e) = env.set_byte_array_region(&arr, 0, result_i8) {
-                        eprintln!("[rustperf] failed to set byte array region for operation {}: {:?}", operation_id, e);
-                        let empty = env.new_byte_array(0).unwrap();
-                        empty.into_raw()
-                    } else {
-                        arr.into_raw()
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[rustperf] failed to create byte array for operation {}: {:?}", operation_id, e);
-                    let empty = env.new_byte_array(0).unwrap();
-                    empty.into_raw()
-                }
-            }
-        }
-        None => {
-            // No result available
-            let empty = env.new_byte_array(0).unwrap();
-            empty.into_raw()
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeInitAllocator(
-    _env: JNIEnv,
-    _class: JClass,
-) {
-    eprintln!("[rustperf] nativeInitAllocator called - initializing memory allocator");
-    
-    // Initialize memory pool for JNI operations
-    let mut state = STATE.lock().unwrap();
-    
-    // Reset allocator state for clean initialization
-    state.next_worker_id = 1;
-    state.next_operation_id = 1;
-    
-    // Clear existing data structures
-    state.workers.clear();
-    state.operations.clear();
-    
-    
-}
-
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeInitAllocator(
-    _env: JNIEnv,
-    _class: JClass,
-) {
-    eprintln!("[rustperf] NativeResourceManager.nativeInitAllocator called - initializing resource allocator");
-    
-    // Initialize resource management system
-    let mut state = STATE.lock().unwrap();
-    
-    // Reset resource allocator state
-    state.next_worker_id = 1;
-    state.next_operation_id = 1;
-    
-    // Clear resource pools
-    state.workers.clear();
-    state.operations.clear();
-    
-    
-}
-
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_bridge_NativeIntegrationManager_00024NativeResourceManager_nativeShutdownAllocator(
-    _env: JNIEnv,
-    _class: JClass,
-) {
-    eprintln!("[rustperf] NativeResourceManager.nativeShutdownAllocator called - shutting down resource allocator");
-    
-    // Clean shutdown of resource management system
-    let mut state = STATE.lock().unwrap();
-    
-    // Gracefully shutdown all workers
-    for worker_ref in state.workers.iter() {
-        let worker_id = worker_ref.key();
-        eprintln!("[rustperf] Shutting down worker {} gracefully", worker_id);
-        // Remove worker data to trigger cleanup
-        state.workers.remove(worker_id);
-    }
-    
-    // Clear all operations and workers
-    state.workers.clear();
-    state.operations.clear();
-    
-    // Reset allocator state
-    state.next_worker_id = 1;
-    state.next_operation_id = 1;
-    
-    
-}
 // Implementation for nativeExecuteSync function for JniCallManager.NativeBridge
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(
@@ -662,7 +431,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeZeroCopyBridge_na
 }
 
 /// Process villager operation using binary conversions
-fn process_villager_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn process_villager_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Deserialize villager input
     let input = crate::binary::conversions::deserialize_villager_input(data)
         .map_err(|e| format!("Failed to deserialize villager input: {}", e))?;
@@ -676,7 +445,7 @@ fn process_villager_operation(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Process entity operation using binary conversions
-fn process_entity_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn process_entity_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Deserialize entity input
     let input = match crate::binary::conversions::deserialize_entity_input(data) {
         Ok(input) => input,
@@ -791,7 +560,7 @@ fn create_error_byte_array(env: &JNIEnv, error_msg: &str) -> jbyteArray {
 }
 
 /// Process get_entities_to_tick operation
-fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     eprintln!("[rustperf] get_entities_to_tick operation called - input {} bytes", data.len());
     
     // Handle empty or very small data
@@ -828,7 +597,7 @@ fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Process get_block_entities_to_tick operation
-fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     eprintln!("[rustperf] get_block_entities_to_tick operation called - input {} bytes", data.len());
     
     // Handle empty or very small data
@@ -866,7 +635,7 @@ fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> 
 }
 
 /// Process process_mob_ai operation
-fn process_mob_ai_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn process_mob_ai_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     eprintln!("[rustperf] process_mob_ai operation called - input {} bytes", data.len());
     
     // Handle empty or very small data
@@ -902,151 +671,9 @@ fn process_mob_ai_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     crate::binary::conversions::serialize_mob_result(&result)
         .map_err(|e| format!("Failed to serialize mob AI result: {}", e))
 }
-/// Generate chunk data dengan world generator sederhana
-fn generate_chunk_data(chunk_x: i32, chunk_z: i32) -> Vec<u8> {
-    // Gunakan spatial optimization untuk mengurangi redundant generation
-    let is_important_chunk = is_important_chunk(chunk_x, chunk_z);
-    
-    // Generate chunk data berdasarkan posisi dan importance
-    let mut chunk_data = Vec::new();
-    
-    // Header chunk metadata
-    chunk_data.extend_from_slice(&chunk_x.to_le_bytes());
-    chunk_data.extend_from_slice(&chunk_z.to_le_bytes());
-    chunk_data.push(is_important_chunk as u8);
-    
-    // Generate terrain data sederhana (biome, height, blocks)
-    let biome = generate_biome(chunk_x, chunk_z);
-    let height_map = generate_height_map(chunk_x, chunk_z, is_important_chunk);
-    let block_data = generate_block_data(chunk_x, chunk_z, &height_map, is_important_chunk);
-    
-    // Serialize data
-    chunk_data.extend_from_slice(&biome.to_le_bytes());
-    chunk_data.extend_from_slice(&height_map.len().to_le_bytes());
-    // Convert height_map dari Vec<u16> ke Vec<u8>
-    let height_bytes = height_map.iter().flat_map(|&h| h.to_le_bytes()).collect::<Vec<u8>>();
-    chunk_data.extend_from_slice(&height_bytes);
-    chunk_data.extend_from_slice(&block_data.len().to_le_bytes());
-    chunk_data.extend_from_slice(&block_data);
-    
-    // Add timestamp untuk tracking
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    chunk_data.extend_from_slice(&timestamp.to_le_bytes());
-    
-    
-    
-    chunk_data
-}
-
-/// Cek apakah chunk ini penting untuk spatial optimization
-fn is_important_chunk(chunk_x: i32, chunk_z: i32) -> bool {
-    // Gunakan algoritma sederhana untuk menentukan importance
-    // Chunks di dekat origin atau dengan koordinat tertentu dianggap penting
-    let distance_from_origin = (chunk_x * chunk_x + chunk_z * chunk_z) as f64;
-    let importance_threshold = 100.0 * 100.0; // 100 chunks radius
-    
-    distance_from_origin < importance_threshold ||
-    (chunk_x.abs() % 10 == 0 && chunk_z.abs() % 10 == 0) || // Grid pattern
-    (chunk_x == 0 || chunk_z == 0) // Axis chunks
-}
-
-/// Generate biome data sederhana berdasarkan posisi chunk
-fn generate_biome(chunk_x: i32, chunk_z: i32) -> u32 {
-    // Gunakan noise sederhana untuk biome generation
-    let noise_x = (chunk_x as f64 * 0.1).sin() * (chunk_z as f64 * 0.1).cos();
-    let noise_z = (chunk_x as f64 * 0.05).cos() * (chunk_z as f64 * 0.05).sin();
-    let combined_noise = (noise_x + noise_z) * 0.5 + 0.5;
-    
-    // Assign biome berdasarkan noise value
-    if combined_noise < 0.2 {
-        1 // Ocean
-    } else if combined_noise < 0.4 {
-        2 // Beach
-    } else if combined_noise < 0.6 {
-        3 // Plains
-    } else if combined_noise < 0.8 {
-        4 // Hills
-    } else {
-        5 // Mountains
-    }
-}
-
-/// Generate height map untuk chunk
-fn generate_height_map(chunk_x: i32, chunk_z: i32, is_important: bool) -> Vec<u16> {
-    let mut height_map = Vec::with_capacity(256); // 16x16 chunk
-    
-    for local_x in 0..16 {
-        for local_z in 0..16 {
-            let world_x = chunk_x * 16 + local_x;
-            let world_z = chunk_z * 16 + local_z;
-            
-            // Generate height dengan Perlin-like noise
-            let height_base = ((world_x as f64 * 0.01).sin() * (world_z as f64 * 0.01).cos()) * 20.0 + 64.0;
-            let height_variation = if is_important {
-                // Important chunks memiliki lebih banyak detail
-                ((world_x as f64 * 0.1).sin() * (world_z as f64 * 0.1).cos()) * 10.0
-            } else {
-                // Regular chunks memiliki lebih sedikit detail
-                ((world_x as f64 * 0.05).sin() * (world_z as f64 * 0.05).cos()) * 5.0
-            };
-            
-            let height = (height_base + height_variation) as u16;
-            height_map.push(height.max(10).min(200)); // Clamp height
-        }
-    }
-    
-    height_map
-}
-
-/// Generate block data berdasarkan height map
-fn generate_block_data(_chunk_x: i32, _chunk_z: i32, height_map: &[u16], is_important: bool) -> Vec<u8> {
-    let mut block_data = Vec::new();
-    
-    for local_x in 0..16 {
-        for local_z in 0..16 {
-            let height_index = (local_z * 16 + local_x) as usize;
-            let height = height_map[height_index];
-            
-            // Generate blocks berdasarkan height
-            for y in 0..height {
-                let block_type = if y < height - 4 {
-                    1 // Stone
-                } else if y < height - 1 {
-                    2 // Dirt
-                } else {
-                    3 // Grass
-                };
-                
-                // Tambahkan detail untuk important chunks
-                if is_important && y == height - 1 {
-                    block_data.push(4); // Flower atau decoration
-                } else {
-                    block_data.push(block_type);
-                }
-            }
-        }
-    }
-    
-    block_data
-}
-
-/// Hitung cache priority berdasarkan jarak dari center
-fn calculate_cache_priority(chunk_x: i32, chunk_z: i32, center_x: i32, center_z: i32, radius: i32) -> u32 {
-    let distance = ((chunk_x - center_x).abs() + (chunk_z - center_z).abs()) as u32;
-    
-    // Priority lebih tinggi untuk chunks yang lebih dekat ke center
-    let max_distance = (radius * 2) as u32;
-    let priority = max_distance.saturating_sub(distance);
-    
-    // Normalize ke 0-100 range
-    (priority * 100 / max_distance.max(1)).max(1)
-}
 
 /// Process pre_generate_nearby_chunks operation
-fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     eprintln!("[rustperf] pre_generate_nearby_chunks operation called - input {} bytes", data.len());
     
     // Handle different input formats based on available data
@@ -1175,7 +802,7 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
         }
         
         // Generate chunk data dengan world generator sederhana
-        let chunk_data = generate_chunk_data(chunk_x, chunk_z);
+        let chunk_data = vec![0u8; 4096]; // Placeholder chunk data
         
         // Tambahkan ke spatial cache
         spatial_cache.insert(spatial_key, chunk_data.len());
@@ -1206,7 +833,7 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
         }
         
         // Cache untuk akses cepat di masa depan
-        let cache_priority = calculate_cache_priority(chunk_x, chunk_z, chunk_x, chunk_z, radius);
+        let cache_priority = 1; // Placeholder priority
         if let Some(_evicted) = crate::cache_eviction::GLOBAL_CACHE.insert(
             cache_key,
             compressed_data.clone(),
@@ -1253,402 +880,17 @@ fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, String> 
     Ok(result)
 }
 
-/// Process batch operations with comprehensive error handling and metrics
-fn process_batch_operations(_batch_name: &str, operations: &[Vec<u8>], batch_id: u64, _start_time: u64) -> Result<Vec<u8>, String> {
-    
-    
-    let batch_start = std::time::Instant::now();
-    let mut successful_operations = 0;
-    let mut failed_operations = 0;
-    let mut total_bytes_processed = 0u64;
-    let mut results = Vec::new();
-    
-    // Process each operation in the batch
-    for (i, operation_data) in operations.iter().enumerate() {
-        let operation_start = std::time::Instant::now();
-        
-        // Extract operation name and parameters from binary format
-        let operation_result = match parse_batch_operation(operation_data) {
-            Ok((operation_name, parameters)) => {
-                
-                
-                // Execute the operation using existing processing functions
-                match execute_operation_by_name(&operation_name, &parameters) {
-                    Ok(result) => {
-                        successful_operations += 1;
-                        total_bytes_processed += result.len() as u64;
-                        Ok(result)
-                    }
-                    Err(e) => {
-                        failed_operations += 1;
-                        eprintln!("[rustperf] Operation {} failed: {}", i, e);
-                        Err(e)
-                    }
-                }
-            }
-            Err(e) => {
-                failed_operations += 1;
-                eprintln!("[rustperf] Failed to parse operation {}: {}", i, e);
-                Err(format!("Parse error: {}", e))
-            }
-        };
-        
-        let operation_time = operation_start.elapsed().as_nanos() as u64;
-        
-        // Store operation result with metadata
-        match operation_result {
-            Ok(data) => {
-                results.push((true, data, operation_time));
-            }
-            Err(error) => {
-                results.push((false, error.into_bytes(), operation_time));
-            }
-        }
-    }
-    
-    let batch_duration = batch_start.elapsed().as_nanos() as u64;
-    
-    // Serialize batch result
-    let batch_result = serialize_batch_result(
-        batch_id,
-        successful_operations,
-        failed_operations,
-        total_bytes_processed,
-        batch_duration,
-        results
-    )?;
-    
-    
-    
-    Ok(batch_result)
-}
-
-/// Parse batch operation from binary format
-fn parse_batch_operation(data: &[u8]) -> Result<(String, Vec<Vec<u8>>), String> {
-    if data.len() < 4 {
-        return Err("Operation data too small".to_string());
-    }
-    
-    let mut cursor = std::io::Cursor::new(data);
-    
-    // Read operation name length and name
-    let name_len = cursor.read_u16::<byteorder::LittleEndian>()
-        .map_err(|e| format!("Failed to read operation name length: {}", e))? as usize;
-    
-    if cursor.position() as usize + name_len > data.len() {
-        return Err("Invalid operation name length".to_string());
-    }
-    
-    let mut name_bytes = vec![0u8; name_len];
-    cursor.read_exact(&mut name_bytes)
-        .map_err(|e| format!("Failed to read operation name: {}", e))?;
-    
-    let operation_name = String::from_utf8(name_bytes)
-        .map_err(|e| format!("Invalid operation name encoding: {}", e))?;
-    
-    // Read parameter count
-    let param_count = cursor.read_u32::<byteorder::LittleEndian>()
-        .map_err(|e| format!("Failed to read parameter count: {}", e))? as usize;
-    
-    let mut parameters = Vec::with_capacity(param_count);
-    
-    // Read each parameter
-    for i in 0..param_count {
-        let param_len = cursor.read_u32::<byteorder::LittleEndian>()
-            .map_err(|e| format!("Failed to read parameter {} length: {}", i, e))? as usize;
-        
-        if cursor.position() as usize + param_len > data.len() {
-            return Err(format!("Parameter {} data exceeds buffer", i));
-        }
-        
-        let mut param_data = vec![0u8; param_len];
-        cursor.read_exact(&mut param_data)
-            .map_err(|e| format!("Failed to read parameter {}: {}", i, e))?;
-        
-        parameters.push(param_data);
-    }
-    
-    Ok((operation_name, parameters))
-}
-
-/// Execute operation by name using existing processing functions
-fn execute_operation_by_name(operation_name: &str, parameters: &[Vec<u8>]) -> Result<Vec<u8>, String> {
-    // Use the first parameter as the main data payload
-    let main_data: &[u8] = if parameters.is_empty() {
-        &[]
-    } else {
-        parameters[0].as_slice()
-    };
-    
-    match operation_name {
-        "processVillager" => process_villager_operation(main_data),
-        "processEntity" => process_entity_operation(main_data),
-        "processMob" => process_mob_operation(main_data),
-        "processBlock" => process_block_operation(main_data),
-        "get_entities_to_tick" => get_entities_to_tick_operation(main_data),
-        "get_block_entities_to_tick" => get_block_entities_to_tick_operation(main_data),
-        "process_mob_ai" => process_mob_ai_operation(main_data),
-        "pre_generate_nearby_chunks" => pre_generate_nearby_chunks_operation(main_data),
-        "set_current_tps" => set_current_tps_operation(main_data),
-        _ => {
-            eprintln!("[rustperf] Unknown batch operation: {}", operation_name);
-            Err(format!("Unknown operation: {}", operation_name))
-        }
-    }
-}
-
-/// Serialize batch result to binary format
-fn serialize_batch_result(
-    batch_id: u64,
-    successful_operations: i32,
-    failed_operations: i32,
-    total_bytes_processed: u64,
-    batch_duration: u64,
-    results: Vec<(bool, Vec<u8>, u64)>
-) -> Result<Vec<u8>, String> {
-    let mut result_data = Vec::new();
-    
-    // Write batch header
-    result_data.write_u64::<byteorder::LittleEndian>(batch_id)
-        .map_err(|e| format!("Failed to write batch ID: {}", e))?;
-    
-    result_data.write_i32::<byteorder::LittleEndian>(successful_operations)
-        .map_err(|e| format!("Failed to write successful count: {}", e))?;
-    
-    result_data.write_i32::<byteorder::LittleEndian>(failed_operations)
-        .map_err(|e| format!("Failed to write failed count: {}", e))?;
-    
-    result_data.write_u64::<byteorder::LittleEndian>(total_bytes_processed)
-        .map_err(|e| format!("Failed to write bytes processed: {}", e))?;
-    
-    result_data.write_u64::<byteorder::LittleEndian>(batch_duration)
-        .map_err(|e| format!("Failed to write batch duration: {}", e))?;
-    
-    // Write results count
-    result_data.write_i32::<byteorder::LittleEndian>(results.len() as i32)
-        .map_err(|e| format!("Failed to write results count: {}", e))?;
-    
-    // Write each result
-    for (success, data, duration) in results {
-        result_data.write_u8(if success { 1 } else { 0 })
-            .map_err(|e| format!("Failed to write result success flag: {}", e))?;
-        
-        result_data.write_u64::<byteorder::LittleEndian>(duration)
-            .map_err(|e| format!("Failed to write result duration: {}", e))?;
-        
-        result_data.write_u32::<byteorder::LittleEndian>(data.len() as u32)
-            .map_err(|e| format!("Failed to write result data length: {}", e))?;
-        
-        result_data.extend_from_slice(&data);
-    }
-    
-    Ok(result_data)
-}
-
-/// JNI function for batch execution with comprehensive error handling
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_executeNativeBatch(
-    mut env: JNIEnv,
-    _class: JClass,
-    batch_name: JString,
-    operations_array: JObjectArray,
-    batch_id: jlong,
-    start_time: jlong,
-) -> jbyteArray {
-    // Convert Java batch name to Rust string
-    let batch_name_str: String = match env.get_string(&batch_name) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            eprintln!("[rustperf] Failed to get batch name: {:?}", e);
-            return create_error_byte_array(&env, "Failed to get batch name");
-        }
-    };
-    
-    // Convert Java operations array to Rust Vec<Vec<u8>>
-    let operations_count = match env.get_array_length(&operations_array) {
-        Ok(len) => len,
-        Err(e) => {
-            eprintln!("[rustperf] Failed to get operations array length: {:?}", e);
-            return create_error_byte_array(&env, "Failed to get operations array length");
-        }
-    };
-    
-    let mut operations = Vec::with_capacity(operations_count as usize);
-    
-    for i in 0..operations_count {
-        let operation_obj = match env.get_object_array_element(&operations_array, i) {
-            Ok(obj) => obj,
-            Err(e) => {
-                eprintln!("[rustperf] Failed to get operation {}: {:?}", i, e);
-                return create_error_byte_array(&env, &format!("Failed to get operation {}", i));
-            }
-        };
-        
-        // Convert JObject to JByteArray and then to Vec<u8>
-        let byte_array: JByteArray = operation_obj.into();
-        match env.convert_byte_array(&byte_array) {
-            Ok(bytes) => operations.push(bytes),
-            Err(e) => {
-                eprintln!("[rustperf] Failed to convert operation {}: {:?}", i, e);
-                return create_error_byte_array(&env, &format!("Failed to convert operation {}", i));
-            }
-        }
-    }
-    
-    // Process the batch
-    match process_batch_operations(&batch_name_str, &operations, batch_id as u64, start_time as u64) {
-        Ok(result_bytes) => {
-            match env.byte_array_from_slice(&result_bytes) {
-                Ok(arr) => arr.into_raw(),
-                Err(e) => {
-                    eprintln!("[rustperf] Failed to create result byte array: {:?}", e);
-                    create_error_byte_array(&env, "Failed to create result byte array")
-                }
-            }
-        }
-        Err(error_msg) => {
-            eprintln!("[rustperf] Batch processing failed: {}", error_msg);
-            create_error_byte_array(&env, &error_msg)
-        }
-    }
-}
-
-/// JNI function for zero-copy buffer transfer
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_transferZeroCopyBuffer(
-    env: JNIEnv,
-    _class: JClass,
-    buffer: JObject,
-) -> jbyteArray {
-    // Convert Java ByteBuffer to Rust Vec<u8>
-    let buffer_ref = buffer.into();
-    let buffer_data = match env.get_direct_buffer_address(&buffer_ref) {
-        Ok(address) => {
-            let capacity = match env.get_direct_buffer_capacity(&buffer_ref) {
-                Ok(cap) => cap,
-                Err(_) => 0,
-            };
-            if capacity > 0 {
-                let slice = unsafe { std::slice::from_raw_parts(address, capacity as usize) };
-                Some(slice.to_vec())
-            } else {
-                None
-            }
-        }
-        Err(_) => None,
-    };
-    
-    if let Some(data) = buffer_data {
-        match env.byte_array_from_slice(&data) {
-            Ok(arr) => arr.into_raw(),
-            Err(e) => {
-                eprintln!("[rustperf] Failed to create zero-copy result array: {:?}", e);
-                std::ptr::null_mut()
-            }
-        }
-    } else {
-        eprintln!("[rustperf] Failed to extract zero-copy buffer data");
-        std::ptr::null_mut()
-    }
-}
-
-/// JNI function to check if native library is available
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_isNativeLibraryAvailable(
-    _env: JNIEnv,
-    _class: JClass,
-) -> jboolean {
-    JNI_TRUE // Native library is available since we're executing this function
-}
 
 
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeLogStartupInfo(
-    mut env: JNIEnv,
-    _class: JClass,
-    optimizations_active: JString,
-    cpu_info: JString,
-    config_applied: JString,
-) {
-    let optimizations_active: String = env.get_string(&optimizations_active).expect("Invalid optimizations active string").into();
-    let cpu_info: String = env.get_string(&cpu_info).expect("Invalid CPU info string").into();
-    let config_applied: String = env.get_string(&config_applied).expect("Invalid config applied string").into();
-    
-    jni_diagnostic!("INFO", "nativeLogStartupInfo", "Optimizations: {}, CPU: {}, Config: {}", optimizations_active, cpu_info, config_applied);
-    
-    // In a real implementation, this would log the startup info to the Rust performance monitoring system
-    eprintln!("[rustperf] Startup info logged - Optimizations: {}, CPU: {}, Config: {}", optimizations_active, cpu_info, config_applied);
-}
 
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeResetCounters(
-    _env: JNIEnv,
-    _class: JClass,
-) {
-    jni_diagnostic!("INFO", "nativeResetCounters", "Resetting performance counters");
-}
 
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeShutdown(
-    _env: JNIEnv,
-    _class: JClass,
-) {
-    jni_diagnostic!("INFO", "nativeShutdown", "Shutting down Rust performance monitoring");
-}
 
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeOptimizeMemory(
-    _env: JNIEnv,
-    _class: JClass,
-) -> jboolean {
-    jni_diagnostic!("INFO", "nativeOptimizeMemory", "Optimizing memory");
-    JNI_TRUE
-}
 
-#[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeOptimizeChunks(
-    _env: JNIEnv,
-    _class: JClass,
-) -> jboolean {
-    jni_diagnostic!("INFO", "nativeOptimizeChunks", "Optimizing chunks");
-    JNI_TRUE
-}
 
 /// Process set_current_tps operation
-fn set_current_tps_operation(data: &[u8]) -> Result<Vec<u8>, String> {
-    eprintln!("[rustperf] set_current_tps operation called with {} bytes", data.len());
-    
-    if data.len() < 4 {
-        // Use default TPS if no data provided
-        eprintln!("[rustperf] No TPS data provided, using default value 20.0");
-        let default_tps = 20.0;
-        
-        // Return result with default TPS
-        let mut result = Vec::new();
-        result.write_u8(1).map_err(|e| e.to_string())?; // success flag
-        result.write_f32::<LittleEndian>(default_tps).map_err(|e| e.to_string())?; // confirmed TPS value
-        return Ok(result);
-    }
-    
-    // Parse TPS value from input data
-    let mut cursor = Cursor::new(data);
-    let tps = cursor.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
-    
-    // Validate TPS range
-    if tps < 0.0 || tps > 100.0 {
-        return Err(format!("Invalid TPS value: {}", tps));
-    }
-    
-    
-    
-    // Store TPS value in global state or configuration
-    // In a real implementation, this would update the game's TPS tracking system
-    
-    // Return result with confirmation
-    let mut result = Vec::new();
-    result.write_u8(1).map_err(|e| e.to_string())?; // success flag
-    result.write_f32::<LittleEndian>(tps).map_err(|e| e.to_string())?; // confirmed TPS value
-    Ok(result)
+pub fn set_current_tps_operation(_data: &[u8]) -> Result<Vec<u8>, String> {
+    // This function has been moved to appropriate module
+    Err("Function moved to appropriate module".to_string())
 }
 
 

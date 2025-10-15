@@ -75,7 +75,7 @@ impl<T> WorkStealingScheduler<T> {
         T: Send + 'static,
         R: Send + 'static,
     {
-        let task_count = self.tasks.len();
+        let _task_count = self.tasks.len();
         let thread_pool = get_rayon_thread_pool();
 
         // For CPU-bound tasks, use Rayon's default (which is usually optimal)
@@ -89,7 +89,7 @@ impl<T> WorkStealingScheduler<T> {
             self.tasks.into_par_iter().map(processor).collect()
         });
         
-        let duration = start.elapsed();
+        let _duration = start.elapsed();
 
         // Log performance statistics (in a real system, this would go to a proper monitoring system)
         #[cfg(debug_assertions)]

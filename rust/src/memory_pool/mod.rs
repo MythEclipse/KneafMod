@@ -8,8 +8,10 @@
 //! - **EnhancedMemoryPoolManager**: Intelligent pool manager with automatic selection
 //! - **LightweightMemoryPool**: Single-threaded pool with minimal overhead
 //! - **SlabAllocator**: Fixed-size block allocation with size classes
+//! - **BufferPool**: Zero-copy buffer pool for high-performance data transfer
 
 pub mod atomic_state;
+pub mod buffer_pool;
 pub mod enhanced_manager;
 pub mod hierarchical;
 pub mod lightweight;
@@ -20,6 +22,10 @@ pub mod swap;
 
 // Re-export commonly used types for convenience
 pub use atomic_state::{AtomicCounter, AtomicPoolState};
+pub use buffer_pool::{
+    acquire_buffer, get_global_buffer_pool, init_global_buffer_pool, BufferPool,
+    BufferPoolConfig, BufferPoolStatsSnapshot, ZeroCopyBuffer,
+};
 pub use enhanced_manager::{
     AllocationStats, EnhancedManagerConfig, EnhancedMemoryPoolManager, MaintenanceResult,
     SmartPooledVec,
@@ -88,39 +94,6 @@ where
     THREAD_LOCAL_POOL.with(|pool| f(&mut pool.borrow_mut()))
 }
 
-/// Legacy MemoryPoolManager for backward compatibility
-#[derive(Debug)]
-pub struct MemoryPoolManager {
-    enhanced_manager: EnhancedMemoryPoolManager,
-}
-
-impl MemoryPoolManager {
-    pub fn new() -> Result<Self, String> {
-        Ok(Self {
-            enhanced_manager: EnhancedMemoryPoolManager::new(None)?,
-        })
-    }
-
-    pub fn allocate(&self, size: usize) -> Result<Vec<u8>, String> {
-        let pooled = self.enhanced_manager.allocate(size)?;
-        Ok(pooled.as_slice().to_vec())
-    }
-
-    /// Zero-copy allocation - returns pooled object directly without copying
-    pub fn allocate_zero_copy(&self, size: usize) -> Result<SmartPooledVec<u8>, String> {
-        self.enhanced_manager.allocate(size)
-    }
-
-    pub fn get_memory_pressure(&self) -> MemoryPressureLevel {
-        self.enhanced_manager.get_memory_pressure()
-    }
-}
-
-impl Default for MemoryPoolManager {
-    fn default() -> Self {
-        Self::new().expect("Failed to create MemoryPoolManager")
-    }
-}
 
 #[cfg(test)]
 mod tests {

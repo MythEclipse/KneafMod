@@ -139,6 +139,9 @@ dependencies {
     implementation 'io.github.astonbitecode:j4rs:0.17.0'
     // Use a different LZ4 version that is more likely to be available
     implementation 'org.lz4:lz4-java:1.8.0'
+    // SLF4J logging dependencies for runtime
+    implementation 'org.slf4j:slf4j-api:2.0.7'
+    implementation 'org.slf4j:slf4j-simple:2.0.7'
     // Binary protocol implemented manually using ByteBuffer - no FlatBuffers Java dependency required
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
@@ -423,6 +426,17 @@ tasks.named('processResources').configure { dependsOn(copyRustToSrc) }
 // Use string-based dependsOn to remain configuration-cache friendly.
 tasks.named('runClient').configure { dependsOn 'copyRustToSrc' }
 tasks.named('runServer').configure { dependsOn 'copyRustToSrc' }
+
+// Task to run RustPerformanceTest directly with proper classpath
+tasks.register('runRustTest', JavaExec) {
+    group = 'build'
+    description = 'Run RustPerformanceTest with full classpath and native libraries'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.kneaf.core.performance.RustPerformanceTest'
+    systemProperty 'java.library.path', file('src/main/resources/natives').absolutePath
+    systemProperty 'org.slf4j.simpleLogger.defaultLogLevel', 'debug'
+    systemProperty 'org.slf4j.simpleLogger.log.com.kneaf.core.performance.bridge.NativeLibraryLoader', 'debug'
+}
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {

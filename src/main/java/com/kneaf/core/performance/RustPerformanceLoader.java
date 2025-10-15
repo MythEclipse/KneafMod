@@ -1,17 +1,19 @@
 package com.kneaf.core.performance;
 
 import com.kneaf.core.performance.bridge.NativeLibraryLoader;
+import com.kneaf.core.performance.error.RustPerformanceError;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import com.kneaf.core.performance.error.RustPerformanceError;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
- * Handles loading and initialization of the Rust performance native library.
+ * Factory class for creating RustPerformanceLoader instances with different configurations.
+ * Implements factory pattern for flexible loader creation.
  */
 public class RustPerformanceLoader {
-    private static final Logger LOGGER = Logger.getLogger(RustPerformanceLoader.class.getName());
+    private static final Logger LOGGER = LoggerFactory.getLogger(RustPerformanceLoader.class);
     
     // Native library loading state
     private static final AtomicBoolean nativeLibraryLoaded = new AtomicBoolean(false);
@@ -20,14 +22,26 @@ public class RustPerformanceLoader {
     // Performance monitoring state
     private static final AtomicLong monitoringStartTime = new AtomicLong(0);
     
+    // Factory method to create standard loader
+    public static RustPerformanceLoader createStandardLoader() {
+        return new RustPerformanceLoader();
+    }
+    
+    // Factory method to create ultra performance loader
+    public static RustPerformanceLoader createUltraPerformanceLoader() {
+        RustPerformanceLoader loader = new RustPerformanceLoader();
+        loader.initializeUltraPerformanceInstance();
+        return loader;
+    }
+    
     static {
         try {
             loadNativeLibrary();
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Failed to load Rust performance native library", e);
+            LOGGER.error("Failed to load Rust performance native library", e);
         }
     }
-    
+
     /**
      * Load the native Rust performance library with enhanced error handling.
      */
@@ -44,15 +58,16 @@ public class RustPerformanceLoader {
             nativeLibraryLoaded.set(true);
             LOGGER.info("Rust performance native library loaded successfully");
         } else {
-            LOGGER.severe(RustPerformanceError.LIBRARY_LOAD_FAILED.getMessage());
+            LOGGER.error(RustPerformanceError.LIBRARY_LOAD_FAILED.getMessage());
             throw new RuntimeException(RustPerformanceError.LIBRARY_LOAD_FAILED.getMessage());
         }
     }
-    
+
     /**
-     * Initialize the Rust performance monitoring system with enhanced configuration.
+     * Instance method: Initialize the Rust performance monitoring system.
+     * Preferred method for new code - use factory methods to create instances.
      */
-    public static void initialize() {
+    public void initializeInstance() {
         LOGGER.info("Initializing Rust performance monitoring system");
         
         if (!nativeLibraryLoaded.get()) {
@@ -77,15 +92,16 @@ public class RustPerformanceLoader {
             initialized.set(true);
             LOGGER.info("Rust performance monitoring initialized successfully");
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, RustPerformanceError.INITIALIZATION_FAILED.getMessage(), e);
+            LOGGER.error(RustPerformanceError.INITIALIZATION_FAILED.getMessage(), e);
             throw new RuntimeException(RustPerformanceError.INITIALIZATION_FAILED.getMessage(), e);
         }
     }
-    
+
     /**
-     * Initialize ultra-high performance mode with aggressive optimizations.
+     * Instance method: Initialize ultra-high performance mode.
+     * Preferred method for new code - use factory methods to create instances.
      */
-    public static void initializeUltraPerformance() {
+    public void initializeUltraPerformanceInstance() {
         if (!initialized.get()) {
             initialize();
         }
@@ -97,15 +113,16 @@ public class RustPerformanceLoader {
             }
             LOGGER.info("Ultra performance mode initialized");
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, RustPerformanceError.ULTIMATE_INIT_FAILED.getMessage(), e);
+            LOGGER.error(RustPerformanceError.ULTIMATE_INIT_FAILED.getMessage(), e);
             throw new RuntimeException(RustPerformanceError.ULTIMATE_INIT_FAILED.getMessage(), e);
         }
     }
-    
+
     /**
-     * Shutdown the performance monitoring system.
+     * Instance method: Shutdown the performance monitoring system.
+     * Preferred method for new code - use factory methods to create instances.
      */
-    public static void shutdown() {
+    public void shutdownInstance() {
         if (!initialized.get()) {
             return;
         }
@@ -115,17 +132,54 @@ public class RustPerformanceLoader {
             initialized.set(false);
             LOGGER.info("Rust performance monitoring shutdown");
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, RustPerformanceError.SHUTDOWN_ERROR.getMessage(), e);
+            LOGGER.warn(RustPerformanceError.SHUTDOWN_ERROR.getMessage(), e);
         }
     }
-    
+
+    /**
+     * Backward compatibility: Static initialize method (creates standard loader instance)
+     * @deprecated Use factory methods with instance initialization for new code.
+     */
+    @Deprecated
+    public static void initialize() {
+        createStandardLoader().initializeInstance();
+    }
+
+    /**
+     * Backward compatibility: Static initializeUltraPerformance method
+     * @deprecated Use factory methods with instance initialization for new code.
+     */
+    @Deprecated
+    public static void initializeUltraPerformance() {
+        // Already initialized by factory method
+    }
+
+    /**
+     * Backward compatibility: Static shutdown method
+     * @deprecated Use instance.shutdownInstance() for new code.
+     */
+    @Deprecated
+    public static void shutdown() {
+        // Note: This is a simplification - in real usage, should track specific loader instances
+        // For backward compatibility, we'll use the static state check
+        if (isInitialized()) {
+            try {
+                nativeShutdown();
+                initialized.set(false);
+                LOGGER.info("Rust performance monitoring shutdown (static)");
+            } catch (Exception e) {
+                LOGGER.warn(RustPerformanceError.SHUTDOWN_ERROR.getMessage(), e);
+            }
+        }
+    }
+
     /**
      * Check if the performance monitoring is initialized.
      */
     public static boolean isInitialized() {
         return initialized.get();
     }
-    
+
     /**
      * Get performance monitoring uptime in milliseconds.
      */
@@ -136,7 +190,7 @@ public class RustPerformanceLoader {
         }
         return System.currentTimeMillis() - startTime;
     }
-    
+
     // Native method declarations
     private static native boolean nativeInitialize();
     private static native boolean nativeInitializeUltraPerformance();

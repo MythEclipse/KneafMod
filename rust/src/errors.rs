@@ -63,26 +63,26 @@ pub enum RustError {
     
     /// Invalid operation type error
     InvalidOperationType {
-        operation_type: u8,
-        max_type: u8,
-    },
+            operation_type: u8,
+            max_type: u8,
+        },
     
-    /// Empty operation set error
-    EmptyOperationSet,
+        /// Empty operation set error
+        EmptyOperationSet,
     
-    /// Async task send failed error
-    AsyncTaskSendFailed {
-        source: String,
-    },
+        /// Async task send failed error
+        AsyncTaskSendFailed {
+            source: String,
+        },
     
-    /// Async result receive failed error
-    AsyncResultReceiveFailed {
-        source: String,
-    },
+        /// Async result receive failed error
+        AsyncResultReceiveFailed {
+            source: String,
+        },
     
-    /// Shared buffer lock failed error
-    SharedBufferLockFailed,
-}
+        /// Shared buffer lock failed error
+        SharedBufferLockFailed,
+    }
 
 impl fmt::Display for RustError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -144,35 +144,3 @@ pub mod messages {
 
 /// Result type alias using our centralized error type
 pub type Result<T> = std::result::Result<T, RustError>;
-
-/// Additional error types for batch processing
-#[derive(Debug)]
-pub enum BatchError {
-    /// Parse error for batch operations
-    ParseError(String),
-    
-    /// Conversion error for JNI arrays
-    ConversionError(String),
-    
-    /// Buffer error for direct memory access
-    BufferError(String),
-    
-    /// Invalid argument error
-    InvalidArgumentError(String),
-}
-
-impl fmt::Display for BatchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BatchError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            BatchError::ConversionError(msg) => write!(f, "Conversion error: {}", msg),
-            BatchError::BufferError(msg) => write!(f, "Buffer error: {}", msg),
-            BatchError::InvalidArgumentError(msg) => write!(f, "Invalid argument: {}", msg),
-        }
-    }
-}
-
-impl Error for BatchError {}
-
-/// Result type alias for batch operations
-pub type BatchResult<T> = std::result::Result<T, BatchError>;

@@ -1,28 +1,29 @@
 package com.kneaf.core.performance;
 
 import com.kneaf.core.performance.error.RustPerformanceError;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * Handles enhanced batch processing with zero-copy optimization for Rust performance system.
+ * Uses composition pattern to delegate to RustPerformanceBase for common functionality.
  */
 public class RustPerformanceBatchProcessor {
-    private static final Logger LOGGER = Logger.getLogger(RustPerformanceBatchProcessor.class.getName());
+    private static final Logger LOGGER = LoggerFactory.getLogger(RustPerformanceBatchProcessor.class.getName());
     
     // Enhanced batch processing state
     private static final ConcurrentHashMap<Long, CompletableFuture<byte[]>> asyncOperations = new ConcurrentHashMap<>();
     private static final Semaphore batchProcessingSemaphore = new Semaphore(10, true); // Limit concurrent batches
-    
-    // Configuration constants
-    public static final int DEFAULT_MIN_BATCH_SIZE = 50;
-    public static final int DEFAULT_MAX_BATCH_SIZE = 500;
-    public static final long DEFAULT_ADAPTIVE_TIMEOUT_MS = 1;
-    public static final int DEFAULT_WORKER_THREADS = 8;
+
+    // Configuration constants (reuse from base class)
+    public static final int DEFAULT_MIN_BATCH_SIZE = RustPerformanceBase.DEFAULT_MIN_BATCH_SIZE;
+    public static final int DEFAULT_MAX_BATCH_SIZE = RustPerformanceBase.DEFAULT_MAX_BATCH_SIZE;
+    public static final long DEFAULT_ADAPTIVE_TIMEOUT_MS = RustPerformanceBase.DEFAULT_ADAPTIVE_TIMEOUT_MS;
+    public static final int DEFAULT_WORKER_THREADS = RustPerformanceBase.DEFAULT_WORKER_THREADS;
 
     /**
      * Initialize enhanced batch processor with custom configuration.
@@ -44,12 +45,12 @@ public class RustPerformanceBatchProcessor {
             boolean enableAdaptiveSizing
     ) {
         return RustPerformanceBase.safeNativeBooleanCall(
-            () -> RustPerformanceBatchProcessor.nativeInitEnhancedBatchProcessorNative(
-                    minBatchSize, maxBatchSize, adaptiveTimeoutMs, 
-                    maxPendingBatches, workerThreads, enableAdaptiveSizing
-            ),
-            RustPerformanceError.BATCH_PROCESSING_ERROR,
-            RustPerformanceLoader::isInitialized
+                () -> nativeInitEnhancedBatchProcessorNative(
+                        minBatchSize, maxBatchSize, adaptiveTimeoutMs,
+                        maxPendingBatches, workerThreads, enableAdaptiveSizing
+                ),
+                RustPerformanceError.BATCH_PROCESSING_ERROR,
+                RustPerformanceBase::isInitialized
         );
     }
     
@@ -59,13 +60,13 @@ public class RustPerformanceBatchProcessor {
      * @return JSON string containing batch processor metrics
      */
     public static String nativeGetEnhancedBatchMetrics() {
-        return RustPerformanceBase.safeNativeCall(
-            RustPerformanceBatchProcessor::nativeGetEnhancedBatchMetricsNative,
-            RustPerformanceError.BATCH_PROCESSING_ERROR,
-            RustPerformanceLoader::isInitialized
+        return RustPerformanceBase.safeNativeStringCall(
+                RustPerformanceBatchProcessor::nativeGetEnhancedBatchMetricsNative,
+                RustPerformanceError.BATCH_PROCESSING_ERROR,
+                RustPerformanceBase::isInitialized
         );
     }
-    
+
     /**
      * Submit zero-copy batched operations directly from Java ByteBuffer.
      *
@@ -79,36 +80,33 @@ public class RustPerformanceBatchProcessor {
             ByteBuffer buffer,
             int bufferSize
     ) {
-        return RustPerformanceBase.safeNativeCall(
-            () -> {
-                if (!buffer.isDirect()) {
-                    throw new IllegalArgumentException("Buffer must be a direct ByteBuffer");
-                }
-                
-                // Acquire semaphore to limit concurrent zero-copy operations
-                try {
-                    if (!batchProcessingSemaphore.tryAcquire(1, 100, TimeUnit.MILLISECONDS)) {
-                        throw new IllegalStateException("Zero-copy operation semaphore timeout");
+        return RustPerformanceBase.safeNativeStringCall(
+                () -> {
+                    RustPerformanceBase.validateDirectBuffer(buffer);
+                    
+                    // Acquire semaphore to limit concurrent zero-copy operations
+                    try {
+                        if (!batchProcessingSemaphore.tryAcquire(1, 100, TimeUnit.MILLISECONDS)) {
+                            throw new IllegalStateException(RustPerformanceError.SEMAPHORE_TIMEOUT.getMessage());
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(RustPerformanceError.SEMAPHORE_TIMEOUT.getMessage(), e);
                     }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("Zero-copy operation semaphore acquisition interrupted", e);
-                }
-                
-                try {
-                    return RustPerformanceBatchProcessor.nativeSubmitZeroCopyBatchedOperationsNative(
-                            operationType, buffer, bufferSize
-                    );
-                } finally {
-                    batchProcessingSemaphore.release();
-                }
-            },
-            RustPerformanceError.ZERO_COPY_ERROR,
-            RustPerformanceLoader::isInitialized,
-            true
+                    
+                    try {
+                        return nativeSubmitZeroCopyBatchedOperationsNative(
+                                operationType, buffer, bufferSize
+                        );
+                    } finally {
+                        batchProcessingSemaphore.release();
+                    }
+                },
+                RustPerformanceError.ZERO_COPY_ERROR,
+                RustPerformanceBase::isInitialized
         );
     }
-    
+
     /**
      * Submit async batched operations with priority support.
      *
@@ -122,15 +120,15 @@ public class RustPerformanceBatchProcessor {
             byte[] operations,
             byte[] priorities
     ) {
-        return RustPerformanceBase.safeNativeCall(
-            () -> RustPerformanceBatchProcessor.nativeSubmitAsyncBatchedOperationsNative(
-                    operationType, operations, priorities
-            ),
-            RustPerformanceError.BATCH_PROCESSING_ERROR,
-            RustPerformanceLoader::isInitialized
+        return RustPerformanceBase.safeNativeLongCall(
+                () -> nativeSubmitAsyncBatchedOperationsNative(
+                        operationType, operations, priorities
+                ),
+                RustPerformanceError.BATCH_PROCESSING_ERROR,
+                RustPerformanceBase::isInitialized
         );
     }
-    
+
     /**
      * Poll async batch operation results.
      *
@@ -138,13 +136,13 @@ public class RustPerformanceBatchProcessor {
      * @return Byte array containing operation results
      */
     public static byte[] nativePollAsyncBatchResult(long operationId) {
-        return RustPerformanceBase.safeNativeCall(
-            () -> RustPerformanceBatchProcessor.nativePollAsyncBatchResultNative(operationId),
-            RustPerformanceError.BATCH_PROCESSING_ERROR,
-            RustPerformanceLoader::isInitialized
+        return RustPerformanceBase.safeNativeByteArrayCall(
+                () -> nativePollAsyncBatchResultNative(operationId),
+                RustPerformanceError.BATCH_PROCESSING_ERROR,
+                RustPerformanceBase::isInitialized
         );
     }
-    
+
     /**
      * Enhanced batch processing with zero-copy optimization.
      * Processes a batch of operations using direct memory access.
@@ -159,77 +157,62 @@ public class RustPerformanceBatchProcessor {
             List<byte[]> operations,
             List<Byte> priorities
     ) {
-        if (!RustPerformanceLoader.isInitialized()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException(RustPerformanceError.NOT_INITIALIZED.getMessage())
             );
         }
 
-        if (operations == null || operations.isEmpty()) {
-            return CompletableFuture.failedFuture(
-                    new IllegalArgumentException(RustPerformanceError.INVALID_ARGUMENTS.getMessage())
-            );
-        }
-
-        if (priorities == null || priorities.size() != operations.size()) {
-            return CompletableFuture.failedFuture(
-                    new IllegalArgumentException(RustPerformanceError.INVALID_ARGUMENTS.getMessage())
-            );
-        }
+        RustPerformanceBase.validateOperations(operations);
+        RustPerformanceBase.validatePriorities(operations, priorities);
 
         try {
             // Acquire semaphore to limit concurrent batch processing
-            try {
-                if (!batchProcessingSemaphore.tryAcquire(1, 100, TimeUnit.MILLISECONDS)) {
-                    return CompletableFuture.failedFuture(
-                            new IllegalStateException(RustPerformanceError.SEMAPHORE_TIMEOUT.getMessage())
-                    );
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            if (!batchProcessingSemaphore.tryAcquire(1, 100, TimeUnit.MILLISECONDS)) {
                 return CompletableFuture.failedFuture(
-                        new IllegalStateException("Batch processing semaphore acquisition interrupted", e)
+                        new IllegalStateException(RustPerformanceError.SEMAPHORE_TIMEOUT.getMessage())
                 );
             }
 
-            // Prepare operations data
-            int totalSize = 0;
+            // Calculate exact required buffer sizes
+            int totalOperationSize = 0;
             for (byte[] operation : operations) {
-                totalSize += operation.length + 4; // 4 bytes for length prefix
+                totalOperationSize += operation.length + 4; // 4 bytes for length prefix
             }
-
-            ByteBuffer buffer = ByteBuffer.allocateDirect(4 + totalSize); // 4 bytes for count prefix
-            buffer.putInt(operations.size());
-
+            
+            // Create separate buffers for operations and priorities
+            ByteBuffer operationsBuffer = ByteBuffer.allocateDirect(totalOperationSize);
+            
+            // Write operations to buffer
             for (int i = 0; i < operations.size(); i++) {
                 byte[] operation = operations.get(i);
-                buffer.putInt(operation.length);
-                buffer.put(operation);
-                
-                // Store priority for later use
-                Byte priority = priorities.get(i);
-                if (priority == null) {
-                    buffer.put((byte) 0); // Default priority
-                } else {
-                    buffer.put(priority);
-                }
+                operationsBuffer.putInt(operation.length);
+                operationsBuffer.put(operation);
             }
-
-            buffer.flip();
-
+            
+            operationsBuffer.flip();
+            byte[] operationsData = new byte[operationsBuffer.remaining()];
+            operationsBuffer.get(operationsData);
+            
+            // Create priorities array
+            byte[] prioritiesData = new byte[priorities.size()];
+            for (int i = 0; i < priorities.size(); i++) {
+                prioritiesData[i] = priorities.get(i);
+            }
+            
             // Submit to native processor
             long operationId = nativeSubmitAsyncBatchedOperations(
                     operationType,
-                    buffer.array(),
-                    buffer.array()
+                    operationsData,
+                    prioritiesData
             );
 
             // Create and return CompletableFuture for async result
             CompletableFuture<byte[]> future = new CompletableFuture<>();
             asyncOperations.put(operationId, future);
 
-            // Schedule result polling
-            scheduleAsyncResultPolling(operationId, future);
+            // Schedule result polling with timeout
+            scheduleAsyncResultPolling(operationId, future, 5, TimeUnit.SECONDS);
 
             return future;
         } catch (Exception e) {
@@ -237,15 +220,30 @@ public class RustPerformanceBatchProcessor {
             return CompletableFuture.failedFuture(e);
         }
     }
-    
+
     /**
-     * Schedule periodic polling for async batch operation results.
+     * Schedule periodic polling for async batch operation results with timeout.
      *
      * @param operationId Operation ID to poll
      * @param future      CompletableFuture to complete with results
+     * @param timeout     Timeout value
+     * @param unit        Time unit for timeout
      */
-    private static void scheduleAsyncResultPolling(long operationId, CompletableFuture<byte[]> future) {
+    private static void scheduleAsyncResultPolling(long operationId, CompletableFuture<byte[]> future, long timeout, TimeUnit unit) {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        
+        // Schedule timeout task
+        scheduler.schedule(() -> {
+            if (!future.isDone()) {
+                LOGGER.warn("Batch operation {} timed out after {} {}", operationId, timeout, unit);
+                future.completeExceptionally(new TimeoutException("Batch operation timed out after " + timeout + " " + unit));
+                asyncOperations.remove(operationId);
+                batchProcessingSemaphore.release();
+                scheduler.shutdownNow();
+            }
+        }, timeout, unit);
+        
+        // Schedule polling task
         scheduler.scheduleAtFixedRate(() -> {
             if (future.isDone()) {
                 scheduler.shutdown();
@@ -261,7 +259,7 @@ public class RustPerformanceBatchProcessor {
                     batchProcessingSemaphore.release();
                 }
             } catch (Exception e) {
-                LOGGER.log(Level.WARNING, "Failed to poll async batch result for operation " + operationId, e);
+                LOGGER.warn("Failed to poll async batch result for operation {}", operationId, e);
                 future.completeExceptionally(e);
                 scheduler.shutdown();
                 asyncOperations.remove(operationId);
@@ -269,47 +267,47 @@ public class RustPerformanceBatchProcessor {
             }
         }, 0, 100, TimeUnit.MILLISECONDS); // Poll every 100ms
     }
-    
+
     /**
      * Get comprehensive performance metrics as JSON string.
      *
      * @return JSON string containing all performance metrics
      */
     public static String getComprehensiveMetrics() {
-        return RustPerformanceBase.safeNativeCall(
-            () -> {
-                if (!RustPerformanceLoader.isInitialized()) {
-                    return "{\"error\":\"" + RustPerformanceError.NOT_INITIALIZED.getMessage() + "\"}";
-                }
+        return RustPerformanceBase.safeNativeStringCall(
+                () -> {
+                    if (!RustPerformanceBase.isInitialized()) {
+                        return "{\"error\":\"" + RustPerformanceError.NOT_INITIALIZED.getMessage() + "\"}";
+                    }
 
-                try {
-                    long uptime = RustPerformanceLoader.getUptimeMs();
-                    double tps = RustPerformanceMonitor.getCurrentTPS();
-                    long totalTicks = RustPerformanceMonitor.getTotalTicksProcessed();
-                    long totalEntities = RustPerformanceMonitor.getTotalEntitiesProcessed();
-                    long totalMobs = RustPerformanceMonitor.getTotalMobsProcessed();
-                    long totalBlocks = RustPerformanceMonitor.getTotalBlocksProcessed();
-                    long totalMerged = RustPerformanceMonitor.getTotalMerged();
-                    long totalDespawned = RustPerformanceMonitor.getTotalDespawned();
-                    String cpuStats = RustPerformanceMonitor.getCpuStats();
-                    String memoryStats = RustPerformanceMonitor.getMemoryStats();
-                    String batchMetrics = nativeGetEnhancedBatchMetrics();
+                    try {
+                        long uptime = RustPerformanceBase.getUptimeMs();
+                        double tps = RustPerformance.getCurrentTPS();
+                        long totalTicks = RustPerformance.getTotalTicksProcessed();
+                        long totalEntities = RustPerformance.getTotalEntitiesProcessed();
+                        long totalMobs = RustPerformance.getTotalMobsProcessed();
+                        long totalBlocks = RustPerformance.getTotalBlocksProcessed();
+                        long totalMerged = RustPerformance.getTotalMerged();
+                        long totalDespawned = RustPerformance.getTotalDespawned();
+                        String cpuStats = RustPerformance.getCpuStats();
+                        String memoryStats = RustPerformance.getMemoryStats();
+                        String batchMetrics = nativeGetEnhancedBatchMetrics();
 
-                    return String.format("{\"uptimeMs\":%d,\"tps\":%.2f,\"totalTicks\":%d,\"totalEntities\":%d,\"totalMobs\":%d,\"totalBlocks\":%d,\"totalMerged\":%d,\"totalDespawned\":%d,\"cpuStats\":\"%s\",\"memoryStats\":\"%s\",\"batchMetrics\":%s}",
-                            uptime, tps, totalTicks, totalEntities, totalMobs, totalBlocks, totalMerged, totalDespawned,
-                            cpuStats != null ? cpuStats.replace("\"", "\\\"") : "null", 
-                            memoryStats != null ? memoryStats.replace("\"", "\\\"") : "null", 
-                            batchMetrics != null ? batchMetrics : "null");
-                } catch (Exception e) {
-                    LOGGER.log(Level.WARNING, RustPerformanceError.METRICS_ERROR.getMessage(), e);
-                    return "{\"error\":\"" + RustPerformanceError.METRICS_ERROR.getMessage() + "\"}";
-                }
-            },
-            RustPerformanceError.METRICS_ERROR,
-            RustPerformanceLoader::isInitialized
+                        return String.format("{\"uptimeMs\":%d,\"tps\":%.2f,\"totalTicks\":%d,\"totalEntities\":%d,\"totalMobs\":%d,\"totalBlocks\":%d,\"totalMerged\":%d,\"totalDespawned\":%d,\"cpuStats\":\"%s\",\"memoryStats\":\"%s\",\"batchMetrics\":%s}",
+                                uptime, tps, totalTicks, totalEntities, totalMobs, totalBlocks, totalMerged, totalDespawned,
+                                cpuStats != null ? cpuStats.replace("\"", "\\\"") : "null",
+                                memoryStats != null ? memoryStats.replace("\"", "\\\"") : "null",
+                                batchMetrics != null ? batchMetrics : "null");
+                    } catch (Exception e) {
+                        LOGGER.warn(RustPerformanceError.METRICS_ERROR.getMessage(), e);
+                        return "{\"error\":\"" + RustPerformanceError.METRICS_ERROR.getMessage() + "\"}";
+                    }
+                },
+                RustPerformanceError.METRICS_ERROR,
+                RustPerformanceBase::isInitialized
         );
     }
-    
+
     // Native method declarations
     private static native boolean nativeInitEnhancedBatchProcessorNative(
             int minBatchSize,

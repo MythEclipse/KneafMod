@@ -1,11 +1,13 @@
 package com.kneaf.core.performance;
 
+import com.kneaf.core.performance.error.RustPerformanceError;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Full JNI integration with Rust performance monitoring library.
@@ -13,31 +15,20 @@ import java.util.logging.Logger;
  * and enhanced batch processing capabilities.
  */
 public class RustPerformance {
-    private static final Logger LOGGER = Logger.getLogger(RustPerformance.class.getName());
+    private static final Logger LOGGER = LoggerFactory.getLogger(RustPerformance.class.getName());
 
-    // Native library loading state
-    private static final AtomicBoolean nativeLibraryLoaded = new AtomicBoolean(false);
-    private static final AtomicBoolean initialized = new AtomicBoolean(false);
-    
     // Performance monitoring state
-    private static final AtomicLong monitoringStartTime = new AtomicLong(0);
     private static final AtomicLong totalTicksProcessed = new AtomicLong(0);
     
     // Enhanced batch processing state
     private static final ConcurrentHashMap<Long, CompletableFuture<byte[]>> asyncOperations = new ConcurrentHashMap<>();
     private static final Semaphore batchProcessingSemaphore = new Semaphore(10, true); // Limit concurrent batches
-    
-    // Configuration constants
-    public static final int DEFAULT_MIN_BATCH_SIZE = 50;
-    public static final int DEFAULT_MAX_BATCH_SIZE = 500;
-    public static final long DEFAULT_ADAPTIVE_TIMEOUT_MS = 1;
-    public static final int DEFAULT_WORKER_THREADS = 8;
 
     static {
         try {
             loadNativeLibrary();
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Failed to load Rust performance native library", e);
+            LOGGER.error("Failed to load Rust performance native library", e);
         }
     }
 
@@ -45,7 +36,7 @@ public class RustPerformance {
      * Load the native Rust performance library with enhanced error handling.
      */
     private static void loadNativeLibrary() {
-        if (nativeLibraryLoaded.get()) {
+        if (RustPerformanceBase.nativeLibraryLoaded.get()) {
             LOGGER.info("Native library already loaded, skipping");
             return;
         }
@@ -54,10 +45,10 @@ public class RustPerformance {
             // Try to load from system path first
             LOGGER.info("Attempting to load library from system path");
             System.loadLibrary("rustperf");
-            nativeLibraryLoaded.set(true);
+            RustPerformanceBase.nativeLibraryLoaded.set(true);
             LOGGER.info("Rust performance native library loaded successfully from system path");
         } catch (UnsatisfiedLinkError e) {
-            LOGGER.warning("System library load failed, trying classpath: " + e.getMessage());
+            LOGGER.warn("System library load failed, trying classpath: " + e.getMessage());
 
             // Try loading from classpath resources with enhanced path resolution
             try {
@@ -90,7 +81,7 @@ public class RustPerformance {
                 boolean loaded = false;
                 for (String candidate : candidatePaths) {
                     if (Thread.currentThread().isInterrupted()) {
-                        LOGGER.warning("Library loading interrupted");
+                        LOGGER.warn("Library loading interrupted");
                         break;
                     }
 
@@ -102,7 +93,7 @@ public class RustPerformance {
                             java.nio.file.Files.copy(is, tempLib, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                             System.load(tempLib.toAbsolutePath().toString());
                             tempLib.toFile().deleteOnExit();
-                            nativeLibraryLoaded.set(true);
+                            RustPerformanceBase.nativeLibraryLoaded.set(true);
                             LOGGER.info("Rust performance native library loaded from classpath: " + candidate);
                             loaded = true;
                             break;
@@ -113,7 +104,7 @@ public class RustPerformance {
                         java.nio.file.Path path = java.nio.file.Paths.get(candidate);
                         if (java.nio.file.Files.exists(path)) {
                             System.load(path.toAbsolutePath().toString());
-                            nativeLibraryLoaded.set(true);
+                            RustPerformanceBase.nativeLibraryLoaded.set(true);
                             LOGGER.info("Rust performance native library loaded from file: " + path.toAbsolutePath());
                             loaded = true;
                             break;
@@ -127,7 +118,7 @@ public class RustPerformance {
                     throw new RuntimeException("Native library not found in candidate locations: " + Arrays.toString(candidatePaths));
                 }
             } catch (Exception ex) {
-                LOGGER.log(Level.SEVERE, "Failed to load Rust performance native library from classpath", ex);
+                LOGGER.error("Failed to load Rust performance native library from classpath", ex);
                 throw new RuntimeException("Cannot load Rust performance native library", ex);
             }
         }
@@ -149,11 +140,11 @@ public class RustPerformance {
      */
     public static void initialize() {
         LOGGER.info("Initializing Rust performance monitoring system");
-        if (!nativeLibraryLoaded.get()) {
+        if (!RustPerformanceBase.nativeLibraryLoaded.get()) {
             throw new IllegalStateException("Native library not loaded");
         }
 
-        if (initialized.getAndSet(true)) {
+        if (RustPerformanceBase.initialized.getAndSet(true)) {
             LOGGER.info("Rust performance monitoring already initialized, skipping");
             return;
         }
@@ -163,15 +154,15 @@ public class RustPerformance {
             boolean success = nativeInitialize();
             LOGGER.info("nativeInitialize() returned: " + success);
             if (!success) {
-                initialized.set(false);
+                RustPerformanceBase.initialized.set(false);
                 throw new RuntimeException("Rust performance initialization failed");
             }
 
-            monitoringStartTime.set(System.currentTimeMillis());
+            RustPerformanceBase.monitoringStartTime.set(System.currentTimeMillis());
             LOGGER.info("Rust performance monitoring initialized successfully");
         } catch (Exception e) {
-            initialized.set(false);
-            LOGGER.log(Level.SEVERE, "Failed to initialize Rust performance monitoring", e);
+            RustPerformanceBase.initialized.set(false);
+            LOGGER.error("Failed to initialize Rust performance monitoring", e);
             throw new RuntimeException("Rust performance initialization failed", e);
         }
     }
@@ -180,7 +171,7 @@ public class RustPerformance {
      * Initialize ultra-high performance mode with aggressive optimizations.
      */
     public static void initializeUltraPerformance() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             initialize();
         }
 
@@ -191,7 +182,7 @@ public class RustPerformance {
             }
             LOGGER.info("Ultra performance mode initialized");
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Failed to initialize ultra performance mode", e);
+            LOGGER.error("Failed to initialize ultra performance mode", e);
             throw new RuntimeException("Ultra performance initialization failed", e);
         }
     }
@@ -200,7 +191,7 @@ public class RustPerformance {
      * Get current TPS (Ticks Per Second) with enhanced accuracy.
      */
     public static double getCurrentTPS() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return 0.0;
         }
 
@@ -209,7 +200,7 @@ public class RustPerformance {
             totalTicksProcessed.incrementAndGet();
             return tps;
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to get current TPS", e);
+            LOGGER.warn("Failed to get current TPS", e);
             return 0.0;
         }
     }
@@ -218,141 +209,124 @@ public class RustPerformance {
      * Get CPU usage statistics with detailed breakdown.
      */
     public static String getCpuStats() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return "CPU: Not initialized";
         }
 
-        try {
-            return nativeGetCpuStats();
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to get CPU stats", e);
-            return "CPU: Error retrieving stats";
-        }
+        return RustPerformanceBase.safeNativeStringCall(
+                RustPerformance::nativeGetCpuStats,
+                RustPerformanceError.CPU_STATS_ERROR,
+                RustPerformanceBase::isInitialized
+        );
     }
 
     /**
      * Get memory usage statistics with detailed breakdown.
      */
     public static String getMemoryStats() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return "Memory: Not initialized";
         }
 
-        try {
-            return nativeGetMemoryStats();
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to get memory stats", e);
-            return "Memory: Error retrieving stats";
-        }
+        return RustPerformanceBase.safeNativeStringCall(
+                RustPerformance::nativeGetMemoryStats,
+                RustPerformanceError.MEMORY_STATS_ERROR,
+                RustPerformanceBase::isInitialized
+        );
     }
 
     /**
      * Get total entities processed since startup.
      */
     public static long getTotalEntitiesProcessed() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return 0L;
         }
 
-        try {
-            return nativeGetTotalEntitiesProcessed();
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to get total entities processed", e);
-            return 0L;
-        }
+        return RustPerformanceBase.safeNativeLongCall(
+                RustPerformance::nativeGetTotalEntitiesProcessed,
+                RustPerformanceError.ENTITY_COUNT_ERROR,
+                RustPerformanceBase::isInitialized
+        );
     }
 
     /**
      * Get total mobs processed since startup.
      */
     public static long getTotalMobsProcessed() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return 0L;
         }
 
-        try {
-            return nativeGetTotalMobsProcessed();
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to get total mobs processed", e);
-            return 0L;
-        }
+        return RustPerformanceBase.safeNativeLongCall(
+                RustPerformance::nativeGetTotalMobsProcessed,
+                RustPerformanceError.MOB_COUNT_ERROR,
+                RustPerformanceBase::isInitialized
+        );
     }
 
     /**
      * Get total blocks processed since startup.
      */
     public static long getTotalBlocksProcessed() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return 0L;
         }
 
-        try {
-            return nativeGetTotalBlocksProcessed();
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to get total blocks processed", e);
-            return 0L;
-        }
+        return RustPerformanceBase.safeNativeLongCall(
+                RustPerformance::nativeGetTotalBlocksProcessed,
+                RustPerformanceError.BLOCK_COUNT_ERROR,
+                RustPerformanceBase::isInitialized
+        );
     }
 
     /**
      * Get total entities merged since startup.
      */
     public static long getTotalMerged() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return 0L;
         }
 
-        try {
-            return nativeGetTotalMerged();
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to get total merged", e);
-            return 0L;
-        }
+        return RustPerformanceBase.safeNativeLongCall(
+                RustPerformance::nativeGetTotalMerged,
+                RustPerformanceError.MERGED_COUNT_ERROR,
+                RustPerformanceBase::isInitialized
+        );
     }
 
     /**
      * Get total entities despawned since startup.
      */
     public static long getTotalDespawned() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return 0L;
         }
 
-        try {
-            return nativeGetTotalDespawned();
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to get total despawned", e);
-            return 0L;
-        }
+        return RustPerformanceBase.safeNativeLongCall(
+                RustPerformance::nativeGetTotalDespawned,
+                RustPerformanceError.DESPAWNED_COUNT_ERROR,
+                RustPerformanceBase::isInitialized
+        );
     }
 
     /**
      * Log startup information with performance optimizations.
      */
     public static void logStartupInfo(String optimizationsActive, String cpuInfo, String configApplied) {
-        LOGGER.info("logStartupInfo called with: optimizationsActive=" + optimizationsActive + ", cpuInfo=" + cpuInfo + ", configApplied=" + configApplied);
-        if (!initialized.get()) {
-            LOGGER.warning("Attempted to log startup info before initialization");
+        LOGGER.info("logStartupInfo called with: optimizationsActive={}, cpuInfo={}, configApplied={}",
+                optimizationsActive, cpuInfo, configApplied);
+        if (!RustPerformanceBase.isInitialized()) {
+            LOGGER.warn("Attempted to log startup info before initialization");
             return;
         }
 
-        try {
-            LOGGER.info("Calling nativeLogStartupInfo()");
-            nativeLogStartupInfo(optimizationsActive, cpuInfo, configApplied);
-            LOGGER.info("Performance startup info logged: " + optimizationsActive);
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to log startup info", e);
-        }
-    }
-
-    /**
-     * Get performance monitoring uptime in milliseconds.
-     */
-    public static long getUptimeMs() {
-        if (monitoringStartTime.get() == 0) {
-            return 0;
-        }
-        return System.currentTimeMillis() - monitoringStartTime.get();
+        RustPerformanceBase.safeNativeVoidCall(
+                () -> nativeLogStartupInfo(optimizationsActive, cpuInfo, configApplied),
+                RustPerformanceError.LOG_STARTUP_ERROR,
+                RustPerformanceBase::isInitialized
+        );
+        LOGGER.info("Performance startup info logged: {}", optimizationsActive);
     }
 
     /**
@@ -363,27 +337,20 @@ public class RustPerformance {
     }
 
     /**
-     * Check if the performance monitoring is initialized.
-     */
-    public static boolean isInitialized() {
-        return initialized.get();
-    }
-
-    /**
      * Reset performance counters (for testing).
      */
     public static void resetCounters() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return;
         }
 
-        try {
-            nativeResetCounters();
-            totalTicksProcessed.set(0);
-            LOGGER.info("Performance counters reset");
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to reset counters", e);
-        }
+        RustPerformanceBase.safeNativeVoidCall(
+                RustPerformance::nativeResetCounters,
+                RustPerformanceError.COUNTER_RESET_ERROR,
+                RustPerformanceBase::isInitialized
+        );
+        totalTicksProcessed.set(0);
+        LOGGER.info("Performance counters reset");
     }
 
     /**
@@ -393,23 +360,16 @@ public class RustPerformance {
      * @return true if optimization was successful, false otherwise
      */
     public static boolean optimizeMemory() {
-        if (!initialized.get()) {
-            LOGGER.warning("Cannot optimize memory: Rust performance system not initialized");
+        if (!RustPerformanceBase.isInitialized()) {
+            LOGGER.warn("Cannot optimize memory: Rust performance system not initialized");
             return false;
         }
 
-        try {
-            boolean result = nativeOptimizeMemory();
-            if (result) {
-                LOGGER.info("Native memory optimization completed successfully");
-            } else {
-                LOGGER.warning("Native memory optimization failed or not supported");
-            }
-            return result;
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Error during native memory optimization", e);
-            return false;
-        }
+        return RustPerformanceBase.safeNativeBooleanCall(
+                RustPerformance::nativeOptimizeMemory,
+                RustPerformanceError.MEMORY_OPTIMIZATION_FAILED,
+                RustPerformanceBase::isInitialized
+        );
     }
 
     /**
@@ -419,103 +379,33 @@ public class RustPerformance {
      * @return true if optimization was successful, false otherwise
      */
     public static boolean optimizeChunks() {
-        if (!initialized.get()) {
-            LOGGER.warning("Cannot optimize chunks: Rust performance system not initialized");
+        if (!RustPerformanceBase.isInitialized()) {
+            LOGGER.warn("Cannot optimize chunks: Rust performance system not initialized");
             return false;
         }
 
-        try {
-            boolean result = nativeOptimizeChunks();
-            if (result) {
-                LOGGER.info("Native chunk optimization completed successfully");
-            } else {
-                LOGGER.warning("Native chunk optimization failed or not supported");
-            }
-            return result;
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Error during native chunk optimization", e);
-            return false;
-        }
+        return RustPerformanceBase.safeNativeBooleanCall(
+                RustPerformance::nativeOptimizeChunks,
+                RustPerformanceError.CHUNK_OPTIMIZATION_FAILED,
+                RustPerformanceBase::isInitialized
+        );
     }
 
     /**
      * Shutdown the performance monitoring system.
      */
     public static void shutdown() {
-        if (!initialized.getAndSet(false)) {
+        if (!RustPerformanceBase.initialized.getAndSet(false)) {
             return;
         }
 
-        try {
-            nativeShutdown();
-            LOGGER.info("Rust performance monitoring shutdown");
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Error during performance monitoring shutdown", e);
-        }
+        RustPerformanceBase.safeNativeVoidCall(
+                RustPerformance::nativeShutdown,
+                RustPerformanceError.SHUTDOWN_ERROR,
+                () -> RustPerformanceBase.initialized.get()
+        );
+        LOGGER.info("Rust performance monitoring shutdown");
     }
-
-    /**
-     * Initialize enhanced batch processor with custom configuration.
-     *
-     * @param minBatchSize          Minimum batch size
-     * @param maxBatchSize          Maximum batch size
-     * @param adaptiveTimeoutMs     Adaptive batch timeout in milliseconds
-     * @param maxPendingBatches     Maximum pending batches
-     * @param workerThreads         Number of worker threads
-     * @param enableAdaptiveSizing  Enable adaptive batch sizing
-     * @return true if initialization was successful
-     */
-    public static native boolean nativeInitEnhancedBatchProcessor(
-            int minBatchSize,
-            int maxBatchSize,
-            long adaptiveTimeoutMs,
-            int maxPendingBatches,
-            int workerThreads,
-            boolean enableAdaptiveSizing
-    );
-
-    /**
-     * Get enhanced batch processor metrics as JSON string.
-     *
-     * @return JSON string containing batch processor metrics
-     */
-    public static native String nativeGetEnhancedBatchMetrics();
-
-    /**
-     * Submit zero-copy batched operations directly from Java ByteBuffer.
-     *
-     * @param operationType Operation type identifier
-     * @param buffer        Direct ByteBuffer containing operations
-     * @param bufferSize    Size of the buffer in bytes
-     * @return JSON string containing operation result
-     */
-    public static native String nativeSubmitZeroCopyBatchedOperations(
-            byte operationType,
-            ByteBuffer buffer,
-            int bufferSize
-    );
-
-    /**
-     * Submit async batched operations with priority support.
-     *
-     * @param operationType Operation type identifier
-     * @param operations    Byte array containing serialized operations
-     * @param priorities    Byte array containing priorities for each operation
-     * @return Operation ID for polling results
-     */
-    public static native long nativeSubmitAsyncBatchedOperations(
-            byte operationType,
-            byte[] operations,
-            byte[] priorities
-    );
-
-    /**
-     * Poll async batch operation results.
-     *
-     * @param operationId Operation ID to poll
-     * @return Byte array containing operation results
-     */
-    public static native byte[] nativePollAsyncBatchResult(long operationId);
 
     /**
      * Enhanced batch processing with zero-copy optimization.
@@ -531,7 +421,7 @@ public class RustPerformance {
             List<byte[]> operations,
             List<Byte> priorities
     ) {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("Rust performance system not initialized")
             );
@@ -626,7 +516,7 @@ public class RustPerformance {
                     batchProcessingSemaphore.release();
                 }
             } catch (Exception e) {
-                LOGGER.log(Level.WARNING, "Failed to poll async batch result for operation " + operationId, e);
+                LOGGER.warn("Failed to poll async batch result for operation {}", operationId, e);
                 future.completeExceptionally(e);
                 scheduler.shutdown();
                 asyncOperations.remove(operationId);
@@ -643,7 +533,7 @@ public class RustPerformance {
      * @return JSON string containing operation result
      */
     public static String processZeroCopyOperations(byte operationType, ByteBuffer buffer) {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             throw new IllegalStateException("Rust performance system not initialized");
         }
 
@@ -677,12 +567,12 @@ public class RustPerformance {
      * @return JSON string containing all performance metrics
      */
     public static String getComprehensiveMetrics() {
-        if (!initialized.get()) {
+        if (!RustPerformanceBase.isInitialized()) {
             return "{\"error\":\"System not initialized\"}";
         }
 
         try {
-            long uptime = getUptimeMs();
+            long uptime = RustPerformanceBase.getUptimeMs();
             double tps = getCurrentTPS();
             long totalTicks = getTotalTicksProcessed();
             long totalEntities = getTotalEntitiesProcessed();
@@ -698,7 +588,7 @@ public class RustPerformance {
                     uptime, tps, totalTicks, totalEntities, totalMobs, totalBlocks, totalMerged, totalDespawned,
                     cpuStats.replace("\"", "\\\""), memoryStats.replace("\"", "\\\""), batchMetrics);
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to get comprehensive metrics", e);
+            LOGGER.warn("Failed to get comprehensive metrics", e);
             return "{\"error\":\"Failed to retrieve metrics\"}";
         }
     }
@@ -719,4 +609,24 @@ public class RustPerformance {
     private static native void nativeShutdown();
     private static native boolean nativeOptimizeMemory();
     private static native boolean nativeOptimizeChunks();
+    private static native boolean nativeInitEnhancedBatchProcessor(
+            int minBatchSize,
+            int maxBatchSize,
+            long adaptiveTimeoutMs,
+            int maxPendingBatches,
+            int workerThreads,
+            boolean enableAdaptiveSizing
+    );
+    private static native String nativeGetEnhancedBatchMetrics();
+    private static native String nativeSubmitZeroCopyBatchedOperations(
+            byte operationType,
+            ByteBuffer buffer,
+            int bufferSize
+    );
+    private static native long nativeSubmitAsyncBatchedOperations(
+            byte operationType,
+            byte[] operations,
+            byte[] priorities
+    );
+    private static native byte[] nativePollAsyncBatchResult(long operationId);
 }

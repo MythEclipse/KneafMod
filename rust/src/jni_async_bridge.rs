@@ -13,10 +13,13 @@ use tokio::runtime::Runtime;
 
 // JNI zero-copy imports
 use jni::objects::JByteBuffer;
+use crate::zero_copy_stubs::ZeroCopyBuffer;
 
 // Re-export from jni_batch for consistency
-use crate::jni_batch::{
-    get_global_buffer_tracker, BatchOperationType, ZeroCopyBuffer, ZeroCopyBufferPool,
+use crate::{
+    get_global_buffer_tracker,
+    BatchOperationType,
+    ZeroCopyBufferPool,
     ZeroCopyBufferRef,
 };
 
@@ -347,12 +350,12 @@ impl AsyncJniBridge {
 
             // Process memory based on operation type with SIMD optimizations when available
             match buffer_ref.operation_type {
-                BatchOperationType::Echo => {
+                0 => {
                     // Echo operation: return data as-is with proper alignment
                     result.extend_from_slice(&(slice.len() as u32).to_le_bytes());
                     result.extend_from_slice(slice);
                 }
-                BatchOperationType::Heavy => {
+                1 => {
                     // Heavy operation: apply transformation using direct memory access
                     result.extend_from_slice(&(slice.len() as u32).to_le_bytes());
                     result.push(0x02); // Heavy operation marker
@@ -398,9 +401,13 @@ impl AsyncJniBridge {
 
                     result.push(0x02); // Heavy operation marker
                 }
-                BatchOperationType::PanicTest => {
+                2 => {
                     // Panic test operation: return error indicator
                     result.extend_from_slice(&[0xFF, 0x01, 0x00, 0x00]);
+                }
+                _ => {
+                    // Unknown operation
+                    result.extend_from_slice(&[0xFF, 0x00, 0x00, 0x00]);
                 }
             }
 
@@ -528,16 +535,16 @@ pub fn submit_zero_copy_batch(
         // For build testing only - create dummy ZeroCopyBufferRef without JNI operations
         let buffer_ref = Arc::new(ZeroCopyBufferRef {
             buffer_id: AtomicU64::new(1).fetch_add(1, Ordering::SeqCst),
-            java_buffer: unsafe { JByteBuffer::from_raw(0 as *mut jni::sys::_jobject) },
+            java_buffer: unsafe { Some(JByteBuffer::from_raw(0 as *mut jni::sys::_jobject)) },
             address,
             size,
-            operation_type,
+            operation_type: operation_type as u8,
             creation_time: std::time::SystemTime::now(),
             ref_count: AtomicUsize::new(1),
         });
 
         // Register buffer with global tracker
-        get_global_buffer_tracker().register_buffer(Arc::clone(&buffer_ref))?;
+        get_global_buffer_tracker().register_buffer(buffer_ref.buffer_id)?;
 
         operations.push(buffer_ref);
     }

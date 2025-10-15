@@ -14,7 +14,7 @@ public class RustPerformanceMonitor {
      * Get current TPS (Ticks Per Second) with enhanced accuracy.
      */
     public static double getCurrentTPS() {
-        return RustPerformanceBase.safeNativeCall(
+        return RustPerformanceBase.safeNativeDoubleCall(
             () -> {
                 double tps = nativeGetCurrentTPS();
                 totalTicksProcessed.incrementAndGet();
@@ -29,7 +29,7 @@ public class RustPerformanceMonitor {
      * Get CPU usage statistics with detailed breakdown.
      */
     public static String getCpuStats() {
-        return RustPerformanceBase.safeNativeCall(
+        return RustPerformanceBase.safeNativeStringCall(
             RustPerformanceMonitor::nativeGetCpuStats,
             RustPerformanceError.CPU_STATS_ERROR,
             RustPerformanceLoader::isInitialized
@@ -40,7 +40,7 @@ public class RustPerformanceMonitor {
      * Get memory usage statistics with detailed breakdown.
      */
     public static String getMemoryStats() {
-        return RustPerformanceBase.safeNativeCall(
+        return RustPerformanceBase.safeNativeStringCall(
             RustPerformanceMonitor::nativeGetMemoryStats,
             RustPerformanceError.MEMORY_STATS_ERROR,
             RustPerformanceLoader::isInitialized
@@ -51,7 +51,7 @@ public class RustPerformanceMonitor {
      * Get total entities processed since startup.
      */
     public static long getTotalEntitiesProcessed() {
-        return RustPerformanceBase.safeNativeCall(
+        return RustPerformanceBase.safeNativeLongCall(
             RustPerformanceMonitor::nativeGetTotalEntitiesProcessed,
             RustPerformanceError.ENTITY_COUNT_ERROR,
             RustPerformanceLoader::isInitialized
@@ -62,7 +62,7 @@ public class RustPerformanceMonitor {
      * Get total mobs processed since startup.
      */
     public static long getTotalMobsProcessed() {
-        return RustPerformanceBase.safeNativeCall(
+        return RustPerformanceBase.safeNativeLongCall(
             RustPerformanceMonitor::nativeGetTotalMobsProcessed,
             RustPerformanceError.MOB_COUNT_ERROR,
             RustPerformanceLoader::isInitialized
@@ -73,7 +73,7 @@ public class RustPerformanceMonitor {
      * Get total blocks processed since startup.
      */
     public static long getTotalBlocksProcessed() {
-        return RustPerformanceBase.safeNativeCall(
+        return RustPerformanceBase.safeNativeLongCall(
             RustPerformanceMonitor::nativeGetTotalBlocksProcessed,
             RustPerformanceError.BLOCK_COUNT_ERROR,
             RustPerformanceLoader::isInitialized
@@ -84,7 +84,7 @@ public class RustPerformanceMonitor {
      * Get total entities merged since startup.
      */
     public static long getTotalMerged() {
-        return RustPerformanceBase.safeNativeCall(
+        return RustPerformanceBase.safeNativeLongCall(
             RustPerformanceMonitor::nativeGetTotalMerged,
             RustPerformanceError.ENTITY_COUNT_ERROR,
             RustPerformanceLoader::isInitialized
@@ -95,7 +95,7 @@ public class RustPerformanceMonitor {
      * Get total entities despawned since startup.
      */
     public static long getTotalDespawned() {
-        return RustPerformanceBase.safeNativeCall(
+        return RustPerformanceBase.safeNativeLongCall(
             RustPerformanceMonitor::nativeGetTotalDespawned,
             RustPerformanceError.ENTITY_COUNT_ERROR,
             RustPerformanceLoader::isInitialized

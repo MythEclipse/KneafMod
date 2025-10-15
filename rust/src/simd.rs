@@ -1,7 +1,6 @@
 use crate::{
     performance_monitoring::record_operation,
     traits::Initializable,
-    errors::RustError,
     impl_initializable,
     check_initialized,
 };

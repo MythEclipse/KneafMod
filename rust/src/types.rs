@@ -5,110 +5,110 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq)]
 pub enum RustPerformanceError {
     /// Native library not loaded
-    LIBRARY_NOT_LOADED(String),
+    LibraryNotLoaded(String),
     
     /// Rust performance system not initialized
-    NOT_INITIALIZED(String),
+    NotInitialized(String),
     
     /// Failed to load Rust performance native library
-    LIBRARY_LOAD_FAILED(String),
+    LibraryLoadFailed(String),
     
     /// Rust performance initialization failed
-    INITIALIZATION_FAILED(String),
+    InitializationFailed(String),
     
     /// Ultra performance initialization failed
-    ULTIMATE_INIT_FAILED(String),
+    UltimateInitFailed(String),
     
     /// Invalid arguments provided
-    INVALID_ARGUMENTS(String),
+    InvalidArguments(String),
     
     /// Semaphore timeout
-    SEMAPHORE_TIMEOUT(String),
+    SemaphoreTimeout(String),
     
     /// Native call failed
-    NATIVE_CALL_FAILED(String),
+    NativeCallFailed(String),
     
     /// Memory optimization failed
-    MEMORY_OPTIMIZATION_FAILED(String),
+    MemoryOptimizationFailed(String),
     
     /// Chunk optimization failed
-    CHUNK_OPTIMIZATION_FAILED(String),
+    ChunkOptimizationFailed(String),
     
     /// Error during performance monitoring shutdown
-    SHUTDOWN_ERROR(String),
+    ShutdownError(String),
     
     /// Error during counter reset
-    COUNTER_RESET_ERROR(String),
+    CounterResetError(String),
     
     /// Error retrieving CPU stats
-    CPU_STATS_ERROR(String),
+    CpuStatsError(String),
     
     /// Error retrieving memory stats
-    MEMORY_STATS_ERROR(String),
+    MemoryStatsError(String),
     
     /// Error retrieving TPS
-    TPS_ERROR(String),
+    TpsError(String),
     
     /// Error retrieving entity count
-    ENTITY_COUNT_ERROR(String),
+    EntityCountError(String),
     
     /// Error retrieving mob count
-    MOB_COUNT_ERROR(String),
+    MobCountError(String),
     
     /// Error retrieving block count
-    BLOCK_COUNT_ERROR(String),
+    BlockCountError(String),
     
     /// Error retrieving merged count
-    MERGED_COUNT_ERROR(String),
+    MergedCountError(String),
     
     /// Error retrieving despawned count
-    DESPAWNED_COUNT_ERROR(String),
+    DespawnedCountError(String),
     
     /// Error during batch processing
-    BATCH_PROCESSING_ERROR(String),
+    BatchProcessingError(String),
     
     /// Error during zero-copy operation
-    ZERO_COPY_ERROR(String),
+    ZeroCopyError(String),
     
     /// Error retrieving metrics
-    METRICS_ERROR(String),
+    MetricsError(String),
     
     /// Error logging startup info
-    LOG_STARTUP_ERROR(String),
+    LogStartupError(String),
     
     /// Generic error with custom message
-    GENERIC_ERROR(String),
+    GenericError(String),
 }
 
 impl RustPerformanceError {
     /// Create a new RustPerformanceError with a custom message
     pub fn with_code(message: String, code: i32) -> Self {
         match code {
-            1 => Self::LIBRARY_NOT_LOADED(message),
-            2 => Self::NOT_INITIALIZED(message),
-            3 => Self::LIBRARY_LOAD_FAILED(message),
-            4 => Self::INITIALIZATION_FAILED(message),
-            5 => Self::ULTIMATE_INIT_FAILED(message),
-            6 => Self::INVALID_ARGUMENTS(message),
-            7 => Self::SEMAPHORE_TIMEOUT(message),
-            8 => Self::NATIVE_CALL_FAILED(message),
-            9 => Self::MEMORY_OPTIMIZATION_FAILED(message),
-            10 => Self::CHUNK_OPTIMIZATION_FAILED(message),
-            11 => Self::SHUTDOWN_ERROR(message),
-            12 => Self::COUNTER_RESET_ERROR(message),
-            13 => Self::CPU_STATS_ERROR(message),
-            14 => Self::MEMORY_STATS_ERROR(message),
-            15 => Self::TPS_ERROR(message),
-            16 => Self::ENTITY_COUNT_ERROR(message),
-            17 => Self::MOB_COUNT_ERROR(message),
-            18 => Self::BLOCK_COUNT_ERROR(message),
-            19 => Self::MERGED_COUNT_ERROR(message),
-            20 => Self::DESPAWNED_COUNT_ERROR(message),
-            21 => Self::BATCH_PROCESSING_ERROR(message),
-            22 => Self::ZERO_COPY_ERROR(message),
-            23 => Self::METRICS_ERROR(message),
-            24 => Self::LOG_STARTUP_ERROR(message),
-            _ => Self::GENERIC_ERROR(message),
+            1 => Self::LibraryNotLoaded(message),
+            2 => Self::NotInitialized(message),
+            3 => Self::LibraryLoadFailed(message),
+            4 => Self::InitializationFailed(message),
+            5 => Self::UltimateInitFailed(message),
+            6 => Self::InvalidArguments(message),
+            7 => Self::SemaphoreTimeout(message),
+            8 => Self::NativeCallFailed(message),
+            9 => Self::MemoryOptimizationFailed(message),
+            10 => Self::ChunkOptimizationFailed(message),
+            11 => Self::ShutdownError(message),
+            12 => Self::CounterResetError(message),
+            13 => Self::CpuStatsError(message),
+            14 => Self::MemoryStatsError(message),
+            15 => Self::TpsError(message),
+            16 => Self::EntityCountError(message),
+            17 => Self::MobCountError(message),
+            18 => Self::BlockCountError(message),
+            19 => Self::MergedCountError(message),
+            20 => Self::DespawnedCountError(message),
+            21 => Self::BatchProcessingError(message),
+            22 => Self::ZeroCopyError(message),
+            23 => Self::MetricsError(message),
+            24 => Self::LogStartupError(message),
+            _ => Self::GenericError(message),
         }
     }
 }
