@@ -73,6 +73,12 @@ pub mod jni_exports;
 pub mod jni_memory;
 pub mod jni_performance;
 pub mod jni_raii;
+pub mod jni_utils;
+
+// Batch processing utilities
+pub mod batch_processing {
+    pub mod common;
+}
 
 // Zero copy stubs (compile-time helpers)
 pub mod zero_copy_stubs;
@@ -93,9 +99,6 @@ pub mod parallelism;
 // Shared utilities
 pub mod shared;
 
-// Extreme performance testing
-// pub mod test_extreme_performance;
-// pub mod test_utils;
 #[cfg(test)]
 pub mod test_timeout;
 

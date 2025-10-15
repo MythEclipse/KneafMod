@@ -52,7 +52,7 @@ public class RustPerformanceLoader {
         }
         
         // Use the existing NativeLibraryLoader for library loading
-        boolean loaded = NativeLibraryLoader.loadNativeLibrary("rustperf");
+        boolean loaded = NativeLibraryLoader.getInstance().loadNativeLibrary("rustperf");
         
         if (loaded) {
             nativeLibraryLoaded.set(true);

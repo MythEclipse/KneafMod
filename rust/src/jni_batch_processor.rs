@@ -1,27 +1,19 @@
-use jni::{
-    objects::JClass,
-    sys::{jbyte, jbyteArray, jint, jlong, jstring},
-    JNIEnv,
-};
+use jni::{objects::JClass, sys::{jbyte, jbyteArray, jint, jlong, jstring}, JNIEnv, objects::JByteArray};
 use log::{debug, error, info};
 use serde_json;
-use std::cmp;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
-use std::time::{Duration, Instant};
-use tokio::runtime::Runtime;
-use tokio::sync::{mpsc, oneshot};
+use std::{cmp, collections::VecDeque, sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, sync::{Arc, Mutex, RwLock}, thread, time::{Duration, Instant}};
+use tokio::{runtime::Runtime, sync::{mpsc, oneshot}};
 
 // Import our new modules
-use crate::errors::{RustError, messages};
-use crate::BatchError;
+use crate::{
+    errors::{RustError, messages},
+    BatchError,
+    traits::Initializable,
+    jni_utils,
+};
 use std::result::Result;
 pub use crate::errors::Result as RustResult;
-use crate::traits::Initializable;
 use crate::{jni_error, check_initialized, impl_initializable};
-use jni::objects::JByteArray;
 
 // Helper trait for mutex operations with timeout
 // Use a more efficient lock strategy with better backoff
@@ -1455,31 +1447,29 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitAsy
 }
 
 use std::sync::OnceLock;
+use std::collections::HashMap;
 
 /// JNI function to poll async batch operation results
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_pollAsyncBatchResult(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     operation_id: jlong,
 ) -> jbyteArray {
     // Simple in-memory storage for demonstration - in production use a proper storage mechanism
-    static RESULTS: OnceLock<std::sync::Mutex<std::collections::HashMap<u64, Vec<u8>>>> = OnceLock::new();
+    static RESULTS: OnceLock<Mutex<HashMap<u64, Vec<u8>>>> = OnceLock::new();
     
-    let results_mutex = RESULTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut results = results_mutex.lock().unwrap();
+    let results_mutex = RESULTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut results = match results_mutex.lock() {
+        Ok(guard) => guard,
+        Err(_) => return jni_utils::create_error_jni_string(&mut env, "Failed to lock results storage"),
+    };
     
     match results.remove(&(operation_id as u64)) {
-        Some(data) => match env.byte_array_from_slice(&data) {
-            Ok(array) => array.into_raw(),
-            Err(_) => std::ptr::null_mut()
-        },
+        Some(data) => env.byte_array_from_slice(&data).map(|arr| arr.into_raw()).unwrap_or(std::ptr::null_mut()),
         None => {
             let error_msg = "No results found for operation ID";
-            match env.byte_array_from_slice(error_msg.as_bytes()) {
-                Ok(array) => array.into_raw(),
-                Err(_) => std::ptr::null_mut()
-            }
+            env.byte_array_from_slice(error_msg.as_bytes()).map(|arr| arr.into_raw()).unwrap_or(std::ptr::null_mut())
         }
     }
 }

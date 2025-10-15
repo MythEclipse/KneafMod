@@ -36,7 +36,7 @@ public class RustPerformance {
      * Load the native Rust performance library with enhanced error handling.
      */
     private static void loadNativeLibrary() {
-        if (RustPerformanceBase.nativeLibraryLoaded.get()) {
+        if (RustPerformanceBase.isNativeLibraryLoaded()) {
             LOGGER.info("Native library already loaded, skipping");
             return;
         }
@@ -45,7 +45,7 @@ public class RustPerformance {
             // Try to load from system path first
             LOGGER.info("Attempting to load library from system path");
             System.loadLibrary("rustperf");
-            RustPerformanceBase.nativeLibraryLoaded.set(true);
+            RustPerformanceBase.setNativeLibraryLoaded(true);
             LOGGER.info("Rust performance native library loaded successfully from system path");
         } catch (UnsatisfiedLinkError e) {
             LOGGER.warn("System library load failed, trying classpath: " + e.getMessage());
@@ -93,7 +93,7 @@ public class RustPerformance {
                             java.nio.file.Files.copy(is, tempLib, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                             System.load(tempLib.toAbsolutePath().toString());
                             tempLib.toFile().deleteOnExit();
-                            RustPerformanceBase.nativeLibraryLoaded.set(true);
+                            RustPerformanceBase.setNativeLibraryLoaded(true);
                             LOGGER.info("Rust performance native library loaded from classpath: " + candidate);
                             loaded = true;
                             break;
@@ -104,7 +104,7 @@ public class RustPerformance {
                         java.nio.file.Path path = java.nio.file.Paths.get(candidate);
                         if (java.nio.file.Files.exists(path)) {
                             System.load(path.toAbsolutePath().toString());
-                            RustPerformanceBase.nativeLibraryLoaded.set(true);
+                            RustPerformanceBase.setNativeLibraryLoaded(true);
                             LOGGER.info("Rust performance native library loaded from file: " + path.toAbsolutePath());
                             loaded = true;
                             break;
@@ -140,11 +140,11 @@ public class RustPerformance {
      */
     public static void initialize() {
         LOGGER.info("Initializing Rust performance monitoring system");
-        if (!RustPerformanceBase.nativeLibraryLoaded.get()) {
+        if (!RustPerformanceBase.isNativeLibraryLoaded()) {
             throw new IllegalStateException("Native library not loaded");
         }
 
-        if (RustPerformanceBase.initialized.getAndSet(true)) {
+        if (RustPerformanceBase.isInitialized()) {
             LOGGER.info("Rust performance monitoring already initialized, skipping");
             return;
         }
@@ -154,14 +154,14 @@ public class RustPerformance {
             boolean success = nativeInitialize();
             LOGGER.info("nativeInitialize() returned: " + success);
             if (!success) {
-                RustPerformanceBase.initialized.set(false);
+                RustPerformanceBase.setInitialized(false);
                 throw new RuntimeException("Rust performance initialization failed");
             }
 
-            RustPerformanceBase.monitoringStartTime.set(System.currentTimeMillis());
+            RustPerformanceBase.setMonitoringStartTime(System.currentTimeMillis());
             LOGGER.info("Rust performance monitoring initialized successfully");
         } catch (Exception e) {
-            RustPerformanceBase.initialized.set(false);
+            RustPerformanceBase.setInitialized(false);
             LOGGER.error("Failed to initialize Rust performance monitoring", e);
             throw new RuntimeException("Rust performance initialization failed", e);
         }
@@ -395,14 +395,14 @@ public class RustPerformance {
      * Shutdown the performance monitoring system.
      */
     public static void shutdown() {
-        if (!RustPerformanceBase.initialized.getAndSet(false)) {
+        if (!RustPerformanceBase.isInitialized()) {
             return;
         }
 
         RustPerformanceBase.safeNativeVoidCall(
                 RustPerformance::nativeShutdown,
                 RustPerformanceError.SHUTDOWN_ERROR,
-                () -> RustPerformanceBase.initialized.get()
+                RustPerformanceBase::isInitialized
         );
         LOGGER.info("Rust performance monitoring shutdown");
     }
