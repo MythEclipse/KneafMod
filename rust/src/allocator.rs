@@ -368,10 +368,7 @@ impl UnifiedMemoryArena {
         }
     }
 
-    /// Legacy allocate method for backward compatibility - deprecated, use allocate_tracked instead
-    /// This function is marked unsafe because it returns a raw pointer that must be manually managed
-    #[deprecated(note = "Use allocate_tracked for proper memory leak prevention")]
-    pub unsafe fn allocate(&self, size: usize) -> *mut u8 {
+    pub fn allocate(&self, size: usize) -> *mut u8 {
         self.total_allocated
             .fetch_add(size as u64, Ordering::Relaxed);
 
@@ -395,9 +392,9 @@ impl UnifiedMemoryArena {
             }
         }
 
-        // Fallback to system allocator for very large allocations
-        let layout = Layout::from_size_align_unchecked(size, 8);
-        System.alloc(layout)
+        // Fallback to system allocator for allocations that don't fit slab allocation
+        let layout = Layout::from_size_align(size, 8).unwrap_or_else(|_| Layout::from_size_align(size, 1).unwrap());
+        unsafe { System.alloc(layout) }
     }
 
     /// Safe allocation method that returns a tracked allocation
@@ -678,6 +675,17 @@ pub struct MemoryArenaStats {
     pub total_deallocated: u64,
     pub current_usage: u64,
     pub zero_copy_buffers: usize,
+}
+
+/// Global allocation function
+pub fn allocate_global(size: usize) -> *mut u8 {
+    if let Some(arena) = get_unified_memory_arena() {
+        arena.allocate(size)
+    } else {
+        // Fallback to system allocator if arena not initialized
+        let layout = unsafe { Layout::from_size_align_unchecked(size, 8) };
+        unsafe { System.alloc(layout) }
+    }
 }
 
 // Global unified memory arena instance

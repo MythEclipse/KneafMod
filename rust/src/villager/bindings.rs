@@ -2,7 +2,9 @@ use jni::objects::{JByteBuffer, JClass, JObject, JString};
 use jni::sys::{jbyteArray, jstring};
 use jni::JNIEnv;
 
-use crate::jni_log_error;
+use crate::errors::{RustError, messages, Result};
+use crate::traits::Initializable;
+use crate::{check_initialized, jni_error, jni_log_error};
 use crate::logging::JniLogger;
 use crate::villager::processing::process_villager_ai_binary_batch;
 use std::sync::OnceLock;

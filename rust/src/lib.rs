@@ -6,10 +6,15 @@ pub mod checksum_monitor;
 pub mod chunk;
 pub mod compression;
 pub mod database;
+#[macro_use]
+pub mod errors;
 pub mod logging;
+#[macro_use]
+pub mod macros;
 pub mod memory_pool;
 pub mod memory_pressure_config;
 pub mod performance_monitoring;
+pub mod traits;
 
 #[cfg(test)]
 mod test_parallelism;
@@ -164,4 +169,5 @@ pub use logging::{generate_trace_id, PerformanceLogger};
 pub use memory_pressure_config::MemoryPressureConfig;
 pub use simd::{SimdOperations, SimdProcessor};
 pub use simd_enhanced::{EnhancedSimdProcessor, SimdCapability, SimdPerformanceStats};
-pub use types::{Result, RustPerformanceError};
+pub use errors::{RustError, Result};
+pub use traits::{Initializable, not_initialized_error};

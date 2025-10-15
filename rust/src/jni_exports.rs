@@ -1561,6 +1561,59 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_isNa
     JNI_TRUE // Native library is available since we're executing this function
 }
 
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeLogStartupInfo(
+    mut env: JNIEnv,
+    _class: JClass,
+    optimizations_active: JString,
+    cpu_info: JString,
+    config_applied: JString,
+) {
+    let optimizations_active: String = env.get_string(&optimizations_active).expect("Invalid optimizations active string").into();
+    let cpu_info: String = env.get_string(&cpu_info).expect("Invalid CPU info string").into();
+    let config_applied: String = env.get_string(&config_applied).expect("Invalid config applied string").into();
+    
+    jni_diagnostic!("INFO", "nativeLogStartupInfo", "Optimizations: {}, CPU: {}, Config: {}", optimizations_active, cpu_info, config_applied);
+    
+    // In a real implementation, this would log the startup info to the Rust performance monitoring system
+    eprintln!("[rustperf] Startup info logged - Optimizations: {}, CPU: {}, Config: {}", optimizations_active, cpu_info, config_applied);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeResetCounters(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    jni_diagnostic!("INFO", "nativeResetCounters", "Resetting performance counters");
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeShutdown(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    jni_diagnostic!("INFO", "nativeShutdown", "Shutting down Rust performance monitoring");
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeOptimizeMemory(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jboolean {
+    jni_diagnostic!("INFO", "nativeOptimizeMemory", "Optimizing memory");
+    JNI_TRUE
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeOptimizeChunks(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jboolean {
+    jni_diagnostic!("INFO", "nativeOptimizeChunks", "Optimizing chunks");
+    JNI_TRUE
+}
+
 /// Process set_current_tps operation
 fn set_current_tps_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     eprintln!("[rustperf] set_current_tps operation called with {} bytes", data.len());

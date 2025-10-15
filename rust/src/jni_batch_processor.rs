@@ -14,6 +14,14 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 
+// Import our new modules
+use crate::errors::{BatchError, RustError, messages};
+use std::result::Result;
+pub use crate::errors::{Result as RustResult, BatchResult};
+use crate::traits::Initializable;
+use crate::{jni_error, check_initialized, impl_initializable};
+use jni::objects::{JByteArray, ReleaseMode};
+
 // Helper trait for mutex operations with timeout
 // Use a more efficient lock strategy with better backoff
 trait LockExt<T> {
@@ -435,7 +443,7 @@ impl PriorityBatchQueue {
 struct AsyncBatchTask {
     operation_type: u8,
     operations: Vec<EnhancedBatchOperation>,
-    result_sender: oneshot::Sender<Result<EnhancedBatchResult, String>>,
+    result_sender: oneshot::Sender<std::result::Result<EnhancedBatchResult, String>>,
 }
 
 /// Zero-copy buffer pool for direct memory access (sharded with better performance characteristics)
@@ -582,6 +590,7 @@ pub struct EnhancedBatchProcessor {
     metrics: Arc<EnhancedBatchMetrics>,
     worker_handles: Vec<thread::JoinHandle<()>>,
     shutdown_flag: Arc<AtomicBool>,
+    is_initialized: AtomicBool,
     #[allow(dead_code)]
     async_runtime: Arc<Runtime>,
     async_task_sender: mpsc::Sender<AsyncBatchTask>,
@@ -651,6 +660,7 @@ impl EnhancedBatchProcessor {
             metrics,
             worker_handles,
             shutdown_flag,
+            is_initialized: AtomicBool::new(true),
             async_runtime,
             async_task_sender,
             zero_copy_pool,
@@ -686,7 +696,7 @@ impl EnhancedBatchProcessor {
                         &metrics,
                     ).await;
 
-                    let _ = task.result_sender.send(result);
+                    let _ = task.result_sender.send(result.map_err(|e| format!("{}", e)));
                     processed_any = true;
                 }
                 _ = tokio::time::sleep(Duration::from_micros(100)) => {
@@ -740,11 +750,11 @@ impl EnhancedBatchProcessor {
 
     /// Process async batch task with zero-copy optimization
     async fn process_async_batch_task(
-        operation_type: u8,
-        operations: Vec<EnhancedBatchOperation>,
-        zero_copy_pool: &Arc<ZeroCopyBufferPool>,
-        metrics: &Arc<EnhancedBatchMetrics>,
-    ) -> Result<EnhancedBatchResult, String> {
+            operation_type: u8,
+            operations: Vec<EnhancedBatchOperation>,
+            zero_copy_pool: &Arc<ZeroCopyBufferPool>,
+            metrics: &Arc<EnhancedBatchMetrics>,
+        ) -> Result<EnhancedBatchResult, String> {
         let start_time = Instant::now();
         let batch_size = operations.len();
 
@@ -806,10 +816,10 @@ impl EnhancedBatchProcessor {
 
     /// Execute native batch processing with zero-copy buffer
     fn execute_native_batch_with_buffer(
-        operation_type: u8,
-        batch: &[EnhancedBatchOperation],
-        buffer: &mut Vec<u8>,
-    ) -> Result<Vec<Vec<u8>>, String> {
+            operation_type: u8,
+            batch: &[EnhancedBatchOperation],
+            buffer: &mut Vec<u8>,
+        ) -> std::result::Result<Vec<Vec<u8>>, String> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
@@ -841,7 +851,7 @@ impl EnhancedBatchProcessor {
         // Call native batch processing function with zero-copy buffer
         match native_process_batch_zero_copy(operation_type, buffer) {
             Ok(results) => Ok(results),
-            Err(e) => Err(format!("Native batch processing failed: {}", e)),
+            Err(e) => Err(RustError::OperationFailed(format!("Native batch processing failed: {}", e)).to_string()),
         }
     }
 
@@ -965,9 +975,9 @@ impl EnhancedBatchProcessor {
     }
 
     fn execute_native_batch(
-        operation_type: u8,
-        batch: &[EnhancedBatchOperation],
-    ) -> Result<Vec<Vec<u8>>, String> {
+            operation_type: u8,
+            batch: &[EnhancedBatchOperation],
+        ) -> std::result::Result<Vec<Vec<u8>>, String> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
@@ -994,21 +1004,23 @@ impl EnhancedBatchProcessor {
         }
 
         // Call native batch processing function (this would be implemented in the main lib.rs)
-        match native_process_batch(operation_type, &batch_data) {
+        match native_process_batch_zero_copy(operation_type, &batch_data) {
             Ok(results) => Ok(results),
-            Err(e) => Err(format!("Native batch processing failed: {}", e)),
+            Err(e) => Err(RustError::OperationFailed(format!("Native batch processing failed: {}", e)).to_string()),
         }
     }
 
     /// Submit operation to the processor with async support
-    pub fn submit_operation(&self, operation: EnhancedBatchOperation) -> Result<(), String> {
+    pub fn submit_operation(&self, operation: EnhancedBatchOperation) -> Result<(), RustError> {
+        check_initialized!(self);
+        
         let operation_type = operation.operation_type as usize;
 
         if operation_type >= self.queues.len() {
-            return Err(format!(
-                "Invalid operation type: {}",
-                operation.operation_type
-            ));
+            return Err(RustError::InvalidOperationType {
+                operation_type: operation.operation_type,
+                max_type: self.queues.len() as u8
+            });
         }
 
         self.queues[operation_type].push(operation);
@@ -1020,9 +1032,11 @@ impl EnhancedBatchProcessor {
         &self,
         operations: Vec<EnhancedBatchOperation>,
         operation_type: u8,
-    ) -> Result<EnhancedBatchResult, String> {
+    ) -> Result<EnhancedBatchResult, RustError> {
+        check_initialized!(self);
+        
         if operations.is_empty() {
-            return Err("No operations provided".to_string());
+            return Err(RustError::EmptyOperationSet);
         }
 
         let (result_sender, result_receiver) = oneshot::channel();
@@ -1036,12 +1050,14 @@ impl EnhancedBatchProcessor {
         self.async_task_sender
             .send(task)
             .await
-            .map_err(|e| format!("Failed to send async task: {}", e))?;
+            .map_err(|e| RustError::AsyncTaskSendFailed { source: e.to_string() })?;
 
         // Wait for result
-        result_receiver
+        let result = result_receiver
             .await
-            .map_err(|e| format!("Failed to receive async result: {}", e))?
+            .map_err(|e| RustError::AsyncResultReceiveFailed { source: e.to_string() })?;
+        
+        result.map_err(|e| RustError::OperationFailed(format!("Async batch processing failed: {}", e)))
     }
 
     /// Submit operation with zero-copy buffer sharing
@@ -1049,23 +1065,25 @@ impl EnhancedBatchProcessor {
         &self,
         operation: EnhancedBatchOperation,
         shared_buffer: Arc<Mutex<Vec<u8>>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), RustError> {
+        check_initialized!(self);
+        
         let operation_type = operation.operation_type as usize;
 
         if operation_type >= self.queues.len() {
-            return Err(format!(
-                "Invalid operation type: {}",
-                operation.operation_type
-            ));
+            return Err(RustError::InvalidOperationType {
+                operation_type: operation.operation_type,
+                max_type: self.queues.len() as u8
+            });
         }
 
         // Use zero-copy buffer instead of copying data
-        if let Ok(mut buffer) = shared_buffer.lock() {
-            // Process operation directly in shared buffer
-            self.process_zero_copy_operation(operation, &mut buffer)?;
-        } else {
-            return Err("Failed to acquire shared buffer lock".to_string());
-        }
+        let mut buffer_guard = shared_buffer.lock()
+            .map_err(|_| RustError::SharedBufferLockFailed)?;
+        match self.process_zero_copy_operation(operation, &mut *buffer_guard) {
+            Ok(_) => {},
+            Err(e) => return Err(RustError::OperationFailed(e)),
+        };
 
         Ok(())
     }
@@ -1119,19 +1137,20 @@ impl EnhancedBatchProcessor {
     }
 
     /// Shutdown the processor
-    pub fn shutdown(&self) {
+    pub fn shutdown(&self) -> Result<(), RustError> {
+        check_initialized!(self);
+        
         self.shutdown_flag.store(true, Ordering::Relaxed);
 
         for handle in &self.worker_handles {
             handle.thread().unpark();
         }
 
-        // Wait for workers to finish
-        for _handle in self.worker_handles.iter() {
-            // Don't join here, let the thread run independently
-        }
+        Ok(())
     }
 }
+
+impl_initializable!(EnhancedBatchProcessor, is_initialized, "Enhanced Batch Processor");
 
 /// Metrics snapshot for reporting
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1182,9 +1201,12 @@ pub fn get_enhanced_batch_processor() -> Option<Arc<EnhancedBatchProcessor>> {
 }
 
 /// Submit operation to the enhanced batch processor
-pub fn submit_enhanced_operation(operation: EnhancedBatchOperation) -> Result<(), String> {
+pub fn submit_enhanced_operation(operation: EnhancedBatchOperation) -> std::result::Result<(), String> {
     if let Some(processor) = get_enhanced_batch_processor() {
-        processor.submit_operation(operation)
+        match processor.submit_operation(operation) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(e.to_string())
+        }
     } else {
         Err("Enhanced batch processor not initialized".to_string())
     }
@@ -1278,13 +1300,6 @@ fn process_generic_operation(data: &[u8], operation_type: u8) -> Vec<u8> {
     .into_bytes()
 }
 
-/// Legacy function for backward compatibility
-pub fn native_process_batch(
-    _operation_type: u8,
-    batch_data: &[u8],
-) -> Result<Vec<Vec<u8>>, String> {
-    native_process_batch_zero_copy(_operation_type, batch_data)
-}
 
 /// JNI function to get enhanced batch processor metrics
 #[no_mangle]
@@ -1310,7 +1325,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_getEnhanc
             Err(_) => std::ptr::null_mut(),
         }
     } else {
-        match env.new_string("{\"error\":\"Enhanced batch processor not initialized\"}") {
+        match env.new_string(messages::PROCESSOR_NOT_INITIALIZED) {
             Ok(s) => s.into_raw(),
             Err(_) => std::ptr::null_mut(),
         }
@@ -1352,67 +1367,39 @@ pub unsafe extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_su
     direct_buffer: jni::sys::jobject,
     buffer_size: jint,
 ) -> jstring {
-    if let Some(processor) = get_enhanced_batch_processor() {
-        if direct_buffer.is_null() {
-            let error_msg = "Direct buffer cannot be null";
-            return env
-                .new_string(error_msg)
-                .map(|s| s.into_raw())
-                .unwrap_or(std::ptr::null_mut());
-        }
+    let processor = match get_enhanced_batch_processor() {
+        Some(p) => p,
+        None => return jni_error!(env, RustError::NotInitializedError(messages::PROCESSOR_NOT_INITIALIZED.to_string()))
+    };
 
-        let byte_buffer = unsafe { jni::objects::JByteBuffer::from_raw(direct_buffer) };
+    if direct_buffer.is_null() {
+        return jni_error!(env, RustError::InvalidArgumentError(messages::NULL_BUFFER_ERROR.to_string()));
+    }
 
-        match env.get_direct_buffer_address(&byte_buffer) {
-            Ok(address) => {
-                if address.is_null() {
-                    let error_msg = "Failed to get direct buffer address";
-                    return env
-                        .new_string(error_msg)
-                        .map(|s| s.into_raw())
-                        .unwrap_or(std::ptr::null_mut());
-                }
+    let byte_buffer = unsafe { jni::objects::JByteBuffer::from_raw(direct_buffer) };
 
-                let data = unsafe { std::slice::from_raw_parts(address, buffer_size as usize) };
+    let address = match env.get_direct_buffer_address(&byte_buffer) {
+        Ok(addr) if !addr.is_null() => addr,
+        Ok(_) => return jni_error!(env, RustError::BufferError(messages::NULL_BUFFER_ADDRESS.to_string())),
+        Err(e) => return jni_error!(env, RustError::BufferError(format!("{}: {}", messages::BUFFER_ADDRESS_ERROR, e)))
+    };
 
-                // Parse operations from direct buffer (zero-copy)
-                match parse_zero_copy_operations(data) {
-                    Ok(operations) => {
-                        let mut success_count = 0;
-                        for operation in operations {
-                            if processor.submit_operation(operation).is_ok() {
-                                success_count += 1;
-                            }
-                        }
+    let data = unsafe { std::slice::from_raw_parts(address, buffer_size as usize) };
 
-                        let result = format!(
-                            "Submitted {} zero-copy operations successfully",
-                            success_count
-                        );
-                        env.new_string(&result)
-                            .map(|s| s.into_raw())
-                            .unwrap_or(std::ptr::null_mut())
-                    }
-                    Err(e) => {
-                        let error_msg = format!("Failed to parse zero-copy operations: {}", e);
-                        env.new_string(&error_msg)
-                            .map(|s| s.into_raw())
-                            .unwrap_or(std::ptr::null_mut())
-                    }
-                }
-            }
-            Err(e) => {
-                let error_msg = format!("Failed to get direct buffer address: {:?}", e);
-                env.new_string(&error_msg)
-                    .map(|s| s.into_raw())
-                    .unwrap_or(std::ptr::null_mut())
-            }
-        }
-    } else {
-        let error_msg = "Enhanced batch processor not initialized";
-        env.new_string(error_msg)
+    match parse_zero_copy_operations(data) {
+        Ok(operations) => {
+            let success_count = operations.iter()
+                .filter(|op| processor.submit_operation((*op).clone()).is_ok())
+                .count();
+
+            env.new_string(&format!(
+                "Submitted {} zero-copy operations successfully",
+                success_count
+            ))
             .map(|s| s.into_raw())
             .unwrap_or(std::ptr::null_mut())
+        }
+        Err(e) => jni_error!(env, RustError::ParseError(format!("{}: {}", messages::PARSE_ERROR, e)))
     }
 }
 
@@ -1425,55 +1412,120 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitAsy
     operations_data: jbyteArray,
     priorities: jbyteArray,
 ) -> jlong {
-    if let Some(_processor) = get_enhanced_batch_processor() {
-        // Convert raw jbyteArray to JByteArray wrapper expected by the JNI helpers
-        let operations_obj = unsafe { jni::objects::JObject::from_raw(operations_data as *mut _) };
-        let priorities_obj = unsafe { jni::objects::JObject::from_raw(priorities as *mut _) };
-        let operations_jarray = jni::objects::JByteArray::from(operations_obj);
-        let priorities_jarray = jni::objects::JByteArray::from(priorities_obj);
+    let processor = match get_enhanced_batch_processor() {
+        Some(p) => p,
+        None => return 0
+    };
 
-        match env.convert_byte_array(operations_jarray) {
-            Ok(operations_vec) => {
-                match env.convert_byte_array(priorities_jarray) {
-                    Ok(priorities_vec) => {
-                        let operations_slice = operations_vec.as_slice();
-                        let priorities_slice = priorities_vec.as_slice();
+    // Convert and validate input arrays
+    let operations_vec = match env.convert_byte_array(unsafe { JByteArray::from_raw(operations_data) }) {
+        Ok(v) => v,
+        Err(_) => return 0
+    };
 
-                        // Parse batched operations data
-                        match parse_batched_operations(operations_slice, priorities_slice) {
-                            Ok(_operations) => {
-                                // Create async task and return operation ID
-                                let _rt = Runtime::new().expect("Failed to create async runtime");
-                                let operation_id = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_nanos()
-                                    as u64;
+    let priorities_vec = match env.convert_byte_array(unsafe { JByteArray::from_raw(priorities) }) {
+        Ok(v) => v,
+        Err(_) => return 0
+    };
 
-                                operation_id as jlong
-                            }
-                            Err(_) => 0, // Error
-                        }
-                    }
-                    Err(_) => 0, // Error
+    let operations_slice = &operations_vec[..];
+    let priorities_slice = priorities_vec.as_slice();
+
+    match parse_batched_operations(operations_slice, priorities_slice) {
+        Ok(operations) => {
+            // Create async task and return operation ID
+            let operation_id = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+
+            // Spawn async task
+            let processor_clone = Arc::clone(&processor);
+            tokio::spawn(async move {
+                for operation in operations {
+                    let _ = processor_clone.submit_operation(operation);
                 }
-            }
-            Err(_) => 0, // Error
+            });
+
+            operation_id as jlong
         }
-    } else {
-        0 // Error
+        Err(_) => 0,
     }
 }
+
+use std::sync::OnceLock;
 
 /// JNI function to poll async batch operation results
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_pollAsyncBatchResult(
-    _env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
-    _operation_id: jlong,
+    operation_id: jlong,
 ) -> jbyteArray {
-    // For now, return empty result - this needs proper async result storage
-    std::ptr::null_mut()
+    // Simple in-memory storage for demonstration - in production use a proper storage mechanism
+    static RESULTS: OnceLock<std::sync::Mutex<std::collections::HashMap<u64, Vec<u8>>>> = OnceLock::new();
+    
+    let results_mutex = RESULTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut results = results_mutex.lock().unwrap();
+    
+    match results.remove(&(operation_id as u64)) {
+        Some(data) => match env.byte_array_from_slice(&data) {
+            Ok(array) => array.into_raw(),
+            Err(_) => std::ptr::null_mut()
+        },
+        None => {
+            let error_msg = "No results found for operation ID";
+            match env.byte_array_from_slice(error_msg.as_bytes()) {
+                Ok(array) => array.into_raw(),
+                Err(_) => std::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// JNI function to submit batched operations from Java
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitBatchedOperations(
+    env: JNIEnv,
+    _class: JClass,
+    _operation_type: jbyte,
+    operations_data: jbyteArray,
+    priorities: jbyteArray,
+) -> jstring {
+    let processor = match get_enhanced_batch_processor() {
+        Some(p) => p,
+        None => return jni_error!(env, RustError::NotInitializedError(messages::PROCESSOR_NOT_INITIALIZED.to_string()))
+    };
+
+    // Convert and validate input arrays
+    let operations_vec = match env.convert_byte_array(unsafe { JByteArray::from_raw(operations_data) }) {
+        Ok(v) => v,
+        Err(_) => return jni_error!(env, RustError::ConversionError(messages::ARRAY_CONVERSION_ERROR.to_string()))
+    };
+
+    let priorities_vec = match env.convert_byte_array(unsafe { JByteArray::from_raw(priorities) }) {
+        Ok(v) => v,
+        Err(_) => return jni_error!(env, RustError::ConversionError(messages::ARRAY_CONVERSION_ERROR.to_string()))
+    };
+
+    let operations_slice = operations_vec.as_slice();
+    let priorities_slice = priorities_vec.as_slice();
+
+    match parse_batched_operations(operations_slice, priorities_slice) {
+        Ok(operations) => {
+            let success_count = operations.iter()
+                .filter(|op| processor.submit_operation((*op).clone()).is_ok())
+                .count();
+
+            env.new_string(&format!(
+                "Submitted {} operations successfully",
+                success_count
+            ))
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+        }
+        Err(e) => jni_error!(env, RustError::ParseError(format!("{}: {}", messages::PARSE_ERROR, e)))
+    }
 }
 
 /// Parse zero-copy operations from direct buffer
@@ -1513,83 +1565,13 @@ fn parse_zero_copy_operations(data: &[u8]) -> Result<Vec<EnhancedBatchOperation>
     Ok(operations)
 }
 
-/// JNI function to submit batched operations from Java (legacy)
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitBatchedOperations(
-    env: JNIEnv,
-    _class: JClass,
-    _operation_type: jbyte,
-    operations_data: jbyteArray,
-    priorities: jbyteArray,
-) -> jstring {
-    if let Some(processor) = get_enhanced_batch_processor() {
-        // Convert raw jbyteArray to JByteArray wrapper expected by the JNI helpers
-        let operations_obj = unsafe { jni::objects::JObject::from_raw(operations_data as *mut _) };
-        let priorities_obj = unsafe { jni::objects::JObject::from_raw(priorities as *mut _) };
-        let operations_jarray = jni::objects::JByteArray::from(operations_obj);
-        let priorities_jarray = jni::objects::JByteArray::from(priorities_obj);
-
-        match env.convert_byte_array(operations_jarray) {
-            Ok(operations_vec) => {
-                match env.convert_byte_array(priorities_jarray) {
-                    Ok(priorities_vec) => {
-                        let operations_slice = operations_vec.as_slice();
-                        let priorities_slice = priorities_vec.as_slice();
-
-                        // Parse batched operations data
-                        match parse_batched_operations(operations_slice, priorities_slice) {
-                            Ok(operations) => {
-                                let mut success_count = 0;
-                                for operation in operations {
-                                    if processor.submit_operation(operation).is_ok() {
-                                        success_count += 1;
-                                    }
-                                }
-
-                                let result =
-                                    format!("Submitted {} operations successfully", success_count);
-                                env.new_string(&result)
-                                    .map(|s| s.into_raw())
-                                    .unwrap_or(std::ptr::null_mut())
-                            }
-                            Err(e) => {
-                                let error_msg = format!("Failed to parse operations: {}", e);
-                                env.new_string(&error_msg)
-                                    .map(|s| s.into_raw())
-                                    .unwrap_or(std::ptr::null_mut())
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        let error_msg = "Failed to access priorities array";
-                        env.new_string(error_msg)
-                            .map(|s| s.into_raw())
-                            .unwrap_or(std::ptr::null_mut())
-                    }
-                }
-            }
-            Err(_) => {
-                let error_msg = "Failed to access operations array";
-                env.new_string(error_msg)
-                    .map(|s| s.into_raw())
-                    .unwrap_or(std::ptr::null_mut())
-            }
-        }
-    } else {
-        let error_msg = "Enhanced batch processor not initialized";
-        env.new_string(error_msg)
-            .map(|s| s.into_raw())
-            .unwrap_or(std::ptr::null_mut())
-    }
-}
-
 /// Parse batched operations data from Java arrays
 fn parse_batched_operations(
     operations_data: &[u8],
     priorities: &[u8],
-) -> Result<Vec<EnhancedBatchOperation>, String> {
+) -> std::result::Result<Vec<EnhancedBatchOperation>, BatchError> {
     if operations_data.len() < 4 {
-        return Err("Operations data too small".to_string());
+        return Err(BatchError::ParseError(messages::PARSE_ERROR.to_string()));
     }
 
     let operation_count = u32::from_le_bytes([
@@ -1598,8 +1580,9 @@ fn parse_batched_operations(
         operations_data[2],
         operations_data[3],
     ]) as usize;
+    
     if operation_count != priorities.len() {
-        return Err("Operation count mismatch with priorities".to_string());
+        return Err(BatchError::ParseError("Operation count mismatch with priorities".to_string()));
     }
 
     let mut operations = Vec::with_capacity(operation_count);
@@ -1607,7 +1590,7 @@ fn parse_batched_operations(
 
     for i in 0..operation_count {
         if offset + 4 > operations_data.len() {
-            return Err("Invalid operations data format".to_string());
+            return Err(BatchError::ParseError("Invalid operations data format".to_string()));
         }
 
         let data_len = u32::from_le_bytes([
@@ -1619,7 +1602,7 @@ fn parse_batched_operations(
         offset += 4;
 
         if offset + data_len > operations_data.len() {
-            return Err("Operation data exceeds buffer".to_string());
+            return Err(BatchError::ParseError("Operation data exceeds buffer".to_string()));
         }
 
         let operation_data = operations_data[offset..offset + data_len].to_vec();
@@ -1627,76 +1610,6 @@ fn parse_batched_operations(
 
         operations.push(EnhancedBatchOperation::new(0, operation_data, priority));
         offset += data_len;
-    }
-
-    #[allow(dead_code)]
-    /// Submit async batch operation
-    pub fn submit_async_batch(worker_handle: u64, operations: Vec<Vec<u8>>) -> Result<u64, String> {
-        // Submit to async JNI bridge
-        match crate::jni_async_bridge::submit_async_batch(worker_handle, operations) {
-            Ok(async_handle) => {
-                info!(
-                    "Submitted async batch operation with handle: {}",
-                    async_handle.0
-                );
-                Ok(async_handle.0)
-            }
-            Err(e) => {
-                error!("Failed to submit async batch: {}", e);
-                Err(e)
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    /// Poll async batch results
-    pub fn poll_async_batch_results(
-        operation_id: u64,
-        max_results: usize,
-    ) -> Result<Vec<Vec<u8>>, String> {
-        match crate::jni_async_bridge::poll_async_batch_results(operation_id, max_results) {
-            Ok(results) => {
-                debug!("Retrieved {} async batch results", results.len());
-                Ok(results)
-            }
-            Err(e) => {
-                error!("Failed to poll async batch results: {}", e);
-                Err(e)
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    /// Cleanup async batch operation
-    pub fn cleanup_async_batch_operation(operation_id: u64) {
-        crate::jni_async_bridge::cleanup_async_batch_operation(operation_id);
-        debug!("Cleaned up async batch operation: {}", operation_id);
-    }
-
-    #[allow(dead_code)]
-    /// Submit zero-copy batch operation
-    pub fn submit_zero_copy_batch(
-        worker_handle: u64,
-        buffer_addresses: Vec<(u64, usize)>,
-        operation_type: u32,
-    ) -> Result<u64, String> {
-        match crate::jni_async_bridge::submit_zero_copy_batch(
-            worker_handle,
-            buffer_addresses,
-            operation_type,
-        ) {
-            Ok(async_handle) => {
-                info!(
-                    "Submitted zero-copy batch operation with handle: {}",
-                    async_handle.0
-                );
-                Ok(async_handle.0)
-            }
-            Err(e) => {
-                error!("Failed to submit zero-copy batch: {}", e);
-                Err(e)
-            }
-        }
     }
 
     Ok(operations)

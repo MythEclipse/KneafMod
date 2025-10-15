@@ -1,4 +1,10 @@
-use crate::performance_monitoring::record_operation;
+use crate::{
+    performance_monitoring::record_operation,
+    traits::Initializable,
+    errors::RustError,
+    impl_initializable,
+    check_initialized,
+};
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::arch::is_x86_feature_detected;
@@ -181,6 +187,8 @@ pub struct SimdManager {
     initialized: AtomicBool,
 }
 
+impl_initializable!(SimdManager, initialized, "SIMD Manager");
+
 impl SimdManager {
     pub fn new() -> Self {
         Self {
@@ -279,6 +287,7 @@ pub trait SimdOperations {
 pub struct SimdProcessor {
     level: SimdLevel,
     features: SimdFeatures,
+    initialized: AtomicBool,
 }
 
 impl Default for SimdProcessor {
@@ -292,7 +301,7 @@ impl SimdProcessor {
         let features = SimdFeatures::detect();
         let level = features.best_level();
         info!("Created SimdProcessor with level: {:?}", level);
-        Self { level, features }
+        Self { level, features, initialized: AtomicBool::new(false) }
     }
 
     /// Get the current SIMD optimization level
@@ -335,6 +344,8 @@ impl SimdProcessor {
         T: Copy + Send + Sync,
         F: Fn(&mut [T]) -> SimdResult<()>,
     {
+        self.check_initialized()?;
+        
         if !self.features.has_avx512f {
             return Err(SimdError::UnsupportedInstructionSet {
                 required: "avx512f",
@@ -371,6 +382,8 @@ impl SimdProcessor {
         T: Copy + Send + Sync,
         F: Fn(&mut [T]) -> SimdResult<()>,
     {
+        self.check_initialized()?;
+        
         if !self.features.has_avx2 {
             return Err(SimdError::UnsupportedInstructionSet {
                 required: "avx2",
@@ -407,6 +420,8 @@ impl SimdProcessor {
         T: Copy + Send + Sync,
         F: Fn(&mut [T]) -> SimdResult<()>,
     {
+        check_initialized!(self);
+        
         if !(self.features.has_sse41 || self.features.has_sse42) {
             return Err(SimdError::UnsupportedInstructionSet {
                 required: "sse4.1/sse4.2",
@@ -440,6 +455,10 @@ impl SimdProcessor {
 
 impl SimdOperations for SimdProcessor {
     fn dot_product(&self, a: &[f32], b: &[f32]) -> SimdResult<f32> {
+        check_initialized!(self);
+        
+        check_initialized!(self);
+        
         if a.len() != b.len() {
             return Err(SimdError::InvalidInputLength {
                 expected: a.len(),
@@ -506,6 +525,18 @@ impl SimdOperations for SimdProcessor {
 
         record_operation(start, aabbs.len() * queries.len(), 1);
         result
+    }
+}
+
+impl SimdProcessor {
+    pub fn check_initialized(&self) -> Result<(), SimdError> {
+        if !self.initialized.load(Ordering::Relaxed) {
+            return Err(SimdError::JniError {
+                operation: "check_initialized",
+                details: "SIMD Processor not initialized".to_string(),
+            });
+        }
+        Ok(())
     }
 }
 

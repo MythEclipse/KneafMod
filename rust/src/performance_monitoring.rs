@@ -3,7 +3,7 @@ use crate::simd_enhanced::{detect_simd_capability, SimdCapability};
 use jni::objects::GlobalRef;
 use jni::{
     objects::{JClass, JString},
-    sys::jlong,
+    sys::{jboolean, jlong, JNI_TRUE},
     JNIEnv,
 };
 use once_cell::sync::Lazy;
@@ -877,7 +877,7 @@ pub static PERFORMANCE_MONITOR: Lazy<PerformanceMonitor> = Lazy::new(|| {
 });
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordJniCallNative(
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_recordJniCallNative(
     mut env: JNIEnv,
     _class: JClass,
     call_type: JString,
@@ -915,7 +915,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordJniCallN
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordLockWaitNative(
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_recordLockWaitNative(
     mut env: JNIEnv,
     _class: JClass,
     lock_name: JString,
@@ -953,7 +953,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordLockWait
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordMemoryUsageNative(
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_recordMemoryUsageNative(
     _env: JNIEnv,
     _class: JClass,
     total_bytes: jlong,
@@ -968,7 +968,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordMemoryUs
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordGcEventNative(
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_recordGcEventNative(
     _env: JNIEnv,
     _class: JClass,
     duration_ms: jlong,
@@ -979,7 +979,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_recordGcEventN
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getPerformanceMetricsNative(
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_getPerformanceMetricsNative(
     mut env: JNIEnv,
     _class: JClass,
 ) -> jni::sys::jstring {
@@ -1021,4 +1021,32 @@ pub extern "C" fn Java_com_kneaf_core_performance_RustPerformance_getPerformance
             std::ptr::null_mut()
         }
     }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_nativeInitialize(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jboolean {
+    // Initialize the performance monitoring system
+    let trace_id = generate_trace_id();
+    PERFORMANCE_MONITOR.logger.log_info(
+        "initialization",
+        &trace_id,
+        "Initializing Rust performance monitoring system",
+    );
+
+    // Initialize SIMD capabilities
+    let _simd_capability = detect_simd_capability();
+    
+    // Mark as initialized and start monitoring
+    PERFORMANCE_MONITOR.is_monitoring.store(true, Ordering::SeqCst);
+    
+    PERFORMANCE_MONITOR.logger.log_info(
+        "initialization",
+        &trace_id,
+        "Rust performance monitoring system initialized successfully",
+    );
+
+    JNI_TRUE
 }
