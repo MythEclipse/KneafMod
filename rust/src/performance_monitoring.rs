@@ -1,5 +1,8 @@
+use crate::errors::{Result, RustError};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::simd_enhanced::{detect_simd_capability, SimdCapability};
+pub mod monitor_builder;
+pub use monitor_builder::{PerformanceMonitorBuilder, PerformanceMonitorFactory};
 use jni::objects::GlobalRef;
 use jni::{
     objects::{JClass, JString},
@@ -249,13 +252,13 @@ pub struct PerformanceMonitor {
 }
 
 impl PerformanceMonitor {
-    pub fn new(logger: Arc<PerformanceLogger>) -> Self {
+    pub fn new(logger: Arc<PerformanceLogger>) -> Result<Self> {
         let now_ns = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
+            .map_err(|e| RustError::OperationFailed(format!("Failed to get current time: {}", e)))?
             .as_nanos() as u64;
 
-        Self {
+        Ok(Self {
             logger,
 
             // Thresholds
@@ -288,7 +291,7 @@ impl PerformanceMonitor {
 
             // JNI reference tracking to prevent leaks
             jni_global_refs: Arc::new(Mutex::new(HashMap::new())),
-        }
+        })
     }
 
     pub fn record_jni_call(&self, call_type: &str, duration_ms: u64) {
@@ -873,7 +876,7 @@ pub fn log_performance_summary() {
 
 pub static PERFORMANCE_MONITOR: Lazy<PerformanceMonitor> = Lazy::new(|| {
     let logger = PerformanceLogger::new("performance_monitor");
-    PerformanceMonitor::new(Arc::new(logger))
+    PerformanceMonitor::new(Arc::new(logger)).expect("Failed to create PerformanceMonitor")
 });
 
 #[no_mangle]

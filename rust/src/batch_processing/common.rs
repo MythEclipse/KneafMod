@@ -3,6 +3,7 @@ use std::time::Instant;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::errors::{RustError, Result};
 use std::io::Read;
+use log::error;
 
 /// Common batch operation structure used across all batch processing modules
 #[derive(Debug, Clone)]
@@ -210,5 +211,160 @@ pub fn execute_operation_by_name(operation_name: &str, parameters: &[Vec<u8>]) -
             operation_type: 0,
             max_type: 255,
         }),
+    }
+}
+
+/// SIMD-accelerated batch processing utilities (standardized across all processors)
+pub mod simd {
+    use super::*;
+    use crate::simd_standardized::{get_standard_simd_ops, SimdStandardOps};
+
+    /// SIMD-accelerated distance calculation for entity processing
+    pub fn calculate_entity_distances_simd(positions: &[(f32, f32, f32)], center: (f32, f32, f32)) -> Vec<f32> {
+        let (cx, cy, cz) = center;
+        
+        positions.chunks_exact(4)
+            .map(|chunk| {
+                let simd_ops = get_standard_simd_ops();
+                let xs = simd_ops.create_simd_vector(&[chunk[0].0, chunk[1].0, chunk[2].0, chunk[3].0]);
+                let ys = simd_ops.create_simd_vector(&[chunk[0].1, chunk[1].1, chunk[2].1, chunk[3].1]);
+                let zs = simd_ops.create_simd_vector(&[chunk[0].2, chunk[1].2, chunk[2].2, chunk[3].2]);
+                
+                let dx = xs - cx;
+                let dy = ys - cy;
+                let dz = zs - cz;
+                
+                let distances_sq = dx * dx + dy * dy + dz * dz;
+                let distances = distances_sq.sqrt();
+                
+                distances.to_array().to_vec()
+            })
+            .flatten()
+            .chain(positions.chunks_exact(4).remainder().iter()
+                .map(|&(x, y, z)| ((x - cx).powi(2) + (y - cy).powi(2) + (z - cz).powi(2)).sqrt()))
+            .collect()
+    }
+
+    /// SIMD-accelerated batch operation processing
+    pub fn process_batch_simd<F>(operations: &[BatchOperation], process_fn: F) -> Vec<Vec<u8>>
+    where
+        F: Fn(&[u8]) -> Vec<u8>,
+    {
+        // Process in chunks of 8 for maximum SIMD utilization
+        operations.chunks_exact(8)
+            .map(|chunk| {
+                let results = chunk.iter()
+                    .map(|op| process_fn(&op.input_data))
+                    .collect::<Vec<_>>();
+                
+                // Use SIMD to optimize result aggregation if needed
+                results
+            })
+            .flatten()
+            .chain(operations.chunks_exact(8).remainder().iter()
+                .map(|op| process_fn(&op.input_data)))
+            .collect()
+    }
+
+    /// SIMD-accelerated vector addition
+    pub fn vector_add_simd(a: &[f32], b: &[f32]) -> Vec<f32> {
+        if a.len() != b.len() {
+            return a.iter().zip(b.iter()).map(|(x, y)| x + y).collect();
+        }
+
+        let mut result = Vec::with_capacity(a.len());
+        let mut i = 0;
+        
+        while i + 8 <= a.len() {
+            let simd_ops = get_standard_simd_ops();
+            let av = simd_ops.create_simd_vector_8(&a[i..i+8]);
+            let bv = simd_ops.create_simd_vector_8(&b[i..i+8]);
+            let rv = av + bv;
+            result.extend_from_slice(&rv.to_array());
+            i += 8;
+        }
+        
+        while i < a.len() {
+            result.push(a[i] + b[i]);
+            i += 1;
+        }
+        
+        result
+    }
+
+    /// SIMD-accelerated vector multiplication
+    pub fn vector_mul_simd(a: &[f32], b: &[f32]) -> Vec<f32> {
+        if a.len() != b.len() {
+            return a.iter().zip(b.iter()).map(|(x, y)| x * y).collect();
+        }
+
+        let mut result = Vec::with_capacity(a.len());
+        let mut i = 0;
+        
+        while i + 8 <= a.len() {
+            let simd_ops = get_standard_simd_ops();
+            let av = simd_ops.create_simd_vector_8(&a[i..i+8]);
+            let bv = simd_ops.create_simd_vector_8(&b[i..i+8]);
+            let rv = av * bv;
+            result.extend_from_slice(&rv.to_array());
+            i += 8;
+        }
+        
+        while i < a.len() {
+            result.push(a[i] * b[i]);
+            i += 1;
+        }
+        
+        result
+    }
+}
+
+/// Standardized error handling utilities for batch processing
+pub mod error_handling {
+    use super::*;
+
+    /// Standard batch processing error handling wrapper
+    pub fn handle_batch_error<F, T>(operation: &str, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T>,
+    {
+        match f() {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                error!("Batch processing error in operation '{}': {}", operation, e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Standard batch operation timeout handling
+    pub fn handle_timeout<F, T>(operation: &str, timeout: std::time::Duration, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T>,
+    {
+        let result = std::thread::spawn(f).join().map_err(|e| {
+            RustError::OperationFailed(format!("Batch operation '{}' failed to join thread: {}", operation, e))
+        })?;
+
+        match result {
+            Ok(res) => Ok(res),
+            Err(e) => {
+                error!("Batch processing error in operation '{}': {}", operation, e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Standard batch result validation
+    pub fn validate_batch_results(results: &[Vec<u8>], expected_count: usize) -> Result<()> {
+        if results.len() != expected_count {
+            return Err(RustError::ValidationError(format!(
+                "Expected {} results, got {}",
+                expected_count,
+                results.len()
+            )));
+        }
+
+        Ok(())
     }
 }

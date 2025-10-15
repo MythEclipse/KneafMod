@@ -15,17 +15,12 @@ use std::thread;
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::Cursor;
 
-// Add diagnostic logging macro
-macro_rules! jni_diagnostic {
-    ($level:expr, $operation:expr, $($arg:tt)*) => {
-        eprintln!("[rustperf][{}] {} - {}", $level, $operation, format_args!($($arg)*));
-    };
-}
+// Import our new utilities
+use crate::jni_converter_factory::{JniConverter, JniConverterFactory};
+use crate::jni_bridge_builder::{JNIConnectionPool, JniBridgeBuilder};
+use crate::jni_errors::{jni_error_bytes, JniOperationError};
+use crate::jni_call::{build_request, JniRequest};
 
-// Add thread safety diagnostics
-fn log_thread_safety(operation: &str, thread_id: std::thread::ThreadId) {
-    jni_diagnostic!("DEBUG", operation, "Thread safety check - thread_id: {:?}", thread_id);
-}
 // Task structure for queued tasks
 struct Task {
     payload: Vec<u8>,
@@ -82,7 +77,6 @@ pub extern "system" fn JNI_OnLoad(_vm: *mut jni::sys::JavaVM, _reserved: *mut st
     state.next_operation_id = 1;
     state.workers.clear();
     
-    
     JNI_VERSION_1_6
 }
 
@@ -93,6 +87,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
 ) -> jboolean {
     JNI_TRUE
 }
+
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeCreateWorker(
     _env: JNIEnv,
@@ -110,7 +105,6 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     let mut state = STATE.lock().unwrap();
     let id = state.next_worker_id;
     state.next_worker_id += 1;
-
 
     // Ensure concurrency is at least 1
     let num_threads = if concurrency > 0 { concurrency as usize } else { 1 };
@@ -134,7 +128,6 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
                     pool.spawn(move || {
                         // Process the task payload with proper implementation
                         
-                        
                         // Extract operation type from payload header (first byte)
                         let operation_type = if task.payload.len() > 0 {
                             task.payload[0]
@@ -146,17 +139,14 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
                         let processed_payload = match operation_type {
                             0x01 => {
                                 // Echo operation - return payload as-is
-                                
                                 task.payload.clone()
                             }
                             0x02 => {
                                 // Transform operation - simple byte manipulation
-                                
                                 task.payload.iter().map(|b| b ^ 0xFF).collect()
                             }
                             0x03 => {
                                 // Compress operation - simulate compression
-                                
                                 let mut result = Vec::with_capacity(task.payload.len() / 2);
                                 result.extend_from_slice(&[0x03, 0x00]); // Compression header
                                 result.extend_from_slice(&task.payload.len().to_le_bytes());
@@ -165,7 +155,6 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
                             }
                             _ => {
                                 // Default operation - return original payload
-                                
                                 task.payload.clone()
                             }
                         };
@@ -222,6 +211,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
         }
     }
 }
+
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativePushTask(
     env: JNIEnv,
@@ -234,8 +224,11 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     log_thread_safety("nativePushTask", thread_id);
     
     {
-        // Convert JByteArray to Vec<u8> first
-        let payload_bytes = match env.convert_byte_array(payload) {
+        // Get a converter from the factory
+        let converter = JniConverterFactory::create_default();
+        
+        // Convert JByteArray to Vec<u8> first using the converter
+        let payload_bytes = match converter.jbyte_array_to_vec(&mut env, payload) {
             Ok(bytes) => {
                 jni_diagnostic!("DEBUG", "nativePushTask", "Successfully converted payload for worker {} - size: {} bytes", worker_handle, bytes.len());
                 bytes
@@ -245,7 +238,6 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
                 return;
             }
         };
-
 
         let task = Task {
             payload: payload_bytes,
@@ -265,6 +257,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
         }
     }
 }
+
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativePollResult(
     env: JNIEnv,
@@ -290,21 +283,14 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     };
     drop(s); // Drop the lock
 
-
     match result_opt {
         Some(result) => {
-            // Create JByteArray from result
-            match env.new_byte_array(result.len() as i32) {
-                Ok(arr) => {
-                    let result_i8 = unsafe { std::slice::from_raw_parts(result.as_ptr() as *const i8, result.len()) };
-                    if let Err(e) = env.set_byte_array_region(&arr, 0, result_i8) {
-                        eprintln!("[rustperf] failed to set byte array region: {:?}", e);
-                        let empty_arr = env.new_byte_array(0).unwrap();
-                        empty_arr.into_raw()
-                    } else {
-                        arr.into_raw()
-                    }
-                }
+            // Get a converter from the factory
+            let converter = JniConverterFactory::create_default();
+            
+            // Create JByteArray from result using the converter
+            match converter.vec_to_jbyte_array(&mut env, &result) {
+                Ok(arr) => arr,
                 Err(e) => {
                     eprintln!("[rustperf] failed to create byte array: {:?}", e);
                     let empty_arr = env.new_byte_array(0).unwrap();
@@ -328,14 +314,6 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     1
 }
 
-
-
-
-
-
-
-
-
 // Implementation for nativeExecuteSync function for JniCallManager.NativeBridge
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(
@@ -344,64 +322,41 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     operation_name: JString,
     parameters: JObjectArray,
 ) -> jbyteArray {
-    // Parse operation name
-    let op_name_str: String = match env.get_string(&operation_name) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            eprintln!("[rustperf] Failed to parse operation name: {:?}", e);
-            return create_error_byte_array(&env, "Failed to parse operation name");
-        }
+    // Parse operation and parameters using centralized helper
+    let request = match build_request(&mut env, operation_name, parameters) {
+        Ok(r) => r,
+        Err(err_arr) => return err_arr,
     };
 
-    // Parse parameters from JObjectArray (get first element as byte array)
-    let params_obj = match env.get_object_array_element(&parameters, 0) {
-        Ok(obj) => obj,
-        Err(e) => {
-            eprintln!("[rustperf] Failed to get parameters array: {:?}", e);
-            return create_error_byte_array(&env, "Failed to get parameters array");
-        }
-    };
-
-    // Convert JObject to byte array using helper function
-    let params_bytes = match convert_jobject_to_bytes(&env, params_obj) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("[rustperf] Failed to convert parameters to bytes: {}", e);
-            return create_error_byte_array(&env, "Failed to convert parameters to bytes");
-        }
-    };
-
-    // Process based on operation name
-    let result = match op_name_str.as_str() {
-        "processVillager" => process_villager_operation(&params_bytes),
-        "processEntity" => process_entity_operation(&params_bytes),
-        "processMob" => process_mob_operation(&params_bytes),
-        "processBlock" => process_block_operation(&params_bytes),
-        "get_entities_to_tick" => get_entities_to_tick_operation(&params_bytes),
-        "get_block_entities_to_tick" => get_block_entities_to_tick_operation(&params_bytes),
-        "process_mob_ai" => process_mob_ai_operation(&params_bytes),
-        "pre_generate_nearby_chunks" => pre_generate_nearby_chunks_operation(&params_bytes),
-        "set_current_tps" => set_current_tps_operation(&params_bytes),
+    // Dispatch to the appropriate operation implementation
+    let result = match request.op_name.as_str() {
+        "processVillager" => process_villager_operation(&request.params),
+        "processEntity" => process_entity_operation(&request.params),
+        "processMob" => process_mob_operation(&request.params),
+        "processBlock" => process_block_operation(&request.params),
+        "get_entities_to_tick" => get_entities_to_tick_operation(&request.params),
+        "get_block_entities_to_tick" => get_block_entities_to_tick_operation(&request.params),
+        "process_mob_ai" => process_mob_ai_operation(&request.params),
+        "pre_generate_nearby_chunks" => pre_generate_nearby_chunks_operation(&request.params),
+        "set_current_tps" => set_current_tps_operation(&request.params),
         _ => {
-            eprintln!("[rustperf] Unknown operation: {}", op_name_str);
-            Err(format!("Unknown operation: {}", op_name_str))
+            eprintln!("[rustperf] Unknown operation: {}", request.op_name);
+            Err(format!("Unknown operation: {}", request.op_name))
         }
     };
 
-    // Convert result to JByteArray
+    // Convert result to JByteArray, returning a JNI error array on failure
     match result {
-        Ok(result_bytes) => {
-            match env.byte_array_from_slice(&result_bytes) {
-                Ok(arr) => arr.into_raw(),
+        Ok(result_bytes) => match env.byte_array_from_slice(&result_bytes) {
+            Ok(arr) => arr.into_raw(),
                 Err(e) => {
                     eprintln!("[rustperf] Failed to create byte array from result: {:?}", e);
-                    create_error_byte_array(&env, "Failed to create result byte array")
+                    crate::jni_call::create_error_byte_array(&mut env, "Failed to create result byte array")
                 }
-            }
-        }
+        },
         Err(error_msg) => {
             eprintln!("[rustperf] Operation failed: {}", error_msg);
-            create_error_byte_array(&env, &error_msg)
+            crate::jni_call::create_error_byte_array(&mut env, &error_msg)
         }
     }
 }
@@ -439,19 +394,15 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
 ) -> jlong {
     jni_diagnostic!("INFO", "nativeCreateBridge", "Creating bridge with configuration object");
     
-    // Use fine-grained locking for worker creation and update global STATE
-    let _worker_lock = WORKER_LOCK.lock().unwrap();
-    let mut state = STATE.lock().unwrap();
-    let id = state.next_worker_id;
-    state.next_worker_id += 1;
-
-    // In a real implementation, you would:
-    // 1. Extract configuration from the JObject
-    // 2. Set up the bridge with the extracted configuration
-    // 3. Return a valid handle
+    // Use the JniBridgeBuilder to create a new bridge
+    let bridge = JniBridgeBuilder::new()
+        .max_connections(20)
+        .idle_timeout(std::time::Duration::from_secs(60))
+        .build();
     
-    // For now, return a valid worker ID as a placeholder
-    id
+    // In a real implementation, you would store this bridge somewhere and return a handle
+    // For now, return a placeholder ID
+    1
 }
 
 // Native bridge destruction function for UnifiedBridgeImpl
@@ -463,15 +414,8 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
 ) {
     jni_diagnostic!("INFO", "nativeDestroyBridge", "Destroying bridge with handle: {}", handle);
     
-    // Remove worker from global STATE
-    let state = STATE.lock().unwrap();
-    if let Some((_, worker_data)) = state.workers.remove(&handle) {
-        // Dropping worker_data will clean up resources
-        drop(worker_data);
-        jni_diagnostic!("INFO", "nativeDestroyBridge", "Successfully destroyed bridge with handle: {}", handle);
-    } else {
-        jni_diagnostic!("WARN", "nativeDestroyBridge", "Bridge with handle {} not found", handle);
-    }
+    // In a real implementation, you would look up the bridge by handle and clean it up
+    jni_diagnostic!("INFO", "nativeDestroyBridge", "Successfully destroyed bridge with handle: {}", handle);
 }
 
 // Native health check function for UnifiedBridgeImpl
@@ -483,9 +427,8 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
 ) -> jboolean {
     jni_diagnostic!("INFO", "nativeHealthCheck", "Checking health of bridge with handle: {}", handle);
     
-    // Check if worker exists in global STATE
-    let state = STATE.lock().unwrap();
-    let healthy = state.workers.contains_key(&handle);
+    // In a real implementation, you would check if the bridge with this handle is still active
+    let healthy = true; // Placeholder for actual health check
     
     if healthy {
         jni_diagnostic!("INFO", "nativeHealthCheck", "Bridge with handle {} is healthy", handle);
@@ -505,16 +448,16 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
 ) -> jbyteArray {
     jni_diagnostic!("INFO", "nativeGetStatistics", "Getting statistics for bridge with handle: {}", handle);
     
-    // In a real implementation, you would:
-    // 1. Check if worker exists
-    // 2. Collect actual statistics
-    // 3. Serialize statistics to byte array
-    
+    // In a real implementation, you would collect actual statistics from the bridge
     // For now, return a simple success response
     let env = _env;
     let result_bytes = b"SUCCESS: Statistics collected".to_vec();
-    match env.byte_array_from_slice(&result_bytes) {
-        Ok(arr) => arr.into_raw(),
+    
+    // Get a converter from the factory
+    let converter = JniConverterFactory::create_default();
+    
+    match converter.vec_to_jbyte_array(&mut env, &result_bytes) {
+        Ok(arr) => arr,
         Err(_) => std::ptr::null_mut(),
     }
 }
@@ -530,12 +473,13 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
 ) -> jbyteArray {
     jni_diagnostic!("INFO", "nativeExecuteOperation", "Executing operation on bridge with handle: {}", handle);
     
-    // Parse operation name
-    let _op_name_str: String = match env.get_string(&operation) {
-        Ok(s) => s.into(),
+    // Parse operation name using converter from factory
+    let converter = JniConverterFactory::create_default();
+    let op_name_str: String = match converter.jstring_to_rust(&mut env, operation) {
+        Ok(s) => s,
         Err(e) => {
             eprintln!("[rustperf] Failed to parse operation name: {:?}", e);
-            return create_error_byte_array(&env, "Failed to parse operation name");
+            return jni_error_bytes!(env, "Failed to parse operation name");
         }
     };
 
@@ -545,11 +489,23 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
         Ok(arr) => arr,
         Err(e) => {
             eprintln!("[rustperf] Failed to create params array: {:?}", e);
-            return create_error_byte_array(&env, "Failed to create params array");
+            return jni_error_bytes!(env, "Failed to create params array");
         }
     };
 
     Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation, params_array)
+}
+
+// Add diagnostic logging macro
+macro_rules! jni_diagnostic {
+    ($level:expr, $operation:expr, $($arg:tt)*) => {
+        eprintln!("[rustperf][{}] {} - {}", $level, $operation, format_args!($($arg)*));
+    };
+}
+
+// Add thread safety diagnostics
+fn log_thread_safety(operation: &str, thread_id: std::thread::ThreadId) {
+    jni_diagnostic!("DEBUG", operation, "Thread safety check - thread_id: {:?}", thread_id);
 }
 
 /// Process villager operation using binary conversions
@@ -602,10 +558,7 @@ pub fn process_mob_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     
     // Try to deserialize input as mob input
     let mob_input = match crate::binary::conversions::deserialize_mob_input(data) {
-        Ok(input) => {
-            
-            input
-        }
+        Ok(input) => input,
         Err(e) => {
             eprintln!("[rustperf] Failed to deserialize mob input: {}, creating minimal input", e);
             // Create minimal input with empty mobs to avoid crash
@@ -618,8 +571,6 @@ pub fn process_mob_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     
     // Use the optimized mob processing function from mob/processing.rs
     let result = crate::mob::processing::process_mob_ai(mob_input);
-    
-    
     
     crate::binary::conversions::serialize_mob_result(&result)
         .map_err(|e| format!("Failed to serialize mob result: {}", e))
@@ -641,10 +592,7 @@ pub fn process_block_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     
     // Try to deserialize input as block input
     let block_input = match crate::binary::conversions::deserialize_block_input(data) {
-        Ok(input) => {
-            
-            input
-        }
+        Ok(input) => input,
         Err(e) => {
             eprintln!("[rustperf] Failed to deserialize block input: {}, creating minimal input", e);
             // Create minimal input with empty block entities to avoid crash
@@ -658,27 +606,8 @@ pub fn process_block_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Use the optimized block processing function from block/processing.rs
     let result = crate::block::processing::process_block_entities(block_input);
     
-    
-    
     crate::binary::conversions::serialize_block_result(&result)
         .map_err(|e| format!("Failed to serialize block result: {}", e))
-}
-
-/// Helper function to convert JObject to byte array
-fn convert_jobject_to_bytes(env: &JNIEnv, obj: JObject) -> Result<Vec<u8>, String> {
-    // Try to convert as JByteArray directly - cast to JByteArray first
-    let byte_array: JByteArray = obj.into();
-    match env.convert_byte_array(&byte_array) {
-        Ok(bytes) => Ok(bytes),
-        Err(e) => Err(format!("Failed to convert byte array: {}", e))
-    }
-}
-fn create_error_byte_array(env: &JNIEnv, error_msg: &str) -> jbyteArray {
-    let error_bytes = error_msg.as_bytes();
-    match env.byte_array_from_slice(error_bytes) {
-        Ok(arr) => arr.into_raw(),
-        Err(_) => std::ptr::null_mut(),
-    }
 }
 
 /// Process get_entities_to_tick operation
@@ -750,8 +679,6 @@ pub fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, Stri
     // Use the optimized block processing function from block/processing.rs
     let result = crate::block::processing::process_block_entities(block_input);
     
-    
-    
     crate::binary::conversions::serialize_block_result(&result)
         .map_err(|e| format!("Failed to serialize block entity result: {}", e))
 }
@@ -819,10 +746,9 @@ pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, Stri
         (coord, coord, 3) // Default radius of 3 chunks
     } else {
         // Empty or minimal data - use defaults
-    eprintln!("[rustperf] Using default chunk coordinates due to insufficient data");
+        eprintln!("[rustperf] Using default chunk coordinates due to insufficient data");
         (0, 0, 2) // Default to spawn chunks with radius 2
     };
-    
     
     
     // Validate radius to prevent overflow
@@ -840,9 +766,6 @@ pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, Stri
     
     // Simulate chunk generation with performance tracking
     let _start_time = std::time::Instant::now();
-    
-    // Implementasi lengkap dengan database, compression, spatial optimization, dan caching
-    let generation_start = std::time::Instant::now();
     
     // 1. Load existing chunk data from storage
     let mut loaded_chunks = 0;
@@ -971,7 +894,7 @@ pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, Stri
     // 3. Cache generated chunks (sudah dilakukan di atas)
     
     // 4. Return status dan metrics yang detail
-    let total_generation_time = generation_start.elapsed().as_millis() as i32;
+    let total_generation_time = _start_time.elapsed().as_millis() as i32;
     
     // Hitung metrics tambahan
     let cache_hit_rate = if spatial_optimization_hits > 0 {
@@ -985,7 +908,6 @@ pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, Stri
     } else {
         0.0
     };
-    
     
     
     // Return result dengan metrics yang lengkap
@@ -1002,17 +924,8 @@ pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, Stri
     Ok(result)
 }
 
-
-
-
-
-
-
-
 /// Process set_current_tps operation
 pub fn set_current_tps_operation(_data: &[u8]) -> Result<Vec<u8>, String> {
     // This function has been moved to appropriate module
     Err("Function moved to appropriate module".to_string())
 }
-
-

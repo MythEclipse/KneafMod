@@ -3,7 +3,7 @@ use jni::sys::{jbyteArray, jstring};
 use jni::JNIEnv;
 
 use crate::logging::JniLogger;
-use crate::villager::processing::process_villager_ai_binary_batch;
+use crate::villager::processing::{process_villager_ai_binary_batch, process_villager_ai_json};
 use std::sync::OnceLock;
 use crate::jni_log_error;
 
@@ -47,7 +47,7 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processVi
         }
     };
 
-    match crate::villager::processing::process_villager_ai_json(&input_str) {
+    match process_villager_ai_json(&input_str) {
         Ok(result_json) => match env.new_string(result_json) {
             Ok(s) => s.into_raw(),
             Err(e) => {

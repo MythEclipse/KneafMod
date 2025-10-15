@@ -1,110 +1,51 @@
 use lz4_flex::block::{compress_prepend_size, decompress_size_prepended};
+use std::time::Instant;
+use thiserror::Error;
 
-/// Adaptive compression configuration
-#[derive(Debug, Clone)]
-pub struct CompressionConfig {
-    pub min_size_for_compression: usize,
-    pub checksum: bool,
+/// Compression error type
+#[derive(Debug, Error)]
+pub enum CompressionError {
+    #[error("LZ4 compression failed: {0}")]
+    Lz4(#[from] lz4_flex::block::CompressionError),
+    
+    #[error("LZ4 decompression failed: {0}")]
+    Lz4Decompress(#[from] lz4_flex::block::DecompressionError),
+    
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    
+    #[error("Invalid data: {0}")]
+    InvalidData(String),
+    
+    #[error("Buffer too small: {0}")]
+    BufferTooSmall(String),
 }
 
-impl Default for CompressionConfig {
-    fn default() -> Self {
-        Self {
-            min_size_for_compression: 10_000, // 10KB - compress chunks larger than this
-            checksum: true,
-        }
-    }
+/// Compression algorithm types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionAlgorithm {
+    /// LZ4 block compression (default)
+    Lz4,
+    /// No compression
+    None,
 }
 
-/// Compression utilities for chunk storage
-pub struct ChunkCompressor {
-    config: CompressionConfig,
+/// Compression level for LZ4
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionLevel {
+    /// Fastest compression (lowest ratio)
+    Fastest,
+    /// Fast compression
+    Fast,
+    /// Default compression
+    Default,
+    /// High compression (best ratio)
+    High,
+    /// Ultra compression (highest ratio, slowest)
+    Ultra,
 }
 
-impl ChunkCompressor {
-    /// Create a new chunk compressor with default configuration
-    pub fn new() -> Self {
-        Self::with_config(CompressionConfig::default())
-    }
-
-    /// Create a new chunk compressor with custom configuration
-    pub fn with_config(config: CompressionConfig) -> Self {
-        Self { config }
-    }
-
-    /// Compress chunk data if it meets the size threshold
-    pub fn compress(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        if data.len() < self.config.min_size_for_compression {
-            return Ok(data.to_vec()); // Return uncompressed if below threshold
-        }
-
-        let compressed = compress_prepend_size(data);
-
-        Ok(compressed)
-    }
-
-    /// Decompress chunk data (automatically detects if compressed)
-    pub fn decompress(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        // Check if data is likely uncompressed (too small to be compressed or not compressed format)
-        if data.len() < self.config.min_size_for_compression || !self.is_compressed(data) {
-            return Ok(data.to_vec());
-        }
-        
-        decompress_size_prepended(data).map_err(|e| format!("LZ4 decompression failed: {}", e))
-    }
-
-    /// Check if data is likely compressed (simple heuristic for block compression)
-    pub fn is_compressed(&self, data: &[u8]) -> bool {
-        // For block compression with size prepend, check if data is smaller than uncompressed threshold
-        // or has reasonable size prefix
-        if data.len() < 8 { // Need at least 4 bytes for size + 4 bytes for data
-            return false;
-        }
-        // Check if the size prefix makes sense (not too large)
-        let size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        // For compressed data, the size should be reasonable and the total data length should be size + 4
-        size > 0 && size < 100_000_000 && data.len() == size + 4
-    }
-
-    /// Get compression ratio (original_size / compressed_size)
-    pub fn calculate_compression_ratio(&self, original_size: usize, compressed_size: usize) -> f64 {
-        if compressed_size == 0 {
-            return 1.0;
-        }
-        (original_size as f64 / compressed_size as f64).max(1.0)
-    }
-}
-
-/// Block compression utilities for smaller chunks
-pub struct BlockCompressor {
-    #[allow(dead_code)]
-    config: CompressionConfig,
-}
-
-impl BlockCompressor {
-    /// Create a new block compressor with default configuration
-    pub fn new() -> Self {
-        Self::with_config(CompressionConfig::default())
-    }
-
-    /// Create a new block compressor with custom configuration
-    pub fn with_config(config: CompressionConfig) -> Self {
-        Self { config }
-    }
-
-    /// Compress data using LZ4 block compression with size prefix
-    pub fn compress(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        Ok(compress_prepend_size(data))
-    }
-
-    /// Decompress data compressed with LZ4 block compression
-    pub fn decompress(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        decompress_size_prepended(data)
-            .map_err(|e| format!("LZ4 block decompression failed: {}", e))
-    }
-}
-
-/// Compression statistics and metrics
+/// Compression statistics
 #[derive(Debug, Clone, Default)]
 pub struct CompressionStats {
     pub original_size: usize,
@@ -113,37 +54,202 @@ pub struct CompressionStats {
     pub total_compressed: usize,
     pub compression_ratio: f64,
     pub compression_time: std::time::Duration,
-    pub compression_time_ms: u64,
+    pub decompression_time: std::time::Duration,
 }
 
-/// Compression engine with statistics
+/// Builder for creating compression configurations
+#[derive(Debug, Clone)]
+pub struct CompressionBuilder {
+    min_size_for_compression: usize,
+    checksum: bool,
+    algorithm: CompressionAlgorithm,
+    level: CompressionLevel,
+    stats: bool,
+}
+
+impl Default for CompressionBuilder {
+    fn default() -> Self {
+        Self {
+            min_size_for_compression: 10_000, // 10KB - compress chunks larger than this
+            checksum: true,
+            algorithm: CompressionAlgorithm::Lz4,
+            level: CompressionLevel::Default,
+            stats: false,
+        }
+    }
+}
+
+impl CompressionBuilder {
+    /// Create a new compression builder with default settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    /// Set minimum size threshold for compression
+    pub fn min_size(mut self, size: usize) -> Self {
+        self.min_size_for_compression = size;
+        self
+    }
+    
+    /// Enable/disable checksum verification
+    pub fn checksum(mut self, enabled: bool) -> Self {
+        self.checksum = enabled;
+        self
+    }
+    
+    /// Set compression algorithm
+    pub fn algorithm(mut self, algorithm: CompressionAlgorithm) -> Self {
+        self.algorithm = algorithm;
+        self
+    }
+    
+    /// Set compression level
+    pub fn level(mut self, level: CompressionLevel) -> Self {
+        self.level = level;
+        self
+    }
+    
+    /// Enable/disable statistics collection
+    pub fn stats(mut self, enabled: bool) -> Self {
+        self.stats = enabled;
+        self
+    }
+    
+    /// Build a compression engine with the configured settings
+    pub fn build(self) -> CompressionEngine {
+        CompressionEngine {
+            config: CompressionConfig {
+                min_size_for_compression: self.min_size_for_compression,
+                checksum: self.checksum,
+                algorithm: self.algorithm,
+                level: self.level,
+            },
+            stats: if self.stats { Some(CompressionStats::default()) } else { None },
+        }
+    }
+    
+    /// Build a compression engine with statistics collection enabled
+    pub fn build_with_stats(self) -> CompressionEngine {
+        self.stats(true).build()
+    }
+}
+
+/// Compression configuration
+#[derive(Debug, Clone)]
+pub struct CompressionConfig {
+    min_size_for_compression: usize,
+    checksum: bool,
+    algorithm: CompressionAlgorithm,
+    level: CompressionLevel,
+}
+
+/// Main compression engine
 pub struct CompressionEngine {
-    chunk_compressor: ChunkCompressor,
-    block_compressor: BlockCompressor,
+    config: CompressionConfig,
+    stats: Option<CompressionStats>,
 }
 
 impl CompressionEngine {
+    /// Create a new compression engine with default configuration
     pub fn new() -> Self {
-        Self {
-            chunk_compressor: ChunkCompressor::new(),
-            block_compressor: BlockCompressor::new(),
+        CompressionBuilder::new().build()
+    }
+    
+    /// Create a new compression engine with statistics collection
+    pub fn with_stats() -> Self {
+        CompressionBuilder::new().build_with_stats()
+    }
+    
+    /// Compress data according to the configured settings
+    pub fn compress(&mut self, data: &[u8]) -> Result<Vec<u8>, CompressionError> {
+        let start_time = Instant::now();
+        
+        // Skip compression for small data
+        if data.len() < self.config.min_size_for_compression {
+            self.update_stats(data.len(), data.len(), start_time);
+            return Ok(data.to_vec());
+        }
+        
+        let result = match self.config.algorithm {
+            CompressionAlgorithm::Lz4 => {
+                let level = match self.config.level {
+                    CompressionLevel::Fastest => lz4_flex::block::CompressionLevel::Fastest,
+                    CompressionLevel::Fast => lz4_flex::block::CompressionLevel::Fast,
+                    CompressionLevel::Default => lz4_flex::block::CompressionLevel::Default,
+                    CompressionLevel::High => lz4_flex::block::CompressionLevel::High,
+                    CompressionLevel::Ultra => lz4_flex::block::CompressionLevel::Ultra,
+                };
+                
+                compress_prepend_size(data, level)
+            }
+            CompressionAlgorithm::None => data.to_vec(),
+        };
+        
+        self.update_stats(data.len(), result.len(), start_time);
+        Ok(result)
+    }
+    
+    /// Decompress data (automatically detects compression format)
+    pub fn decompress(&mut self, data: &[u8]) -> Result<Vec<u8>, CompressionError> {
+        let start_time = Instant::now();
+        
+        // Handle uncompressed data or data too small to be compressed
+        if data.len() < self.config.min_size_for_compression || !self.is_compressed(data) {
+            self.update_stats(data.len(), data.len(), start_time);
+            return Ok(data.to_vec());
+        }
+        
+        let result = decompress_size_prepended(data)?;
+        self.update_stats(data.len(), result.len(), start_time);
+        Ok(result)
+    }
+    
+    /// Check if data is likely compressed
+    pub fn is_compressed(&self, data: &[u8]) -> bool {
+        // For block compression with size prepend, check if data is smaller than uncompressed threshold
+        // or has reasonable size prefix
+        if data.len() < 8 { // Need at least 4 bytes for size + 4 bytes for data
+            return false;
+        }
+        
+        // Check if the size prefix makes sense (not too large)
+        let size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        
+        // For compressed data, the size should be reasonable and the total data length should be size + 4
+        size > 0 && size < 100_000_000 && data.len() == size + 4
+    }
+    
+    /// Calculate compression ratio (original_size / compressed_size)
+    pub fn calculate_compression_ratio(original_size: usize, compressed_size: usize) -> f64 {
+        if compressed_size == 0 {
+            return 1.0;
+        }
+        (original_size as f64 / compressed_size as f64).max(1.0)
+    }
+    
+    /// Get compression statistics (if enabled)
+    pub fn stats(&self) -> Option<&CompressionStats> {
+        self.stats.as_ref()
+    }
+    
+    /// Reset compression statistics (if enabled)
+    pub fn reset_stats(&mut self) {
+        if let Some(stats) = &mut self.stats {
+            *stats = CompressionStats::default();
         }
     }
-
-    pub fn compress_chunk(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        self.chunk_compressor.compress(data)
-    }
-
-    pub fn decompress_chunk(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        self.chunk_compressor.decompress(data)
-    }
-
-    pub fn compress_block(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        self.block_compressor.compress(data)
-    }
-
-    pub fn decompress_block(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        self.block_compressor.decompress(data)
+    
+    /// Update compression statistics
+    fn update_stats(&mut self, original_size: usize, compressed_size: usize, start_time: Instant) {
+        if let Some(stats) = &mut self.stats {
+            stats.original_size = original_size;
+            stats.compressed_size = compressed_size;
+            stats.total_uncompressed += original_size;
+            stats.total_compressed += compressed_size;
+            stats.compression_ratio = Self::calculate_compression_ratio(original_size, compressed_size);
+            stats.compression_time = start_time.elapsed();
+            stats.compression_time_ms = start_time.elapsed().as_millis();
+        }
     }
 }
 
@@ -152,55 +258,95 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_compression_roundtrip() {
-        let compressor = ChunkCompressor::new();
-        let original_data = vec![1, 2, 3, 4, 5];
-
-        // Test with small data (should not compress)
-        let compressed = compressor.compress(&original_data).unwrap();
-        assert_eq!(compressed, original_data);
-
-        let decompressed = compressor.decompress(&compressed).unwrap();
-        assert_eq!(decompressed, original_data);
-
-        // Test with larger data - use a simple repeating pattern that compresses well
-        let large_data: Vec<u8> = (0..20_000).map(|i| (i % 100) as u8).collect();
-        let compressed = compressor.compress(&large_data).unwrap();
-        
-        // Skip compression test for now due to LZ4 buffer overflow issues
-        // Just test that it doesn't crash and returns reasonable data
-        let decompressed = compressor.decompress(&compressed).unwrap();
-        assert!(decompressed.len() > 0); // Basic sanity check
+    fn test_compression_builder_defaults() {
+        let builder = CompressionBuilder::new();
+        assert_eq!(builder.min_size_for_compression, 10_000);
+        assert!(builder.checksum);
+        assert_eq!(builder.algorithm, CompressionAlgorithm::Lz4);
+        assert_eq!(builder.level, CompressionLevel::Default);
+        assert!(!builder.stats);
     }
 
     #[test]
-    fn test_block_compression_roundtrip() {
-        let compressor = BlockCompressor::new();
-        let data = vec![1, 2, 3, 4, 5];
+    fn test_compression_builder_configuration() {
+        let builder = CompressionBuilder::new()
+            .min_size(5_000)
+            .checksum(false)
+            .algorithm(CompressionAlgorithm::None)
+            .level(CompressionLevel::Ultra)
+            .stats(true);
+        
+        assert_eq!(builder.min_size_for_compression, 5_000);
+        assert!(!builder.checksum);
+        assert_eq!(builder.algorithm, CompressionAlgorithm::None);
+        assert_eq!(builder.level, CompressionLevel::Ultra);
+        assert!(builder.stats);
+    }
 
-        let compressed = compressor.compress(&data).unwrap();
-        assert!(compressed.len() > data.len()); // Should always add size prefix
+    #[test]
+    fn test_compression_engine_default() {
+        let engine = CompressionEngine::new();
+        assert_eq!(engine.config.min_size_for_compression, 10_000);
+        assert!(engine.config.checksum);
+        assert_eq!(engine.config.algorithm, CompressionAlgorithm::Lz4);
+        assert_eq!(engine.config.level, CompressionLevel::Default);
+    }
 
-        let decompressed = compressor.decompress(&compressed).unwrap();
-        assert_eq!(decompressed, data);
+    #[test]
+    fn test_compression_roundtrip() {
+        let mut engine = CompressionEngine::new();
+        let original_data = vec![1, 2, 3, 4, 5];
+
+        // Test with small data (should not compress)
+        let compressed = engine.compress(&original_data).unwrap();
+        assert_eq!(compressed, original_data);
+
+        let decompressed = engine.decompress(&compressed).unwrap();
+        assert_eq!(decompressed, original_data);
+
+        // Test with larger data pattern that should compress
+        let large_data: Vec<u8> = (0..20_000).map(|i| (i % 100) as u8).collect();
+        let compressed = engine.compress(&large_data).unwrap();
+        
+        // Should be different from original (compressed)
+        assert_ne!(compressed, large_data);
+
+        let decompressed = engine.decompress(&compressed).unwrap();
+        assert_eq!(decompressed, large_data);
     }
 
     #[test]
     fn test_is_compressed_detection() {
-        let compressor = ChunkCompressor::new();
+        let engine = CompressionEngine::new();
         let original_data = vec![1, 2, 3, 4, 5];
         
-        // Create data that will definitely be compressed (large enough)
+        // Create data that will be compressed (large enough)
         let large_data = vec![0; 20_000];
-        let compressed_data = compressor.compress(&large_data).unwrap();
+        let compressed_data = engine.compress(&large_data).unwrap();
 
         // Small data should not be considered compressed
-        assert!(!compressor.is_compressed(&original_data));
+        assert!(!engine.is_compressed(&original_data));
         
         // Compressed data should be detected as compressed
-        // Note: Due to LZ4 issues, we test the detection logic directly
-        assert!(compressed_data.len() > 4); // Should have size prefix
-        let size_prefix = u32::from_le_bytes([compressed_data[0], compressed_data[1], compressed_data[2], compressed_data[3]]) as usize;
-        assert!(size_prefix > 0 && size_prefix < 100_000_000);
+        assert!(engine.is_compressed(&compressed_data));
+    }
+
+    #[test]
+    fn test_compression_stats() {
+        let mut engine = CompressionEngine::with_stats();
+        let original_data = vec![1, 2, 3, 4, 5];
+
+        // Compress and decompress
+        let compressed = engine.compress(&original_data).unwrap();
+        let _ = engine.decompress(&compressed).unwrap();
+
+        // Check stats
+        let stats = engine.stats().unwrap();
+        assert_eq!(stats.original_size, 5);
+        assert_eq!(stats.compressed_size, 5); // Should be same as original for small data
+        assert_eq!(stats.total_uncompressed, 5);
+        assert_eq!(stats.total_compressed, 5);
+        assert!(stats.compression_ratio >= 1.0);
+        assert!(stats.compression_time_ms > 0);
     }
 }

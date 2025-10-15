@@ -1,127 +1,15 @@
 use jni::objects::JObject;
 use jni::sys::{jint, jlong};
 use jni::JNIEnv;
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
-use lazy_static::lazy_static;
+use crate::jni_bridge_builder::JNIConnectionPool;
+use crate::jni_converter_factory::{JniConverter, JniConverterFactory};
+use crate::jni_errors::JniOperationError;
 
-// JNI connection pool structure (simplified - no actual JNIEnv storage)
-#[derive(Debug)]
-struct JNIConnection {
-    last_used: std::time::Instant,
-    reference_count: u32,
-}
-
-// Connection pool for JNI calls
-#[derive(Debug)]
-pub struct JNIConnectionPool {
-    connections: RwLock<HashMap<jlong, Arc<Mutex<JNIConnection>>>>,
-    next_id: Mutex<jlong>,
-    max_size: usize,
-    idle_timeout: std::time::Duration,
-}
-
-impl JNIConnectionPool {
-    // Create a new JNI connection pool
-    pub fn new(max_size: usize, idle_timeout: std::time::Duration) -> Self {
-        JNIConnectionPool {
-            connections: RwLock::new(HashMap::new()),
-            next_id: Mutex::new(1),
-            max_size,
-            idle_timeout,
-        }
-    }
-
-    // Get or create a connection from the pool
-    pub fn get_connection(&self) -> Result<jlong, String> {
-        let mut connections = self.connections.write().unwrap();
-        let mut next_id = self.next_id.lock().unwrap();
-
-        // First, try to find an idle connection
-        let now = std::time::Instant::now();
-        let mut idle_connections = Vec::new();
-
-        for (conn_id, conn) in connections.iter() {
-            let conn = conn.lock().unwrap();
-            if conn.reference_count == 0 && now.duration_since(conn.last_used) > self.idle_timeout {
-                idle_connections.push(*conn_id);
-            }
-        }
-
-        // Remove and return an idle connection if found
-        if let Some(conn_id) = idle_connections.first() {
-            let conn = connections.get(conn_id).unwrap().clone();
-            let mut conn = conn.lock().unwrap();
-            conn.reference_count += 1;
-            conn.last_used = now;
-            return Ok(*conn_id);
-        }
-
-        // Create new connection if pool isn't full
-        if connections.len() < self.max_size {
-            // Simplified version - no actual JNIEnv storage
-            let conn = Arc::new(Mutex::new(JNIConnection {
-                last_used: now,
-                reference_count: 1,
-            }));
-
-            let id = *next_id;
-            *next_id += 1;
-            connections.insert(id, conn);
-            return Ok(id);
-        }
-
-        Err("Connection pool is full".to_string())
-    }
-
-    // Release a connection back to the pool
-    pub fn release_connection(&self, conn_id: jlong) -> Result<(), String> {
-        let connections = self.connections.write().unwrap();
-
-        if let Some(conn) = connections.get(&conn_id) {
-            let mut conn = conn.lock().unwrap();
-            conn.reference_count -= 1;
-            conn.last_used = std::time::Instant::now();
-            Ok(())
-        } else {
-            Err("Invalid connection ID".to_string())
-        }
-    }
-
-    // Remove a connection from the pool (for cleanup)
-    pub fn remove_connection(&self, conn_id: jlong) -> Result<(), String> {
-        let mut connections = self.connections.write().unwrap();
-        connections.remove(&conn_id);
-        Ok(())
-    }
-
-    // Clean up idle connections
-    pub fn cleanup_idle_connections(&self) {
-        let now = std::time::Instant::now();
-        let mut connections = self.connections.write().unwrap();
-        let mut to_remove = Vec::new();
-
-        for (conn_id, conn) in connections.iter() {
-            let conn = conn.lock().unwrap();
-            if conn.reference_count == 0 && now.duration_since(conn.last_used) > self.idle_timeout {
-                to_remove.push(*conn_id);
-            }
-        }
-
-        for conn_id in to_remove {
-            connections.remove(&conn_id);
-        }
-    }
-}
-
-// Global JNI connection pool (using Mutex for thread safety instead of Arc)
-lazy_static! {
-    pub static ref GLOBAL_JNI_POOL: Mutex<JNIConnectionPool> = Mutex::new(JNIConnectionPool::new(
-        10,                      // Max 10 connections
-        std::time::Duration::from_secs(30) // 30 second idle timeout
-    ));
-}
+// Re-export the builder for convenience
+pub use crate::jni_bridge_builder::JniBridgeBuilder;
 
 // Error handling types for JNI operations
 #[derive(Debug, Clone)]
@@ -255,7 +143,7 @@ where
     eprintln!("[jni_bridge] with_jni_connection called for connection {}", conn_id);
     
     // Get connection from global pool
-    let pool = GLOBAL_JNI_POOL.lock().unwrap();
+    let pool = crate::jni_bridge_builder::GLOBAL_JNI_POOL.lock().unwrap();
     
     // Validate connection ID
     if let Ok(_) = pool.release_connection(conn_id) {
@@ -348,19 +236,9 @@ where
     }
 }
 
-// Test utilities
 #[cfg(test)]
 pub mod tests {
     use super::*;
-
-    #[test]
-    fn test_jni_connection_pool_basic() {
-        let pool = JNIConnectionPool::new(2, std::time::Duration::from_secs(1));
-
-        // Create two connections (simplified - not using real JNIEnv)
-        // This test is simplified since we can't easily create JNIEnv in tests
-        assert_eq!(pool.connections.read().unwrap().len(), 0);
-    }
 
     #[test]
     fn test_jni_error_conversion() {

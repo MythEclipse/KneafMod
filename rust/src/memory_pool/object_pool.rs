@@ -8,8 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossbeam_utils::CachePadded;
 
+use crate::errors::{RustError, Result};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::memory_pool::atomic_state::AtomicPoolState;
+use crate::memory_pool::common::{MemoryPool, MemoryPoolConfig, MemoryPoolStats};
 use crate::memory_pressure_config::GLOBAL_MEMORY_PRESSURE_CONFIG;
 
 /// Enhanced wrapper for pooled objects with LRU access tracking and swap tracking
@@ -25,6 +27,43 @@ pub struct PooledObject<T> {
     allocation_tracker: Option<Arc<RwLock<SwapAllocationMetrics>>>,
     allocation_type: Option<String>,
     is_critical_operation: bool,
+}
+
+/// Configuration for object pool
+#[derive(Debug, Clone)]
+pub struct ObjectPoolConfig {
+    pub max_size: usize,
+    pub pre_allocate: bool,
+    pub high_water_mark_ratio: f64,
+    pub cleanup_threshold: f64,
+    pub logger_name: String,
+    pub common_config: MemoryPoolConfig,
+}
+
+impl Default for ObjectPoolConfig {
+    fn default() -> Self {
+        Self {
+            max_size: 1024 * 1024 * 50, // 50MB default
+            pre_allocate: true,
+            high_water_mark_ratio: 0.9,
+            cleanup_threshold: 0.8,
+            logger_name: "object_pool".to_string(),
+            common_config: MemoryPoolConfig::default(),
+        }
+    }
+}
+
+impl From<MemoryPoolConfig> for ObjectPoolConfig {
+    fn from(config: MemoryPoolConfig) -> Self {
+        Self {
+            max_size: config.max_size,
+            pre_allocate: config.pre_allocate,
+            high_water_mark_ratio: config.high_water_mark_ratio,
+            cleanup_threshold: config.cleanup_threshold,
+            logger_name: config.logger_name,
+            common_config: config,
+        }
+    }
 }
 
 impl<T> PooledObject<T> {
@@ -192,19 +231,26 @@ where
     shutdown_flag: Arc<AtomicBool>,
     pressure_monitor: Arc<RwLock<MemoryPressureMonitor>>,
     atomic_state: Arc<AtomicPoolState>, // Thread-safe pool state for race condition prevention
+    config: ObjectPoolConfig,
+    common_stats: MemoryPoolStats,
 }
 
 impl<T> ObjectPool<T>
 where
     T: Default + Debug + Send + 'static,
 {
-    pub fn new(max_size: usize) -> Self {
+    pub fn new(config: ObjectPoolConfig) -> Self {
+        // Validate configuration
+        if config.max_size == 0 {
+            panic!("Max size cannot be zero");
+        }
+
         Self {
             pool: Arc::new(Mutex::new(HashMap::new())),
             access_order: Arc::new(Mutex::new(BTreeMap::new())),
             next_id: CachePadded::new(AtomicU64::new(0)),
-            max_size,
-            logger: PerformanceLogger::new("memory_pool"),
+            max_size: config.max_size,
+            logger: PerformanceLogger::new(&config.logger_name),
             high_water_mark: CachePadded::new(AtomicUsize::new(0)),
             allocation_count: CachePadded::new(AtomicUsize::new(0)),
             last_cleanup_time: CachePadded::new(AtomicUsize::new(
@@ -216,7 +262,69 @@ where
             is_monitoring: AtomicBool::new(false),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             pressure_monitor: Arc::new(RwLock::new(MemoryPressureMonitor::new())),
-            atomic_state: Arc::new(AtomicPoolState::new(max_size)),
+            atomic_state: Arc::new(AtomicPoolState::new(config.max_size)),
+            config,
+            common_stats: MemoryPoolStats::default(),
+        }
+    }
+
+    /// Get pool statistics implementing MemoryPoolStats trait
+    pub fn get_stats(&self) -> MemoryPoolStats {
+        self.common_stats.clone()
+    }
+
+    /// Get current memory pressure level (0.0 to 1.0)
+    pub fn get_memory_pressure(&self) -> f64 {
+        let current_size = self.get_current_size();
+        if self.max_size == 0 {
+            0.0
+        } else {
+            current_size as f64 / self.max_size as f64
+        }
+    }
+
+    /// Allocate memory from the pool (implements MemoryPool trait)
+    pub fn allocate(&self, size: usize) -> Result<Box<[u8]>> {
+        // For object pool, we allocate based on object count, not byte size
+        // Convert byte size to approximate object count for allocation purposes
+        let object_size_estimate = std::mem::size_of::<T>();
+        let object_count = if object_size_estimate == 0 {
+            1 // Handle zero-sized types carefully
+        } else {
+            (size + object_size_estimate - 1) / object_size_estimate // Ceiling division
+        };
+
+        // Check if we can allocate without exceeding max size
+        let current_size = self.get_current_size();
+        if current_size + object_count > self.max_size {
+            return memory_pool_error!("Memory pool exhausted: current={}, max={}", current_size, self.max_size);
+        }
+
+        // Get object from pool or create new one
+        let obj = self.get().object.take().unwrap_or_else(T::default);
+        
+        // Update statistics
+        self.common_stats.allocated_bytes.fetch_add(size, Ordering::Relaxed);
+        self.common_stats.total_allocations.fetch_add(1, Ordering::Relaxed);
+        self.update_peak_usage();
+        
+        Ok(obj as Box<[u8]>) // SAFETY: Only valid if T is [u8]
+    }
+
+    /// Deallocate memory (implements MemoryPool trait)
+    pub fn deallocate(&self, _ptr: *mut u8, size: usize) {
+        // For object pool, we handle deallocation through PooledObject's Drop trait
+        self.common_stats.total_deallocations.fetch_add(1, Ordering::Relaxed);
+        self.common_stats.allocated_bytes.fetch_sub(size, Ordering::Relaxed);
+    }
+
+    /// Update peak usage statistics
+    fn update_peak_usage(&self) {
+        let current_allocated = self.common_stats.allocated_bytes.load(Ordering::Relaxed);
+        let peak_allocated = self.common_stats.peak_allocated_bytes.load(Ordering::Relaxed);
+        
+        if current_allocated > peak_allocated {
+            self.common_stats.peak_allocated_bytes.store(current_allocated, Ordering::Relaxed);
         }
     }
 

@@ -12,7 +12,9 @@
 
 pub mod atomic_state;
 pub mod buffer_pool;
+pub mod common;
 pub mod enhanced_manager;
+pub mod factory;
 pub mod hierarchical;
 pub mod lightweight;
 pub mod object_pool;
@@ -26,10 +28,12 @@ pub use buffer_pool::{
     acquire_buffer, get_global_buffer_pool, init_global_buffer_pool, BufferPool,
     BufferPoolConfig, BufferPoolStatsSnapshot, ZeroCopyBuffer,
 };
+pub use common::{MemoryPool, MemoryPoolConfig, MemoryPoolStats, MemoryPoolBuilder};
 pub use enhanced_manager::{
     AllocationStats, EnhancedManagerConfig, EnhancedMemoryPoolManager, MaintenanceResult,
     SmartPooledVec,
 };
+pub use factory::{MemoryPoolFactory, MemoryPoolType};
 pub use hierarchical::{
     FastObjectPool, HierarchicalMemoryPool, HierarchicalPoolConfig,
     PooledVec as HierarchicalPooledVec,
@@ -38,7 +42,7 @@ pub use lightweight::{
     ArenaHandle, ArenaStats, FastArena, LightweightMemoryPool, LightweightPoolStats,
     LightweightPooledObject, ScopedArena, ThreadLocalLightweightPool,
 };
-pub use object_pool::{MemoryPressureLevel, ObjectPool, PooledObject};
+pub use object_pool::{MemoryPressureLevel, ObjectPool, ObjectPoolConfig, PooledObject};
 pub use slab_allocator::{
     SizeClass, SizeClassStats, Slab, SlabAllocation, SlabAllocator, SlabAllocatorConfig,
     SlabAllocatorStats, SlabStats,

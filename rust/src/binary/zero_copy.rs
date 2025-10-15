@@ -3,94 +3,129 @@ use std::io::{Cursor, Read};
 use std::slice;
 
 use crate::mob::types::{MobInput, MobProcessResult};
+use super::conversions::{BinaryConversionError, conversion_utils};
 
-// Zero-copy deserialization - reads directly from memory without copying
-pub unsafe fn deserialize_mob_input_zero_copy(
-    data_ptr: *const u8,
-    data_len: usize,
-) -> Result<MobInput, String> {
-    if data_ptr.is_null() || data_len == 0 {
-        return Err("Null pointer or zero length data".to_string());
+// Trait defining the zero-copy conversion interface
+pub trait ZeroCopyConverter {
+    type Input;
+    type Output;
+    
+    /// Deserialize from raw pointer without copying data
+    unsafe fn deserialize(&self, data_ptr: *const u8, data_len: usize) -> Result<Self::Input, BinaryConversionError>;
+    
+    /// Serialize to provided buffer without copying data
+    unsafe fn serialize(
+        &self, 
+        data: &Self::Output, 
+        tick_count: u64, 
+        buffer_ptr: *mut u8, 
+        buffer_capacity: usize
+    ) -> Result<usize, BinaryConversionError>;
+    
+    /// Calculate required buffer size for serialization
+    fn calculate_serialized_size(&self, data: &Self::Output) -> usize;
+}
+
+// Factory for creating zero-copy converters
+pub struct ZeroCopyConverterFactory;
+
+impl ZeroCopyConverterFactory {
+    /// Get a mob zero-copy converter
+    pub fn mob_converter() -> impl ZeroCopyConverter<Input=MobInput, Output=MobProcessResult> {
+        MobZeroCopyConverter
     }
+}
 
-    let data_slice = unsafe { slice::from_raw_parts(data_ptr, data_len) };
-    let mut cur = Cursor::new(data_slice);
+// Mob zero-copy converter implementation
+struct MobZeroCopyConverter;
 
-    let tick_count = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
-    let num = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
-
-    let mut mobs = Vec::with_capacity(num);
-    for _ in 0..num {
-        let id = cur.read_u64::<LittleEndian>().map_err(|e| e.to_string())?;
-        let distance = cur.read_f32::<LittleEndian>().map_err(|e| e.to_string())?;
-        let passive = cur.read_u8().map_err(|e| e.to_string())? != 0;
-        let etype_len = cur.read_i32::<LittleEndian>().map_err(|e| e.to_string())? as usize;
-
-        let mut etype = String::new();
-        if etype_len > 0 {
-            let mut buf = vec![0u8; etype_len];
-            cur.read_exact(&mut buf).map_err(|e| e.to_string())?;
-            etype = String::from_utf8(buf).map_err(|e| e.to_string())?;
+impl ZeroCopyConverter for MobZeroCopyConverter {
+    type Input = MobInput;
+    type Output = MobProcessResult;
+    
+    unsafe fn deserialize(&self, data_ptr: *const u8, data_len: usize) -> Result<Self::Input, BinaryConversionError> {
+        if data_ptr.is_null() || data_len == 0 {
+            return Err(BinaryConversionError::InvalidData(
+                "Null pointer or zero length data".to_string()
+            ));
         }
 
-        mobs.push(crate::mob::types::MobData {
-            id,
-            distance,
-            entity_type: etype,
-            is_passive: passive,
-        });
+        let data_slice = slice::from_raw_parts(data_ptr, data_len);
+        let mut cur = Cursor::new(data_slice);
+
+        let tick_count = cur.read_u64::<LittleEndian>()?;
+        let num = cur.read_i32::<LittleEndian>()? as usize;
+
+        let mut mobs = Vec::with_capacity(num);
+        for _ in 0..num {
+            let id = cur.read_u64::<LittleEndian>()?;
+            let distance = cur.read_f32::<LittleEndian>()?;
+            let passive = cur.read_u8()? != 0;
+            let etype_len = cur.read_i32::<LittleEndian>()? as usize;
+
+            let etype = if etype_len > 0 {
+                let mut buf = vec![0u8; etype_len];
+                cur.read_exact(&mut buf)?;
+                String::from_utf8(buf)?
+            } else {
+                String::new()
+            };
+
+            mobs.push(crate::mob::types::MobData {
+                id,
+                distance,
+                entity_type: etype,
+                is_passive: passive,
+            });
+        }
+
+        Ok(MobInput { tick_count, mobs })
     }
 
-    Ok(MobInput { tick_count, mobs })
-}
+    unsafe fn serialize(
+        &self, 
+        result: &Self::Output, 
+        tick_count: u64, 
+        buffer_ptr: *mut u8, 
+        buffer_capacity: usize
+    ) -> Result<usize, BinaryConversionError> {
+        if buffer_ptr.is_null() || buffer_capacity == 0 {
+            return Err(BinaryConversionError::InvalidData(
+                "Null pointer or zero capacity buffer".to_string()
+            ));
+        }
 
-// Zero-copy serialization - writes directly to provided memory buffer
-pub unsafe fn serialize_mob_result_zero_copy(
-    result: &MobProcessResult,
-    tick_count: u64,
-    buffer_ptr: *mut u8,
-    buffer_capacity: usize,
-) -> Result<usize, String> {
-    if buffer_ptr.is_null() || buffer_capacity == 0 {
-        return Err("Null pointer or zero capacity buffer".to_string());
+        let buffer_slice = slice::from_raw_parts_mut(buffer_ptr, buffer_capacity);
+        let mut cur = Cursor::new(buffer_slice);
+
+        // Write tick count from the original input
+        cur.write_u64::<LittleEndian>(tick_count)?;
+
+        // Write disable list
+        let disable_len = result.mobs_to_disable_ai.len() as i32;
+        cur.write_i32::<LittleEndian>(disable_len)?;
+
+        for id in &result.mobs_to_disable_ai {
+            cur.write_u64::<LittleEndian>(*id)?;
+        }
+
+        // Write simplify list
+        let simplify_len = result.mobs_to_simplify_ai.len() as i32;
+        cur.write_i32::<LittleEndian>(simplify_len)?;
+
+        for id in &result.mobs_to_simplify_ai {
+            cur.write_u64::<LittleEndian>(*id)?;
+        }
+
+        Ok(cur.position() as usize)
     }
 
-    let buffer_slice = unsafe { slice::from_raw_parts_mut(buffer_ptr, buffer_capacity) };
-    let mut cur = Cursor::new(buffer_slice);
+    fn calculate_serialized_size(&self, result: &Self::Output) -> usize {
+        let disable_size = result.mobs_to_disable_ai.len() * 8;
+        let simplify_size = result.mobs_to_simplify_ai.len() * 8;
 
-    // Write tick count from the original input
-    cur.write_u64::<LittleEndian>(tick_count)
-        .map_err(|e| e.to_string())?;
-
-    // Write disable list
-    let disable_len = result.mobs_to_disable_ai.len() as i32;
-    cur.write_i32::<LittleEndian>(disable_len)
-        .map_err(|e| e.to_string())?;
-
-    for id in &result.mobs_to_disable_ai {
-        cur.write_u64::<LittleEndian>(*id)
-            .map_err(|e| e.to_string())?;
+        8 + 4 + disable_size + 4 + simplify_size
     }
-
-    // Write simplify list
-    let simplify_len = result.mobs_to_simplify_ai.len() as i32;
-    cur.write_i32::<LittleEndian>(simplify_len)
-        .map_err(|e| e.to_string())?;
-
-    for id in &result.mobs_to_simplify_ai {
-        cur.write_u64::<LittleEndian>(*id)
-            .map_err(|e| e.to_string())?;
-    }
-
-    Ok(cur.position() as usize)
-}
-
-// Calculate required buffer size for serialization
-pub fn calculate_serialized_size_mob_result(result: &MobProcessResult) -> usize {
-    let disable_size = result.mobs_to_disable_ai.len() * 8;
-    let simplify_size = result.mobs_to_simplify_ai.len() * 8;
-
-    8 + 4 + disable_size + 4 + simplify_size
 }
 
 #[cfg(test)]
@@ -105,16 +140,23 @@ mod tests {
             mobs_to_simplify_ai: vec![4, 5, 6],
         };
 
-        let required_size = calculate_serialized_size_mob_result(&test_result);
+        let converter = ZeroCopyConverterFactory::mob_converter();
+        let required_size = converter.calculate_serialized_size(&test_result);
         assert_eq!(required_size, 8 + 4 + 3 * 8 + 4 + 3 * 8);
 
         let mut buffer = vec![0u8; required_size];
         let test_tick_count = 12345u64;
         let bytes_written = unsafe {
-            serialize_mob_result_zero_copy(&test_result, test_tick_count, buffer.as_mut_ptr(), buffer.len())
-        }
-        .expect("Serialization failed");
+            converter.serialize(&test_result, test_tick_count, buffer.as_mut_ptr(), buffer.len())
+        }.expect("Serialization failed");
 
         assert_eq!(bytes_written, required_size);
+        
+        // Test deserialization
+        let deserialized = unsafe {
+            converter.deserialize(buffer.as_ptr(), buffer.len())
+        }.expect("Deserialization failed");
+        
+        assert_eq!(deserialized.tick_count, test_tick_count);
     }
 }

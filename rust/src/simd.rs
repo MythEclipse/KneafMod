@@ -1,4 +1,5 @@
 use crate::{
+    errors::RustError,
     performance_monitoring::record_operation,
     traits::Initializable,
     impl_initializable,
@@ -14,67 +15,8 @@ use jni::objects::JClass;
 use jni::sys::{jint, jstring};
 use jni::JNIEnv;
 
-/// Custom error type for SIMD operations
-#[derive(Debug, Clone, PartialEq)]
-pub enum SimdError {
-    /// Vector length mismatch in operations requiring equal lengths
-    InvalidInputLength {
-        expected: usize,
-        actual: usize,
-        operation: &'static str,
-    },
-    /// SIMD instruction set not supported on this hardware
-    UnsupportedInstructionSet {
-        required: &'static str,
-        available: String,
-    },
-    /// Memory allocation failed
-    MemoryAllocationFailed { size: usize, reason: String },
-    /// JNI operation failed
-    JniError {
-        operation: &'static str,
-        details: String,
-    },
-}
-
-impl std::fmt::Display for SimdError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SimdError::InvalidInputLength {
-                expected,
-                actual,
-                operation,
-            } => {
-                write!(
-                    f,
-                    "Invalid input length for {}: expected {}, got {}",
-                    operation, expected, actual
-                )
-            }
-            SimdError::UnsupportedInstructionSet {
-                required,
-                available,
-            } => {
-                write!(
-                    f,
-                    "Required SIMD instruction set '{}' not supported. Available: {}",
-                    required, available
-                )
-            }
-            SimdError::MemoryAllocationFailed { size, reason } => {
-                write!(f, "Memory allocation failed for size {}: {}", size, reason)
-            }
-            SimdError::JniError { operation, details } => {
-                write!(f, "JNI operation '{}' failed: {}", operation, details)
-            }
-        }
-    }
-}
-
-impl std::error::Error for SimdError {}
-
-/// Type alias for SIMD operation results
-pub type SimdResult<T> = Result<T, SimdError>;
+/// Type alias for SIMD operation results using standardized error type
+pub type SimdResult<T> = Result<T, RustError>;
 
 /// SIMD feature detection and optimization configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -541,7 +483,34 @@ impl SimdProcessor {
 
 /// SIMD-accelerated vector operations (scalar-first, safe implementations)
 pub mod vector_ops {
-    use super::{SimdError, SimdResult};
+    use crate::errors::{RustError, Result};
+    
+    #[derive(Debug)]
+    pub enum SimdError {
+        UnsupportedInstructionSet { instruction_set: String },
+        InvalidInputLength { expected: usize, actual: usize },
+        JniError { source: String },
+    }
+    
+    impl std::fmt::Display for SimdError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                SimdError::UnsupportedInstructionSet { instruction_set } => {
+                    write!(f, "Unsupported SIMD instruction set: {}", instruction_set)
+                }
+                SimdError::InvalidInputLength { expected, actual } => {
+                    write!(f, "Invalid input length: expected {}, got {}", expected, actual)
+                }
+                SimdError::JniError { source } => {
+                    write!(f, "JNI error: {}", source)
+                }
+            }
+        }
+    }
+    
+    impl std::error::Error for SimdError {}
+    
+    pub type SimdResult<T> = Result<T, SimdError>;
 
     /// Dot product (scalar implementation, always available)
     pub fn dot_product(a: &[f32], b: &[f32]) -> SimdResult<f32> {

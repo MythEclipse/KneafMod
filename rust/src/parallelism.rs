@@ -1,11 +1,14 @@
-use num_cpus;
+use crate::errors::{Result, RustError};
 use rayon;
 use std::sync::Arc;
 
 pub mod work_stealing;
 pub use work_stealing::WorkStealingScheduler;
+pub mod executor_factory;
+pub use executor_factory::{ParallelExecutor, ParallelExecutorFactory, ExecutorType, get_global_executor};
 
 /// Adaptive thread pool with real parallelism using Rayon
+#[deprecated(since = "0.8.0", note = "Please use ParallelExecutorFactory instead for new code")]
 pub struct AdaptiveThreadPool {
     thread_pool: Arc<rayon::ThreadPool>,
 }
@@ -19,7 +22,7 @@ impl AdaptiveThreadPool {
             .thread_name(|idx| format!("kneaf-worker-{}", idx))
             .build()
             .expect("Failed to create Rayon thread pool");
-            
+         
         AdaptiveThreadPool {
             thread_pool: Arc::new(thread_pool),
         }
@@ -77,13 +80,40 @@ lazy_static::lazy_static! {
 }
 
 /// Get the global adaptive thread pool
+#[deprecated(since = "0.8.0", note = "Please use get_global_executor() instead for new code")]
 pub fn get_adaptive_pool() -> &'static AdaptiveThreadPool {
     &GLOBAL_ADAPTIVE_POOL
 }
 
 /// Get the global Rayon thread pool for direct usage
+#[deprecated(since = "0.8.0", note = "Please use ParallelExecutor::thread_pool() instead for new code")]
 pub fn get_rayon_thread_pool() -> Arc<rayon::ThreadPool> {
     GLOBAL_ADAPTIVE_POOL.thread_pool().clone()
+}
+
+/// Create a default parallel executor (recommended for new code)
+pub fn create_default_executor() -> Result<ParallelExecutor> {
+    ParallelExecutorFactory::create_default()
+}
+
+/// Create a CPU-bound optimized executor (recommended for new code)
+pub fn create_cpu_bound_executor() -> Result<ParallelExecutor> {
+    ParallelExecutorFactory::create_cpu_bound()
+}
+
+/// Create an I/O-bound optimized executor (recommended for new code)
+pub fn create_io_bound_executor() -> Result<ParallelExecutor> {
+    ParallelExecutorFactory::create_io_bound()
+}
+
+/// Create a work-stealing optimized executor (recommended for new code)
+pub fn create_work_stealing_executor() -> Result<ParallelExecutor> {
+    ParallelExecutorFactory::create_work_stealing()
+}
+
+/// Create a sequential executor (single thread, recommended for new code)
+pub fn create_sequential_executor() -> Result<ParallelExecutor> {
+    ParallelExecutorFactory::create_sequential()
 }
 
 // Re-export performance monitoring under the `monitoring` name so older code

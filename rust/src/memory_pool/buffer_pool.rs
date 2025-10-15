@@ -3,7 +3,9 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+
 use crate::errors::{RustError, Result};
+use crate::memory_pool::common::{MemoryPool, MemoryPoolConfig, MemoryPoolStats};
 
 /// Configuration for the zero-copy buffer pool
 #[derive(Debug, Clone)]
@@ -12,6 +14,7 @@ pub struct BufferPoolConfig {
     pub buffer_size: usize,
     pub shard_count: usize,
     pub max_buffers_per_shard: usize,
+    pub common_config: MemoryPoolConfig,
 }
 
 impl Default for BufferPoolConfig {
@@ -21,6 +24,23 @@ impl Default for BufferPoolConfig {
             buffer_size: 64 * 1024, // 64KB default buffer size
             shard_count: 8,
             max_buffers_per_shard: 128,
+            common_config: MemoryPoolConfig::default(),
+        }
+    }
+}
+
+impl From<MemoryPoolConfig> for BufferPoolConfig {
+    fn from(config: MemoryPoolConfig) -> Self {
+        let buffer_size = config.max_size.min(64 * 1024);
+        let max_buffers = config.max_size / buffer_size;
+        let max_buffers_per_shard = max_buffers / 8;
+        
+        Self {
+            max_buffers,
+            buffer_size,
+            shard_count: 8,
+            max_buffers_per_shard,
+            common_config: config,
         }
     }
 }
@@ -135,8 +155,11 @@ pub struct BufferPool {
     shard_count: usize,
     config: BufferPoolConfig,
     stats: BufferPoolStats,
+    common_stats: MemoryPoolStats,
+    logger: PerformanceLogger,
 }
 
+/// Buffer pool specific statistics
 #[derive(Debug, Default)]
 struct BufferPoolStats {
     total_acquired: AtomicUsize,
@@ -145,9 +168,46 @@ struct BufferPoolStats {
     current_allocated: AtomicUsize,
 }
 
+/// Combined statistics for BufferPool (implements MemoryPoolStats)
+#[derive(Debug, Clone)]
+pub struct CombinedBufferPoolStats {
+    pub common_stats: MemoryPoolStats,
+    pub buffer_stats: BufferPoolStats,
+}
+
+impl MemoryPoolStats for CombinedBufferPoolStats {
+    fn allocated_bytes(&self) -> usize {
+        self.common_stats.allocated_bytes.load(Ordering::Relaxed)
+    }
+    
+    fn total_allocations(&self) -> usize {
+        self.common_stats.total_allocations.load(Ordering::Relaxed)
+    }
+    
+    fn total_deallocations(&self) -> usize {
+        self.common_stats.total_deallocations.load(Ordering::Relaxed)
+    }
+    
+    fn peak_allocated_bytes(&self) -> usize {
+        self.common_stats.peak_allocated_bytes.load(Ordering::Relaxed)
+    }
+    
+    fn current_usage_ratio(&self) -> f64 {
+        self.common_stats.current_usage_ratio
+    }
+}
+
 impl BufferPool {
     /// Create new buffer pool with configuration
     pub fn new(config: BufferPoolConfig) -> Arc<Self> {
+        // Validate configuration
+        if config.buffer_size == 0 {
+            panic!("Buffer size cannot be zero");
+        }
+        if config.shard_count == 0 {
+            panic!("Shard count cannot be zero");
+        }
+        
         let mut shards = Vec::with_capacity(config.shard_count);
         let max_per_shard = config.max_buffers / config.shard_count;
 
@@ -160,7 +220,29 @@ impl BufferPool {
             shard_count: config.shard_count,
             config,
             stats: BufferPoolStats::default(),
+            common_stats: MemoryPoolStats::default(),
+            logger: PerformanceLogger::new(&config.common_config.logger_name),
         })
+    }
+
+    /// Get buffer pool statistics
+    pub fn get_stats(&self) -> CombinedBufferPoolStats {
+        CombinedBufferPoolStats {
+            common_stats: self.common_stats.clone(),
+            buffer_stats: self.stats.clone(),
+        }
+    }
+
+    /// Get current memory pressure level (0.0 to 1.0)
+    pub fn get_memory_pressure(&self) -> f64 {
+        let current_allocated = self.stats.current_allocated.load(Ordering::Relaxed);
+        let max_possible = self.config.max_buffers * self.config.buffer_size;
+        
+        if max_possible == 0 {
+            0.0
+        } else {
+            current_allocated as f64 / max_possible as f64
+        }
     }
 
     /// Get shard index for current thread
@@ -234,8 +316,8 @@ impl BufferPool {
         Ok(())
     }
 
-    /// Get pool statistics
-    pub fn get_stats(&self) -> BufferPoolStatsSnapshot {
+    /// Get legacy buffer pool statistics (for backward compatibility)
+    pub fn get_legacy_stats(&self) -> BufferPoolStatsSnapshot {
         BufferPoolStatsSnapshot {
             total_acquired: self.stats.total_acquired.load(Ordering::Relaxed),
             total_returned: self.stats.total_returned.load(Ordering::Relaxed),

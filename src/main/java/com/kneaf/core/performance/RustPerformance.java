@@ -158,7 +158,9 @@ public class RustPerformance {
                 throw new RuntimeException("Rust performance initialization failed");
             }
 
+            // Mark the system as initialized so callers gating on isInitialized() proceed
             RustPerformanceBase.setMonitoringStartTime(System.currentTimeMillis());
+            RustPerformanceBase.setInitialized(true);
             LOGGER.info("Rust performance monitoring initialized successfully");
         } catch (Exception e) {
             RustPerformanceBase.setInitialized(false);
