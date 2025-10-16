@@ -328,8 +328,8 @@ pub struct SlabAllocator<T> {
 }
 
 impl<T> SlabAllocator<T> {
-    pub fn new(config: SlabAllocatorConfig) -> Self {
-        Self {
+    pub fn new(config: SlabAllocatorConfig) -> Arc<Self> {
+        Arc::new(Self {
             slabs: HashMap::new(),
             _phantom: PhantomData,
             current_slab: HashMap::new(),
@@ -337,7 +337,7 @@ impl<T> SlabAllocator<T> {
             logger: PerformanceLogger::new(&config.common_config.logger_name),
             lock: RwLock::new(()),
             common_stats: MemoryPoolStats::default(),
-        }
+        })
     }
 
     /// Get pool statistics implementing MemoryPoolStats trait

@@ -69,13 +69,13 @@ macro_rules! jni_try {
     };
 }
 
-/// Macro for creating error byte arrays for JNI
+/// Macro for creating error JNI strings
 #[macro_export]
-macro_rules! jni_error_bytes {
+macro_rules! jni_error_string {
     ($env:expr, $err:expr) => {{
         let error_msg = format!("{}", $err);
-        match $env.byte_array_from_slice(error_msg.as_bytes()) {
-            Ok(arr) => arr.into_raw(),
+        match $env.new_string(error_msg) {
+            Ok(s) => s.into_raw(),
             Err(_) => std::ptr::null_mut(),
         }
     }};

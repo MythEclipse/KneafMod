@@ -150,7 +150,7 @@ impl BufferShard {
 }
 
 /// Unified zero-copy buffer pool
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BufferPool {
     shards: Vec<Arc<BufferShard>>,
     shard_count: usize,
@@ -158,6 +158,49 @@ pub struct BufferPool {
     stats: BufferPoolStats,
     common_stats: MemoryPoolStats,
     logger: PerformanceLogger,
+}
+
+impl MemoryPool for BufferPool {
+    fn new(config: MemoryPoolConfig) -> Self {
+        let buffer_config = BufferPoolConfig::from(config);
+        let mut shards = Vec::with_capacity(buffer_config.shard_count);
+        let max_per_shard = buffer_config.max_buffers / buffer_config.shard_count;
+
+        for _ in 0..buffer_config.shard_count {
+            shards.push(Arc::new(BufferShard::new(max_per_shard, buffer_config.buffer_size)));
+        }
+
+        Self {
+            shards,
+            shard_count: buffer_config.shard_count,
+            config: buffer_config.clone(),
+            stats: BufferPoolStats::default(),
+            common_stats: MemoryPoolStats::default(),
+            logger: PerformanceLogger::new(&buffer_config.common_config.logger_name),
+        }
+    }
+
+    fn allocate(&self, size: usize) -> Result<Box<[u8]>> {
+        if size > self.config.buffer_size {
+            return Err(RustError::BufferError(format!("Allocation size {} exceeds buffer size {}", size, self.config.buffer_size)));
+        }
+        let temp_self = self.clone();
+        let arc_self = Arc::new(temp_self);
+        let buffer = arc_self.acquire_buffer()?;
+        Ok(buffer.to_vec().into_boxed_slice())
+    }
+
+    fn deallocate(&self, _ptr: *mut u8, _size: usize) {
+        // Deallocation is handled by ZeroCopyBuffer's Drop implementation
+    }
+
+    fn get_stats(&self) -> MemoryPoolStats {
+        self.common_stats.clone()
+    }
+
+    fn get_memory_pressure(&self) -> f64 {
+        self.get_memory_pressure()
+    }
 }
 
 impl Clone for BufferPoolStats {

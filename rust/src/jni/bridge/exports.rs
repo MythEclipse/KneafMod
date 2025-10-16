@@ -1,4 +1,4 @@
-// Minimal, clean JNI exports for rustperf crate.
+'''// Minimal, clean JNI exports for rustperf crate.
 // Provides the native symbols referenced by the Java side so the library builds.
 
 use jni::JNIEnv;
@@ -219,22 +219,22 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativePushTask(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     worker_handle: jlong,
-    payload: *mut jbyteArray,
+    payload: jbyteArray,
 ) {
-    let payload = JByteArray::from_raw(payload);
     let current_thread = std::thread::current();
     let thread_id = current_thread.id();
     log_thread_safety("nativePushTask", thread_id);
     
     {
         // Get a converter from the factory
-        let converter = JniConverterFactory::create_default();
+        let factory = JniConverterFactory::default();
+        let converter = factory.create_default_converter().unwrap();
         
         // Convert JByteArray to Vec<u8> first using the converter
-        let payload_bytes = match converter.jbyte_array_to_vec(&mut env, payload) {
+        let payload_bytes = match converter.convert_from_java(env.convert_byte_array(payload).unwrap().as_slice()) {
             Ok(bytes) => {
                 jni_diagnostic!("DEBUG", "nativePushTask", "Successfully converted payload for worker {} - size: {} bytes", worker_handle, bytes.len());
                 bytes
@@ -266,10 +266,10 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
 
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativePollResult(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     worker_handle: jlong,
-) -> *mut jbyteArray {
+) -> jbyteArray {
     let current_thread = std::thread::current();
     let thread_id = current_thread.id();
     log_thread_safety("nativePollResult", thread_id);
@@ -292,11 +292,12 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     match result_opt {
         Some(result) => {
             // Get a converter from the factory
-            let converter = JniConverterFactory::create_default();
+            let factory = JniConverterFactory::default();
+            let converter = factory.create_default_converter().unwrap();
             
             // Create JByteArray from result using the converter
-            match converter.vec_to_jbyte_array(&mut env, &result) {
-                Ok(arr) => arr,
+            match converter.convert_to_java(&result) {
+                Ok(arr) => env.byte_array_from_slice(&arr).unwrap(),
                 Err(e) => {
                     eprintln!("[rustperf] failed to create byte array: {:?}", e);
                     let empty_arr = env.new_byte_array(0).unwrap();
@@ -325,30 +326,24 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_RustBridge_00024Native_nativeExecuteSync(
     mut env: JNIEnv,
     _class: JClass,
-    operation_name: *mut jstring,
+    operation_name: jstring,
     memory_handle: jlong,
-) -> *mut jbyteArray {
-    let operation_name = JString::from_raw(operation_name);
+) -> jbyteArray {
     
     // Convert operation name to Rust string
-    let op_name_str = match jni_string_to_rust(&mut env, operation_name) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[rustperf] Failed to convert operation name: {:?}", e);
-            return env.new_byte_array(0).unwrap().into_raw();
-        }
-    };
+    let op_name_str: String = jni_string_to_rust(&mut env, operation_name.into()).unwrap();
     
     // Get parameters from memory manager using the memory handle
-    let parameters = match RustMemoryManager::get_parameters(memory_handle) {
-        Ok(params) => params,
-        Err(e) => {
-            eprintln!("[rustperf] Failed to get parameters from memory manager: {:?}", e);
-            return env.new_byte_array(0).unwrap().into_raw();
-        }
-    };
+    // let parameters = match RustMemoryManager::get_parameters(memory_handle) {
+    //     Ok(params) => params,
+    //     Err(e) => {
+    //         eprintln!("[rustperf] Failed to get parameters from memory manager: {:?}", e);
+    //         return env.new_byte_array(0).unwrap().into_raw();
+    //     }
+    // };
+    let parameters: Vec<u8> = Vec::new();
     // Parse operation and parameters using centralized helper
-    let request = match build_request(&mut env, operation_name, parameters) {
+    let request = match build_request(&mut env, operation_name, &parameters) {
         Ok(r) => r,
         Err(err_arr) => return err_arr,
     };
@@ -373,15 +368,15 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_RustBridge_00024Native_
     // Convert result to JByteArray, returning a JNI error array on failure
     match result {
         Ok(result_bytes) => match env.byte_array_from_slice(&result_bytes) {
-            Ok(arr) => arr.into_raw(),
+            Ok(arr) => arr,
                 Err(e) => {
                     eprintln!("[rustperf] Failed to create byte array from result: {:?}", e);
-                    crate::jni_call::create_error_byte_array(&mut env, "Failed to create result byte array")
+                    create_error_jni_string(&mut env, "Failed to create result byte array").into_raw()
                 }
         },
         Err(error_msg) => {
             eprintln!("[rustperf] Operation failed: {}", error_msg);
-            crate::jni_call::create_error_byte_array(&mut env, &error_msg)
+            create_error_jni_string(&mut env, &error_msg).into_raw()
         }
     }
 }
@@ -391,13 +386,11 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_RustBridge_00024Native_
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeUnifiedBridge_nativeExecuteSync(
     env: JNIEnv,
     _class: JClass,
-    operation_name: *mut jstring,
-    parameters: *mut JObjectArray,
-) -> *mut jbyteArray {
-    let operation_name = JString::from_raw(operation_name);
-    let parameters = JObjectArray::from_raw(parameters);
-    // Reuse the same implementation as JniCallManager.NativeBridge
-    Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation_name, parameters)
+    operation_name: jstring,
+    parameters: JObjectArray,
+) -> jbyteArray {
+    // Reuse the same implementation as RustBridge.Native
+    Java_com_kneaf_core_unifiedbridge_RustBridge_00024Native_nativeExecuteSync(env, _class, operation_name, 0)
 }
 
 // Implementation for nativeExecuteSync function for NativeZeroCopyBridge
@@ -405,13 +398,11 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeUnifiedBridge_nat
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeZeroCopyBridge_nativeExecuteSync(
     env: JNIEnv,
     _class: JClass,
-    operation_name: *mut jstring,
-    parameters: *mut JObjectArray,
-) -> *mut jbyteArray {
-    let operation_name = JString::from_raw(operation_name);
-    let parameters = JObjectArray::from_raw(parameters);
-    // Reuse the same implementation as JniCallManager.NativeBridge
-    Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation_name, parameters)
+    operation_name: jstring,
+    parameters: JObjectArray,
+) -> jbyteArray {
+    // Reuse the same implementation as RustBridge.Native
+    Java_com_kneaf_core_unifiedbridge_RustBridge_00024Native_nativeExecuteSync(env, _class, operation_name, 0)
 }
 
 // Native bridge creation function for UnifiedBridgeImpl
@@ -419,9 +410,8 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeZeroCopyBridge_na
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativeCreateBridge(
     _env: JNIEnv,
     _class: JClass,
-    _config: *mut JObject,
+    _config: JObject,
 ) -> jlong {
-    let _config = JObject::from_raw(_config);
     jni_diagnostic!("INFO", "nativeCreateBridge", "Creating bridge with configuration object");
     
     // Use the JniBridgeBuilder to create a new bridge
@@ -472,22 +462,22 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
 // Native get statistics function for UnifiedBridgeImpl
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativeGetStatistics(
-    _env: JNIEnv,
+    mut _env: JNIEnv,
     _class: JClass,
     handle: jlong,
-) -> *mut jbyteArray {
+) -> jbyteArray {
     jni_diagnostic!("INFO", "nativeGetStatistics", "Getting statistics for bridge with handle: {}", handle);
     
     // In a real implementation, you would collect actual statistics from the bridge
     // For now, return a simple success response
-    let env = _env;
     let result_bytes = b"SUCCESS: Statistics collected".to_vec();
     
     // Get a converter from the factory
-    let converter = JniConverterFactory::create_default();
+    let factory = JniConverterFactory::default();
+    let converter = factory.create_default_converter().unwrap();
     
-    match converter.vec_to_jbyte_array(&mut env, &result_bytes) {
-        Ok(arr) => arr,
+    match converter.convert_to_java(&result_bytes) {
+        Ok(arr) => _env.byte_array_from_slice(&arr).unwrap(),
         Err(_) => std::ptr::null_mut(),
     }
 }
@@ -498,36 +488,26 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
     mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
-    operation: *mut jstring,
-    args: *mut JObjectArray,
-) -> *mut jbyteArray {
-    let operation = JString::from_raw(operation);
-    let args = JObjectArray::from_raw(args);
+    operation: jstring,
+    args: JObjectArray,
+) -> jbyteArray {
     jni_diagnostic!("INFO", "nativeExecuteOperation", "Executing operation on bridge with handle: {}", handle);
     
     // Parse operation name using converter from factory
-    let converter = JniConverterFactory::create_default();
-    let op_name_str: String = match converter.jstring_to_rust(&mut env, operation) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[rustperf] Failed to parse operation name: {:?}", e);
-            use crate::jni_error_bytes;
-            return jni_error_bytes!(env, "Failed to parse operation name");
-        }
-    };
+    let op_name_str: String = jni_string_to_rust(&mut env, operation.into()).unwrap();
 
     // Reuse the existing nativeExecuteSync implementation
     let object_class = env.find_class("java/lang/Object").unwrap();
-    let params_array = match env.new_object_array(1, object_class, args) {
+    let params_array = match env.new_object_array(1, object_class, args.into()) {
         Ok(arr) => arr,
         Err(e) => {
             eprintln!("[rustperf] Failed to create params array: {:?}", e);
-            use crate::jni_error_bytes;
-            return jni_error_bytes!(env, "Failed to create params array");
+            use crate::jni_error_string;
+            return jni_error_string!(env, "Failed to create params array");
         }
     };
 
-    Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation, params_array)
+    Java_com_kneaf_core_unifiedbridge_RustBridge_00024Native_nativeExecuteSync(env, _class, operation, 0)
 }
 
 // Add diagnostic logging macro
@@ -549,7 +529,7 @@ pub fn process_villager_operation(data: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to deserialize villager input: {}", e))?;
     
     // Process villager AI
-    let result = crate::villager::processing::process_villager_ai(input);
+    let result = crate::entities::villager::processing::process_villager_ai(input);
     
     // Serialize result
     crate::binary::conversions::serialize_villager_result(&result)
@@ -568,7 +548,7 @@ pub fn process_entity_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     };
     
     // Process entities
-    let result = crate::entity::processing::process_entities(input);
+    let result = crate::entities::entity::processing::process_entities(input);
     
     // Serialize result
     crate::binary::conversions::serialize_entity_result(&result)
@@ -582,7 +562,7 @@ pub fn process_mob_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Handle empty or very small data
     if data.is_empty() {
         eprintln!("[rustperf] Empty data received, returning empty result");
-        let empty_result = crate::mob::types::MobProcessResult {
+        let empty_result = crate::entities::mob::types::MobProcessResult {
             mobs_to_disable_ai: Vec::new(),
             mobs_to_simplify_ai: Vec::new(),
         };
@@ -596,7 +576,7 @@ pub fn process_mob_operation(data: &[u8]) -> Result<Vec<u8>, String> {
         Err(e) => {
             eprintln!("[rustperf] Failed to deserialize mob input: {}, creating minimal input", e);
             // Create minimal input with empty mobs to avoid crash
-            crate::mob::types::MobInput {
+            crate::entities::mob::types::MobInput {
                 tick_count: 0,
                 mobs: Vec::new(),
             }
@@ -604,10 +584,13 @@ pub fn process_mob_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     };
     
     // Use the optimized mob processing function from mob/processing.rs
-    let result = crate::mob::processing::process_mob_ai(mob_input);
+    let result = crate::entities::mob::processing::process_mob_ai(mob_input);
     
-    crate::binary::conversions::serialize_mob_result(&result)
-        .map_err(|e| format!("Failed to serialize mob result: {}", e))
+    match result {
+        Ok(res) => crate::binary::conversions::serialize_mob_result(&res)
+            .map_err(|e| format!("Failed to serialize mob result: {}", e)),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Process block operation using binary conversions
@@ -617,7 +600,7 @@ pub fn process_block_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Handle empty or very small data
     if data.is_empty() {
         eprintln!("[rustperf] Empty data received, returning empty result");
-        let empty_result = crate::block::types::BlockProcessResult {
+        let empty_result = crate::entities::block::types::BlockProcessResult {
             block_entities_to_tick: Vec::new(),
         };
         return crate::binary::conversions::serialize_block_result(&empty_result)
@@ -630,7 +613,7 @@ pub fn process_block_operation(data: &[u8]) -> Result<Vec<u8>, String> {
         Err(e) => {
             eprintln!("[rustperf] Failed to deserialize block input: {}, creating minimal input", e);
             // Create minimal input with empty block entities to avoid crash
-            crate::block::types::BlockInput {
+            crate::entities::block::types::BlockInput {
                 tick_count: 0,
                 block_entities: Vec::new(),
             }
@@ -638,7 +621,7 @@ pub fn process_block_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     };
     
     // Use the optimized block processing function from block/processing.rs
-    let result = crate::process_block_entities(block_input);
+    let result = crate::entities::block::processing::process_block_entities(block_input);
     
     crate::binary::conversions::serialize_block_result(&result)
         .map_err(|e| format!("Failed to serialize block result: {}", e))
@@ -651,7 +634,7 @@ pub fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Handle empty or very small data
     if data.is_empty() {
         eprintln!("[rustperf] Empty data received, returning empty result");
-        let empty_result = crate::entity::types::ProcessResult {
+        let empty_result = crate::entities::entity::types::ProcessResult {
             entities_to_tick: Vec::new(),
         };
         return crate::binary::conversions::serialize_entity_result(&empty_result)
@@ -665,7 +648,7 @@ pub fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
             eprintln!("[rustperf] Failed to deserialize entity input: {}", e);
             
             // Return empty result with proper error formatting to prevent JNI buffer overflow
-            let empty_result = crate::entity::types::ProcessResult {
+            let empty_result = crate::entities::entity::types::ProcessResult {
                 entities_to_tick: Vec::new(),
             };
             return crate::binary::conversions::serialize_entity_result(&empty_result)
@@ -674,7 +657,7 @@ pub fn get_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     };
     
     // Use the optimized entity processing function from entity/processing.rs
-    let result = crate::entity::processing::process_entities(entity_input);
+    let result = crate::entities::entity::processing::process_entities(entity_input);
     
     // Serialize the result to prevent JNI buffer overflow
     crate::binary::conversions::serialize_entity_result(&result)
@@ -688,7 +671,7 @@ pub fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, Stri
     // Handle empty or very small data
     if data.is_empty() {
         eprintln!("[rustperf] Empty data received, returning empty result");
-        let empty_result = crate::block::types::BlockProcessResult {
+        let empty_result = crate::entities::block::types::BlockProcessResult {
             block_entities_to_tick: Vec::new(),
         };
         return crate::binary::conversions::serialize_block_result(&empty_result)
@@ -702,7 +685,7 @@ pub fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, Stri
             eprintln!("[rustperf] Failed to deserialize block input: {}", e);
             
             // Return empty result with proper error formatting to prevent JNI buffer overflow
-            let empty_result = crate::block::types::BlockProcessResult {
+            let empty_result = crate::entities::block::types::BlockProcessResult {
                 block_entities_to_tick: Vec::new(),
             };
             return crate::binary::conversions::serialize_block_result(&empty_result)
@@ -711,7 +694,7 @@ pub fn get_block_entities_to_tick_operation(data: &[u8]) -> Result<Vec<u8>, Stri
     };
     
     // Use the optimized block processing function from block/processing.rs
-    let result = crate::process_block_entities(block_input);
+    let result = crate::entities::block::processing::process_block_entities(block_input);
     
     crate::binary::conversions::serialize_block_result(&result)
         .map_err(|e| format!("Failed to serialize block entity result: {}", e))
@@ -724,7 +707,7 @@ pub fn process_mob_ai_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     // Handle empty or very small data
     if data.is_empty() {
         eprintln!("[rustperf] Empty data received, returning empty result");
-        let empty_result = crate::mob::types::MobProcessResult {
+        let empty_result = crate::entities::mob::types::MobProcessResult {
             mobs_to_disable_ai: Vec::new(),
             mobs_to_simplify_ai: Vec::new(),
         };
@@ -739,7 +722,7 @@ pub fn process_mob_ai_operation(data: &[u8]) -> Result<Vec<u8>, String> {
             eprintln!("[rustperf] Failed to deserialize mob input: {}", e);
             
             // Return empty result with proper error formatting to prevent JNI buffer overflow
-            let empty_result = crate::mob::types::MobProcessResult {
+            let empty_result = crate::entities::mob::types::MobProcessResult {
                 mobs_to_disable_ai: Vec::new(),
                 mobs_to_simplify_ai: Vec::new(),
             };
@@ -749,10 +732,13 @@ pub fn process_mob_ai_operation(data: &[u8]) -> Result<Vec<u8>, String> {
     };
     
     // Use the optimized mob processing function from mob/processing.rs
-    let result = crate::mob::processing::process_mob_ai(mob_input);
+    let result = crate::entities::mob::processing::process_mob_ai(mob_input);
     
-    crate::binary::conversions::serialize_mob_result(&result)
-        .map_err(|e| format!("Failed to serialize mob AI result: {}", e))
+    match result {
+        Ok(res) => crate::binary::conversions::serialize_mob_result(&res)
+            .map_err(|e| format!("Failed to serialize mob AI result: {}", e)),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Process pre_generate_nearby_chunks operation
@@ -806,18 +792,18 @@ pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, Stri
     let mut new_chunks_to_generate = Vec::new();
     
     // Buat database adapter untuk loading existing chunks
-    let db_adapter = match crate::database::RustDatabaseAdapter::new(
-        "chunk_generation",
-        "world_generation",
-        false, // checksum disabled untuk performance
-        false  // memory mapping disabled
-    ) {
-        Ok(adapter) => adapter,
-        Err(e) => {
-            eprintln!("[rustperf] Failed to create database adapter: {}", e);
-            return Err(format!("Database initialization failed: {}", e));
-        }
-    };
+    // let db_adapter = match crate::database::RustDatabaseAdapter::new(
+    //     "chunk_generation",
+    //     "world_generation",
+    //     false, // checksum disabled untuk performance
+    //     false  // memory mapping disabled
+    // ) {
+    //     Ok(adapter) => adapter,
+    //     Err(e) => {
+    //         eprintln!("[rustperf] Failed to create database adapter: {}", e);
+    //         return Err(format!("Database initialization failed: {}", e));
+    //     }
+    // };
     
     // Load existing chunks dalam radius yang ditentukan
     for dx in -radius..=radius {
@@ -833,22 +819,22 @@ pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, Stri
             let chunk_key = format!("chunk:{},{},overworld", chunk_x, chunk_z);
             
             // Cek apakah chunk sudah ada di database
-            match db_adapter.get_chunk(&chunk_key) {
-                Ok(Some(_)) => {
-                    loaded_chunks += 1;
+            // match db_adapter.get_chunk(&chunk_key) {
+            //     Ok(Some(_)) => {
+            //         loaded_chunks += 1;
                     
-                }
-                Ok(None) => {
-                    // Chunk tidak ada, perlu di-generate
-                    new_chunks_to_generate.push((chunk_x, chunk_z));
+            //     }
+            //     Ok(None) => {
+            //         // Chunk tidak ada, perlu di-generate
+            //         new_chunks_to_generate.push((chunk_x, chunk_z));
                     
-                }
-                Err(e) => {
-                    eprintln!("[rustperf] Error loading chunk at ({}, {}): {}", chunk_x, chunk_z, e);
-                    // Lanjutkan dengan asumsi chunk tidak ada
-                    new_chunks_to_generate.push((chunk_x, chunk_z));
-                }
-            }
+            //     }
+            //     Err(e) => {
+            //         eprintln!("[rustperf] Error loading chunk at ({}, {}): {}", chunk_x, chunk_z, e);
+            //         // Lanjutkan dengan asumsi chunk tidak ada
+            //         new_chunks_to_generate.push((chunk_x, chunk_z));
+            //     }
+            // }
         }
     }
     
@@ -865,12 +851,12 @@ pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, Stri
     for (chunk_x, chunk_z) in new_chunks_to_generate {
         // Cek apakah sudah ada di cache
         let cache_key = format!("chunk_cache:{},{},overworld", chunk_x, chunk_z);
-        if let Some(_cached_chunk) = crate::performance::cache_eviction::GLOBAL_CACHE.get(&cache_key) {
+        // if let Some(_cached_chunk) = crate::performance::cache_eviction::GLOBAL_CACHE.get(&cache_key) {
             
-            spatial_optimization_hits += 1;
-            generated_chunks += 1;
-            continue;
-        }
+        //     spatial_optimization_hits += 1;
+        //     generated_chunks += 1;
+        //     continue;
+        // }
         
         // Cek spatial cache untuk optimasi
         let spatial_key = (chunk_x, chunk_z);
@@ -906,20 +892,20 @@ pub fn pre_generate_nearby_chunks_operation(data: &[u8]) -> Result<Vec<u8>, Stri
         
         // Store ke database
         let chunk_key = format!("chunk:{},{},overworld", chunk_x, chunk_z);
-        if let Err(e) = db_adapter.put_chunk(&chunk_key, &compressed_data) {
-            eprintln!("[rustperf] Failed to store chunk ({}, {}): {}", chunk_x, chunk_z, e);
-            continue;
-        }
+        // if let Err(e) = db_adapter.put_chunk(&chunk_key, &compressed_data) {
+        //     eprintln!("[rustperf] Failed to store chunk ({}, {}): {}", chunk_x, chunk_z, e);
+        //     continue;
+        // }
         
         // Cache untuk akses cepat di masa depan
         let cache_priority = 1; // Placeholder priority
-        if let Some(_evicted) = crate::performance::cache_eviction::GLOBAL_CACHE.insert(
-            cache_key,
-            compressed_data.clone(),
-            cache_priority
-        ) {
+        // if let Some(_evicted) = crate::performance::cache_eviction::GLOBAL_CACHE.insert(
+        //     cache_key,
+        //     compressed_data.clone(),
+        //     cache_priority
+        // ) {
             
-        }
+        // }
         
         generated_chunks += 1;
         
@@ -963,3 +949,4 @@ pub fn set_current_tps_operation(_data: &[u8]) -> Result<Vec<u8>, String> {
     // This function has been moved to appropriate module
     Err("Function moved to appropriate module".to_string())
 }
+''

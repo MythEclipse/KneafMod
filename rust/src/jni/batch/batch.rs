@@ -129,13 +129,22 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_exec
     start_time: jlong,
 ) -> jbyteArray {
     // Convert Java batch name to Rust string
-    let batch_name_str = match utils::jni_string_to_rust(&mut env, batch_name) {
+    let batch_name_str = match jni_utils::jni_string_to_rust(&mut env, batch_name) {
         Ok(s) => s,
-        Err(e) => return utils::create_error_jni_string(&mut env, &format!("Failed to convert batch name: {}", e)).map_err(|e| RustError::JniError(e.to_string()))?,
+        Err(e) => {
+            let error_msg = format!("Failed to convert batch name: {}", e);
+            return match jni_utils::create_error_jni_string(&mut env, &error_msg) {
+                Ok(jstr) => jstr,
+                Err(_) => std::ptr::null_mut(),
+            };
+        }
     };
     
     if batch_name_str.is_empty() {
-        return utils::create_error_jni_string(&mut env, "Invalid batch name").map_err(|e| RustError::JniError(e.to_string()))?
+        return match jni_utils::create_error_jni_string(&mut env, "Invalid batch name") {
+            Ok(jstr) => jstr,
+            Err(_) => std::ptr::null_mut(),
+        };
     }
 
     // Convert Java operations array to Rust Vec<Vec<u8>>
@@ -143,7 +152,10 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_exec
         Ok(len) => len,
         Err(e) => {
             log::error!("Failed to get operations array length: {:?}", e);
-            return utils::create_error_jni_string(&mut env, "Failed to get operations array length").map_err(|e| RustError::JniError(e.to_string()))?
+            return match jni_utils::create_error_jni_string(&mut env, "Failed to get operations array length") {
+                Ok(jstr) => jstr,
+                Err(_) => std::ptr::null_mut(),
+            };
         }
     };
 
@@ -154,17 +166,25 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_exec
             Ok(obj) => obj,
             Err(e) => {
                 log::error!("Failed to get operation {}: {:?}", i, e);
-                return utils::create_error_jni_string(&mut env, &format!("Failed to get operation {}", i)).map_err(|e| RustError::JniError(e.to_string()))?
+                let error_msg = format!("Failed to get operation {}", i);
+                return match jni_utils::create_error_jni_string(&mut env, &error_msg) {
+                    Ok(jstr) => jstr,
+                    Err(_) => std::ptr::null_mut(),
+                };
             }
         };
 
         // Convert JObject to JByteArray and then to Vec<u8>
         let byte_array: JByteArray = operation_obj.into();
-        match env.convert_byte_array(&byte_array) {
+        match env.convert_byte_array(byte_array) {
             Ok(bytes) => operations.push(bytes),
             Err(e) => {
                 log::error!("Failed to convert operation {}: {:?}", i, e);
-                return utils::create_error_jni_string(&mut env, &format!("Failed to convert operation {}", i)).map_err(|e| RustError::JniError(e.to_string()))?
+                let error_msg = format!("Failed to convert operation {}", i);
+                return match jni_utils::create_error_jni_string(&mut env, &error_msg) {
+                    Ok(jstr) => jstr,
+                    Err(_) => std::ptr::null_mut(),
+                };
             }
         }
     }
@@ -176,13 +196,19 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_exec
                 Ok(arr) => arr.into_raw(),
                 Err(e) => {
                     log::error!("Failed to create result byte array: {:?}", e);
-                    utils::create_error_jni_string(&mut env, "Failed to create result byte array").map_err(|e| RustError::JniError(e.to_string()))?
+                    match jni_utils::create_error_jni_string(&mut env, "Failed to create result byte array") {
+                        Ok(jstr) => jstr,
+                        Err(_) => std::ptr::null_mut(),
+                    }
                 }
             }
         }
         Err(error_msg) => {
             log::error!("Batch processing failed: {}", error_msg);
-            utils::create_error_jni_string(&mut env, &error_msg.to_string()).map_err(|e| RustError::JniError(e.to_string()))?
+            match jni_utils::create_error_jni_string(&mut env, &error_msg.to_string()) {
+                Ok(jstr) => jstr,
+                Err(_) => std::ptr::null_mut(),
+            }
         }
     }
 }
@@ -353,22 +379,24 @@ fn parse_batch_operation(data: &[u8]) -> Result<(String, Vec<Vec<u8>>)> {
 /// Execute operation by name using existing processing functions
 fn execute_operation_by_name(operation_name: &str, parameters: &[Vec<u8>]) -> Result<Vec<u8>> {
     // Use the first parameter as the main data payload
-    let main_data: &[u8] = if parameters.is_empty() {
+    let main_data_bytes: &[u8] = if parameters.is_empty() {
         &[]
     } else {
         parameters[0].as_slice()
     };
 
+    let main_data = std::str::from_utf8(main_data_bytes).map_err(|e| RustError::ParseError(e.to_string()))?;
+
     match operation_name {
-        "processVillager" => process_villager_operation(main_data).map_err(|e| RustError::OperationFailed(e)),
-        "processEntity" => process_entity_operation(main_data).map_err(|e| RustError::OperationFailed(e)),
-        "processMob" => process_mob_operation(main_data).map_err(|e| RustError::OperationFailed(e)),
-        "processBlock" => process_block_operation(main_data).map_err(|e| RustError::OperationFailed(e)),
-        "get_entities_to_tick" => get_entities_to_tick_operation(main_data).map_err(|e| RustError::OperationFailed(e)),
-        "get_block_entities_to_tick" => get_block_entities_to_tick_operation(main_data).map_err(|e| RustError::OperationFailed(e)),
-        "process_mob_ai" => process_mob_ai_operation(main_data).map_err(|e| RustError::OperationFailed(e)),
-        "pre_generate_nearby_chunks" => pre_generate_nearby_chunks_operation(main_data).map_err(|e| RustError::OperationFailed(e)),
-        "set_current_tps" => set_current_tps_operation(main_data).map_err(|e| RustError::OperationFailed(e)),
+        "processVillager" => process_villager_operation(main_data).map(|s| s.into_bytes()).map_err(|e| RustError::OperationFailed(e.to_string())),
+        "processEntity" => process_entity_operation(main_data).map(|s| s.into_bytes()).map_err(|e| RustError::OperationFailed(e.to_string())),
+        "processMob" => process_mob_operation(main_data).map(|s| s.into_bytes()).map_err(|e| RustError::OperationFailed(e.to_string())),
+        "processBlock" => process_block_operation(main_data).map(|s| s.into_bytes()).map_err(|e| RustError::OperationFailed(e.to_string())),
+        "get_entities_to_tick" => get_entities_to_tick_operation(main_data).map(|s| s.into_bytes()).map_err(|e| RustError::OperationFailed(e.to_string())),
+        "get_block_entities_to_tick" => get_block_entities_to_tick_operation(main_data).map(|s| s.into_bytes()).map_err(|e| RustError::OperationFailed(e.to_string())),
+        "process_mob_ai" => process_mob_ai_operation(main_data).map(|s| s.into_bytes()).map_err(|e| RustError::OperationFailed(e.to_string())),
+        "pre_generate_nearby_chunks" => pre_generate_nearby_chunks_operation(main_data).map(|s| s.into_bytes()).map_err(|e| RustError::OperationFailed(e.to_string())),
+        "set_current_tps" => set_current_tps_operation(main_data).map(|s| s.into_bytes()).map_err(|e| RustError::OperationFailed(e.to_string())),
         _ => {
             eprintln!("[rustperf] Unknown batch operation: {}", operation_name);
             Err(RustError::InvalidOperationType {

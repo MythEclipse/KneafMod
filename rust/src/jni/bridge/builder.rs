@@ -40,11 +40,11 @@ impl JNIConnectionPool {
 
         // Remove and return an idle connection if found
         if let Some(&idx) = idle_connections.first() {
-            let conn = connections.remove(idx).clone();
-            let mut conn = conn.lock().unwrap();
+            let conn_arc = connections.remove(idx);
+            let mut conn = conn_arc.lock().unwrap();
             conn.reference_count += 1;
             conn.last_used = now;
-            connections.push(conn); // Put it back in the pool
+            connections.push(conn_arc.clone()); // Put it back in the pool
             return Ok(*next_id);
         }
 
@@ -125,9 +125,9 @@ impl JniBridgeBuilder {
     // Build the JNI connection pool
     pub fn build(self) -> JNIConnectionPool {
         let converter = if self.use_custom_converter {
-            JniConverterFactory::create_with_custom_error_handling()
+            JniConverterFactory::default().create_default_converter().unwrap()
         } else {
-            JniConverterFactory::create_default()
+            JniConverterFactory::default().create_default_converter().unwrap()
         };
 
         JNIConnectionPool {

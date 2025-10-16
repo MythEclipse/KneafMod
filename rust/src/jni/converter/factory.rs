@@ -46,7 +46,6 @@ impl JniConverter for DefaultJniConverter {
 
     fn vec_to_jbyte_array(&self, env: &mut JNIEnv, vec: &[u8]) -> Result<JByteArray> {
         env.byte_array_from_slice(vec)
-            .map(|arr| arr.into_raw())
             .map_err(|e| RustError::ConversionError(format!("Failed to convert Vec<u8> to JByteArray: {}", e)))
     }
 

@@ -2,6 +2,7 @@ use jni::JNIEnv;
 use jni::objects::{JObject, JString, JObjectArray, JByteArray};
 use jni::sys::jbyteArray;
 
+use crate::jni::converter::factory::JniConverter;
 use crate::jni_converter_factory::{JniConverter, JniConverterFactory};
 use crate::jni_errors::jni_error_bytes;
 use crate::jni_error_bytes;
@@ -17,9 +18,7 @@ pub struct JniRequest {
 /// not hold that borrow across the call site.
 pub fn build_request(env: &mut JNIEnv<'_>, operation: JString<'_>, parameters: JObjectArray<'_>) -> Result<JniRequest, jbyteArray> {
     // Get a default converter from the factory
-    let converter = JniConverterFactory::create_default();
-    
-    // Parse operation name using the converter
+    let converter = JniConverterFactory::default().create_default_converter().unwrap();
     let op_name: String = match converter.jstring_to_rust(env, operation) {
         Ok(s) => s,
         Err(e) => {
@@ -50,7 +49,7 @@ pub fn convert_jobject_to_bytes(env: &mut JNIEnv<'_>, obj: JObject<'_>) -> Resul
     let byte_array: JByteArray = obj.into();
     
     // Get a default converter from the factory
-    let converter = JniConverterFactory::create_default();
+    let converter = JniConverterFactory::default().create_default_converter().unwrap();
     
     match converter.jbyte_array_to_vec(env, byte_array) {
         Ok(bytes) => Ok(bytes),

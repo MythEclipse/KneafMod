@@ -148,9 +148,9 @@ where
     let pool = crate::jni_bridge_builder::GLOBAL_JNI_POOL.lock().unwrap();
     
     // Validate connection ID
-    if let Ok(_) = pool.release_connection(conn_id) {
+    if pool.remove_connection(&conn_id.to_string()) {
         // Connection exists, now get it back for use
-        if let Ok(_) = pool.get_connection() {
+        if let Some(_) = pool.get_connection(&conn_id.to_string()) {
             // In a real implementation, we would:
             // 1. Get the actual JNIEnv from the connection pool
             // 2. Execute the function with the JNIEnv
@@ -168,8 +168,8 @@ where
             let result = func(env);
             
             // Release connection back to pool
-            if let Err(e) = pool.release_connection(conn_id) {
-                eprintln!("[jni_bridge] Warning: Failed to release connection {}: {}", conn_id, e);
+            if !pool.remove_connection(&conn_id.to_string()) {
+                eprintln!("[jni_bridge] Warning: Failed to release connection {}", conn_id);
             }
             
             result

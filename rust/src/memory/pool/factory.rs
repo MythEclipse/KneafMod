@@ -89,7 +89,7 @@ impl MemoryPoolFactory {
                     common_config: config.clone(),
                 };
                 
-                let pool = ObjectPool::new(MemoryPoolConfig::from(object_config));
+                let pool = ObjectPool::new(object_config);
                 Ok(Box::new(pool))
             }
             
@@ -102,8 +102,8 @@ impl MemoryPoolFactory {
                     common_config: config.clone(),
                 };
 
-                let pool = SlabAllocator::new(slab_config);
-                Ok(Box::new(Arc::try_unwrap(pool).unwrap()))
+                let pool: Arc<SlabAllocator<u8>> = SlabAllocator::new(slab_config);
+                Ok(Box::new(pool))
             }
             
             MemoryPoolType::LightweightPool => {

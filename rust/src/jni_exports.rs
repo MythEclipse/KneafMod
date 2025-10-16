@@ -67,3 +67,18 @@ pub fn pre_generate_nearby_chunks_operation(_input: &str) -> Result<String, crat
 pub fn set_current_tps_operation(_input: &str) -> Result<String, crate::errors::RustError> {
     Ok("{\"tps_set\": true}".to_string())
 }
+
+fn execute_operation(main_data: &str, operation: &str) -> Result<String, RustError> {
+    match operation {
+        "process_villager" => process_villager_operation(main_data),
+        "process_entity" => process_entity_operation(main_data),
+        "process_mob" => process_mob_operation(main_data),
+        "process_block" => process_block_operation(main_data),
+        "get_entities_to_tick" => get_entities_to_tick_operation(main_data),
+        "get_block_entities_to_tick" => get_block_entities_to_tick_operation(main_data),
+        "process_mob_ai" => process_mob_ai_operation(main_data),
+        "pre_generate_nearby_chunks" => pre_generate_nearby_chunks_operation(main_data),
+        "set_current_tps" => set_current_tps_operation(main_data),
+        _ => Err(RustError::OperationFailed(format!("Unknown operation: {}", operation))),
+    }
+}
