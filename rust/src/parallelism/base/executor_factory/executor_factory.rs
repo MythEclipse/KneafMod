@@ -1,8 +1,13 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use async_trait::async_trait;
-use crate::config::performance_config::{PerformanceConfig, PerformanceMode};
+use crate::config::performance_config::{PerformanceConfig, WorkStealingConfig};
 use crate::parallelism::sequential::SequentialExecutor;
 use std::time::Duration;
+use std::collections::BinaryHeap;
+use std::cmp::Ordering;
+use std::time::Instant;
+use tokio::sync::Notify;
+use std::any::Any;
 
 /// Enum representing different types of parallel executors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +23,7 @@ pub enum ExecutorType {
 }
 
 #[async_trait]
-pub trait ParallelExecutor: Send + Sync {
+pub trait ParallelExecutor: Send + Sync + Any {
     /// Executes a function synchronously
     fn execute<F, R>(&self, f: F) -> R
     where
@@ -33,13 +38,51 @@ pub trait ParallelExecutor: Send + Sync {
 
     /// Gets the maximum number of concurrent tasks
     fn max_concurrent_tasks(&self) -> usize;
+
+    /// Executes a function with specified priority
+    fn execute_with_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static;
+}
+
+/// Priority levels for task execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TaskPriority {
+    Lowest,
+    Low,
+    Normal,
+    High,
+    Highest,
+}
+
+/// Task wrapper with priority metadata
+#[derive(Debug, Clone)]
+pub struct PrioritizedTask {
+    pub priority: TaskPriority,
+    pub task: Box<dyn FnOnce() -> Box<dyn Send + 'static> + Send + 'static>,
+    pub submission_time: Instant,
+    pub trace_id: Option<String>,
+}
+
+impl Ord for PrioritizedTask {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.priority.cmp(&self.priority)
+            .then_with(|| self.submission_time.cmp(&other.submission_time))
+    }
+}
+
+impl PartialOrd for PrioritizedTask {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// Enum for dynamic dispatch of parallel executors
 #[derive(Clone, Debug)]
 pub enum ParallelExecutorEnum {
     ThreadPool(Arc<ThreadPoolExecutor>),
-    WorkStealing(Arc<WorkStealingExecutor>),
+    WorkStealing(Arc<EnhancedWorkStealingExecutor>),
     Async(Arc<AsyncExecutor>),
     Sequential(Arc<SequentialExecutor>),
 }
@@ -56,6 +99,24 @@ impl ParallelExecutorEnum {
             ParallelExecutorEnum::WorkStealing(e) => e.execute(f),
             ParallelExecutorEnum::Async(e) => e.execute(f),
             ParallelExecutorEnum::Sequential(e) => e.execute(f),
+        }
+    }
+
+    /// Executes a function with specified priority
+    pub fn execute_with_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        match self {
+            ParallelExecutorEnum::ThreadPool(_) => {
+                panic!("Priority execution not supported by ThreadPool executor")
+            }
+            ParallelExecutorEnum::WorkStealing(e) => e.execute_with_priority(f, priority, trace_id),
+            ParallelExecutorEnum::Async(_) => {
+                panic!("Priority execution not supported by Async executor")
+            }
+            ParallelExecutorEnum::Sequential(e) => e.execute(f), // Fallback for sequential
         }
     }
 
@@ -122,6 +183,8 @@ pub struct ExecutorConfig {
 pub struct WorkStealingConfig {
     pub enabled: bool,
     pub queue_size: usize,
+    pub high_priority_ratio: f64,
+    pub worker_threads: Option<usize>,
 }
 
 /// Factory for creating different types of parallel executors
@@ -132,17 +195,7 @@ impl ParallelExecutorFactory {
     pub fn create_executor(executor_type: ExecutorType) -> ParallelExecutorEnum {
         match executor_type {
             ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(None))),
-            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new(None))),
-            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(None))),
-            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
-        }
-    }
-
-    /// Creates a new parallel executor enum of the specified type with default configuration
-    pub fn create_executor_enum(executor_type: ExecutorType) -> ParallelExecutorEnum {
-        match executor_type {
-            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(None))),
-            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new(None))),
+            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(EnhancedWorkStealingExecutor::new(None))),
             ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(None))),
             ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
         }
@@ -152,17 +205,7 @@ impl ParallelExecutorFactory {
     pub fn create_executor_with_config(executor_type: ExecutorType, config: &ExecutorConfig) -> ParallelExecutorEnum {
         match executor_type {
             ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(Some(config)))),
-            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new(Some(config)))),
-            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(Some(config)))),
-            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
-        }
-    }
-
-    /// Creates a new parallel executor enum with performance configuration
-    pub fn create_executor_enum_with_config(executor_type: ExecutorType, config: &ExecutorConfig) -> ParallelExecutorEnum {
-        match executor_type {
-            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(Some(config)))),
-            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new(Some(config)))),
+            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(EnhancedWorkStealingExecutor::new(Some(config)))),
             ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(Some(config)))),
             ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
         }
@@ -176,7 +219,7 @@ struct ThreadPoolExecutor {
 }
 
 impl ThreadPoolExecutor {
-    fn new() -> Self {
+    fn new(config: Option<&ExecutorConfig>) -> Self {
         let pool = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
         Self { pool }
     }
@@ -203,43 +246,198 @@ impl ParallelExecutor for ThreadPoolExecutor {
     fn max_concurrent_tasks(&self) -> usize {
         100
     }
+
+    fn execute_with_priority<F, R>(&self, _f: F, _priority: TaskPriority, _trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        panic!("Priority execution not supported by ThreadPoolExecutor")
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
-/// Work stealing executor implementation
+/// Enhanced Work stealing executor with priority support
 #[derive(Debug)]
-struct WorkStealingExecutor {
-    executor: rayon::ThreadPool,
+pub struct EnhancedWorkStealingExecutor {
+    base_executor: rayon::ThreadPool,
+    priority_queue: Arc<Mutex<BinaryHeap<PrioritizedTask>>>,
+    config: Arc<RwLock<WorkStealingConfig>>,
+    task_notify: Arc<Notify>,
+    is_running: Arc<std::sync::atomic::AtomicBool>,
+    worker_handles: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
 }
 
-impl WorkStealingExecutor {
-    fn new() -> Self {
-        let executor = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_cpus::get())
+impl EnhancedWorkStealingExecutor {
+    fn new(config: Option<&ExecutorConfig>) -> Self {
+        // Use CPU count for worker threads unless configured otherwise
+        let worker_threads = config.and_then(|c| c.work_stealing_config.as_ref().and_then(|ws| ws.worker_threads)).unwrap_or_else(|| num_cpus::get());
+        
+        let base_executor = rayon::ThreadPoolBuilder::new()
+            .num_threads(worker_threads)
             .build()
             .expect("Failed to create Rayon thread pool");
-        Self { executor }
+
+        let config = Arc::new(RwLock::new(config.map_or_else(
+            || WorkStealingConfig::default(),
+            |c| c.work_stealing_config.clone().unwrap_or_default()
+        )));
+
+        let priority_queue = Arc::new(Mutex::new(BinaryHeap::new()));
+        let task_notify = Arc::new(Notify::new());
+        let is_running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let worker_handles = Arc::new(Mutex::new(Vec::new()));
+
+        // Start priority worker threads based on CPU count
+        let queue_clone = priority_queue.clone();
+        let config_clone = config.clone();
+        let notify_clone = task_notify.clone();
+        let running_clone = is_running.clone();
+        let handles_clone = worker_handles.clone();
+        let base_executor_clone = base_executor.clone();
+
+        for _ in 0..num_cpus::get() {
+            let worker = std::thread::spawn(move || {
+                Self::priority_worker(
+                    queue_clone.clone(),
+                    config_clone.clone(),
+                    notify_clone.clone(),
+                    running_clone.clone(),
+                    base_executor_clone.clone()
+                );
+            });
+            handles_clone.lock().unwrap().push(worker);
+        }
+
+        Self {
+            base_executor,
+            priority_queue,
+            config,
+            task_notify,
+            is_running,
+            worker_handles,
+        }
+    }
+
+    fn priority_worker(
+        queue: Arc<Mutex<BinaryHeap<PrioritizedTask>>>,
+        config: Arc<RwLock<WorkStealingConfig>>,
+        notify: Arc<Notify>,
+        running: Arc<std::sync::atomic::AtomicBool>,
+        base_executor: rayon::ThreadPool,
+    ) {
+        while running.load(std::sync::atomic::Ordering::Relaxed) {
+            notify.notified().await;
+
+            let mut queue = queue.lock().unwrap();
+            let config = config.read().unwrap();
+
+            // Process high priority tasks first
+            while let Some(task) = queue.pop() {
+                // Execute through Rayon's work-stealing pool
+                base_executor.install(move || {
+                    let result = (task.task)();
+                    // In real implementation, handle result with tracing
+                    let _ = result;
+                });
+
+                // Check queue size limit
+                if queue.len() == 0 {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn get_priority_queue(&self) -> Arc<Mutex<BinaryHeap<PrioritizedTask>>> {
+        self.priority_queue.clone()
     }
 }
 
 #[async_trait]
-impl ParallelExecutor for WorkStealingExecutor {
+impl ParallelExecutor for EnhancedWorkStealingExecutor {
     fn execute<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.executor.install(f)
+        self.base_executor.install(f)
+    }
+
+    fn execute_with_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let boxed_task = Box::new(move || Box::new(f()) as Box<dyn Send + 'static>);
+        let prioritized_task = PrioritizedTask {
+            priority,
+            task: boxed_task,
+            submission_time: Instant::now(),
+            trace_id,
+        };
+
+        // Add to priority queue if not full
+        let queue_result = {
+            let mut queue = self.priority_queue.lock().unwrap();
+            let config = self.config.read().unwrap();
+            
+            if queue.len() < config.queue_size {
+                queue.push(prioritized_task);
+                self.task_notify.notify_one();
+                Ok(())
+            } else {
+                // If queue is full, execute directly through base executor
+                Err(())
+            }
+        };
+
+        match queue_result {
+            Ok(_) => {
+                // For synchronous execution, we need to wait for completion
+                // This is a simplification - in real async implementation would return a future
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                let task = move || {
+                    let result = f();
+                    sender.send(result).unwrap();
+                };
+                
+                self.base_executor.install(task);
+                receiver.recv().unwrap()
+            }
+            Err(_) => self.execute(f),
+        }
     }
 
     async fn shutdown(&self) {
+        self.is_running.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.task_notify.notify_one();
+
+        // Wait for queue to empty
+        while self.priority_queue.lock().unwrap().len() > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // Join worker threads
+        let handles = self.worker_handles.lock().unwrap();
+        for handle in handles.iter() {
+            let _ = handle.join();
+        }
     }
 
     fn running_tasks(&self) -> usize {
-        0
+        self.priority_queue.lock().unwrap().len() + self.base_executor.current_num_threads()
     }
 
     fn max_concurrent_tasks(&self) -> usize {
-        self.executor.current_num_threads()
+        self.base_executor.current_num_threads()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -250,7 +448,7 @@ struct AsyncExecutor {
 }
 
 impl AsyncExecutor {
-    fn new() -> Self {
+    fn new(config: Option<&ExecutorConfig>) -> Self {
         let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
         Self { runtime }
     }
@@ -277,6 +475,18 @@ impl ParallelExecutor for AsyncExecutor {
     fn max_concurrent_tasks(&self) -> usize {
         100
     }
+
+    fn execute_with_priority<F, R>(&self, _f: F, _priority: TaskPriority, _trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        panic!("Priority execution not supported by AsyncExecutor")
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// Global executor instance for the application
@@ -284,7 +494,7 @@ static GLOBAL_EXECUTOR: Mutex<Option<ParallelExecutorEnum>> = Mutex::new(None);
 
 pub fn initialize_global_executor(executor_type: ExecutorType) {
     let mut global_executor = GLOBAL_EXECUTOR.lock().expect("Failed to lock global executor");
-    *global_executor = Some(ParallelExecutorFactory::create_executor_enum(executor_type));
+    *global_executor = Some(ParallelExecutorFactory::create_executor(executor_type));
 }
 
 pub fn initialize_default_executor() {
@@ -298,7 +508,23 @@ fn init() {
 
 impl Default for ParallelExecutorEnum {
     fn default() -> Self {
-        // Default to a basic thread pool executor
-        ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new()))
+        // Default to enhanced work-stealing executor
+        ParallelExecutorEnum::WorkStealing(Arc::new(EnhancedWorkStealingExecutor::new(None)))
+    }
+}
+
+/// Extension trait for performance config integration
+pub trait PerformanceConfigIntegration {
+    fn apply_work_stealing_config(&self, executor: &mut EnhancedWorkStealingExecutor) -> Result<(), String>;
+}
+
+impl PerformanceConfigIntegration for PerformanceConfig {
+    fn apply_work_stealing_config(&self, executor: &mut EnhancedWorkStealingExecutor) -> Result<(), String> {
+        let mut config = executor.config.write().map_err(|e| e.to_string())?;
+        
+        config.enabled = self.work_stealing_enabled;
+        config.queue_size = self.work_stealing_queue_size;
+        
+        Ok(())
     }
 }

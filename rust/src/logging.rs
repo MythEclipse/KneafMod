@@ -2,13 +2,64 @@ use chrono::{DateTime, Utc};
 use log::{Level, Log, Metadata, Record};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 // JNI-specific imports for Java logging
 use jni::objects::{JObject, JValue};
 use jni::sys::jstring;
 use jni::JNIEnv;
+
+// Log severity levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LogSeverity {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Critical,
+}
+
+impl LogSeverity {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "trace" => Some(LogSeverity::Trace),
+            "debug" => Some(LogSeverity::Debug),
+            "info" => Some(LogSeverity::Info),
+            "warn" => Some(LogSeverity::Warn),
+            "error" => Some(LogSeverity::Error),
+            "critical" => Some(LogSeverity::Critical),
+            _ => None,
+        }
+    }
+
+    pub fn to_string(&self) -> &str {
+        match self {
+            LogSeverity::Trace => "TRACE",
+            LogSeverity::Debug => "DEBUG",
+            LogSeverity::Info => "INFO",
+            LogSeverity::Warn => "WARN",
+            LogSeverity::Error => "ERROR",
+            LogSeverity::Critical => "CRITICAL",
+        }
+    }
+
+    pub fn to_level(&self) -> Level {
+        match self {
+            LogSeverity::Trace => Level::Trace,
+            LogSeverity::Debug => Level::Debug,
+            LogSeverity::Info => Level::Info,
+            LogSeverity::Warn => Level::Warn,
+            LogSeverity::Error => Level::Error,
+            LogSeverity::Critical => Level::Error, // Map Critical to Error for log crate compatibility
+        }
+    }
+}
 
 static TRACE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -22,7 +73,7 @@ pub fn generate_trace_id() -> String {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LogEntry {
     pub timestamp: DateTime<Utc>,
-    pub level: String,
+    pub severity: LogSeverity,
     pub trace_id: String,
     pub component: String,
     pub operation: String,
@@ -32,13 +83,14 @@ pub struct LogEntry {
     pub duration_ms: Option<u64>,
     pub thread_id: String,
     pub process_id: u32,
+    pub metadata: Option<serde_json::Value>,
 }
 
 impl LogEntry {
-    pub fn new(level: &str, component: &str, operation: &str, message: &str) -> Self {
+    pub fn new(severity: LogSeverity, component: &str, operation: &str, message: &str) -> Self {
         Self {
             timestamp: Utc::now(),
-            level: level.to_string(),
+            severity,
             trace_id: generate_trace_id(),
             component: component.to_string(),
             operation: operation.to_string(),
@@ -48,6 +100,7 @@ impl LogEntry {
             duration_ms: None,
             thread_id: format!("{:?}", std::thread::current().id()),
             process_id: std::process::id(),
+            metadata: None,
         }
     }
 
@@ -71,16 +124,42 @@ impl LogEntry {
         self
     }
 
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|e| {
+            format!("{{\"error\":\"Failed to serialize log entry: {}\", \"log_entry\":{:?}}}", e, self)
+        })
+    }
+
+    pub fn to_console_format(&self) -> String {
+        let color = match self.severity {
+            LogSeverity::Trace => "\x1B[34m",    // Blue
+            LogSeverity::Debug => "\x1B[36m",    // Cyan
+            LogSeverity::Info => "\x1B[32m",     // Green
+            LogSeverity::Warn => "\x1B[33m",     // Yellow
+            LogSeverity::Error => "\x1B[31m",    // Red
+            LogSeverity::Critical => "\x1B[35m", // Magenta
+        };
+        let reset = "\x1B[0m";
+        
+        format!(
+            "[{}] {} {} {}: {}",
+            self.timestamp.format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+            color,
+            self.severity.to_string(),
+            reset,
+            self.message
+        )
+    }
+
     pub fn log(self) {
-        let json = serde_json::to_string(&self)
-            .unwrap_or_else(|_| "Failed to serialize log entry".to_string());
-        // Avoid calling the `log` macros here because the global
-        // `StructuredLogger::log` implementation routes records back
-        // into `LogEntry::log`, which would cause infinite recursion.
-        // Instead, write the serialized JSON directly to stdout/stderr
-        // based on level.
-        match self.level.as_str() {
-            "ERROR" | "WARN" => eprintln!("{}", json),
+        let json = self.to_json();
+        match self.severity {
+            LogSeverity::Error | LogSeverity::Critical => eprintln!("{}", json),
             _ => println!("{}", json),
         }
     }
@@ -90,13 +169,62 @@ impl LogEntry {
 #[derive(Debug, Clone)]
 pub struct PerformanceLogger {
     component: String,
+    min_severity: LogSeverity,
+    enable_console_logging: bool,
+    enable_file_logging: bool,
+    log_file: Option<Arc<Mutex<File>>>,
 }
 
 impl PerformanceLogger {
     pub fn new(component: &str) -> Self {
         Self {
             component: component.to_string(),
+            min_severity: LogSeverity::Info,
+            enable_console_logging: true,
+            enable_file_logging: false,
+            log_file: None,
         }
+    }
+
+    pub fn with_min_severity(mut self, severity: LogSeverity) -> Self {
+        self.min_severity = severity;
+        self
+    }
+
+    pub fn with_console_logging(mut self, enable: bool) -> Self {
+        self.enable_console_logging = enable;
+        self
+    }
+
+    pub fn with_file_logging(mut self, file_path: &str) -> Result<Self, String> {
+        self.enable_file_logging = true;
+        let file = File::create(file_path).map_err(|e| {
+            format!("Failed to create log file {}: {}", file_path, e)
+        })?;
+        self.log_file = Some(Arc::new(Mutex::new(file)));
+        Ok(self)
+    }
+
+    fn should_log(&self, severity: LogSeverity) -> bool {
+        severity as u8 >= self.min_severity as u8
+    }
+
+    fn write_to_file(&self, entry: &LogEntry) {
+        if !self.enable_file_logging || self.log_file.is_none() {
+            return;
+        }
+
+        let log_file = self.log_file.as_ref().unwrap();
+        let mut file = match log_file.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                eprintln!("[ERROR] Failed to lock log file: {}", e);
+                return;
+            }
+        };
+
+        let output = format!("{}\n", entry.to_json());
+        let _ = file.write_all(output.as_bytes());
     }
 
     pub fn log_operation<F, R>(&self, operation: &str, trace_id: &str, f: F) -> R
@@ -107,25 +235,28 @@ impl PerformanceLogger {
         let result = f();
         let duration = start.elapsed().as_millis() as u64;
 
-        LogEntry::new("INFO", &self.component, operation, "Operation completed")
+        let entry = LogEntry::new(LogSeverity::Info, &self.component, operation, "Operation completed")
             .with_trace_id(trace_id.to_string())
-            .with_duration(duration)
-            .log();
+            .with_duration(duration);
+        
+        self.log_entry(entry);
 
         result
     }
 
     pub fn log_error(&self, operation: &str, trace_id: &str, error: &str, error_code: &str) {
-        LogEntry::new("ERROR", &self.component, operation, error)
+        let entry = LogEntry::new(LogSeverity::Error, &self.component, operation, error)
             .with_trace_id(trace_id.to_string())
-            .with_error_code(error_code.to_string())
-            .log();
+            .with_error_code(error_code.to_string());
+        
+        self.log_entry(entry);
     }
 
     pub fn log_warning(&self, operation: &str, trace_id: &str, message: &str) {
-        LogEntry::new("WARN", &self.component, operation, message)
-            .with_trace_id(trace_id.to_string())
-            .log();
+        let entry = LogEntry::new(LogSeverity::Warn, &self.component, operation, message)
+            .with_trace_id(trace_id.to_string());
+        
+        self.log_entry(entry);
     }
 
     // Backwards-compatibility alias used in some modules
@@ -134,15 +265,40 @@ impl PerformanceLogger {
     }
 
     pub fn log_info(&self, operation: &str, trace_id: &str, message: &str) {
-        LogEntry::new("INFO", &self.component, operation, message)
-            .with_trace_id(trace_id.to_string())
-            .log();
+        let entry = LogEntry::new(LogSeverity::Info, &self.component, operation, message)
+            .with_trace_id(trace_id.to_string());
+        
+        self.log_entry(entry);
     }
 
     pub fn log_debug(&self, operation: &str, trace_id: &str, message: &str) {
-        LogEntry::new("DEBUG", &self.component, operation, message)
-            .with_trace_id(trace_id.to_string())
-            .log();
+        let entry = LogEntry::new(LogSeverity::Debug, &self.component, operation, message)
+            .with_trace_id(trace_id.to_string());
+        
+        self.log_entry(entry);
+    }
+
+    pub fn log_trace(&self, operation: &str, trace_id: &str, message: &str) {
+        let entry = LogEntry::new(LogSeverity::Trace, &self.component, operation, message)
+            .with_trace_id(trace_id.to_string());
+        
+        self.log_entry(entry);
+    }
+
+    pub fn log_critical(&self, operation: &str, trace_id: &str, message: &str) {
+        let entry = LogEntry::new(LogSeverity::Critical, &self.component, operation, message)
+            .with_trace_id(trace_id.to_string());
+        
+        self.log_entry(entry);
+    }
+
+    fn log_entry(&self, entry: LogEntry) {
+        if !self.should_log(entry.severity) {
+            return;
+        }
+
+        entry.log();
+        self.write_to_file(&entry);
     }
 }
 
@@ -218,7 +374,7 @@ impl ProcessingError {
             ProcessingError::InternalError { message, .. } => message.clone(),
         };
 
-        LogEntry::new("ERROR", component, operation, &message)
+        LogEntry::new(LogSeverity::Error, component, operation, &message)
             .with_trace_id(self.trace_id().to_string())
             .with_error_code(self.error_code().to_string())
             .log();
@@ -286,8 +442,16 @@ impl Log for StructuredLogger {
             return;
         }
 
+        let severity = match record.level() {
+            Level::Trace => LogSeverity::Trace,
+            Level::Debug => LogSeverity::Debug,
+            Level::Info => LogSeverity::Info,
+            Level::Warn => LogSeverity::Warn,
+            Level::Error => LogSeverity::Error,
+        };
+
         let mut entry = LogEntry::new(
-            &record.level().to_string(),
+            severity,
             &self.component,
             "system",
             &record.args().to_string(),
@@ -494,7 +658,17 @@ macro_rules! log_to_java {
         let formatted_message = format!("[{}] {}: {}", $component, $operation, $message);
 
         // Log to Rust logger
-        $crate::logging::LogEntry::new($level, $component, $operation, &formatted_message)
+        let severity = match $level.to_uppercase().as_str() {
+            "TRACE" => $crate::logging::LogSeverity::Trace,
+            "DEBUG" => $crate::logging::LogSeverity::Debug,
+            "INFO" => $crate::logging::LogSeverity::Info,
+            "WARN" => $crate::logging::LogSeverity::Warn,
+            "ERROR" => $crate::logging::LogSeverity::Error,
+            "CRITICAL" => $crate::logging::LogSeverity::Critical,
+            _ => $crate::logging::LogSeverity::Info,
+        };
+        
+        $crate::logging::LogEntry::new(severity, $component, $operation, &formatted_message)
             .with_trace_id(trace_id.to_string())
             .log();
 
@@ -510,14 +684,14 @@ macro_rules! log_to_java {
 #[macro_export]
 macro_rules! log_error {
     ($component:expr, $operation:expr, $trace_id:expr, $error:expr) => {
-        $crate::logging::LogEntry::new("ERROR", $component, $operation, &$error.to_string())
+        $crate::logging::LogEntry::new($crate::logging::LogSeverity::Error, $component, $operation, &$error.to_string())
             .with_trace_id($trace_id.to_string())
             .with_error_code("GENERIC_ERROR".to_string())
             .log();
     };
     ($component:expr, $operation:expr, $trace_id:expr, $message:expr, $error:expr) => {
         $crate::logging::LogEntry::new(
-            "ERROR",
+            $crate::logging::LogSeverity::Error,
             $component,
             $operation,
             &format!("{}: {}", $message, $error.to_string()),
@@ -552,7 +726,7 @@ macro_rules! handle_error_with_code {
             Err(e) => {
                 let trace_id = $crate::logging::generate_trace_id();
                 let mut entry =
-                    $crate::logging::LogEntry::new("ERROR", $component, $operation, &e.to_string())
+                    $crate::logging::LogEntry::new($crate::logging::LogSeverity::Error, $component, $operation, &e.to_string())
                         .with_trace_id(trace_id.to_string());
                 if !$error_code.is_empty() {
                     entry = entry.with_error_code($error_code);
@@ -582,7 +756,7 @@ macro_rules! handle_result_or_default {
 #[macro_export]
 macro_rules! log_info {
     ($component:expr, $operation:expr, $trace_id:expr, $message:expr) => {
-        $crate::logging::LogEntry::new("INFO", $component, $operation, $message)
+        $crate::logging::LogEntry::new($crate::logging::LogSeverity::Info, $component, $operation, $message)
             .with_trace_id($trace_id.to_string())
             .log();
     };
@@ -591,7 +765,7 @@ macro_rules! log_info {
 #[macro_export]
 macro_rules! log_performance {
     ($component:expr, $operation:expr, $trace_id:expr, $duration_ms:expr) => {
-        $crate::logging::LogEntry::new("INFO", $component, $operation, "Performance measurement")
+        $crate::logging::LogEntry::new($crate::logging::LogSeverity::Info, $component, $operation, "Performance measurement")
             .with_trace_id($trace_id.to_string())
             .with_duration($duration_ms)
             .log();
