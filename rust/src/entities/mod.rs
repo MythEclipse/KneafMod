@@ -16,7 +16,8 @@ pub use self::common::types::{ProcessingInput, ProcessingOutput};
 
 pub use self::block::types::{BlockData, BlockState, BlockPosition};
 
-pub use self::entity::types::{EntityPosition, EntityData as EntityEntityData};
+pub use self::entity::types::EntityPosition;
+pub use crate::types::EntityDataTrait as EntityEntityData;
 pub use self::entity::types::ProcessResult as EntityProcessResult;
 pub use crate::traits::EntityConfigTrait as EntityEntityConfig;
 

@@ -1,6 +1,6 @@
 use super::types::*;
 use std::sync::RwLock;
-use crate::entities::common::types::EntityConfig;
+use crate::types::EntityConfigTrait as EntityConfig;
 
 lazy_static::lazy_static! {
     pub static ref VILLAGER_CONFIG: RwLock<VillagerConfig> = RwLock::new(VillagerConfig {
@@ -32,14 +32,40 @@ pub fn get_villager_config() -> VillagerConfig {
 
 // Implement EntityConfig trait for VillagerConfig
 impl EntityConfig for VillagerConfig {
+    fn entity_type(&self) -> crate::types::EntityType {
+        crate::types::EntityType::Villager
+    }
+    
+    fn is_active(&self) -> bool {
+        true
+    }
+    
+    fn update_interval(&self) -> u64 {
+        self.simple_ai_tick_interval as u64
+    }
+    
+    fn execute_with_priority(&self, priority: u8) -> Result<(), crate::errors::ExecutionError> {
+        // Implement priority-based execution logic
+        match priority {
+            0..=2 => Ok(()), // Low priority - basic updates
+            3..=5 => Ok(()), // Medium priority - standard updates
+            6..=8 => Ok(()), // High priority - urgent updates
+            _ => Err(crate::errors::ExecutionError::InvalidPriority(priority)),
+        }
+    }
+    
+    fn get_execution_strategy(&self) -> crate::types::ExecutionStrategy {
+        crate::types::ExecutionStrategy::PriorityBased
+    }
+    
     fn get_entity_type(&self) -> &str {
         "villager"
     }
-
+    
     fn clone_box(&self) -> Box<dyn EntityConfig> {
         Box::new(self.clone())
     }
-
+    
     fn get_disable_ai_distance(&self) -> f32 {
         self.disable_ai_distance
     }
