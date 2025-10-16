@@ -35,7 +35,6 @@ unsafe fn _mm_reduce_add_ps(mut v: __m128) -> f32 {
 }
 use std::arch::x86_64::*;
 use std::time::Instant;
-use crate::performance::monitoring::record_operation;
 
 /// Standardized SIMD operations interface
 pub trait SimdStandardOps {
@@ -115,7 +114,7 @@ impl SimdStandardOps for StandardSimdOps {
             SimdLevel::None | SimdLevel::Sse => self.dot_product_scalar(a, b), // Fallback to scalar for unsupported levels
         };
 
-        record_operation(start, a.len(), 1);
+        // record_operation(start, a.len(), 1);
         result
     }
 
@@ -136,7 +135,7 @@ impl SimdStandardOps for StandardSimdOps {
             SimdLevel::None | SimdLevel::Sse => self.vector_add_scalar(a, b, scale), // Fallback to scalar for unsupported levels
         };
 
-        record_operation(start, a.len(), 1);
+        // record_operation(start, a.len(), 1);
         result
     }
 
@@ -150,7 +149,7 @@ impl SimdStandardOps for StandardSimdOps {
             SimdLevel::None | SimdLevel::Sse => self.calculate_chunk_distances_scalar(chunk_coords, center_chunk), // Fallback to scalar for unsupported levels
         };
 
-        record_operation(start, chunk_coords.len(), 1);
+        // record_operation(start, chunk_coords.len(), 1);
         result
     }
 
@@ -164,7 +163,7 @@ impl SimdStandardOps for StandardSimdOps {
             SimdLevel::None | SimdLevel::Sse => self.calculate_entity_distances_scalar(positions, center), // Fallback to scalar for unsupported levels
         };
 
-        record_operation(start, positions.len(), 1);
+        // record_operation(start, positions.len(), 1);
         result
     }
 
@@ -178,7 +177,7 @@ impl SimdStandardOps for StandardSimdOps {
             SimdLevel::None | SimdLevel::Sse => self.batch_aabb_intersections_scalar(aabbs, queries), // Fallback to scalar for unsupported levels
         };
 
-        record_operation(start, aabbs.len() * queries.len(), 1);
+        // record_operation(start, aabbs.len() * queries.len(), 1);
         result
     }
 
@@ -192,7 +191,7 @@ impl SimdStandardOps for StandardSimdOps {
             SimdLevel::None | SimdLevel::Sse => self.filter_entities_by_distance_scalar(entities, center, max_distance), // Fallback to scalar for unsupported levels
         };
 
-        record_operation(start, entities.len(), 1);
+        // record_operation(start, entities.len(), 1);
         result
     }
 
@@ -210,7 +209,7 @@ impl SimdStandardOps for StandardSimdOps {
             SimdLevel::None | SimdLevel::Sse => operation(data), // Fallback to scalar for unsupported levels
         };
 
-        record_operation(start, data.len(), 1);
+        // record_operation(start, data.len(), 1);
         result
     }
 }

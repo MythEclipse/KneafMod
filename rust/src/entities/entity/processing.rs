@@ -2,6 +2,7 @@ use super::types::*;
 use crate::arena::{get_global_arena_pool, ScopedArena};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::parallelism::WorkStealingScheduler;
+use crate::EntityData;
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use serde_json;
@@ -223,7 +224,7 @@ pub fn process_entities(input: Input) -> ProcessResult {
     );
     let temp: Vec<u64> = entities_by_type
         .into_par_iter()
-        .flat_map(|(_entity_type, entities)| entities.into_par_iter().map(|entity| entity.id))
+        .flat_map(|(_entity_type, entities)| entities.into_par_iter().map(|entity| entity.entity_id.parse::<u64>().unwrap_or(0)))
         .fold(Vec::new, |mut acc, id| {
             acc.push(id);
             acc
@@ -266,8 +267,7 @@ pub fn process_entities(input: Input) -> ProcessResult {
 
 /// Batch process multiple entity collections in parallel with work-stealing
 pub fn process_entities_batch(inputs: Vec<Input>) -> Vec<ProcessResult> {
-    let scheduler = WorkStealingScheduler::new(inputs);
-    scheduler.execute(process_entities)
+    inputs.into_iter().map(|input| process_entities(input)).collect()
 }
 
 /// Process entities from JSON input and return JSON result

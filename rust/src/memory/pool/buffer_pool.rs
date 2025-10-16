@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::errors::{RustError, Result};
 use crate::memory::pool::common::{MemoryPool, MemoryPoolConfig, MemoryPoolStats};
+use crate::PerformanceLogger;
 
 /// Configuration for the zero-copy buffer pool
 #[derive(Debug, Clone)]
@@ -159,6 +160,16 @@ pub struct BufferPool {
     logger: PerformanceLogger,
 }
 
+impl Clone for BufferPoolStats {
+    fn clone(&self) -> Self {
+        Self {
+            total_acquired: AtomicUsize::new(self.total_acquired.load(Ordering::Relaxed)),
+            total_returned: AtomicUsize::new(self.total_returned.load(Ordering::Relaxed)),
+            total_created: AtomicUsize::new(self.total_created.load(Ordering::Relaxed)),
+            current_allocated: AtomicUsize::new(self.current_allocated.load(Ordering::Relaxed)),
+        }
+    }
+}
 /// Buffer pool specific statistics
 #[derive(Debug, Default)]
 struct BufferPoolStats {
@@ -173,28 +184,6 @@ struct BufferPoolStats {
 pub struct CombinedBufferPoolStats {
     pub common_stats: MemoryPoolStats,
     pub buffer_stats: BufferPoolStats,
-}
-
-impl MemoryPoolStats for CombinedBufferPoolStats {
-    fn allocated_bytes(&self) -> usize {
-        self.common_stats.allocated_bytes.load(Ordering::Relaxed)
-    }
-    
-    fn total_allocations(&self) -> usize {
-        self.common_stats.total_allocations.load(Ordering::Relaxed)
-    }
-    
-    fn total_deallocations(&self) -> usize {
-        self.common_stats.total_deallocations.load(Ordering::Relaxed)
-    }
-    
-    fn peak_allocated_bytes(&self) -> usize {
-        self.common_stats.peak_allocated_bytes.load(Ordering::Relaxed)
-    }
-    
-    fn current_usage_ratio(&self) -> f64 {
-        self.common_stats.current_usage_ratio
-    }
 }
 
 impl BufferPool {

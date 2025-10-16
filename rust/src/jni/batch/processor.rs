@@ -11,6 +11,7 @@ use crate::{
     traits::Initializable,
     jni_utils,
 };
+use crate::jni::utils;
 use std::result::Result;
 pub use crate::errors::Result as RustResult;
 use crate::{jni_error, check_initialized, impl_initializable};
@@ -1462,7 +1463,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_pollAsync
     let results_mutex = RESULTS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut results = match results_mutex.lock() {
         Ok(guard) => guard,
-        Err(_) => return jni_utils::create_error_jni_string(&mut env, "Failed to lock results storage"),
+        Err(_) => return utils::create_error_jni_string(&mut env, "Failed to lock results storage").map_err(|e| RustError::JniError(e.to_string()))?,
     };
     
     match results.remove(&(operation_id as u64)) {

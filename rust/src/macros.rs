@@ -1,4 +1,5 @@
 // Macros should reference the crate-local error types with fully-qualified paths
+use log::{info, warn, error, debug};
 
 /// Macro to create a JNI error string from a RustError
 #[macro_export]
@@ -238,5 +239,27 @@ macro_rules! safe_allocate_buffer {
         }
 
         Vec::with_capacity($size)
+    };
+}
+
+/// Macro for memory pool error handling
+#[macro_export]
+macro_rules! memory_pool_error {
+    ($($arg:tt)*) => {
+        return Err(crate::errors::RustError::MemoryPoolError(format!($($arg)*)));
+    };
+}
+
+/// Macro for JNI diagnostic logging
+#[macro_export]
+macro_rules! jni_diagnostic {
+    ($level:expr, $component:expr, $($arg:tt)*) => {
+        match $level {
+            "INFO" => info!("[{}] {}", $component, format!($($arg)*)),
+            "WARN" => warn!("[{}] {}", $component, format!($($arg)*)),
+            "ERROR" => error!("[{}] {}", $component, format!($($arg)*)),
+            "DEBUG" => debug!("[{}] {}", $component, format!($($arg)*)),
+            _ => info!("[{}] {}", $component, format!($($arg)*)),
+        }
     };
 }

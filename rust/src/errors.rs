@@ -27,6 +27,7 @@ pub enum RustError {
     
     /// Operation failed
     OperationFailed(String),
+    InvalidInput(String),
     
     /// Serialization error
     SerializationError(String),
@@ -60,6 +61,12 @@ pub enum RustError {
         
         /// Conversion error for JNI arrays
         ConversionError(String),
+        
+        /// Memory pool error
+        MemoryPoolError(String),
+        
+        /// Resource limit exceeded
+        ResourceLimitExceeded(String),
     
     /// Invalid operation type error
     InvalidOperationType {
@@ -106,6 +113,8 @@ impl fmt::Display for RustError {
             RustError::BufferError(msg) => write!(f, "Buffer error: {}", msg),
             RustError::ParseError(msg) => write!(f, "Parse error: {}", msg),
             RustError::ConversionError(msg) => write!(f, "Conversion error: {}", msg),
+            RustError::MemoryPoolError(msg) => write!(f, "Memory pool error: {}", msg),
+            RustError::ResourceLimitExceeded(msg) => write!(f, "Resource limit exceeded: {}", msg),
             RustError::InvalidOperationType { operation_type, max_type } => {
                 write!(f, "Invalid operation type {} (max: {})", operation_type, max_type)
             }
@@ -118,6 +127,101 @@ impl fmt::Display for RustError {
 }
 
 impl Error for RustError {}
+
+/// Implement From trait for std::io::Error
+impl From<std::io::Error> for RustError {
+    fn from(error: std::io::Error) -> Self {
+        RustError::IoError(error.to_string())
+    }
+}
+
+/// Implement From trait for jni::errors::Error
+impl From<jni::errors::Error> for RustError {
+    fn from(error: jni::errors::Error) -> Self {
+        RustError::JniError(error.to_string())
+    }
+}
+
+/// Implement From trait for serde_json::Error
+impl From<serde_json::Error> for RustError {
+    fn from(error: serde_json::Error) -> Self {
+        if error.is_io() {
+            RustError::IoError(error.to_string())
+        } else if error.is_syntax() {
+            RustError::DeserializationError(error.to_string())
+        } else if error.is_data() {
+            RustError::ValidationError(error.to_string())
+        } else {
+            RustError::SerializationError(error.to_string())
+        }
+    }
+}
+
+/// Implement From trait for sled::Error
+impl From<sled::Error> for RustError {
+    fn from(error: sled::Error) -> Self {
+        RustError::DatabaseError(error.to_string())
+    }
+}
+
+/// Implement From trait for flate2::CompressionError
+impl From<flate2::CompressError> for RustError {
+    fn from(error: flate2::CompressError) -> Self {
+        RustError::CompressionError(error.to_string())
+    }
+}
+
+/// Implement From trait for lz4_flex::block::CompressError
+impl From<lz4_flex::block::CompressError> for RustError {
+    fn from(error: lz4_flex::block::CompressError) -> Self {
+        RustError::CompressionError(error.to_string())
+    }
+}
+
+/// Implement From trait for BinaryConversionError
+impl From<crate::binary::conversions::BinaryConversionError> for RustError {
+    fn from(error: crate::binary::conversions::BinaryConversionError) -> Self {
+        match error {
+            crate::binary::conversions::BinaryConversionError::Io(e) => RustError::IoError(e.to_string()),
+            crate::binary::conversions::BinaryConversionError::Utf8(e) => RustError::InvalidInputError(e.to_string()),
+            crate::binary::conversions::BinaryConversionError::InvalidData(msg) => RustError::InvalidInputError(msg),
+            crate::binary::conversions::BinaryConversionError::SystemTime(e) => RustError::InternalError(e.to_string()),
+        }
+    }
+}
+
+/// Implement From trait for AllocationError
+impl From<crate::memory::allocator::AllocationError> for RustError {
+    fn from(error: crate::memory::allocator::AllocationError) -> Self {
+        match error {
+            crate::memory::allocator::AllocationError::OutOfMemory => RustError::ResourceExhaustionError("Out of memory".to_string()),
+            crate::memory::allocator::AllocationError::InvalidSize => RustError::InvalidInputError("Invalid allocation size".to_string()),
+            crate::memory::allocator::AllocationError::AllocationFailed => RustError::OperationFailed("Allocation failed".to_string()),
+            crate::memory::allocator::AllocationError::DeallocationFailed => RustError::OperationFailed("Deallocation failed".to_string()),
+        }
+    }
+}
+
+/// Implement From trait for crc32fast::Error
+impl From<std::io::Error> for RustError {
+    fn from(error: std::io::Error) -> Self {
+        RustError::ChecksumError(error.to_string())
+    }
+}
+
+/// Implement From trait for tokio::io::Error
+impl From<tokio::io::Error> for RustError {
+    fn from(error: tokio::io::Error) -> Self {
+        RustError::IoError(error.to_string())
+    }
+}
+
+/// Implement From trait for j4rs::errors::J4RsError
+impl From<j4rs::errors::J4RsError> for RustError {
+    fn from(error: j4rs::errors::J4RsError) -> Self {
+        RustError::JniError(error.to_string())
+    }
+}
 
 /// Common error messages
 pub mod messages {

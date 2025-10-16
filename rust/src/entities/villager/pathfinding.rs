@@ -135,7 +135,7 @@ impl PathfindingOptimizer {
                     cache.update_pathfind_result(
                         self.current_tick,
                         true, // Assume success for now
-                        (villager.x, villager.y, villager.z),
+                        villager.position,
                     );
                     villager.pathfind_frequency = config.pathfinding_tick_interval;
                 }
@@ -145,7 +145,7 @@ impl PathfindingOptimizer {
                 cache.update_pathfind_result(
                     self.current_tick,
                     true,
-                    (villager.x, villager.y, villager.z),
+                    villager.position,
                 );
             }
         }
@@ -495,7 +495,7 @@ pub fn check_path_obstacles_simd(
 
                 // Check against all obstacles
                 for obstacle in obstacles {
-                    if obstacle.contains_point(pos_vec) {
+                    if obstacle.contains(pos_vec) {
                         return true; // Position is blocked
                     }
                 }

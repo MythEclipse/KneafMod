@@ -129,6 +129,8 @@ impl JNIOperationMetrics {
 }
 
 // Global metrics collection
+use lazy_static::lazy_static;
+
 lazy_static! {
     pub static ref JNI_METRICS_COLLECTOR: Arc<RwLock<Vec<JNIOperationMetrics>>> =
         Arc::new(RwLock::new(Vec::new()));

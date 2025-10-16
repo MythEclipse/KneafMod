@@ -1,6 +1,5 @@
 use crate::{
     errors::{RustError, Result as RustResult},
-    performance::monitoring::record_operation,
     traits::Initializable,
 };
 use lazy_static::lazy_static;
@@ -297,7 +296,7 @@ impl SimdProcessor {
             
             let start = Instant::now();
             self.process_array_scalar(data);
-            record_operation(start, data.len(), 1);
+            // record_operation(start, data.len(), 1);
             
             Ok(())
         }

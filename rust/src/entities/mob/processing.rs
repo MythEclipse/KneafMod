@@ -4,7 +4,9 @@ use crate::types::EntityTypeTrait as EntityType;
 use crate::errors::{Result, RustError};
 use crate::entities::mob::types::{MobData, MobInput, MobProcessResult};
 use crate::entities::mob::config::MobConfig;
-use crate::types::EntityConfigTrait as EntityConfig;
+use crate::types::EntityConfig;
+use crate::types::DefaultEntityConfig;
+use crate::binary::conversions::{deserialize_mob_input, serialize_mob_result};
 
 #[derive(Debug, Clone)]
 pub struct MobEntityProcessor {
@@ -13,7 +15,7 @@ pub struct MobEntityProcessor {
 }
 
 impl MobEntityProcessor {
-    pub fn new(config: Arc<EntityConfig>, ai_config: Arc<MobConfig>) -> Self {
+    pub fn new(config: Arc<dyn EntityConfig>, ai_config: Arc<MobConfig>) -> Self {
         MobEntityProcessor { config, ai_config }
     }
 
@@ -35,10 +37,36 @@ impl MobEntityProcessor {
                 simplify.push(mob.id);
             }
         }
+        
+        /// Process mob entities from binary input in batches
+        pub fn process_mob_ai_binary_batch(data: &[u8]) -> Result<Vec<u8>> {
+            if data.is_empty() {
+                return Ok(Vec::new());
+            }
+        
+            let input = deserialize_mob_input(data).map_err(|e| RustError::DeserializationError(e.to_string()))?;
+            let result = process_mob_ai(input)?;
+            let out = serialize_mob_result(&result).map_err(|e| RustError::SerializationError(e.to_string()))?;
+            Ok(out)
+        }
 
         Ok(MobProcessResult {
             mobs_to_disable_ai: disable,
             mobs_to_simplify_ai: simplify,
         })
     }
+}
+
+pub fn process_mob_ai_json(input: &str) -> Result<String> {
+    let input: MobInput = serde_json::from_str(input)?;
+    let config = Arc::new(MobConfig::default());
+    let processor = MobEntityProcessor::new(Arc::new(DefaultEntityConfig::default()), config);
+    let result = processor.process(input)?;
+    serde_json::to_string(&result).map_err(|e| RustError::SerializationError(e.to_string()))
+}
+
+pub fn process_mob_ai(input: MobInput) -> Result<MobProcessResult> {
+    let config = Arc::new(MobConfig::default());
+    let processor = MobEntityProcessor::new(Arc::new(DefaultEntityConfig::default()), config);
+    processor.process(input)
 }

@@ -1,11 +1,11 @@
 use crate::entities::block::types::{BlockInput, BlockProcessResult};
-use crate::types::{EntityData as REntityData, PlayerData as RPlayerData};
+use crate::types::{EntityData as REntityData, PlayerData as RPlayerData, EntityType};
 use crate::entities::entity::types::{Input as EntityInput, ProcessResult as EntityProcessResult};
 use crate::entities::mob::types::{MobInput, MobProcessResult};
 use crate::entities::villager::types::{
     PlayerData as VillagerPlayerData, VillagerData, VillagerInput, VillagerProcessResult,
 };
-use crate::entities::entity::config::Config as EntityConfig;
+use crate::types::EntityConfig;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Cursor, Read};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -298,8 +298,9 @@ impl BinaryConverter for MobConverter {
             
             mobs.push(crate::mob::types::MobData {
                 id,
+                entity_type: EntityType::Mob, // Convert string to EntityType
+                position: (0.0, 0.0, 0.0), // Default position
                 distance,
-                entity_type: etype,
                 is_passive: passive,
             });
         }
@@ -359,10 +360,10 @@ impl BinaryConverter for BlockConverter {
             blocks.push(crate::block::types::BlockEntityData {
                 id,
                 block_type: bt,
-                distance,
                 x,
                 y,
                 z,
+                distance,
             });
         }
         
@@ -466,13 +467,20 @@ impl BinaryConverter for EntityConverter {
             };
             
             entities.push(REntityData {
-                id,
-                entity_type: etype,
-                x,
-                y,
-                z,
-                distance,
-                is_block_entity: is_block,
+                entity_id: id.to_string(),
+                entity_type: EntityType::Generic, // Convert string to EntityType
+                x: x as f32,
+                y: y as f32,
+                z: z as f32,
+                health: 20.0,
+                max_health: 20.0,
+                velocity_x: 0.0,
+                velocity_y: 0.0,
+                velocity_z: 0.0,
+                rotation: 0.0,
+                pitch: 0.0,
+                yaw: 0.0,
+                properties: std::collections::HashMap::new(),
             });
         }
         
@@ -485,7 +493,18 @@ impl BinaryConverter for EntityConverter {
             let x = cur.read_f32::<LittleEndian>()? as f64;
             let y = cur.read_f32::<LittleEndian>()? as f64;
             let z = cur.read_f32::<LittleEndian>()? as f64;
-            players.push(RPlayerData { id, x, y, z });
+            players.push(RPlayerData {
+                uuid: id.to_string(),
+                username: "Player".to_string(),
+                x: x as f32,
+                y: y as f32,
+                z: z as f32,
+                health: 20.0,
+                max_health: 20.0,
+                level: 1,
+                experience: 0,
+                inventory: Vec::new(),
+            });
         }
         
         // Skip entity config floats if present (5 floats)
@@ -493,16 +512,9 @@ impl BinaryConverter for EntityConverter {
             let _ = cur.read_f32::<LittleEndian>();
         }
         
-        let cfg = EntityConfig {
-            close_radius: 16.0,
-            medium_radius: 32.0,
-            close_rate: 1.0,
-            medium_rate: 0.5,
-            far_rate: 0.1,
-            use_spatial_partitioning: true,
-            world_bounds: crate::types::Aabb::new(-1000.0, 0.0, -1000.0, 1000.0, 256.0, 1000.0),
-            quadtree_max_entities: 1000,
-            quadtree_max_depth: 10,
+        use crate::entities::mob::types::DefaultEntityConfig;
+        let cfg = DefaultEntityConfig {
+            entity_type: entity_type.clone(),
         };
         
         Ok(EntityInput {
@@ -568,9 +580,8 @@ impl BinaryConverter for VillagerConverter {
             
             villagers.push(VillagerData {
                 id,
-                x,
-                y,
-                z,
+                entity_type: EntityType::Villager,
+                position: (x, y, z),
                 distance,
                 profession,
                 level,
@@ -592,7 +603,12 @@ impl BinaryConverter for VillagerConverter {
             let x = cur.read_f32::<LittleEndian>()?;
             let y = cur.read_f32::<LittleEndian>()?;
             let z = cur.read_f32::<LittleEndian>()?;
-            players.push(VillagerPlayerData { id, x, y, z });
+            players.push(VillagerPlayerData {
+                id,
+                x: x as f64,
+                y: y as f64,
+                z: z as f64,
+            });
         }
         
         Ok(VillagerInput {

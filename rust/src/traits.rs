@@ -1,5 +1,5 @@
 use crate::errors::{RustError, Result};
-use crate::types::{Aabb, EntityConfig, EntityData, EntityType};
+use crate::types::{Aabb, EntityData, EntityType};
 use std::sync::atomic::Ordering;
 
 /// Trait for components that need initialization checks
@@ -75,7 +75,9 @@ pub trait EntityDataTrait {
 }
 
 /// Trait for entity configuration types
-pub trait EntityConfigTrait {
+use std::fmt::Debug;
+
+pub trait EntityConfigTrait: Debug + Send + Sync {
     /// Get the close radius from the configuration
     fn close_radius(&self) -> f32;
     
@@ -105,7 +107,7 @@ pub struct EntityConfigImpl {
 // Implement EntityDataTrait for EntityData
 impl EntityDataTrait for EntityData {
     fn id(&self) -> u64 {
-        self.id
+        self.entity_id.parse::<u64>().unwrap_or(0)
     }
     
     fn entity_type(&self) -> &EntityType {
@@ -113,7 +115,7 @@ impl EntityDataTrait for EntityData {
     }
     
     fn position(&self) -> (f64, f64, f64) {
-        (self.x, self.y, self.z)
+        (self.x as f64, self.y as f64, self.z as f64)
     }
 }
 

@@ -5,6 +5,7 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::{jbyteArray, jlong};
 use crate::errors::RustError;
+use crate::check_jni_string;
 
 /// JNI function for initializing allocator
 #[no_mangle]

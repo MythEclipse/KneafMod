@@ -3,7 +3,8 @@ use jni::sys::{jbyteArray, jstring};
 use jni::JNIEnv;
 
 use crate::logging::JniLogger;
-use crate::entities::mob::processing::process_mob_ai_binary_batch;
+use crate::entities::mob::processing::process_mob_ai_json;
+// use crate::entities::mob::processing::process_mob_ai_binary_batch; // Function not found - temporarily commented out
 use std::sync::OnceLock;
 use crate::jni_log_error;
 
@@ -124,34 +125,10 @@ pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_processMo
 
     // Removed debug log to reduce noise - only log errors
     // Process binary data in batches for better JNI performance
-    match process_mob_ai_binary_batch(slice) {
-        Ok(result) => {
-            // Removed debug log to reduce noise - only log errors
-            match env.byte_array_from_slice(&result) {
-                Ok(arr) => arr.into_raw(),
-                Err(e) => {
-                    jni_log_error!(
-                        logger,
-                        &mut env,
-                        "JNI",
-                        &format!("Failed to create byte array from result: {:?}", e)
-                    );
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            jni_log_error!(
-                logger,
-                &mut env,
-                "JNI",
-                &format!("process_mob_ai_binary_batch failed: {}", e)
-            );
-            let error_msg = format!("{{\"error\":\"{}\"}}", e);
-            match env.byte_array_from_slice(error_msg.as_bytes()) {
-                Ok(arr) => arr.into_raw(),
-                Err(_) => std::ptr::null_mut(),
-            }
-        }
+    // Temporarily return empty result until process_mob_ai_binary_batch is implemented
+    let error_msg = b"{\"error\":\"process_mob_ai_binary_batch not implemented\"}";
+    match env.byte_array_from_slice(error_msg) {
+        Ok(arr) => arr.into_raw(),
+        Err(_) => std::ptr::null_mut(),
     }
 }

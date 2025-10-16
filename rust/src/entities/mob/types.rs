@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use crate::entities::common::types::*;
+use crate::EntityProcessingInput;
+use crate::EntityProcessingResult;
 use crate::EntityType;
 use crate::EntityData;
 
@@ -32,13 +35,25 @@ pub struct MobProcessResult {
 impl From<MobData> for EntityData {
     fn from(mob_data: MobData) -> Self {
         EntityData {
-            id: mob_data.id,
+            entity_id: mob_data.id.to_string(),
             entity_type: mob_data.entity_type,
-            position: mob_data.position,
-            distance: mob_data.distance,
-            metadata: Some(serde_json::json!({
-                "is_passive": mob_data.is_passive
-            })),
+            x: mob_data.position.0,
+            y: mob_data.position.1,
+            z: mob_data.position.2,
+            health: 20.0, // Default health
+            max_health: 20.0,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
+            velocity_z: 0.0,
+            rotation: 0.0,
+            pitch: 0.0,
+            yaw: 0.0,
+            properties: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("is_passive".to_string(), mob_data.is_passive.to_string());
+                map.insert("distance".to_string(), mob_data.distance.to_string());
+                map
+            },
         }
     }
 }
@@ -46,10 +61,39 @@ impl From<MobData> for EntityData {
 /// Convert MobInput to EntityProcessingInput for use with the common processor
 impl From<MobInput> for EntityProcessingInput {
     fn from(mob_input: MobInput) -> Self {
-        EntityProcessingInput {
-            tick_count: mob_input.tick_count,
-            entities: mob_input.mobs.into_iter().map(|m| m.into()).collect(),
-            players: None,
+        // For batch processing, we'll create a single input for the first mob
+        if let Some(first_mob) = mob_input.mobs.first() {
+            EntityProcessingInput {
+                entity_id: first_mob.id.to_string(),
+                entity_type: first_mob.entity_type,
+                data: first_mob.clone().into(),
+                delta_time: 0.05, // Default 50ms tick
+                simulation_distance: 128,
+            }
+        } else {
+            // Default input if no mobs
+            EntityProcessingInput {
+                entity_id: "0".to_string(),
+                entity_type: EntityType::Mob,
+                data: EntityData {
+                    entity_id: "0".to_string(),
+                    entity_type: EntityType::Mob,
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    health: 20.0,
+                    max_health: 20.0,
+                    velocity_x: 0.0,
+                    velocity_y: 0.0,
+                    velocity_z: 0.0,
+                    rotation: 0.0,
+                    pitch: 0.0,
+                    yaw: 0.0,
+                    properties: HashMap::new(),
+                },
+                delta_time: 0.05,
+                simulation_distance: 128,
+            }
         }
     }
 }
@@ -57,9 +101,20 @@ impl From<MobInput> for EntityProcessingInput {
 /// Convert EntityProcessingResult to MobProcessResult
 impl From<EntityProcessingResult> for MobProcessResult {
     fn from(result: EntityProcessingResult) -> Self {
+        // Parse entity_id to get mob ID
+        let mob_id = result.entity_id.parse::<u64>().unwrap_or(0);
+        
         MobProcessResult {
-            mobs_to_disable_ai: result.entities_to_disable_ai,
-            mobs_to_simplify_ai: result.entities_to_simplify_ai,
+            mobs_to_disable_ai: if result.success && result.metadata_changed.is_some() {
+                vec![mob_id]
+            } else {
+                Vec::new()
+            },
+            mobs_to_simplify_ai: if !result.success {
+                vec![mob_id]
+            } else {
+                Vec::new()
+            },
         }
     }
 }

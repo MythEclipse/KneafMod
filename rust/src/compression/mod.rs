@@ -243,8 +243,57 @@ impl CompressionEngine {
             stats.total_compressed += compressed_size;
             stats.compression_ratio = Self::calculate_compression_ratio(original_size, compressed_size);
             stats.compression_time = start_time.elapsed();
-            stats.compression_time_ms = start_time.elapsed().as_millis();
+            stats.compression_time = start_time.elapsed();
         }
+    }
+}
+
+/// Chunk compressor for compressing Minecraft world chunks
+pub struct ChunkCompressor {
+    algorithm: CompressionAlgorithm,
+    level: CompressionLevel,
+}
+
+impl ChunkCompressor {
+    pub fn new() -> Self {
+        Self {
+            algorithm: CompressionAlgorithm::Lz4,
+            level: CompressionLevel::Default,
+        }
+    }
+
+    pub fn with_algorithm(mut self, algorithm: CompressionAlgorithm) -> Self {
+        self.algorithm = algorithm;
+        self
+    }
+
+    pub fn with_level(mut self, level: CompressionLevel) -> Self {
+        self.level = level;
+        self
+    }
+
+    pub fn compress(&self, data: &[u8]) -> Result<Vec<u8>, CompressionError> {
+        match self.algorithm {
+            CompressionAlgorithm::Lz4 => {
+                compress_prepend_size(data).map_err(CompressionError::Lz4)
+            }
+            CompressionAlgorithm::None => Ok(data.to_vec()),
+        }
+    }
+
+    pub fn decompress(&self, data: &[u8]) -> Result<Vec<u8>, CompressionError> {
+        match self.algorithm {
+            CompressionAlgorithm::Lz4 => {
+                decompress_size_prepended(data).map_err(CompressionError::Lz4Decompress)
+            }
+            CompressionAlgorithm::None => Ok(data.to_vec()),
+        }
+    }
+}
+
+impl Default for ChunkCompressor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

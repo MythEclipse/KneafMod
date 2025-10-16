@@ -21,6 +21,12 @@ pub trait ParallelExecutor: Send + Sync {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static;
 
+    /// Executes a function asynchronously, returning a future
+    fn execute<F, R>(&self, f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static;
+
     /// Shuts down the executor gracefully
     fn shutdown(&self);
 
@@ -29,6 +35,64 @@ pub trait ParallelExecutor: Send + Sync {
 
     /// Gets the maximum number of concurrent tasks
     fn max_concurrent_tasks(&self) -> usize;
+}
+
+/// Enum for dynamic dispatch of parallel executors
+#[derive(Clone)]
+pub enum ParallelExecutorEnum {
+    ThreadPool(Arc<ThreadPoolExecutor>),
+    WorkStealing(Arc<WorkStealingExecutor>),
+    Async(Arc<AsyncExecutor>),
+}
+
+impl ParallelExecutor for ParallelExecutorEnum {
+    fn execute_sync<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        match self {
+            ParallelExecutorEnum::ThreadPool(e) => e.execute_sync(f),
+            ParallelExecutorEnum::WorkStealing(e) => e.execute_sync(f),
+            ParallelExecutorEnum::Async(e) => e.execute_sync(f),
+        }
+    }
+
+    fn execute<F, R>(&self, f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        match self {
+            ParallelExecutorEnum::ThreadPool(e) => e.execute(f),
+            ParallelExecutorEnum::WorkStealing(e) => e.execute(f),
+            ParallelExecutorEnum::Async(e) => e.execute(f),
+        }
+    }
+
+    fn shutdown(&self) {
+        match self {
+            ParallelExecutorEnum::ThreadPool(e) => e.shutdown(),
+            ParallelExecutorEnum::WorkStealing(e) => e.shutdown(),
+            ParallelExecutorEnum::Async(e) => e.shutdown(),
+        }
+    }
+
+    fn running_tasks(&self) -> usize {
+        match self {
+            ParallelExecutorEnum::ThreadPool(e) => e.running_tasks(),
+            ParallelExecutorEnum::WorkStealing(e) => e.running_tasks(),
+            ParallelExecutorEnum::Async(e) => e.running_tasks(),
+        }
+    }
+
+    fn max_concurrent_tasks(&self) -> usize {
+        match self {
+            ParallelExecutorEnum::ThreadPool(e) => e.max_concurrent_tasks(),
+            ParallelExecutorEnum::WorkStealing(e) => e.max_concurrent_tasks(),
+            ParallelExecutorEnum::Async(e) => e.max_concurrent_tasks(),
+        }
+    }
 }
 
 /// Async-compatible executor trait for dyn usage
@@ -53,6 +117,15 @@ impl ParallelExecutorFactory {
             ExecutorType::ThreadPool => Arc::new(ThreadPoolExecutor::new()),
             ExecutorType::WorkStealing => Arc::new(WorkStealingExecutor::new()),
             ExecutorType::Async => Arc::new(AsyncExecutor::new()),
+        }
+    }
+
+    /// Creates a new parallel executor enum of the specified type
+    pub fn create_executor_enum(executor_type: ExecutorType) -> ParallelExecutorEnum {
+        match executor_type {
+            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new())),
+            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new())),
+            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new())),
         }
     }
 }
@@ -174,13 +247,13 @@ impl ParallelExecutor for AsyncExecutor {
 }
 
 /// Global executor instance for the application
-// static GLOBAL_EXECUTOR: Mutex<Option<Arc<Box<dyn ParallelExecutor>>>> = Mutex::new(None);
+static GLOBAL_EXECUTOR: Mutex<Option<ParallelExecutorEnum>> = Mutex::new(None);
 
 /// Initializes the global executor with the specified type
-// pub fn initialize_global_executor(executor_type: ExecutorType) {
-//     let mut global_executor = GLOBAL_EXECUTOR.lock().expect("Failed to lock global executor");
-//     *global_executor = Some(ParallelExecutorFactory::create_executor(executor_type));
-// }
+pub fn initialize_global_executor(executor_type: ExecutorType) {
+    let mut global_executor = GLOBAL_EXECUTOR.lock().expect("Failed to lock global executor");
+    *global_executor = Some(ParallelExecutorFactory::create_executor_enum(executor_type));
+}
 
 /// Gets the global executor instance
 // pub fn get_global_executor() -> Arc<Box<dyn ParallelExecutor>> {
@@ -192,9 +265,9 @@ impl ParallelExecutor for AsyncExecutor {
 // }
 
 /// Initializes the global executor with a default work-stealing executor
-// pub fn initialize_default_executor() {
-//     initialize_global_executor(ExecutorType::WorkStealing);
-// }
+pub fn initialize_default_executor() {
+    initialize_global_executor(ExecutorType::WorkStealing);
+}
 
 // Initialize the global executor with a default work-stealing executor on first use
 #[ctor::ctor]

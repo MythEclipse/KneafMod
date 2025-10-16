@@ -1,8 +1,9 @@
 use crate::errors::{Result, RustError};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::simd_enhanced::{detect_simd_capability, SimdCapability};
-pub mod monitor_builder;
-pub use monitor_builder::{PerformanceMonitorBuilder, PerformanceMonitorFactory};
+use crate::performance::common::{
+    JniCallMetrics, LockWaitMetrics, MemoryMetrics, PerformanceMetrics, PerformanceMonitorTrait
+};
 use jni::objects::GlobalRef;
 use jni::{
     objects::{JClass, JString},
@@ -14,40 +15,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, Instant};
-
-#[derive(Debug, Default, Clone)]
-pub struct JniCallMetrics {
-    pub total_calls: u64,
-    pub call_duration_ms: u64,
-    pub max_call_duration_ms: u64,
-    pub call_types: HashMap<String, u64>,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct LockWaitMetrics {
-    pub total_lock_waits: u64,
-    pub total_lock_wait_time_ms: u64,
-    pub max_lock_wait_time_ms: u64,
-    pub current_lock_contention: u32,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct MemoryMetrics {
-    pub total_heap_bytes: u64,
-    pub used_heap_bytes: u64,
-    pub free_heap_bytes: u64,
-    pub peak_heap_bytes: u64,
-    pub gc_count: u64,
-    pub gc_time_ms: u64,
-    pub used_heap_percent: f64,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct PerformanceMetrics {
-    pub jni_calls: JniCallMetrics,
-    pub lock_wait_metrics: LockWaitMetrics,
-    pub memory_metrics: MemoryMetrics,
-}
 
 #[derive(Debug, Clone)]
 pub struct SwapOperationStats {
@@ -212,10 +179,216 @@ impl Default for PerformanceStats {
     }
 }
 
-
-
 static SWAP_PERFORMANCE_STATS: Lazy<PerformanceStats> = Lazy::new(PerformanceStats::new);
 
+#[derive(Debug, Clone, Copy)]
+pub enum SwapHealthStatus {
+    Healthy,
+    Degraded,
+    Unhealthy,
+}
+
+#[derive(Debug, Clone)]
+pub struct SwapPerformanceSummary {
+    pub swap_in_operations: u64,
+    pub swap_out_operations: u64,
+    pub swap_failures: u64,
+    pub swap_in_bytes: u64,
+    pub swap_out_bytes: u64,
+    pub average_swap_in_time_ms: f64,
+    pub average_swap_out_time_ms: f64,
+    pub swap_latency_ms: f64,
+    pub swap_io_throughput_mbps: f64,
+    pub swap_hit_rate: f64,
+    pub swap_miss_rate: f64,
+    pub memory_pressure_level: String,
+    pub pressure_trigger_events: u64,
+    pub swap_cleanup_operations: u64,
+}
+
+/// Builder for creating configured PerformanceMonitor instances
+pub struct PerformanceMonitorBuilder {
+    // Thresholds
+    jni_call_threshold_ms: Option<u64>,
+    lock_wait_threshold_ms: Option<u64>,
+    memory_usage_threshold_pct: Option<u32>,
+    gc_duration_threshold_ms: Option<u64>,
+    
+    // Alert configuration
+    alert_cooldown: Option<u64>,
+    
+    // Logger configuration
+    logger_name: Option<String>,
+    
+    // JNI reference tracking
+    enable_jni_ref_tracking: Option<bool>,
+}
+
+impl Default for PerformanceMonitorBuilder {
+    fn default() -> Self {
+        Self {
+            jni_call_threshold_ms: None,
+            lock_wait_threshold_ms: None,
+            memory_usage_threshold_pct: None,
+            gc_duration_threshold_ms: None,
+            alert_cooldown: None,
+            logger_name: None,
+            enable_jni_ref_tracking: None,
+        }
+    }
+}
+
+impl PerformanceMonitorBuilder {
+    /// Create a new builder with default settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    /// Set JNI call threshold in milliseconds
+    pub fn with_jni_call_threshold(mut self, threshold: u64) -> Self {
+        self.jni_call_threshold_ms = Some(threshold);
+        self
+    }
+    
+    /// Set lock wait threshold in milliseconds
+    pub fn with_lock_wait_threshold(mut self, threshold: u64) -> Self {
+        self.lock_wait_threshold_ms = Some(threshold);
+        self
+    }
+    
+    /// Set memory usage threshold percentage
+    pub fn with_memory_usage_threshold(mut self, threshold: u32) -> Self {
+        self.memory_usage_threshold_pct = Some(threshold);
+        self
+    }
+    
+    /// Set GC duration threshold in milliseconds
+    pub fn with_gc_duration_threshold(mut self, threshold: u64) -> Self {
+        self.gc_duration_threshold_ms = Some(threshold);
+        self
+    }
+    
+    /// Set alert cooldown in milliseconds
+    pub fn with_alert_cooldown(mut self, cooldown: u64) -> Self {
+        self.alert_cooldown = Some(cooldown);
+        self
+    }
+    
+    /// Set custom logger name
+    pub fn with_logger_name(mut self, name: String) -> Self {
+        self.logger_name = Some(name);
+        self
+    }
+    
+    /// Enable or disable JNI reference tracking
+    pub fn with_jni_ref_tracking(mut self, enable: bool) -> Self {
+        self.enable_jni_ref_tracking = Some(enable);
+        self
+    }
+    
+    /// Build a PerformanceMonitor with the configured settings
+    pub fn build(&self) -> Result<PerformanceMonitor> {
+        let logger_name = self.logger_name.as_deref().unwrap_or("performance_monitor");
+        let logger = Arc::new(PerformanceLogger::new(logger_name));
+        
+        let now_ns = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
+        let monitor = PerformanceMonitor {
+            logger,
+            
+            // Thresholds with fallback to defaults
+            jni_call_threshold_ms: Arc::new(AtomicU64::new(
+                self.jni_call_threshold_ms.unwrap_or(100)
+            )),
+            lock_wait_threshold_ms: Arc::new(AtomicU64::new(
+                self.lock_wait_threshold_ms.unwrap_or(50)
+            )),
+            memory_usage_threshold_pct: Arc::new(AtomicU32::new(
+                self.memory_usage_threshold_pct.unwrap_or(90)
+            )),
+            gc_duration_threshold_ms: Arc::new(AtomicU64::new(
+                self.gc_duration_threshold_ms.unwrap_or(100)
+            )),
+            
+            // Counters - initialized to 0
+            jni_calls_total: Arc::new(AtomicU64::new(0)),
+            jni_call_duration_ms: Arc::new(AtomicU64::new(0)),
+            jni_max_call_duration_ms: Arc::new(AtomicU64::new(0)),
+            
+            lock_waits_total: Arc::new(AtomicU64::new(0)),
+            lock_wait_time_ms: Arc::new(AtomicU64::new(0)),
+            lock_max_wait_time_ms: Arc::new(AtomicU64::new(0)),
+            current_lock_contention: Arc::new(AtomicU32::new(0)),
+            
+            memory_total_heap: Arc::new(AtomicU64::new(0)),
+            memory_used_heap: Arc::new(AtomicU64::new(0)),
+            memory_free_heap: Arc::new(AtomicU64::new(0)),
+            memory_peak_heap: Arc::new(AtomicU64::new(0)),
+            memory_gc_count: Arc::new(AtomicU64::new(0)),
+            memory_gc_time_ms: Arc::new(AtomicU64::new(0)),
+            
+            // State
+            is_monitoring: Arc::new(AtomicBool::new(true)),
+            last_alert_time_ns: Arc::new(AtomicU64::new(now_ns)),
+            alert_cooldown: Arc::new(AtomicU64::new(
+                self.alert_cooldown.unwrap_or(3000) // 3 seconds default
+            )),
+            
+            // JNI reference tracking
+            jni_global_refs: Arc::new(Mutex::new(if self.enable_jni_ref_tracking.unwrap_or(true) {
+                HashMap::new()
+            } else {
+                HashMap::new()
+            })),
+        };
+        
+        Ok(monitor)
+    }
+}
+
+/// Factory for creating PerformanceMonitor instances
+pub struct PerformanceMonitorFactory;
+
+impl PerformanceMonitorFactory {
+    /// Create a default PerformanceMonitor
+    pub fn create_default() -> Result<PerformanceMonitor> {
+        PerformanceMonitorBuilder::new().build()
+    }
+    
+    /// Create a PerformanceMonitor with strict thresholds
+    pub fn create_strict() -> Result<PerformanceMonitor> {
+        PerformanceMonitorBuilder::new()
+            .with_jni_call_threshold(50)
+            .with_lock_wait_threshold(25)
+            .with_memory_usage_threshold(80)
+            .with_gc_duration_threshold(50)
+            .build()
+    }
+    
+    /// Create a PerformanceMonitor with lenient thresholds
+    pub fn create_lenient() -> Result<PerformanceMonitor> {
+        PerformanceMonitorBuilder::new()
+            .with_jni_call_threshold(200)
+            .with_lock_wait_threshold(100)
+            .with_memory_usage_threshold(95)
+            .with_gc_duration_threshold(200)
+            .build()
+    }
+    
+    /// Create a custom PerformanceMonitor with specific configuration
+    pub fn create_custom<F>(builder_customizer: F) -> Result<PerformanceMonitor>
+    where
+        F: FnOnce(PerformanceMonitorBuilder) -> PerformanceMonitorBuilder,
+    {
+        let builder = builder_customizer(PerformanceMonitorBuilder::new());
+        builder.build()
+    }
+}
+
+/// Performance monitor for tracking system metrics
 pub struct PerformanceMonitor {
     pub logger: Arc<PerformanceLogger>,
 
@@ -249,6 +422,28 @@ pub struct PerformanceMonitor {
 
     // JNI reference tracking to prevent leaks
     pub jni_global_refs: Arc<Mutex<HashMap<jlong, GlobalRef>>>,
+}
+
+impl PerformanceMonitorTrait for PerformanceMonitor {
+    fn record_jni_call(&self, call_type: &str, duration_ms: u64) {
+        self.record_jni_call_impl(call_type, duration_ms);
+    }
+    
+    fn record_lock_wait(&self, lock_name: &str, duration_ms: u64) {
+        self.record_lock_wait_impl(lock_name, duration_ms);
+    }
+    
+    fn record_memory_usage(&self, total_bytes: u64, used_bytes: u64, free_bytes: u64) {
+        self.record_memory_usage_impl(total_bytes, used_bytes, free_bytes);
+    }
+    
+    fn record_gc_event(&self, duration_ms: u64) {
+        self.record_gc_event_impl(duration_ms);
+    }
+    
+    fn get_metrics_snapshot(&self) -> PerformanceMetrics {
+        self.get_metrics_snapshot_impl()
+    }
 }
 
 impl PerformanceMonitor {
@@ -294,7 +489,7 @@ impl PerformanceMonitor {
         })
     }
 
-    pub fn record_jni_call(&self, call_type: &str, duration_ms: u64) {
+    pub fn record_jni_call_impl(&self, call_type: &str, duration_ms: u64) {
         if !self.is_monitoring.load(Ordering::Relaxed) {
             return;
         }
@@ -328,7 +523,7 @@ impl PerformanceMonitor {
         }
     }
 
-    pub fn record_lock_wait(&self, lock_name: &str, duration_ms: u64) {
+    pub fn record_lock_wait_impl(&self, lock_name: &str, duration_ms: u64) {
         if !self.is_monitoring.load(Ordering::Relaxed) {
             return;
         }
@@ -365,7 +560,7 @@ impl PerformanceMonitor {
         }
     }
 
-    pub fn record_memory_usage(&self, total_bytes: u64, used_bytes: u64, free_bytes: u64) {
+    pub fn record_memory_usage_impl(&self, total_bytes: u64, used_bytes: u64, free_bytes: u64) {
         if !self.is_monitoring.load(Ordering::Relaxed) {
             return;
         }
@@ -405,7 +600,7 @@ impl PerformanceMonitor {
         }
     }
 
-    pub fn record_gc_event(&self, duration_ms: u64) {
+    pub fn record_gc_event_impl(&self, duration_ms: u64) {
         if !self.is_monitoring.load(Ordering::Relaxed) {
             return;
         }
@@ -461,7 +656,7 @@ impl PerformanceMonitor {
         );
     }
 
-    pub fn get_metrics_snapshot(&self) -> PerformanceMetrics {
+    pub fn get_metrics_snapshot_impl(&self) -> PerformanceMetrics {
         // Create metrics directly from atomic counters (lock-free)
         let mut metrics = PerformanceMetrics::default();
 
@@ -495,33 +690,118 @@ impl PerformanceMonitor {
 
         metrics
     }
+
+    // --- Minimal swap reporting API stubs (exported at crate root) ---
+    pub fn record_operation(start: std::time::Instant, items_processed: usize, thread_count: usize) {
+        let duration = start.elapsed().as_millis() as u64;
+        let trace_id = generate_trace_id();
+        PERFORMANCE_MONITOR.logger.log_info(
+            "operation",
+            &trace_id,
+            &format!(
+                "processed {} items on {} threads in {} ms",
+                items_processed, thread_count, duration
+            ),
+        );
+    }
+
+    pub fn get_system_status() -> String {
+        let simd_capability = detect_simd_capability();
+        let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
+
+        format!(
+            "CPU Capabilities: {:?}, Memory: {:.1}% used, GC Events: {}, Lock Contention: {}",
+            simd_capability,
+            metrics.memory_metrics.used_heap_percent,
+            metrics.memory_metrics.gc_count,
+            metrics.lock_wait_metrics.current_lock_contention
+        )
+    }
+
+    pub fn log_periodic_status() {
+        let trace_id = generate_trace_id();
+        let status = get_system_status();
+        PERFORMANCE_MONITOR
+            .logger
+            .log_info("system_status", &trace_id, &status);
+    }
+
+    pub fn log_startup_info() {
+        let trace_id = generate_trace_id();
+        let simd_capability = detect_simd_capability();
+
+        // Get CPU capabilities string
+        let cpu_capabilities = match simd_capability {
+            SimdCapability::Avx512Extreme => "AVX-512 Extreme ✓ AVX-512 ✓ AVX2 ✓ SSE4.2 ✓",
+            SimdCapability::Full => "AVX-512 ✓ AVX2 ✓ SSE4.2 ✓",
+            SimdCapability::Advanced => "AVX2 ✓ SSE4.2 ✓",
+            SimdCapability::Basic => "SSE4.2 ✓",
+            SimdCapability::None => "Scalar (no SIMD)",
+        };
+
+        PERFORMANCE_MONITOR.logger.log_info("startup", &trace_id,
+            &format!("=== KNEAF MOD STARTUP ===\nCPU Capabilities: {}\nSIMD Level: {:?}\nRust Performance Monitoring: ACTIVE",
+            cpu_capabilities, simd_capability));
+    }
+
+    pub fn log_real_time_status() {
+        let trace_id = generate_trace_id();
+        let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
+
+        // Check thresholds and log warnings if exceeded
+        if metrics.memory_metrics.used_heap_percent > 90.0 {
+            PERFORMANCE_MONITOR.logger.log_warning(
+                "memory_threshold",
+                &trace_id,
+                &format!(
+                    "Memory usage high: {:.1}%",
+                    metrics.memory_metrics.used_heap_percent
+                ),
+            );
+        }
+
+        if metrics.lock_wait_metrics.current_lock_contention > 10 {
+            PERFORMANCE_MONITOR.logger.log_warning(
+                "lock_contention",
+                &trace_id,
+                &format!(
+                    "High lock contention: {}",
+                    metrics.lock_wait_metrics.current_lock_contention
+                ),
+            );
+        }
+
+        if metrics.jni_calls.max_call_duration_ms > 100 {
+            PERFORMANCE_MONITOR.logger.log_warning(
+                "jni_threshold",
+                &trace_id,
+                &format!(
+                    "Slow JNI call: {}ms",
+                    metrics.jni_calls.max_call_duration_ms
+                ),
+            );
+        }
+    }
+
+    pub fn log_performance_summary() {
+        let trace_id = generate_trace_id();
+        let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
+
+        PERFORMANCE_MONITOR.logger.log_info(
+            "performance_summary",
+            &trace_id,
+            &format!(
+                "Performance Summary: {} JNI calls, {} lock waits, {:.1}% memory used, {} GC events",
+                metrics.jni_calls.total_calls,
+                metrics.lock_wait_metrics.total_lock_waits,
+                metrics.memory_metrics.used_heap_percent,
+                metrics.memory_metrics.gc_count
+            ),
+        );
+    }
 }
 
-// --- Minimal swap reporting API stubs (exported at crate root) ---
-#[derive(Debug, Clone, Copy)]
-pub enum SwapHealthStatus {
-    Healthy,
-    Degraded,
-    Unhealthy,
-}
-
-pub struct SwapPerformanceSummary {
-    pub swap_in_operations: u64,
-    pub swap_out_operations: u64,
-    pub swap_failures: u64,
-    pub swap_in_bytes: u64,
-    pub swap_out_bytes: u64,
-    pub average_swap_in_time_ms: f64,
-    pub average_swap_out_time_ms: f64,
-    pub swap_latency_ms: f64,
-    pub swap_io_throughput_mbps: f64,
-    pub swap_hit_rate: f64,
-    pub swap_miss_rate: f64,
-    pub memory_pressure_level: String,
-    pub pressure_trigger_events: u64,
-    pub swap_cleanup_operations: u64,
-}
-
+// --- Swap performance reporting functions ---
 pub fn report_swap_operation(
     direction: &str,
     bytes: u64,
@@ -760,125 +1040,12 @@ pub fn get_swap_performance_summary() -> SwapPerformanceSummary {
     }
 }
 
-/// Record an operation for lightweight performance tracking from other modules.
-pub fn record_operation(start: std::time::Instant, items_processed: usize, thread_count: usize) {
-    let duration = start.elapsed().as_millis() as u64;
-    let trace_id = generate_trace_id();
-    PERFORMANCE_MONITOR.logger.log_info(
-        "operation",
-        &trace_id,
-        &format!(
-            "processed {} items on {} threads in {} ms",
-            items_processed, thread_count, duration
-        ),
-    );
-}
-
-/// Get comprehensive system status information for logging
-pub fn get_system_status() -> String {
-    let simd_capability = detect_simd_capability();
-    let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
-
-    format!(
-        "CPU Capabilities: {:?}, Memory: {:.1}% used, GC Events: {}, Lock Contention: {}",
-        simd_capability,
-        metrics.memory_metrics.used_heap_percent,
-        metrics.memory_metrics.gc_count,
-        metrics.lock_wait_metrics.current_lock_contention
-    )
-}
-
-/// Log system status periodically
-pub fn log_periodic_status() {
-    let trace_id = generate_trace_id();
-    let status = get_system_status();
-    PERFORMANCE_MONITOR
-        .logger
-        .log_info("system_status", &trace_id, &status);
-}
-
-/// Log startup information with comprehensive system details
-pub fn log_startup_info() {
-    let trace_id = generate_trace_id();
-    let simd_capability = detect_simd_capability();
-
-    // Get CPU capabilities string
-    let cpu_capabilities = match simd_capability {
-        SimdCapability::Avx512Extreme => "AVX-512 Extreme ✓ AVX-512 ✓ AVX2 ✓ SSE4.2 ✓",
-        SimdCapability::Full => "AVX-512 ✓ AVX2 ✓ SSE4.2 ✓",
-        SimdCapability::Advanced => "AVX2 ✓ SSE4.2 ✓",
-        SimdCapability::Basic => "SSE4.2 ✓",
-        SimdCapability::None => "Scalar (no SIMD)",
-    };
-
-    PERFORMANCE_MONITOR.logger.log_info("startup", &trace_id,
-        &format!("=== KNEAF MOD STARTUP ===\nCPU Capabilities: {}\nSIMD Level: {:?}\nRust Performance Monitoring: ACTIVE",
-        cpu_capabilities, simd_capability));
-}
-
-/// Log real-time status updates with threshold checking
-pub fn log_real_time_status() {
-    let trace_id = generate_trace_id();
-    let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
-
-    // Check thresholds and log warnings if exceeded
-    if metrics.memory_metrics.used_heap_percent > 90.0 {
-        PERFORMANCE_MONITOR.logger.log_warning(
-            "memory_threshold",
-            &trace_id,
-            &format!(
-                "Memory usage high: {:.1}%",
-                metrics.memory_metrics.used_heap_percent
-            ),
-        );
-    }
-
-    if metrics.lock_wait_metrics.current_lock_contention > 10 {
-        PERFORMANCE_MONITOR.logger.log_warning(
-            "lock_contention",
-            &trace_id,
-            &format!(
-                "High lock contention: {}",
-                metrics.lock_wait_metrics.current_lock_contention
-            ),
-        );
-    }
-
-    if metrics.jni_calls.max_call_duration_ms > 100 {
-        PERFORMANCE_MONITOR.logger.log_warning(
-            "jni_threshold",
-            &trace_id,
-            &format!(
-                "Slow JNI call: {}ms",
-                metrics.jni_calls.max_call_duration_ms
-            ),
-        );
-    }
-}
-
-/// Log performance metrics summary
-pub fn log_performance_summary() {
-    let trace_id = generate_trace_id();
-    let metrics = PERFORMANCE_MONITOR.get_metrics_snapshot();
-
-    PERFORMANCE_MONITOR.logger.log_info(
-        "performance_summary",
-        &trace_id,
-        &format!(
-            "Performance Summary: {} JNI calls, {} lock waits, {:.1}% memory used, {} GC events",
-            metrics.jni_calls.total_calls,
-            metrics.lock_wait_metrics.total_lock_waits,
-            metrics.memory_metrics.used_heap_percent,
-            metrics.memory_metrics.gc_count
-        ),
-    );
-}
-
 pub static PERFORMANCE_MONITOR: Lazy<PerformanceMonitor> = Lazy::new(|| {
     let logger = PerformanceLogger::new("performance_monitor");
     PerformanceMonitor::new(Arc::new(logger)).expect("Failed to create PerformanceMonitor")
 });
 
+// JNI native functions
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_performance_RustPerformance_recordJniCallNative(
     mut env: JNIEnv,

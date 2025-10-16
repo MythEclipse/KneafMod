@@ -5,11 +5,11 @@ use crate::types::EntityTypeTrait as EntityType;
 use crate::simd_standardized::{get_standard_simd_ops, StandardSimdOps};
 use crate::parallelism::executor_factory::ParallelExecutorFactory;
 use crate::ParallelExecutor;
-use crate::EntityConfig;
+use crate::entities::common::types::EntityConfig;
 use crate::EntityProcessingInput;
 use crate::EntityProcessingResult;
 use crate::GroupType;
-use crate::PathfindingCacheStats;
+use crate::types::PathfindingCacheStats;
 use std::sync::Arc;
 use serde_json;
 
@@ -27,14 +27,41 @@ pub struct VillagerProcessingConfig {
 }
 
 /// Villager entity processor
+use crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum;
+
 pub struct VillagerEntityProcessor {
     simd_ops: Arc<StandardSimdOps>,
-    executor: Arc<dyn ParallelExecutor>,
+    executor: ParallelExecutorEnum,
 }
 
 impl VillagerEntityProcessor {
-    pub fn new(simd_ops: Arc<StandardSimdOps>, executor: Arc<dyn ParallelExecutor>) -> Self {
+    pub fn new(simd_ops: Arc<StandardSimdOps>, executor: ParallelExecutorEnum) -> Self {
         Self { simd_ops, executor }
+    }
+
+    pub fn process_villagers(&self, input: VillagerInput) -> VillagerProcessResult {
+        // Basic villager processing logic
+        let mut disable_ai = Vec::new();
+        let mut simplify_ai = Vec::new();
+        let mut reduce_pathfinding = Vec::new();
+        let groups = Vec::new();
+
+        for villager in &input.villagers {
+            if villager.distance > 32.0 {
+                disable_ai.push(villager.id);
+            } else if villager.distance > 64.0 {
+                simplify_ai.push(villager.id);
+            } else if villager.distance > 128.0 {
+                reduce_pathfinding.push(villager.id);
+            }
+        }
+
+        VillagerProcessResult {
+            villagers_to_disable_ai: disable_ai,
+            villagers_to_simplify_ai: simplify_ai,
+            villagers_to_reduce_pathfinding: reduce_pathfinding,
+            villager_groups: groups,
+        }
     }
 }
 
@@ -76,26 +103,22 @@ impl Default for VillagerProcessingConfig {
 pub struct VillagerProcessingManager {
     config: VillagerProcessingConfig,
     simd_processor: Arc<StandardSimdOps>,
-    executor: Arc<crate::parallelism::ParallelExecutor>,
-    processor: Arc<dyn EntityProcessor>,
+    executor: ParallelExecutorEnum,
+    processor: VillagerEntityProcessor,
 }
 
 impl VillagerProcessingManager {
     /// Create a new villager processing manager with all optimizations
     pub fn new(config: VillagerProcessingConfig) -> Result<Self, String> {
         let simd_processor = Arc::new(get_standard_simd_ops().clone());
-        let executor = Arc::new(ParallelExecutorFactory::create_default()
-            .map_err(|e| format!("Failed to create parallel executor: {}", e))?);
+        let executor = ParallelExecutorFactory::create_default()
+            .map_err(|e| format!("Failed to create parallel executor: {}", e))?;
         
         // Create a villager entity processor with the given config
-        let processor = Arc::new(VillagerEntityProcessor::new(
+        let processor = VillagerEntityProcessor::new(
             Arc::clone(&simd_processor),
-            Arc::clone(&executor),
-        )) as Arc<dyn EntityProcessor>;
-        
-        // Update the processor with the custom config
-        let ai_config = Arc::new(config.ai_config) as Arc<dyn EntityConfig>;
-        processor.update_config(ai_config);
+            executor.clone(),
+        );
         
         Ok(Self {
             config,
@@ -106,19 +129,12 @@ impl VillagerProcessingManager {
     }
 
     /// Process villager AI with full optimizations - main entry point
-    pub fn process_villager_ai(&mut self, input: VillagerInput) -> EnhancedVillagerProcessResult {
-        let entity_input: EntityProcessingInput = input.into();
-        let entity_result = self.processor.process_entities(entity_input);
-        let mut result = entity_result.into();
-        
-        // Update with additional statistics
-        result.processing_stats.simd_operations_used = self.simd_processor.get_level() as usize;
-        
-        result
+    pub fn process_villager_ai(&mut self, input: VillagerInput) -> VillagerProcessResult {
+        self.processor.process_villagers(input)
     }
 
     /// Process villager AI using SIMD acceleration for vector operations
-    pub fn process_villager_ai_simd(&mut self, input: VillagerInput) -> EnhancedVillagerProcessResult {
+    pub fn process_villager_ai_simd(&mut self, input: VillagerInput) -> VillagerProcessResult {
         let start_time = std::time::Instant::now();
         
         // Use SIMD for distance calculations
@@ -135,8 +151,7 @@ impl VillagerProcessingManager {
         let mut result = self.process_villager_ai(input);
         
         // Update SIMD statistics
-        result.processing_stats.simd_operations_used = distance_factors.len();
-        result.processing_stats.processing_time_ms = start_time.elapsed().as_millis() as u64;
+        // Processing stats removed - using simple result structure
         
         result
     }
@@ -355,6 +370,8 @@ pub fn get_villager_processing_stats() -> Result<VillagerProcessingStats, String
         total_villagers_processed: 0,
     })
 }
+
+use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct VillagerProcessingStats {

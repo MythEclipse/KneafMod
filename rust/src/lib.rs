@@ -13,6 +13,17 @@ pub mod binary;
 pub mod compression;
 pub mod batch;
 pub mod storage;
+pub mod macros;
+pub mod zero_copy_stubs;
+pub mod memory_pressure_config;
+pub mod simd_enhanced;
+pub mod simd_standardized;
+pub mod jni_bridge_builder;
+pub mod jni_converter_factory;
+pub mod jni_errors;
+pub mod jni_call;
+pub mod jni_exports;
+pub mod jni_utils;
 
 // Export all public modules for use outside the crate
 pub use parallelism::*;
@@ -30,6 +41,7 @@ pub use binary::*;
 pub use compression::*;
 pub use batch::*;
 pub use storage::*;
+pub use macros::*;
 
 // Export verification test for manual execution
 #[cfg(test)]

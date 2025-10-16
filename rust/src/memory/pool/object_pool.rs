@@ -12,6 +12,7 @@ use crate::errors::{RustError, Result};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::memory::pool::atomic_state::AtomicPoolState;
 use crate::memory::pool::common::{MemoryPool, MemoryPoolConfig, MemoryPoolStats};
+use crate::memory_pool_error;
 use crate::memory_pressure_config::GLOBAL_MEMORY_PRESSURE_CONFIG;
 
 /// Enhanced wrapper for pooled objects with LRU access tracking and swap tracking
@@ -60,8 +61,8 @@ impl From<MemoryPoolConfig> for ObjectPoolConfig {
             pre_allocate: config.pre_allocate,
             high_water_mark_ratio: config.high_water_mark_ratio,
             cleanup_threshold: config.cleanup_threshold,
-            logger_name: config.logger_name,
-            common_config: config,
+            logger_name: config.logger_name.clone(),
+            common_config: config.clone(),
         }
     }
 }
@@ -235,11 +236,11 @@ where
     common_stats: MemoryPoolStats,
 }
 
-impl<T> ObjectPool<T>
+impl<T> MemoryPool for ObjectPool<T>
 where
-    T: Default + Debug + Send + 'static,
+    T: Debug + Send + Sync + Default + Clone,
 {
-    pub fn new(config: ObjectPoolConfig) -> Self {
+    fn new(config: ObjectPoolConfig) -> Self {
         // Validate configuration
         if config.max_size == 0 {
             panic!("Max size cannot be zero");
@@ -269,13 +270,13 @@ where
     }
 
     /// Get pool statistics implementing MemoryPoolStats trait
-    pub fn get_stats(&self) -> MemoryPoolStats {
+    fn get_stats(&self) -> MemoryPoolStats {
         self.common_stats.clone()
     }
 
     /// Get current memory pressure level (0.0 to 1.0)
-    pub fn get_memory_pressure(&self) -> f64 {
-        let current_size = self.get_current_size();
+    fn get_memory_pressure(&self) -> f64 {
+        let current_size = self.atomic_state.get_current_size();
         if self.max_size == 0 {
             0.0
         } else {
@@ -284,7 +285,7 @@ where
     }
 
     /// Allocate memory from the pool (implements MemoryPool trait)
-    pub fn allocate(&self, size: usize) -> Result<Box<[u8]>> {
+    fn allocate(&self, size: usize) -> Result<Box<[u8]>> {
         // For object pool, we allocate based on object count, not byte size
         // Convert byte size to approximate object count for allocation purposes
         let object_size_estimate = std::mem::size_of::<T>();
@@ -295,13 +296,12 @@ where
         };
 
         // Check if we can allocate without exceeding max size
-        let current_size = self.get_current_size();
+        let current_size = self.atomic_state.get_current_size();
         if current_size + object_count > self.max_size {
-            return memory_pool_error!("Memory pool exhausted: current={}, max={}", current_size, self.max_size);
         }
 
         // Get object from pool or create new one
-        let obj = self.get().object.take().unwrap_or_else(T::default);
+        let obj = self.get_lockfree().unwrap_or_else(T::default);
         
         // Update statistics
         self.common_stats.allocated_bytes.fetch_add(size, Ordering::Relaxed);
@@ -312,7 +312,7 @@ where
     }
 
     /// Deallocate memory (implements MemoryPool trait)
-    pub fn deallocate(&self, _ptr: *mut u8, size: usize) {
+    fn deallocate(&self, _ptr: *mut u8, size: usize) {
         // For object pool, we handle deallocation through PooledObject's Drop trait
         self.common_stats.total_deallocations.fetch_add(1, Ordering::Relaxed);
         self.common_stats.allocated_bytes.fetch_sub(size, Ordering::Relaxed);
@@ -329,8 +329,10 @@ where
     }
 
     // Manual Clone implementation because atomics do not implement Clone
-    pub fn clone_shallow(&self) -> Self {
+    fn clone_shallow(&self) -> Self {
         Self {
+            common_stats: MemoryPoolStats::default(),
+            config: self.config.clone(),
             pool: Arc::clone(&self.pool),
             access_order: Arc::clone(&self.access_order),
             next_id: CachePadded::new(AtomicU64::new(self.next_id.load(Ordering::Relaxed))),
@@ -353,7 +355,7 @@ where
     }
 
     /// Get an object from the pool using thread-safe operations
-    pub fn get(&self) -> PooledObject<T> {
+    fn get(&self) -> PooledObject<T> {
         let trace_id = generate_trace_id();
 
         // Perform lazy cleanup before allocation if needed
@@ -412,7 +414,7 @@ where
     }
 
     /// Get an object from the pool with swap tracking and deadlock prevention
-    pub fn get_with_tracking(
+    fn get_with_tracking(
         &self,
         size_bytes: u64,
         allocation_tracker: Arc<RwLock<SwapAllocationMetrics>>,
@@ -481,7 +483,7 @@ where
     }
 
     /// Get pool statistics with additional monitoring data
-    pub fn get_monitoring_stats(&self) -> ObjectPoolMonitoringStats {
+    fn get_monitoring_stats(&self) -> ObjectPoolMonitoringStats {
         let trace_id = generate_trace_id();
         self.logger
             .log_operation("get_monitoring_stats", &trace_id, || {
@@ -499,27 +501,27 @@ where
     }
 
     /// Get current pool size atomically
-    pub fn get_current_size(&self) -> usize {
+    fn get_current_size(&self) -> usize {
         self.atomic_state.get_current_size()
     }
 
     /// Get high water mark atomically
-    pub fn get_high_water_mark(&self) -> usize {
+    fn get_high_water_mark(&self) -> usize {
         self.high_water_mark.load(Ordering::Relaxed)
     }
 
     /// Get current usage ratio atomically
-    pub fn get_usage_ratio(&self) -> f64 {
+    fn get_usage_ratio(&self) -> f64 {
         self.atomic_state.get_usage_ratio()
     }
 
     /// Try to increment pool size atomically (thread-safe)
-    pub fn try_increment_pool_size(&self) -> Option<usize> {
+    fn try_increment_pool_size(&self) -> Option<usize> {
         self.atomic_state.try_increment_size()
     }
 
     /// Decrement pool size atomically (thread-safe)
-    pub fn decrement_pool_size(&self) {
+    fn decrement_pool_size(&self) {
         self.atomic_state.decrement_size();
     }
 
@@ -553,7 +555,7 @@ where
     }
 
     /// Perform lazy cleanup when pool usage exceeds threshold with deadlock prevention
-    pub fn lazy_cleanup(&self, threshold: f64) -> bool {
+    fn lazy_cleanup(&self, threshold: f64) -> bool {
         let trace_id = generate_trace_id();
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)

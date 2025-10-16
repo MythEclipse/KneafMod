@@ -3,7 +3,7 @@ use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
-use crate::PlayerData;
+use crate::types::PlayerDataTrait as PlayerData;
 
 const CHUNK_SIZE: f32 = 16.0;
 const MAX_GROUP_RADIUS: f32 = 32.0;
@@ -24,8 +24,8 @@ pub fn group_villagers_by_proximity(
     let villager_chunks: DashMap<(i32, i32), Vec<VillagerData>> = DashMap::new();
 
     for villager in villagers {
-        let chunk_x = (villager.x / CHUNK_SIZE).floor() as i32;
-        let chunk_z = (villager.z / CHUNK_SIZE).floor() as i32;
+        let chunk_x = (villager.position.0 / CHUNK_SIZE).floor() as i32;
+        let chunk_z = (villager.position.2 / CHUNK_SIZE).floor() as i32;
         let key = (chunk_x, chunk_z);
 
         villager_chunks
@@ -94,7 +94,7 @@ fn group_villagers_in_chunk(
         let mut group_villagers = vec![villagers[i].clone()];
         processed[i] = true;
 
-        let mut group_center = (villagers[i].x, villagers[i].y, villagers[i].z);
+        let mut group_center = villagers[i].position;
         let mut total_weight = 1.0;
 
         // Find nearby villagers to add to this group
@@ -104,12 +104,12 @@ fn group_villagers_in_chunk(
             }
 
             let distance = calculate_distance(
-                villagers[i].x,
-                villagers[i].y,
-                villagers[i].z,
-                villagers[j].x,
-                villagers[j].y,
-                villagers[j].z,
+                villagers[i].position.0,
+                villagers[i].position.1,
+                villagers[i].position.2,
+                villagers[j].position.0,
+                villagers[j].position.1,
+                villagers[j].position.2,
             );
 
             if distance <= MAX_GROUP_RADIUS {
@@ -118,9 +118,9 @@ fn group_villagers_in_chunk(
 
                 // Update group center (weighted average)
                 let weight = 1.0 / (1.0 + distance * 0.1); // Closer villagers have more weight
-                group_center.0 += villagers[j].x * weight;
-                group_center.1 += villagers[j].y * weight;
-                group_center.2 += villagers[j].z * weight;
+                group_center.0 += villagers[j].position.0 * weight;
+                group_center.1 += villagers[j].position.1 * weight;
+                group_center.2 += villagers[j].position.2 * weight;
                 total_weight += weight;
             }
 
@@ -156,7 +156,7 @@ pub fn calculate_min_distance_to_players(x: f32, y: f32, z: f32, players: &[Play
 
     players
         .par_iter()
-        .map(|player| calculate_distance(x, y, z, player.x, player.y, player.z))
+        .map(|player| calculate_distance(x, y, z, player.x as f32, player.y as f32, player.z as f32))
         .min_by(|a, b| a.partial_cmp(b).unwrap())
         .unwrap_or(f32::MAX)
 }
@@ -266,12 +266,12 @@ fn calculate_average_villager_distance(villagers: &[VillagerData]) -> f32 {
     for i in 0..villagers.len() {
         for j in (i + 1)..villagers.len() {
             let distance = calculate_distance(
-                villagers[i].x,
-                villagers[i].y,
-                villagers[i].z,
-                villagers[j].x,
-                villagers[j].y,
-                villagers[j].z,
+                villagers[i].position.0,
+                villagers[i].position.1,
+                villagers[i].position.2,
+                villagers[j].position.0,
+                villagers[j].position.1,
+                villagers[j].position.2,
             );
             total_distance += distance;
             count += 1;

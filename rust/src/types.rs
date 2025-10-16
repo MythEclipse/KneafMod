@@ -2,6 +2,24 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
+/// Spatial groups for entity organization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpatialGroups {
+    pub group_type: GroupType,
+    pub entity_ids: Vec<u64>,
+    pub center: (f32, f32, f32),
+    pub radius: f32,
+}
+
+/// Processing statistics for entity operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessingStats {
+    pub operation_time: f64,
+    pub memory_used: usize,
+    pub entities_processed: u64,
+    pub success_rate: f32,
+}
+
 /// Configuration for entities
 pub trait EntityConfig: Send + Sync {
     /// Gets the entity type
@@ -34,6 +52,17 @@ impl EntityConfig for DefaultEntityConfig {
     
     fn update_interval(&self) -> u64 {
         self.update_interval
+    }
+}
+
+impl Default for DefaultEntityConfig {
+    fn default() -> Self {
+        Self {
+            entity_type: EntityType::Generic,
+            is_active: true,
+            update_interval: 1000,
+            properties: HashMap::new(),
+        }
     }
 }
 
@@ -110,6 +139,11 @@ pub struct EntityProcessingResult {
     pub new_velocity: Option<(f32, f32, f32)>,
     pub health_changed: Option<f32>,
     pub metadata_changed: Option<HashMap<String, String>>,
+    pub entities_to_disable_ai: Vec<u64>,
+    pub entities_to_simplify_ai: Vec<u64>,
+    pub entities_to_reduce_pathfinding: Option<Vec<u64>>,
+    pub groups: Option<SpatialGroups>,
+    pub processing_stats: Option<ProcessingStats>,
 }
 
 /// Configuration for binary conversion
@@ -120,6 +154,24 @@ pub struct BinaryConverterConfig {
     pub use_crc_checksum: bool,
     pub max_batch_size: usize,
     pub buffer_alignment: usize,
+    pub validate_input: bool,
+    pub compress_large_data: bool,
+    pub compression_threshold: usize,
+}
+
+impl Default for BinaryConverterConfig {
+    fn default() -> Self {
+        Self {
+            use_compression: true,
+            compression_level: 6,
+            use_crc_checksum: true,
+            max_batch_size: 1024 * 1024, // 1MB
+            buffer_alignment: 8,
+            validate_input: true,
+            compress_large_data: false,
+            compression_threshold: 1024,
+        }
+    }
 }
 
 /// AABB (Axis-Aligned Bounding Box) for spatial calculations

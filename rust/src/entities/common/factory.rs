@@ -14,7 +14,7 @@ impl EntityProcessorFactory {
     }
 
     pub fn with_config(config: Arc<dyn EntityConfig>) -> Self {
-        Self { common_config }
+        Self { common_config: config }
     }
 
     pub fn build(self) -> Arc<dyn EntityConfig> {

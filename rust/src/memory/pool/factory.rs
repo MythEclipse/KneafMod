@@ -6,6 +6,9 @@ use crate::errors::{RustError, Result};
 use crate::memory::pool::buffer_pool::{BufferPool, BufferPoolConfig as BufferPoolConfigImpl};
 use crate::memory::pool::object_pool::{ObjectPool, ObjectPoolConfig as ObjectPoolConfigImpl};
 use crate::memory::pool::slab_allocator::{SlabAllocator, SlabAllocatorConfig as SlabAllocatorConfigImpl};
+use crate::memory::pool::object_pool::ObjectPoolConfig as ObjectPoolObjectConfig;
+use crate::memory::pool::slab_allocator::SlabAllocatorConfig as SlabAllocatorObjectConfig;
+use crate::memory::pool::buffer_pool::BufferPoolConfig as BufferPoolObjectConfig;
 use crate::memory::pool::common::{MemoryPool, MemoryPoolConfig, MemoryPoolBuilder};
 
 /// Enum representing different types of memory pools
@@ -70,40 +73,37 @@ impl MemoryPoolFactory {
         
         match pool_type {
             MemoryPoolType::BufferPool => {
-                let buffer_config = BufferPoolConfig {
-                    max_buffers: config.max_size / config.max_size.min(64 * 1024), // Default to 64KB buffers
-                    buffer_size: config.max_size.min(64 * 1024),
-                    shard_count: 8,
-                    max_buffers_per_shard: config.max_size / (8 * 64 * 1024),
-                };
-                
+                let buffer_config = BufferPoolObjectConfig::from(config.clone());
+
                 let pool = BufferPool::new(buffer_config);
-                Ok(Box::new(pool))
+                Ok(Box::new(Arc::try_unwrap(pool).unwrap()))
             }
             
             MemoryPoolType::ObjectPool => {
-                let object_config = ObjectPoolConfig {
+                let object_config = ObjectPoolObjectConfig {
                     max_size: config.max_size,
                     pre_allocate: config.pre_allocate,
                     high_water_mark_ratio: config.high_water_mark_ratio,
                     cleanup_threshold: config.cleanup_threshold,
                     logger_name: config.logger_name.clone(),
+                    common_config: config.clone(),
                 };
                 
-                let pool = ObjectPool::new(object_config);
+                let pool = ObjectPool::new(MemoryPoolConfig::from(object_config));
                 Ok(Box::new(pool))
             }
             
             MemoryPoolType::SlabAllocator => {
-                let slab_config = SlabAllocatorConfig {
+                let slab_config = SlabAllocatorObjectConfig {
                     slab_size: 1024, // 1024 objects per slab
                     max_slabs_per_class: 8,
                     pre_allocate: config.pre_allocate,
                     allow_overcommit: false,
+                    common_config: config.clone(),
                 };
-                
+
                 let pool = SlabAllocator::new(slab_config);
-                Ok(Box::new(pool))
+                Ok(Box::new(Arc::try_unwrap(pool).unwrap()))
             }
             
             MemoryPoolType::LightweightPool => {
@@ -173,17 +173,19 @@ impl PoolSpecificConfig for BufferPoolConfig {
 
 /// Object pool specific configuration
 #[derive(Debug, Clone)]
-pub struct ObjectPoolConfig {
+pub struct FactoryObjectPoolConfig {
     pub max_size: usize,
     pub pre_allocate: bool,
     pub high_water_mark_ratio: f64,
     pub cleanup_threshold: f64,
     pub logger_name: String,
+    pub common_config: MemoryPoolConfig,
 }
 
-impl Default for ObjectPoolConfig {
+impl Default for FactoryObjectPoolConfig {
     fn default() -> Self {
         Self {
+            common_config: Default::default(),
             max_size: 1024 * 1024 * 50, // 50MB default
             pre_allocate: true,
             high_water_mark_ratio: 0.9,
@@ -193,7 +195,7 @@ impl Default for ObjectPoolConfig {
     }
 }
 
-impl PoolSpecificConfig for ObjectPoolConfig {
+impl PoolSpecificConfig for FactoryObjectPoolConfig {
     fn to_common_config(&self) -> MemoryPoolConfig {
         MemoryPoolConfig {
             max_size: self.max_size,
@@ -207,16 +209,18 @@ impl PoolSpecificConfig for ObjectPoolConfig {
 
 /// Slab allocator specific configuration
 #[derive(Debug, Clone)]
-pub struct SlabAllocatorConfig {
+pub struct FactorySlabAllocatorConfig {
     pub slab_size: usize,
     pub max_slabs_per_class: usize,
     pub pre_allocate: bool,
     pub allow_overcommit: bool,
+    pub common_config: MemoryPoolConfig,
 }
 
-impl Default for SlabAllocatorConfig {
+impl Default for FactorySlabAllocatorConfig {
     fn default() -> Self {
         Self {
+            common_config: Default::default(),
             slab_size: 1024,
             max_slabs_per_class: 8,
             pre_allocate: true,
@@ -225,7 +229,7 @@ impl Default for SlabAllocatorConfig {
     }
 }
 
-impl PoolSpecificConfig for SlabAllocatorConfig {
+impl PoolSpecificConfig for FactorySlabAllocatorConfig {
     fn to_common_config(&self) -> MemoryPoolConfig {
         MemoryPoolConfig {
             max_size: 1024 * 1024 * 100, // 100MB default

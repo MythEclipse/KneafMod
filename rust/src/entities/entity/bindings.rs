@@ -370,7 +370,7 @@ fn process_entities_binary_batch(env: &mut JNIEnv, data: &[u8]) -> Result<Vec<u8
         match crate::binary::conversions::deserialize_entity_input(data) {
             Ok(manual_input) => {
                 let entities_to_tick: Vec<u64> =
-                    manual_input.entities.iter().map(|e| e.id).collect();
+                    manual_input.entities.iter().map(|e| e.entity_id.parse::<u64>().unwrap_or(0)).collect();
                 // Format expected by Java BinarySerializer for process result: [numItems:i32][ids...]
                 let mut result = Vec::with_capacity(4 + entities_to_tick.len() * 8);
                 // Number of entities (i32 little-endian)

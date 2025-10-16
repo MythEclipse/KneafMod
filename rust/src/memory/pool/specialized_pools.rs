@@ -2,6 +2,8 @@ use std::fmt::Debug;
 use std::sync::RwLock;
 
 use crate::logging::PerformanceLogger;
+use crate::memory::pool::common::{MemoryPool, MemoryPoolConfig, MemoryPoolStats};
+use crate::SizeClass;
 use crate::memory::pool::object_pool::{ObjectPool, PooledObject};
 
 /// Specialized pool for vectors

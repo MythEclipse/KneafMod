@@ -6,7 +6,8 @@ use std::sync::RwLock;
 
 use crate::errors::{RustError, Result};
 use crate::logging::PerformanceLogger;
-use crate::memory::pool::common::{MemoryPool, MemoryPoolConfig, MemoryPoolStats};
+use crate::memory::pool::common::{MemoryPoolConfig, MemoryPoolStats};
+use crate::memory_pool_error;
 
 /// Size class definitions for hierarchical memory pooling with better fragmentation reduction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -332,7 +333,7 @@ impl<T> SlabAllocator<T> {
             slabs: HashMap::new(),
             _phantom: PhantomData,
             current_slab: HashMap::new(),
-            config,
+            config: config.clone(),
             logger: PerformanceLogger::new(&config.common_config.logger_name),
             lock: RwLock::new(()),
             common_stats: MemoryPoolStats::default(),
@@ -362,14 +363,14 @@ impl<T> SlabAllocator<T> {
     }
 
     /// Allocate memory from the pool (implements MemoryPool trait)
-    pub fn allocate(&self, size: usize) -> Result<Box<[u8]>> {
+    pub fn allocate(&mut self, size: usize) -> Result<Box<[u8]>> {
         // Get size class for the allocation
         let size_class = SizeClass::find_smallest_fit(size);
         
         // Check if we can allocate without exceeding max size
         let current_usage = self.common_stats.allocated_bytes.load(Ordering::Relaxed);
         if current_usage + size > self.config.common_config.max_size {
-            return memory_pool_error!("Memory pool exhausted: current={}, max={}", current_usage, self.config.common_config.max_size);
+            memory_pool_error!("Memory pool exhausted: current={}, max={}", current_usage, self.config.common_config.max_size);
         }
 
         // Allocate from slab allocator
@@ -391,7 +392,7 @@ impl<T> SlabAllocator<T> {
     }
 
     /// Deallocate memory (implements MemoryPool trait)
-    pub fn deallocate(&self, ptr: *mut u8, size: usize) {
+    pub fn deallocate(&mut self, ptr: *mut u8, size: usize) {
         // For slab allocator, we need to find which slab and slot this pointer belongs to
         // This is a simplified implementation - in a real system you would need a way to map pointers back to allocations
         self.common_stats.total_deallocations.fetch_add(1, Ordering::Relaxed);
@@ -453,21 +454,23 @@ impl<T> SlabAllocator<T> {
 
         // All slabs are full, need to allocate new slab
         Self::allocate_new_slab(&mut self.slabs, &self.config, &size_class);
-        if let Some(slot_idx) = self.slabs.get_mut(&size_class)?.last_mut()?.allocate() {
-            let slab_idx = self.slabs.get(&size_class)?.len() - 1;
-            return Ok(SlabAllocation {
-                slab_index: slab_idx,
-                slot_index: slot_idx,
-                size_class,
-                ptr: self
-                    .slabs
-                    .get(&size_class)?
-                    .last()?
-                    .get_slot_ptr(slot_idx)
-                    .ok_or_else(|| {
-                        RustError::MemoryPoolError(format!("Failed to get pointer for slot index: {}", slot_idx))
-                    })?,
-            });
+        if let Some(slab) = self.slabs.get_mut(&size_class)?.last_mut() {
+            if let Some(slot_idx) = slab.allocate() {
+                let slab_idx = self.slabs.get(&size_class).unwrap().len() - 1;
+                return Ok(SlabAllocation {
+                    slab_index: slab_idx,
+                    slot_index: slot_idx,
+                    size_class,
+                    ptr: self
+                        .slabs
+                        .get(&size_class).unwrap()
+                        .last().unwrap()
+                        .get_slot_ptr(slot_idx)
+                        .ok_or_else(|| {
+                            RustError::MemoryPoolError(format!("Failed to get pointer for slot index: {}", slot_idx))
+                        })?,
+                });
+            }
         }
 
         memory_pool_error!("Failed to allocate memory from slab allocator")

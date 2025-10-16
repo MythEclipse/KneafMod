@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use crate::entities::common::types::*;
+use crate::EntityProcessingInput;
+use crate::EntityProcessingResult;
 use crate::EntityType;
 use crate::EntityData;
-use crate::PlayerData;
+use crate::types::PlayerDataTrait as GlobalPlayerData;
 
 /// Villager-specific data extending the common EntityData
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -42,20 +45,32 @@ pub struct VillagerProcessResult {
 impl From<VillagerData> for EntityData {
     fn from(villager_data: VillagerData) -> Self {
         EntityData {
-            id: villager_data.id,
+            entity_id: villager_data.id.to_string(),
             entity_type: villager_data.entity_type,
-            position: villager_data.position,
-            distance: villager_data.distance,
-            metadata: Some(serde_json::json!({
-                "profession": villager_data.profession,
-                "level": villager_data.level,
-                "has_workstation": villager_data.has_workstation,
-                "is_resting": villager_data.is_resting,
-                "is_breeding": villager_data.is_breeding,
-                "last_pathfind_tick": villager_data.last_pathfind_tick,
-                "pathfind_frequency": villager_data.pathfind_frequency,
-                "ai_complexity": villager_data.ai_complexity,
-            })),
+            x: villager_data.position.0,
+            y: villager_data.position.1,
+            z: villager_data.position.2,
+            health: 20.0, // Default health
+            max_health: 20.0,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
+            velocity_z: 0.0,
+            rotation: 0.0,
+            pitch: 0.0,
+            yaw: 0.0,
+            properties: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("profession".to_string(), villager_data.profession);
+                map.insert("level".to_string(), villager_data.level.to_string());
+                map.insert("has_workstation".to_string(), villager_data.has_workstation.to_string());
+                map.insert("is_resting".to_string(), villager_data.is_resting.to_string());
+                map.insert("is_breeding".to_string(), villager_data.is_breeding.to_string());
+                map.insert("last_pathfind_tick".to_string(), villager_data.last_pathfind_tick.to_string());
+                map.insert("pathfind_frequency".to_string(), villager_data.pathfind_frequency.to_string());
+                map.insert("ai_complexity".to_string(), villager_data.ai_complexity.to_string());
+                map.insert("distance".to_string(), villager_data.distance.to_string());
+                map
+            },
         }
     }
 }
@@ -63,10 +78,39 @@ impl From<VillagerData> for EntityData {
 /// Convert VillagerInput to EntityProcessingInput for use with the common processor
 impl From<VillagerInput> for EntityProcessingInput {
     fn from(villager_input: VillagerInput) -> Self {
-        EntityProcessingInput {
-            tick_count: villager_input.tick_count,
-            entities: villager_input.villagers.into_iter().map(|v| v.into()).collect(),
-            players: Some(villager_input.players),
+        // For batch processing, we'll create a single input for the first villager
+        if let Some(first_villager) = villager_input.villagers.first() {
+            EntityProcessingInput {
+                entity_id: first_villager.id.to_string(),
+                entity_type: first_villager.entity_type,
+                data: first_villager.clone().into(),
+                delta_time: 0.05, // Default 50ms tick
+                simulation_distance: 128,
+            }
+        } else {
+            // Default input if no villagers
+            EntityProcessingInput {
+                entity_id: "0".to_string(),
+                entity_type: EntityType::Villager,
+                data: EntityData {
+                    entity_id: "0".to_string(),
+                    entity_type: EntityType::Villager,
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    health: 20.0,
+                    max_health: 20.0,
+                    velocity_x: 0.0,
+                    velocity_y: 0.0,
+                    velocity_z: 0.0,
+                    rotation: 0.0,
+                    pitch: 0.0,
+                    yaw: 0.0,
+                    properties: HashMap::new(),
+                },
+                delta_time: 0.05,
+                simulation_distance: 128,
+            }
         }
     }
 }
@@ -74,34 +118,27 @@ impl From<VillagerInput> for EntityProcessingInput {
 /// Convert EntityProcessingResult to VillagerProcessResult
 impl From<EntityProcessingResult> for VillagerProcessResult {
     fn from(result: EntityProcessingResult) -> Self {
-        let mut villager_groups = Vec::new();
+        // Parse entity_id to get villager ID
+        let villager_id = result.entity_id.parse::<u64>().unwrap_or(0);
         
-        // Convert any spatial groups to villager groups if needed
-        if let Some(spatial_groups) = result.groups {
-            for group in spatial_groups {
-                let villager_group = VillagerGroup {
-                    group_id: group.group_id,
-                    center_x: group.center_position.0,
-                    center_y: group.center_position.1,
-                    center_z: group.center_position.2,
-                    villager_ids: group.member_ids,
-                    group_type: "generic".to_string(), // Default type, would be more specific in real implementation
-                    ai_tick_rate: group.ai_tick_rate.unwrap_or(1),
-                };
-                villager_groups.push(villager_group);
-            }
-        }
-
         VillagerProcessResult {
-            villagers_to_disable_ai: result.entities_to_disable_ai,
-            villagers_to_simplify_ai: result.entities_to_simplify_ai,
-            villagers_to_reduce_pathfinding: result.entities_to_reduce_pathfinding.unwrap_or_default(),
-            villager_groups,
+            villagers_to_disable_ai: if result.success && result.metadata_changed.is_some() {
+                vec![villager_id]
+            } else {
+                Vec::new()
+            },
+            villagers_to_simplify_ai: if !result.success {
+                vec![villager_id]
+            } else {
+                Vec::new()
+            },
+            villagers_to_reduce_pathfinding: Vec::new(), // Will be populated based on distance logic
+            villager_groups: Vec::new(), // Will be populated by spatial processing
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VillagerGroup {
     pub group_id: u32,
     pub center_x: f32,
@@ -112,7 +149,7 @@ pub struct VillagerGroup {
     pub ai_tick_rate: u8,
 }
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct VillagerConfig {
     pub disable_ai_distance: f32,
     pub simplify_ai_distance: f32,
@@ -125,6 +162,15 @@ pub struct VillagerConfig {
     pub workstation_search_radius: f32,
     pub breeding_cooldown_ticks: u64,
     pub rest_tick_interval: u8,
+}
+
+/// Player data for villager processing
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PlayerData {
+    pub id: u64,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -1,5 +1,5 @@
-use crate::types::{AabbTrait as Aabb, EntityConfigTrait as EntityConfig};
-use crate::traits::EntityConfigImpl;
+use crate::traits::{EntityConfigImpl, EntityConfigTrait as EntityConfig};
+use crate::types::AabbTrait as Aabb;
 use std::sync::RwLock;
 
 /// Global entity configuration (re-export from types module for backward compatibility)

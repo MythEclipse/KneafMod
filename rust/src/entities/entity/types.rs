@@ -7,7 +7,7 @@ pub struct Input {
     pub tick_count: u64,
     pub entities: Vec<EntityData>,
     pub players: Vec<PlayerData>,
-    pub entity_config: Box<dyn EntityConfig>,
+    pub entity_config: String, // Changed from Box<dyn EntityConfig> to String for serialization
 }
 
 #[derive(Serialize, Deserialize)]

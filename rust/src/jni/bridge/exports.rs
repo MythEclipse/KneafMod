@@ -3,7 +3,12 @@
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JByteArray, JObject, JString, JObjectArray};
-use jni::sys::{jboolean, jbyteArray, jlong, jint, JNI_TRUE, JNI_FALSE, JNI_VERSION_1_6};
+use log::{info, warn, error, debug};
+use jni::sys::{jboolean, jbyteArray, jlong, jint, jstring, JNI_TRUE, JNI_FALSE, JNI_VERSION_1_6};
+
+// Import jni_utils for consistent JNI operations
+use crate::jni::utils::{jni_string_to_rust, check_jni_result, create_error_jni_string};
+use crate::jni_converter_factory::{JniConverter, JniConverterFactory};
 use std::cell::RefCell;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
@@ -16,10 +21,10 @@ use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::Cursor;
 
 // Import our new utilities
-use crate::jni_converter_factory::{JniConverter, JniConverterFactory};
 use crate::jni_bridge_builder::{JNIConnectionPool, JniBridgeBuilder};
 use crate::jni_errors::{jni_error_bytes, JniOperationError};
 use crate::jni_call::{build_request, JniRequest};
+use crate::jni_diagnostic;
 
 // Task structure for queued tasks
 struct Task {
@@ -217,8 +222,9 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     env: JNIEnv,
     _class: JClass,
     worker_handle: jlong,
-    payload: JByteArray,
+    payload: *mut jbyteArray,
 ) {
+    let payload = JByteArray::from_raw(payload);
     let current_thread = std::thread::current();
     let thread_id = current_thread.id();
     log_thread_safety("nativePushTask", thread_id);
@@ -263,7 +269,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     env: JNIEnv,
     _class: JClass,
     worker_handle: jlong,
-) -> jbyteArray {
+) -> *mut jbyteArray {
     let current_thread = std::thread::current();
     let thread_id = current_thread.id();
     log_thread_safety("nativePollResult", thread_id);
@@ -314,14 +320,33 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
     1
 }
 
-// Implementation for nativeExecuteSync function for JniCallManager.NativeBridge
+// Implementation for nativeExecuteSync function for RustBridge.Native
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(
+pub extern "system" fn Java_com_kneaf_core_unifiedbridge_RustBridge_00024Native_nativeExecuteSync(
     mut env: JNIEnv,
     _class: JClass,
-    operation_name: JString,
-    parameters: JObjectArray,
-) -> jbyteArray {
+    operation_name: *mut jstring,
+    memory_handle: jlong,
+) -> *mut jbyteArray {
+    let operation_name = JString::from_raw(operation_name);
+    
+    // Convert operation name to Rust string
+    let op_name_str = match jni_string_to_rust(&mut env, operation_name) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[rustperf] Failed to convert operation name: {:?}", e);
+            return env.new_byte_array(0).unwrap().into_raw();
+        }
+    };
+    
+    // Get parameters from memory manager using the memory handle
+    let parameters = match RustMemoryManager::get_parameters(memory_handle) {
+        Ok(params) => params,
+        Err(e) => {
+            eprintln!("[rustperf] Failed to get parameters from memory manager: {:?}", e);
+            return env.new_byte_array(0).unwrap().into_raw();
+        }
+    };
     // Parse operation and parameters using centralized helper
     let request = match build_request(&mut env, operation_name, parameters) {
         Ok(r) => r,
@@ -366,9 +391,11 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_JniCallManager_00024Nat
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeUnifiedBridge_nativeExecuteSync(
     env: JNIEnv,
     _class: JClass,
-    operation_name: JString,
-    parameters: JObjectArray,
-) -> jbyteArray {
+    operation_name: *mut jstring,
+    parameters: *mut JObjectArray,
+) -> *mut jbyteArray {
+    let operation_name = JString::from_raw(operation_name);
+    let parameters = JObjectArray::from_raw(parameters);
     // Reuse the same implementation as JniCallManager.NativeBridge
     Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation_name, parameters)
 }
@@ -378,9 +405,11 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeUnifiedBridge_nat
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeZeroCopyBridge_nativeExecuteSync(
     env: JNIEnv,
     _class: JClass,
-    operation_name: JString,
-    parameters: JObjectArray,
-) -> jbyteArray {
+    operation_name: *mut jstring,
+    parameters: *mut JObjectArray,
+) -> *mut jbyteArray {
+    let operation_name = JString::from_raw(operation_name);
+    let parameters = JObjectArray::from_raw(parameters);
     // Reuse the same implementation as JniCallManager.NativeBridge
     Java_com_kneaf_core_unifiedbridge_JniCallManager_00024NativeBridge_nativeExecuteSync(env, _class, operation_name, parameters)
 }
@@ -390,8 +419,9 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_NativeZeroCopyBridge_na
 pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativeCreateBridge(
     _env: JNIEnv,
     _class: JClass,
-    _config: JObject,
+    _config: *mut JObject,
 ) -> jlong {
+    let _config = JObject::from_raw(_config);
     jni_diagnostic!("INFO", "nativeCreateBridge", "Creating bridge with configuration object");
     
     // Use the JniBridgeBuilder to create a new bridge
@@ -445,7 +475,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
     _env: JNIEnv,
     _class: JClass,
     handle: jlong,
-) -> jbyteArray {
+) -> *mut jbyteArray {
     jni_diagnostic!("INFO", "nativeGetStatistics", "Getting statistics for bridge with handle: {}", handle);
     
     // In a real implementation, you would collect actual statistics from the bridge
@@ -468,9 +498,11 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
     mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
-    operation: JString,
-    args: JObjectArray,
-) -> jbyteArray {
+    operation: *mut jstring,
+    args: *mut JObjectArray,
+) -> *mut jbyteArray {
+    let operation = JString::from_raw(operation);
+    let args = JObjectArray::from_raw(args);
     jni_diagnostic!("INFO", "nativeExecuteOperation", "Executing operation on bridge with handle: {}", handle);
     
     // Parse operation name using converter from factory
@@ -479,6 +511,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
         Ok(s) => s,
         Err(e) => {
             eprintln!("[rustperf] Failed to parse operation name: {:?}", e);
+            use crate::jni_error_bytes;
             return jni_error_bytes!(env, "Failed to parse operation name");
         }
     };
@@ -489,6 +522,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_UnifiedBridgeImpl_nativ
         Ok(arr) => arr,
         Err(e) => {
             eprintln!("[rustperf] Failed to create params array: {:?}", e);
+            use crate::jni_error_bytes;
             return jni_error_bytes!(env, "Failed to create params array");
         }
     };

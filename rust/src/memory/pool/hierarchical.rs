@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use crate::logging::generate_trace_id;
 use crate::logging::PerformanceLogger;
+use crate::memory::pool::common::{MemoryPool, MemoryPoolConfig, MemoryPoolStats};
+use crate::memory::pool::object_pool::ObjectPoolMonitoringStats;
 use crate::memory::pool::object_pool::{MemoryPressureLevel, ObjectPool, PooledObject};
 use crate::memory::pool::slab_allocator::{SizeClass, SlabAllocator, SlabAllocatorConfig};
 
@@ -137,7 +139,7 @@ impl HierarchicalMemoryPool {
                 .copied()
                 .unwrap_or(1000); // Default to 1000 if not specified
 
-            pools.insert(*size_class, ObjectPool::new(max_size));
+            pools.insert(*size_class, ObjectPool::new(MemoryPoolConfig::new(max_size)));
         }
 
         Self {
@@ -411,7 +413,7 @@ impl HierarchicalMemoryPool {
     /// Get statistics for all size classes
     pub fn get_size_class_stats(
         &self,
-    ) -> HashMap<SizeClass, crate::memory_pool::object_pool::ObjectPoolMonitoringStats> {
+    ) -> HashMap<SizeClass, crate::memory::pool::object_pool::ObjectPoolMonitoringStats> {
         let trace_id = generate_trace_id();
         self.logger
             .log_operation("get_size_class_stats", &trace_id, || {

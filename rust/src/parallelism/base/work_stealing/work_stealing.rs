@@ -1,12 +1,12 @@
 use crate::parallelism::base::ExecutorType;
 use crate::ParallelExecutor;
 use crate::ParallelExecutorFactory;
-use crate::ExecutorType;
+use std::sync::Arc;
 
 /// Work-stealing scheduler for parallel task execution
 #[derive(Debug, Default)]
 pub struct WorkStealingScheduler {
-    executor: ParallelExecutor,
+    executor: Arc<dyn ParallelExecutor>,
 }
 
 impl WorkStealingScheduler {

@@ -250,6 +250,7 @@ fn acquire_locks_in_order<'a>(
     (
         RwLockWriteGuard<'a, DatabaseStats>,
         RwLockWriteGuard<'a, HashMap<String, SwapMetadata>>,
+        Option<RwLockWriteGuard<'a, HashMap<String, Mmap>>>,
     ),
     DatabaseError,
 > {
@@ -258,15 +259,14 @@ fn acquire_locks_in_order<'a>(
     let swap_metadata_guard =
         try_write_lock_with_timeout(swap_metadata, timeout_ms, "swap_metadata")?;
 
-    // Memory mapped files lock is optional
-    if let Some(mm_files) = memory_mapped_files {
-        let _mm_files_guard =
-            try_write_lock_with_timeout(mm_files, timeout_ms, "memory_mapped_files")?;
-        // We don't return this guard as it's not commonly needed together with the others
-        drop(_mm_files_guard);
-    }
+    // Memory mapped files lock is optional - return it if needed
+    let mm_files_guard = if let Some(mm_files) = memory_mapped_files {
+        Some(try_write_lock_with_timeout(mm_files, timeout_ms, "memory_mapped_files")?)
+    } else {
+        None
+    };
 
-    Ok((stats_guard, swap_metadata_guard))
+    Ok((stats_guard, swap_metadata_guard, mm_files_guard))
 }
 
 /// Database statistics for monitoring
@@ -774,8 +774,8 @@ impl RustDatabaseAdapter {
             .map_err(|e| format!("Failed to insert data: {}", e))?;
 
         // Update metadata and statistics with consistent lock ordering
-        match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
-            Ok((mut stats, mut swap_meta)) => {
+                match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
+                    Ok((mut stats, mut swap_meta, _)) => {
                 // Update swap metadata
                 if let Some(metadata) = swap_meta.get_mut(key) {
                     metadata.update_access();
@@ -844,7 +844,7 @@ impl RustDatabaseAdapter {
         // Update swap metadata and statistics if chunk was found with consistent lock ordering
         if let Ok(Some(_)) = processed_result {
             match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
-                Ok((mut stats, mut swap_meta)) => {
+                            Ok((mut stats, mut swap_meta, _)) => {
                     if let Some(metadata) = swap_meta.get_mut(key) {
                         metadata.update_access();
                     }
@@ -1233,7 +1233,7 @@ impl RustDatabaseAdapter {
 
         // Update swap metadata and statistics with consistent lock ordering
         match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
-            Ok((mut stats, mut swap_meta)) => {
+                    Ok((mut stats, mut swap_meta, _)) => {
                 if let Some(metadata) = swap_meta.get_mut(key) {
                     metadata.update_swap();
                 }
@@ -1342,7 +1342,7 @@ impl RustDatabaseAdapter {
 
         // Update swap metadata and statistics with consistent lock ordering
         match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
-            Ok((mut stats, mut swap_meta)) => {
+                    Ok((mut stats, mut swap_meta, _)) => {
                 if let Some(metadata) = swap_meta.get_mut(key) {
                     metadata.update_access();
                 }
@@ -1397,9 +1397,9 @@ impl RustDatabaseAdapter {
     /// Bulk swap out multiple chunks using sled batch API for atomic operations
     pub fn bulk_swap_out(&self, keys: &[String]) -> Result<usize, String> {
         // Acquire locks for the entire operation to maintain consistent ordering
-        let (mut stats_guard, mut swap_meta_guard) =
-            acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS)
-                .map_err(|e| format!("Failed to acquire initial locks for bulk_swap_out: {}", e))?;
+        let (mut stats_guard, mut swap_meta_guard, _) =
+                    acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS)
+                        .map_err(|e| format!("Failed to acquire initial locks for bulk_swap_out: {}", e))?;
 
         let mut batch = sled::Batch::default();
         let mut success_count = 0;
@@ -1523,15 +1523,6 @@ impl RustDatabaseAdapter {
             std::fs::remove_file(&swap_file_path)
                 .map_err(|e| format!("Failed to remove swap file: {}", e))?;
 
-            // Update swap metadata (will be done in batch later)
-            if let Ok(mut swap_meta) =
-                try_write_lock_with_timeout(&self.swap_metadata, LOCK_TIMEOUT_MS, "swap_metadata")
-            {
-                if let Some(metadata) = swap_meta.get_mut(key) {
-                    metadata.update_access();
-                }
-                // Drop the lock immediately to avoid holding it during batch operations
-            }
 
             results.push(data);
         }
@@ -1543,7 +1534,7 @@ impl RustDatabaseAdapter {
 
         // Update statistics and swap metadata with consistent lock ordering
         match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
-            Ok((mut stats, mut swap_meta)) => {
+                    Ok((mut stats, mut swap_meta, _)) => {
                 // Update swap metadata for all successfully processed keys
                 for key in keys.iter().take(results.len()) {
                     if let Some(metadata) = swap_meta.get_mut(key) {
@@ -1607,15 +1598,13 @@ impl RustDatabaseAdapter {
                 .map_err(|e| format!("Failed to create return memory map: {}", e))?
         };
 
-        // Acquire locks for memory_mapped_files and stats in correct order
-        let mut stats_guard = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats")
-            .map_err(|e| e.to_string())?;
-        let mut mm_files_guard = try_write_lock_with_timeout(
-            &self.memory_mapped_files,
-            LOCK_TIMEOUT_MS,
-            "memory_mapped_files",
-        )
-        .map_err(|e| e.to_string())?;
+        // Acquire locks in consistent order: stats -> memory_mapped_files
+                let (mut stats_guard, _, mut mm_files_guard) = acquire_locks_in_order(
+                    &self.stats,
+                    &self.swap_metadata,
+                    Some(&self.memory_mapped_files),
+                    LOCK_TIMEOUT_MS
+                ).map_err(|e| e.to_string())?;
 
         // Update statistics
         stats_guard.memory_mapped_files_active += 1;
@@ -1663,15 +1652,13 @@ impl RustDatabaseAdapter {
                 .map_err(|e| format!("Failed to remove mmap file: {}", e))?;
         }
 
-        // Acquire locks for memory_mapped_files and stats in correct order
-        let mut stats_guard = try_write_lock_with_timeout(&self.stats, LOCK_TIMEOUT_MS, "stats")
-            .map_err(|e| e.to_string())?;
-        let mut mm_files_guard = try_write_lock_with_timeout(
-            &self.memory_mapped_files,
-            LOCK_TIMEOUT_MS,
-            "memory_mapped_files",
-        )
-        .map_err(|e| e.to_string())?;
+        // Acquire locks in consistent order: stats -> swap_metadata -> memory_mapped_files
+                let (mut stats_guard, _, mut mm_files_guard) = acquire_locks_in_order(
+                    &self.stats,
+                    &self.swap_metadata,
+                    Some(&self.memory_mapped_files),
+                    LOCK_TIMEOUT_MS
+                ).map_err(|e| e.to_string())?;
 
         // Update statistics
         stats_guard.memory_mapped_files_active =

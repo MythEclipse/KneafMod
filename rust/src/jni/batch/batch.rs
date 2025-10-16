@@ -1,9 +1,10 @@
 use jni::{JNIEnv, objects::{JClass, JString, JByteArray, JObjectArray, JObject}, sys::{jboolean, jlong, jbyteArray, jbyte, jstring}};
 use crate::errors::{RustError, Result};
+use crate::utils;
 use byteorder::{ReadBytesExt, WriteBytesExt, LittleEndian};
 use std::io::Read;
 use std::time::Instant;
-use crate::jni_utils;
+use crate::jni::utils as jni_utils;
 use crate::jni_exports::{
     process_villager_operation,
     process_entity_operation,
@@ -128,13 +129,13 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_exec
     start_time: jlong,
 ) -> jbyteArray {
     // Convert Java batch name to Rust string
-    let batch_name_str = match jni_utils::jni_string_to_rust(&mut env, batch_name) {
+    let batch_name_str = match utils::jni_string_to_rust(&mut env, batch_name) {
         Ok(s) => s,
-        Err(e) => return jni_utils::create_error_jni_string(&mut env, &format!("Failed to convert batch name: {}", e)),
+        Err(e) => return utils::create_error_jni_string(&mut env, &format!("Failed to convert batch name: {}", e)).map_err(|e| RustError::JniError(e.to_string()))?,
     };
     
     if batch_name_str.is_empty() {
-        return jni_utils::create_error_jni_string(&mut env, "Invalid batch name");
+        return utils::create_error_jni_string(&mut env, "Invalid batch name").map_err(|e| RustError::JniError(e.to_string()))?
     }
 
     // Convert Java operations array to Rust Vec<Vec<u8>>
@@ -142,7 +143,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_exec
         Ok(len) => len,
         Err(e) => {
             log::error!("Failed to get operations array length: {:?}", e);
-            return jni_utils::create_error_jni_string(&mut env, "Failed to get operations array length");
+            return utils::create_error_jni_string(&mut env, "Failed to get operations array length").map_err(|e| RustError::JniError(e.to_string()))?
         }
     };
 
@@ -153,7 +154,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_exec
             Ok(obj) => obj,
             Err(e) => {
                 log::error!("Failed to get operation {}: {:?}", i, e);
-                return jni_utils::create_error_jni_string(&mut env, &format!("Failed to get operation {}", i));
+                return utils::create_error_jni_string(&mut env, &format!("Failed to get operation {}", i)).map_err(|e| RustError::JniError(e.to_string()))?
             }
         };
 
@@ -163,7 +164,7 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_exec
             Ok(bytes) => operations.push(bytes),
             Err(e) => {
                 log::error!("Failed to convert operation {}: {:?}", i, e);
-                return jni_utils::create_error_jni_string(&mut env, &format!("Failed to convert operation {}", i));
+                return utils::create_error_jni_string(&mut env, &format!("Failed to convert operation {}", i)).map_err(|e| RustError::JniError(e.to_string()))?
             }
         }
     }
@@ -175,13 +176,13 @@ pub extern "system" fn Java_com_kneaf_core_unifiedbridge_AsynchronousBridge_exec
                 Ok(arr) => arr.into_raw(),
                 Err(e) => {
                     log::error!("Failed to create result byte array: {:?}", e);
-                    jni_utils::create_error_jni_string(&mut env, "Failed to create result byte array")
+                    utils::create_error_jni_string(&mut env, "Failed to create result byte array").map_err(|e| RustError::JniError(e.to_string()))?
                 }
             }
         }
         Err(error_msg) => {
             log::error!("Batch processing failed: {}", error_msg);
-            jni_utils::create_error_jni_string(&mut env, &error_msg.to_string())
+            utils::create_error_jni_string(&mut env, &error_msg.to_string()).map_err(|e| RustError::JniError(e.to_string()))?
         }
     }
 }

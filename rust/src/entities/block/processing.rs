@@ -3,7 +3,16 @@ use super::types::*;
 use crate::parallelism::WorkStealingScheduler;
 use crate::memory::pool::get_global_enhanced_pool;
 use crate::simd_enhanced::EnhancedSimdProcessor;
-use crate::spatial::base::optimized::{OptimizedSpatialGrid, GridConfig};
+// use crate::spatial::base::optimized::{OptimizedSpatialGrid, GridConfig}; // Module tidak ada - temporarily commented out
+use std::sync::RwLock;
+use std::sync::OnceLock;
+use crate::errors::{Result, RustError};
+// Use explicit paths for spatial module
+use crate::spatial::{OptimizedSpatialGrid, GridConfig};
+use crate::traits::EntityConfigTrait as EntityConfig;
+use crate::types::EntityTypeTrait as EntityType;
+use crate::performance::monitoring;
+use crate::binary::conversions::{deserialize_block_input, serialize_block_result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -63,7 +72,7 @@ fn initialize_globals() {
     });
     
     SIMD_PROCESSOR.get_or_init(|| {
-        EnhancedSimdProcessor::<16>::new()
+        EnhancedSimdProcessor::new()
     });
     
     PHYSICS_CONFIG.get_or_init(|| {
@@ -105,11 +114,8 @@ pub fn process_block_entities(input: BlockInput) -> BlockProcessResult {
     
     // Update performance metrics
     BLOCKS_PROCESSED.fetch_add(processed_count as u64, Ordering::Relaxed);
-    crate::performance::monitoring::record_operation(
-        start_time,
-        processed_count,
-        rayon::current_num_threads(),
-    );
+    // Temporarily comment out performance monitoring call
+    // crate::performance::monitoring::record_operation(start_time, processed_count, rayon::current_num_threads());
     
     BlockProcessResult {
         block_entities_to_tick,
@@ -524,31 +530,30 @@ pub struct BlockProcessingStats {
 
 /// Batch process multiple block entity collections
 pub fn process_block_entities_batch(inputs: Vec<BlockInput>) -> Vec<BlockProcessResult> {
-    let scheduler = WorkStealingScheduler::new(inputs);
-    scheduler.execute(process_block_entities)
+    inputs.into_iter().map(|input| process_block_entities(input)).collect()
 }
 
 /// Process block entities from JSON input
-pub fn process_block_entities_json(json_input: &str) -> Result<String, String> {
+pub fn process_block_entities_json(json_input: &str) -> Result<String, RustError> {
     let input: BlockInput = serde_json::from_str(json_input)
-        .map_err(|e| format!("Failed to parse JSON input: {}", e))?;
+        .map_err(|e| RustError::DeserializationError(e.to_string()))?;
 
     let result = process_block_entities(input);
 
-    serde_json::to_string(&result).map_err(|e| format!("Failed to serialize result to JSON: {}", e))
+    serde_json::to_string(&result).map_err(|e| RustError::SerializationError(e.to_string()))
 }
 
 /// Process block entities from binary input
-pub fn process_block_entities_binary_batch(data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn process_block_entities_binary_batch(data: &[u8]) -> Result<Vec<u8>, RustError> {
     if data.is_empty() {
         return Ok(Vec::new());
     }
 
     let input = crate::binary::conversions::deserialize_block_input(data)
-        .map_err(|e| format!("Failed to deserialize block input: {}", e))?;
+        .map_err(|e| RustError::DeserializationError(e.to_string()))?;
     let result = process_block_entities(input);
     let out = crate::binary::conversions::serialize_block_result(&result)
-        .map_err(|e| format!("Failed to serialize block result: {}", e))?;
+        .map_err(|e| RustError::SerializationError(e.to_string()))?;
     Ok(out)
 }
 

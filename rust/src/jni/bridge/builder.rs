@@ -65,7 +65,7 @@ impl JNIConnectionPool {
     }
 
     // Release a connection back to the pool
-    pub fn release_connection(&self, conn_id: jlong) -> Result<(), String> {
+    pub fn release_connection(&self, _conn_id: jlong) -> Result<(), String> {
         let mut connections = self.connections.write().unwrap();
         
         // In a real implementation, we would find the connection by ID

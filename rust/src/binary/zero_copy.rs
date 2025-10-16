@@ -3,6 +3,7 @@ use std::io::{Cursor, Read};
 use std::slice;
 
 use crate::entities::mob::types::{MobInput, MobProcessResult};
+use crate::types::EntityTypeTrait as EntityType;
 use super::conversions::{BinaryConversionError, conversion_utils};
 
 // Trait defining the zero-copy conversion interface
@@ -74,7 +75,7 @@ impl ZeroCopyConverter for MobZeroCopyConverter {
             mobs.push(crate::mob::types::MobData {
                 id,
                 distance,
-                entity_type: etype,
+                entity_type: EntityType::Generic,
                 is_passive: passive,
             });
         }
