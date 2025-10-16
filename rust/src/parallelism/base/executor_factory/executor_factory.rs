@@ -1,6 +1,8 @@
 use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
+use crate::config::performance_config::{PerformanceConfig, PerformanceMode};
 use crate::parallelism::sequential::SequentialExecutor;
+use std::time::Duration;
 
 /// Enum representing different types of parallel executors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,26 +102,68 @@ pub trait AsyncParallelExecutor: Send + Sync {
     async fn shutdown_async(&self);
 }
 
+/// Configuration for parallel executor performance
+#[derive(Debug, Clone, Default)]
+pub struct ExecutorConfig {
+    pub thread_pool_size: usize,
+    pub min_thread_pool_size: usize,
+    pub dynamic_thread_scaling: bool,
+    pub thread_scale_up_threshold: f64,
+    pub thread_scale_down_threshold: f64,
+    pub thread_scale_up_delay: Duration,
+    pub thread_scale_down_delay: Duration,
+    pub work_stealing_config: Option<WorkStealingConfig>,
+    pub cpu_aware_thread_sizing: bool,
+    pub cpu_load_threshold: f64,
+}
+
+/// Configuration for work stealing executor
+#[derive(Debug, Clone, Default)]
+pub struct WorkStealingConfig {
+    pub enabled: bool,
+    pub queue_size: usize,
+}
+
 /// Factory for creating different types of parallel executors
 pub struct ParallelExecutorFactory;
 
 impl ParallelExecutorFactory {
-    /// Creates a new parallel executor of the specified type
+    /// Creates a new parallel executor of the specified type with default configuration
     pub fn create_executor(executor_type: ExecutorType) -> ParallelExecutorEnum {
         match executor_type {
-            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new())),
-            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new())),
-            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new())),
+            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(None))),
+            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new(None))),
+            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(None))),
             ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
         }
     }
 
-    /// Creates a new parallel executor enum of the specified type
+    /// Creates a new parallel executor enum of the specified type with default configuration
     pub fn create_executor_enum(executor_type: ExecutorType) -> ParallelExecutorEnum {
         match executor_type {
-            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new())),
-            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new())),
-            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new())),
+            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(None))),
+            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new(None))),
+            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(None))),
+            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
+        }
+    }
+
+    /// Creates a new parallel executor with performance configuration
+    pub fn create_executor_with_config(executor_type: ExecutorType, config: &ExecutorConfig) -> ParallelExecutorEnum {
+        match executor_type {
+            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(Some(config)))),
+            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new(Some(config)))),
+            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(Some(config)))),
+            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
+        }
+    }
+
+    /// Creates a new parallel executor enum with performance configuration
+    pub fn create_executor_enum_with_config(executor_type: ExecutorType, config: &ExecutorConfig) -> ParallelExecutorEnum {
+        match executor_type {
+            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(Some(config)))),
+            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(WorkStealingExecutor::new(Some(config)))),
+            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(Some(config)))),
             ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
         }
     }

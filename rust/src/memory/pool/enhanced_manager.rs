@@ -6,12 +6,14 @@ use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
 
+use crate::config::performance_config::{PerformanceConfig, PerformanceMode};
 use crate::logging::generate_trace_id;
 use crate::logging::PerformanceLogger;
 use crate::memory::pool::hierarchical::HierarchicalMemoryPool;
 use crate::memory::pool::object_pool::MemoryPressureLevel;
 use crate::memory::pool::specialized_pools::{StringPool, VecPool};
 use crate::memory::pool::swap::SwapMemoryPool;
+use crate::simd_enhanced::SimdCapability;
 
 // Global counters for memory leak detection and statistics
 lazy_static! {
@@ -32,6 +34,12 @@ pub struct EnhancedMemoryPoolManager {
     config: EnhancedManagerConfig,
     allocation_queue: Mutex<VecDeque<SmartPooledVec<u8>>>,
     leak_detection_timer: AtomicU64,
+    
+    /// Performance configuration
+    performance_config: Option<PerformanceConfig>,
+    
+    /// SIMD capability for optimized operations
+    simd_capability: SimdCapability,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +63,28 @@ impl Default for EnhancedManagerConfig {
             prefetch_enabled: true,
         }
     }
+}
+
+/// Configuration for memory pool performance optimizations
+#[derive(Debug, Clone, Default)]
+pub struct MemoryPoolConfig {
+    pub enable_fast_nbt: bool,
+    pub swap_async_prefetching: bool,
+    pub swap_compression: bool,
+    pub swap_compression_level: u8,
+    pub swap_memory_mapped_files: bool,
+    pub swap_async_prefetch_limit: usize,
+    pub swap_prefetch_buffer_size_mb: u64,
+    pub swap_non_blocking_io: bool,
+    pub swap_mmap_cache_size_mb: u64,
+    pub swap_operation_batching: bool,
+    pub swap_max_batch_size: usize,
+    pub memory_pressure_threshold: f64,
+    pub enable_aggressive_preallocation: bool,
+    pub preallocation_buffer_size_mb: u64,
+    pub enable_lock_free_pooling: bool,
+    pub enable_zero_copy_operations: bool,
+    pub enable_direct_memory_access: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -178,6 +208,8 @@ impl EnhancedMemoryPoolManager {
 
         let logger = PerformanceLogger::new("enhanced_memory_pool_manager");
 
+        let simd_capability = crate::simd_enhanced::detect_simd_capability();
+
         logger.log_info("new", &trace_id, "Enhanced memory pool manager initialized");
 
         Ok(Self {
@@ -191,7 +223,133 @@ impl EnhancedMemoryPoolManager {
             config,
             allocation_queue: Mutex::new(VecDeque::new()),
             leak_detection_timer: AtomicU64::new(0),
+            performance_config: None,
+            simd_capability,
         })
+    }
+
+    /// Apply performance configuration to the memory pool
+    pub fn apply_config(&mut self, config: PerformanceConfig) -> Result<()> {
+        self.performance_config = Some(config);
+        
+        // Configure memory pool based on performance mode
+        match config.performance_mode {
+            PerformanceMode::Normal => self.configure_normal_mode(),
+            PerformanceMode::Extreme => self.configure_extreme_mode(),
+            PerformanceMode::Ultra => self.configure_ultra_mode(),
+            PerformanceMode::Custom => self.configure_custom_mode(),
+            PerformanceMode::Auto => self.configure_auto_mode(),
+        }?;
+        
+        Ok(())
+    }
+
+    /// Configure memory pool for Normal performance mode
+    fn configure_normal_mode(&mut self) -> Result<()> {
+        let config = self.performance_config.as_ref().ok_or("No performance config")?;
+        
+        self.config.memory_pressure_threshold = config.memory_pressure_threshold;
+        
+        // Configure specialized pools
+        if let Ok(mut vec_pool) = self.vec_pool.try_borrow_mut() {
+            vec_pool.set_max_size(config.swap_async_prefetch_limit * 10);
+        }
+        
+        Ok(())
+    }
+
+    /// Configure memory pool for Extreme performance mode
+    fn configure_extreme_mode(&mut self) -> Result<()> {
+        let config = self.performance_config.as_ref().ok_or("No performance config")?;
+        
+        self.config.memory_pressure_threshold = config.memory_pressure_threshold;
+        self.config.prefetch_enabled = config.swap_async_prefetching;
+        
+        // Optimize for performance in Extreme mode
+        if let Ok(mut vec_pool) = self.vec_pool.try_borrow_mut() {
+            vec_pool.set_max_size(config.swap_async_prefetch_limit * 20);
+        }
+        
+        Ok(())
+    }
+
+    /// Configure memory pool for Ultra performance mode
+    fn configure_ultra_mode(&mut self) -> Result<()> {
+        let config = self.performance_config.as_ref().ok_or("No performance config")?;
+        
+        self.config.memory_pressure_threshold = config.memory_pressure_threshold;
+        self.config.prefetch_enabled = config.swap_async_prefetching;
+        
+        // Maximize performance in Ultra mode
+        if let Ok(mut vec_pool) = self.vec_pool.try_borrow_mut() {
+            vec_pool.set_max_size(config.swap_async_prefetch_limit * 30);
+        }
+
+        // Use SIMD optimizations if available
+        if self.simd_capability.has_avx512 {
+            // Enable SIMD optimizations in hierarchical pool
+            if let Ok(hierarchical_pool) = self.hierarchical_pool.try_borrow_mut() {
+                hierarchical_pool.enable_simd_optimizations(true);
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Configure memory pool for Custom performance mode
+    fn configure_custom_mode(&mut self) -> Result<()> {
+        let config = self.performance_config.as_ref().ok_or("No performance config")?;
+        
+        // Apply all custom configuration settings
+        self.config.memory_pressure_threshold = config.memory_pressure_threshold;
+        self.config.prefetch_enabled = config.swap_async_prefetching;
+        
+        // Adjust pool sizes based on custom configuration
+        let pool_size_multiplier = if config.swap_async_prefetch_limit > 10 { 20 } else { 10 };
+        if let Ok(mut vec_pool) = self.vec_pool.try_borrow_mut() {
+            vec_pool.set_max_size(config.swap_async_prefetch_limit * pool_size_multiplier);
+        }
+        
+        Ok(())
+    }
+
+    /// Configure memory pool for Auto performance mode
+    fn configure_auto_mode(&mut self) -> Result<()> {
+        let config = self.performance_config.as_ref().ok_or("No performance config")?;
+        
+        // Auto-configure based on system capabilities
+        if self.simd_capability.has_avx512 {
+            // Enable SIMD optimizations in hierarchical pool
+            if let Ok(hierarchical_pool) = self.hierarchical_pool.try_borrow_mut() {
+                hierarchical_pool.enable_simd_optimizations(true);
+            }
+        }
+        
+        // Set reasonable defaults that balance performance and stability
+        self.config.memory_pressure_threshold = config.memory_pressure_threshold;
+        self.config.prefetch_enabled = config.swap_async_prefetching;
+        
+        // Adjust based on available resources
+        let pool_size = if self.simd_capability.has_avx512 {
+            config.swap_async_prefetch_limit * 30
+        } else if self.simd_capability.has_avx2 {
+            config.swap_async_prefetch_limit * 20
+        } else {
+            config.swap_async_prefetch_limit * 10
+        };
+        
+        if let Ok(mut vec_pool) = self.vec_pool.try_borrow_mut() {
+            vec_pool.set_max_size(pool_size);
+        }
+        
+        Ok(())
+    }
+
+    /// Estimate available system memory (simplified implementation)
+    fn estimate_available_memory(&self) -> u64 {
+        // In a real implementation, this would query system information
+        // For demonstration purposes, return a fixed value
+        16 * 1024  // 16GB
     }
 
     /// Intelligent allocation with automatic pool selection

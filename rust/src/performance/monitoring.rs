@@ -1,3 +1,4 @@
+use crate::config::performance_config::{PerformanceConfig, PerformanceMode};
 use crate::errors::{Result, RustError};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::simd_enhanced::{detect_simd_capability, SimdCapability};
@@ -180,6 +181,9 @@ impl Default for PerformanceStats {
 }
 
 static SWAP_PERFORMANCE_STATS: Lazy<PerformanceStats> = Lazy::new(PerformanceStats::new);
+
+// Add performance configuration integration
+static PERFORMANCE_CONFIG: Lazy<Mutex<Option<PerformanceConfig>>> = Lazy::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone, Copy)]
 pub enum SwapHealthStatus {
@@ -487,6 +491,105 @@ impl PerformanceMonitor {
             // JNI reference tracking to prevent leaks
             jni_global_refs: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    /// Apply performance configuration to the monitor
+    pub fn apply_performance_config(&mut self, config: &PerformanceConfig) -> Result<()> {
+        // Update monitoring configuration based on performance mode
+        match config.performance_mode {
+            PerformanceMode::Normal => self.configure_normal_mode(config),
+            PerformanceMode::Extreme => self.configure_extreme_mode(config),
+            PerformanceMode::Ultra => self.configure_ultra_mode(config),
+            PerformanceMode::Custom => self.configure_custom_mode(config),
+            PerformanceMode::Auto => self.configure_auto_mode(config)?,
+        };
+
+        // Store configuration for global access
+        let mut config_guard = PERFORMANCE_CONFIG.lock().map_err(|e| {
+            format!("Failed to lock performance config: {}", e)
+        })?;
+        *config_guard = Some(config.clone());
+
+        Ok(())
+    }
+
+    /// Configure monitor for Normal performance mode
+    fn configure_normal_mode(&mut self, config: &PerformanceConfig) {
+        // Normal mode: balanced monitoring
+        self.jni_call_threshold_ms.store(config.monitoring_sample_rate, Ordering::Relaxed);
+        self.lock_wait_threshold_ms.store(50, Ordering::Relaxed);
+        self.memory_usage_threshold_pct.store(90, Ordering::Relaxed);
+        self.gc_duration_threshold_ms.store(100, Ordering::Relaxed);
+        self.alert_cooldown.store(3000, Ordering::Relaxed);
+        
+        // Enable all safety checks and monitoring
+        self.is_monitoring.store(config.enable_performance_monitoring, Ordering::SeqCst);
+    }
+
+    /// Configure monitor for Extreme performance mode
+    fn configure_extreme_mode(&mut self, config: &PerformanceConfig) {
+        // Extreme mode: reduced monitoring overhead
+        self.jni_call_threshold_ms.store(config.monitoring_sample_rate * 2, Ordering::Relaxed);
+        self.lock_wait_threshold_ms.store(100, Ordering::Relaxed);
+        self.memory_usage_threshold_pct.store(95, Ordering::Relaxed);
+        self.gc_duration_threshold_ms.store(200, Ordering::Relaxed);
+        self.alert_cooldown.store(5000, Ordering::Relaxed);
+        
+        // Reduce monitoring overhead but keep essential safety
+        self.is_monitoring.store(config.enable_performance_monitoring, Ordering::SeqCst);
+    }
+
+    /// Configure monitor for Ultra performance mode
+    fn configure_ultra_mode(&mut self, config: &PerformanceConfig) {
+        // Ultra mode: minimal monitoring for maximum performance
+        self.jni_call_threshold_ms.store(config.monitoring_sample_rate * 10, Ordering::Relaxed);
+        self.lock_wait_threshold_ms.store(200, Ordering::Relaxed);
+        self.memory_usage_threshold_pct.store(98, Ordering::Relaxed);
+        self.gc_duration_threshold_ms.store(500, Ordering::Relaxed);
+        self.alert_cooldown.store(10000, Ordering::Relaxed);
+        
+        // Minimal monitoring only if enabled
+        self.is_monitoring.store(config.enable_performance_monitoring, Ordering::SeqCst);
+        
+        if !config.enable_performance_monitoring {
+            // Disable all detailed monitoring in ultra mode when monitoring is off
+            self.logger.log_info(
+                "performance_config",
+                &generate_trace_id(),
+                "Ultra performance mode: Disabling detailed monitoring for maximum speed",
+            );
+        }
+    }
+
+    /// Configure monitor for Custom performance mode
+    fn configure_custom_mode(&mut self, config: &PerformanceConfig) {
+        // Custom mode: use exactly what user configured
+        self.jni_call_threshold_ms.store(config.monitoring_sample_rate, Ordering::Relaxed);
+        self.lock_wait_threshold_ms.store(config.monitoring_sample_rate as u64, Ordering::Relaxed);
+        self.memory_usage_threshold_pct.store(config.monitoring_sample_rate as u32, Ordering::Relaxed);
+        self.gc_duration_threshold_ms.store(config.monitoring_sample_rate as u64, Ordering::Relaxed);
+        self.alert_cooldown.store(config.monitoring_sample_rate * 1000, Ordering::Relaxed);
+        
+        self.is_monitoring.store(config.enable_performance_monitoring, Ordering::SeqCst);
+    }
+
+    /// Configure monitor for Auto performance mode
+    fn configure_auto_mode(&mut self, config: &PerformanceConfig) -> Result<()> {
+        let simd_capability = detect_simd_capability();
+        
+        // Auto-configure based on system capabilities
+        if simd_capability.has_avx512 && num_cpus::get() >= 16 {
+            // High-end system: use Ultra mode settings
+            self.configure_ultra_mode(config);
+        } else if simd_capability.has_avx2 && num_cpus::get() >= 8 {
+            // Mid-range system: use Extreme mode settings
+            self.configure_extreme_mode(config);
+        } else {
+            // Low-end system: use Normal mode settings
+            self.configure_normal_mode(config);
+        }
+
+        Ok(())
     }
 
     pub fn record_jni_call_impl(&self, call_type: &str, duration_ms: u64) {
@@ -1046,6 +1149,20 @@ pub static PERFORMANCE_MONITOR: Lazy<PerformanceMonitor> = Lazy::new(|| {
     let logger = PerformanceLogger::new("performance_monitor");
     PerformanceMonitor::new(Arc::new(logger)).expect("Failed to create PerformanceMonitor")
 });
+
+/// Get current performance configuration
+pub fn get_current_performance_config() -> Option<PerformanceConfig> {
+    PERFORMANCE_CONFIG.lock().ok().and_then(|guard| guard.clone())
+}
+
+/// Apply performance configuration to monitoring system
+pub fn apply_performance_config(config: &PerformanceConfig) -> Result<()> {
+    let mut monitor = PERFORMANCE_MONITOR.write().map_err(|e| {
+        format!("Failed to get mutable performance monitor: {}", e)
+    })?;
+    monitor.apply_performance_config(config)?;
+    Ok(())
+}
 
 // JNI native functions
 #[no_mangle]
