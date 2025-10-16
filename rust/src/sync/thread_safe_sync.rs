@@ -1,440 +1,282 @@
-use crate::errors::EnhancedError;
-use crate::errors::ToEnhancedError;
-use crate::logging::{generate_trace_id, LogSeverity};
-use crossbeam_epoch::pin;
-use crossbeam_epoch::Guard;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}};
+use std::collections::HashMap;
+use std::time::{SystemTime, Duration};
+use std::thread;
 
-/// Thread-safe data synchronizer with lock-free operations where possible
-#[derive(Debug, Clone)]
-pub struct ThreadSafeSynchronizer<T> {
-    data: Arc<RwLock<T>>,
-    last_modified: Arc<AtomicU64>,
-    is_modifying: Arc<AtomicBool>,
-    component_name: String,
+/// Thread-safe synchronization primitive
+#[derive(Debug)]
+pub struct ThreadSafeSync {
+    inner: Arc<ThreadSafeSyncInner>,
 }
 
-impl<T: Clone + Send + Sync + 'static> ThreadSafeSynchronizer<T> {
-    /// Create a new ThreadSafeSynchronizer
-    pub fn new(initial_data: T, component_name: &str) -> Self {
-        Self {
-            data: Arc::new(RwLock::new(initial_data)),
-            last_modified: Arc::new(AtomicU64::new(std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0))),
-            is_modifying: Arc::new(AtomicBool::new(false)),
-            component_name: component_name.to_string(),
-        }
-    }
-
-    /// Get read access to the data
-    pub async fn read(&self) -> Result<RwLockReadGuard<'_, T>, EnhancedError> {
-        let trace_id = generate_trace_id();
-        
-        // Log read operation
-        slog!(
-            &self.component_name,
-            LogSeverity::Debug,
-            "data_read_attempt",
-            "Attempting to read data",
-            "trace_id" => trace_id.clone()
-        );
-
-        let guard = self.data.read().await;
-        
-        // Update last accessed time
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        self.last_modified.store(now, Ordering::Relaxed);
-
-        slog!(
-            &self.component_name,
-            LogSeverity::Info,
-            "data_read_success",
-            "Successfully read data",
-            "trace_id" => trace_id,
-            "last_modified" => now.to_string()
-        );
-
-        Ok(guard)
-    }
-
-    /// Get write access to the data
-    pub async fn write(&self) -> Result<RwLockWriteGuard<'_, T>, EnhancedError> {
-        let trace_id = generate_trace_id();
-        
-        // Use compare-and-swap to ensure only one writer at a time
-        if !self.is_modifying.compare_and_swap(false, true, Ordering::Acquire) {
-            let guard = self.data.write().await;
-            
-            // Update last modified time
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            self.last_modified.store(now, Ordering::Release);
-
-            slog!(
-                &self.component_name,
-                LogSeverity::Info,
-                "data_write_success",
-                "Successfully acquired write lock",
-                "trace_id" => trace_id.clone(),
-                "last_modified" => now.to_string()
-            );
-
-            Ok(guard)
-        } else {
-            let error = crate::errors::RustError::new_thread_safe("Data is currently being modified by another thread")
-                .to_enhanced()
-                .with_trace_id(trace_id);
-            
-            slog!(
-                &self.component_name,
-                LogSeverity::Warn,
-                "data_write_failed",
-                "Write attempt failed - data is being modified",
-                "trace_id" => trace_id
-            );
-
-            Err(error)
-        }
-    }
-
-    /// Try to get write access with timeout
-    pub async fn try_write_with_timeout(&self, timeout_ms: u64) -> Result<RwLockWriteGuard<'_, T>, EnhancedError> {
-        let trace_id = generate_trace_id();
-        let start_time = std::time::Instant::now();
-        let timeout_duration = Duration::from_millis(timeout_ms);
-
-        loop {
-            // Check if we've exceeded timeout
-            if start_time.elapsed() > timeout_duration {
-                let error = crate::errors::RustError::new_thread_safe(&format!(
-                    "Write timeout after {}ms - data is being modified",
-                    timeout_ms
-                ))
-                .to_enhanced()
-                .with_trace_id(trace_id.clone());
-
-                slog!(
-                    &self.component_name,
-                    LogSeverity::Error,
-                    "data_write_timeout",
-                    &format!("Write timeout after {}ms", timeout_ms),
-                    "trace_id" => trace_id
-                );
-
-                return Err(error);
-            }
-
-            // Try to acquire write lock
-            if let Ok(guard) = self.try_write() {
-                return Ok(guard);
-            }
-
-            // Wait a bit before retrying
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    }
-
-    /// Try to get write access without blocking
-    pub async fn try_write(&self) -> Result<RwLockWriteGuard<'_, T>, EnhancedError> {
-        let trace_id = generate_trace_id();
-
-        // Quick check if data is being modified
-        if self.is_modifying.load(Ordering::Acquire) {
-            let error = crate::errors::RustError::new_thread_safe("Data is currently being modified by another thread")
-                .to_enhanced()
-                .with_trace_id(trace_id);
-            
-            return Err(error);
-        }
-
-        // Try to acquire write lock without blocking
-        match self.data.try_write() {
-            Some(guard) => {
-                // Update last modified time
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                self.last_modified.store(now, Ordering::Release);
-
-                // Mark as modifying
-                self.is_modifying.store(true, Ordering::Release);
-
-                slog!(
-                    &self.component_name,
-                    LogSeverity::Info,
-                    "data_write_success",
-                    "Successfully acquired write lock without blocking",
-                    "trace_id" => trace_id,
-                    "last_modified" => now.to_string()
-                );
-
-                Ok(guard)
-            }
-            None => {
-                let error = crate::errors::RustError::new_thread_safe("Failed to acquire write lock - data is locked")
-                    .to_enhanced()
-                    .with_trace_id(trace_id);
-                
-                slog!(
-                    &self.component_name,
-                    LogSeverity::Warn,
-                    "data_write_failed",
-                    "Failed to acquire write lock",
-                    "trace_id" => trace_id
-                );
-
-                Err(error)
-            }
-        }
-    }
-
-    /// Update the data with synchronization
-    pub async fn update<F>(&self, update_fn: F) -> Result<(), EnhancedError>
-    where
-        F: FnOnce(&mut T) -> Result<(), EnhancedError>,
-    {
-        let trace_id = generate_trace_id();
-        
-        slog!(
-            &self.component_name,
-            LogSeverity::Debug,
-            "data_update_attempt",
-            "Attempting to update data",
-            "trace_id" => trace_id.clone()
-        );
-
-        let mut guard = self.write().await?;
-        
-        match update_fn(&mut *guard) {
-            Ok(_) => {
-                // Update last modified time
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                self.last_modified.store(now, Ordering::Release);
-
-                // Clear modifying flag
-                self.is_modifying.store(false, Ordering::Release);
-
-                slog!(
-                    &self.component_name,
-                    LogSeverity::Info,
-                    "data_update_success",
-                    "Successfully updated data",
-                    "trace_id" => trace_id,
-                    "last_modified" => now.to_string()
-                );
-
-                Ok(())
-            }
-            Err(e) => {
-                // Clear modifying flag even if update failed
-                self.is_modifying.store(false, Ordering::Release);
-
-                slog!(
-                    &self.component_name,
-                    LogSeverity::Error,
-                    "data_update_failed",
-                    &format!("Data update failed: {}", e),
-                    "trace_id" => trace_id
-                );
-
-                Err(e)
-            }
-        }
-    }
-
-    /// Get the last modified timestamp
-    pub fn last_modified(&self) -> u64 {
-        self.last_modified.load(Ordering::Relaxed)
-    }
-
-    /// Check if data is currently being modified
-    pub fn is_modifying(&self) -> bool {
-        self.is_modifying.load(Ordering::Relaxed)
-    }
-
-    /// Get a clone of the current data (for non-critical operations)
-    pub async fn get_snapshot(&self) -> Result<T, EnhancedError> {
-        let trace_id = generate_trace_id();
-        
-        let guard = self.read().await;
-        let snapshot = guard.clone();
-
-        slog!(
-            &self.component_name,
-            LogSeverity::Debug,
-            "data_snapshot",
-            "Created data snapshot",
-            "trace_id" => trace_id,
-            "last_modified" => self.last_modified().to_string()
-        );
-
-        Ok(snapshot)
-    }
-}
-
-/// Lock-free data synchronizer for high-performance scenarios
-#[derive(Debug, Clone)]
-pub struct LockFreeSynchronizer<T> {
-    data: Arc<std::sync::atomic::AtomicPtr<T>>,
-    component_name: String,
-}
-
-impl<T: Clone + Send + Sync + 'static> LockFreeSynchronizer<T> {
-    /// Create a new LockFreeSynchronizer
-    pub fn new(initial_data: T, component_name: &str) -> Self {
-        let boxed_data = Box::new(initial_data);
-        Self {
-            data: Arc::new(std::sync::atomic::AtomicPtr::new(Box::into_raw(boxed_data))),
-            component_name: component_name.to_string(),
-        }
-    }
-
-    /// Get a snapshot of the data using lock-free operations
-    pub fn get_snapshot(&self) -> Result<T, EnhancedError> {
-        let trace_id = generate_trace_id();
-        
-        // Use load with acquire ordering to ensure we see the most recent write
-        let ptr = self.data.load(Ordering::Acquire);
-        
-        // Safety: We know the pointer is valid because we only replace it with Box::into_raw
-        // and never delete it without replacing it first
-        let data = unsafe { &*ptr };
-        let snapshot = data.clone();
-
-        slog!(
-            &self.component_name,
-            LogSeverity::Debug,
-            "lock_free_snapshot",
-            "Created lock-free data snapshot",
-            "trace_id" => trace_id
-        );
-
-        Ok(snapshot)
-    }
-
-    /// Update the data using lock-free operations
-    pub fn update<F>(&self, update_fn: F) -> Result<(), EnhancedError>
-    where
-        F: FnOnce(&mut T) -> Result<(), EnhancedError>,
-    {
-        let trace_id = generate_trace_id();
-        
-        slog!(
-            &self.component_name,
-            LogSeverity::Debug,
-            "lock_free_update_attempt",
-            "Attempting lock-free data update",
-            "trace_id" => trace_id.clone()
-        );
-
-        loop {
-            // Load current pointer
-            let old_ptr = self.data.load(Ordering::Acquire);
-            
-            // Safety: We know the pointer is valid
-            let old_data = unsafe { &*old_ptr };
-            let mut new_data = old_data.clone();
-
-            match update_fn(&mut new_data) {
-                Ok(_) => {
-                    // Create new boxed data
-                    let new_ptr = Box::into_raw(Box::new(new_data));
-                    
-                    // Compare and swap - if the pointer is still the same, we succeeded
-                    if self.data.compare_exchange_weak(
-                        old_ptr,
-                        new_ptr,
-                        Ordering::Release,
-                        Ordering::Acquire
-                    ).is_ok() {
-                        // Safety: We can drop the old pointer because we successfully swapped
-                        unsafe { Box::from_raw(old_ptr); }
-
-                        slog!(
-                            &self.component_name,
-                            LogSeverity::Info,
-                            "lock_free_update_success",
-                            "Successfully updated data lock-free",
-                            "trace_id" => trace_id
-                        );
-
-                        return Ok(());
-                    } else {
-                        // Another thread updated the data, try again
-                        continue;
-                    }
-                }
-                Err(e) => {
-                    slog!(
-                        &self.component_name,
-                        LogSeverity::Error,
-                        "lock_free_update_failed",
-                        &format!("Lock-free data update failed: {}", e),
-                        "trace_id" => trace_id
-                    );
-
-                    return Err(e);
-                }
-            }
-        }
-    }
-}
-
-/// Synchronize data between multiple threads safely
-pub async fn synchronize_data<T, F>(
-    data: &ThreadSafeSynchronizer<T>,
-    sync_fn: F
-) -> Result<(), EnhancedError>
-where
-    T: Clone + Send + Sync + 'static,
-    F: FnOnce(&mut T) -> Result<(), EnhancedError>,
-{
-    let trace_id = generate_trace_id();
+#[derive(Debug)]
+struct ThreadSafeSyncInner {
+    /// Global lock for critical sections
+    global_lock: Mutex<()>,
     
-    slog!(
-        &data.component_name,
-        LogSeverity::Info,
-        "data_synchronization",
-        "Starting data synchronization",
-        "trace_id" => trace_id.clone()
-    );
+    /// Read-write lock for shared data
+    data_lock: RwLock<HashMap<String, SyncData>>,
+    
+    /// Atomic flag for shutdown
+    shutdown_flag: AtomicBool,
+    
+    /// Atomic counter for operations
+    operation_counter: AtomicU64,
+    
+    /// Thread-safe condition variable
+    condition: std::sync::Condvar,
+}
 
-    let result = data.update(sync_fn).await;
+/// Synchronization data
+#[derive(Debug, Clone)]
+pub struct SyncData {
+    pub value: String,
+    pub timestamp: SystemTime,
+    pub owner_thread: thread::ThreadId,
+    pub access_count: u64,
+}
 
-    match &result {
-        Ok(_) => {
-            slog!(
-                &data.component_name,
-                LogSeverity::Info,
-                "data_synchronization_complete",
-                "Data synchronization completed successfully",
-                "trace_id" => trace_id
-            );
-        }
-        Err(e) => {
-            slog!(
-                &data.component_name,
-                LogSeverity::Error,
-                "data_synchronization_failed",
-                &format!("Data synchronization failed: {}", e),
-                "trace_id" => trace_id
-            );
+impl ThreadSafeSync {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(ThreadSafeSyncInner {
+                global_lock: Mutex::new(()),
+                data_lock: RwLock::new(HashMap::new()),
+                shutdown_flag: AtomicBool::new(false),
+                operation_counter: AtomicU64::new(0),
+                condition: std::sync::Condvar::new(),
+            }),
         }
     }
+    
+    /// Create a new thread-safe sync instance
+    pub fn new_shared() -> Arc<Self> {
+        Arc::new(Self::new())
+    }
+    
+    /// Acquire global lock
+    pub fn acquire_global_lock(&self) -> ThreadSafeGlobalLock {
+        ThreadSafeGlobalLock {
+            guard: self.inner.global_lock.lock().unwrap(),
+        }
+    }
+    
+    /// Check if shutdown is requested
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.inner.shutdown_flag.load(Ordering::Relaxed)
+    }
+    
+    /// Request shutdown
+    pub fn request_shutdown(&self) {
+        self.inner.shutdown_flag.store(true, Ordering::Relaxed);
+        self.inner.condition.notify_all();
+    }
+    
+    /// Get operation count
+    pub fn get_operation_count(&self) -> u64 {
+        self.inner.operation_counter.load(Ordering::Relaxed)
+    }
+    
+    /// Increment operation count
+    pub fn increment_operation_count(&self) {
+        self.inner.operation_counter.fetch_add(1, Ordering::Relaxed);
+    }
+    
+    /// Store data thread-safely
+    pub fn store_data(&self, key: String, value: String) -> Result<(), SyncError> {
+        let mut data = self.inner.data_lock.write().unwrap();
+        
+        data.insert(key, SyncData {
+            value,
+            timestamp: SystemTime::now(),
+            owner_thread: thread::current().id(),
+            access_count: 0,
+        });
+        
+        self.inner.operation_counter.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+    
+    /// Retrieve data thread-safely
+    pub fn retrieve_data(&self, key: &str) -> Result<Option<SyncData>, SyncError> {
+        let mut data = self.inner.data_lock.write().unwrap();
+        
+        if let Some(sync_data) = data.get_mut(key) {
+            sync_data.access_count += 1;
+            sync_data.timestamp = SystemTime::now();
+            Ok(Some(sync_data.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Remove data thread-safely
+    pub fn remove_data(&self, key: &str) -> Result<bool, SyncError> {
+        let mut data = self.inner.data_lock.write().unwrap();
+        
+        let existed = data.remove(key).is_some();
+        if existed {
+            self.inner.operation_counter.fetch_add(1, Ordering::Relaxed);
+        }
+        
+        Ok(existed)
+    }
+    
+    /// Clear all data
+    pub fn clear_all_data(&self) -> Result<(), SyncError> {
+        let mut data = self.inner.data_lock.write().unwrap();
+        data.clear();
+        self.inner.operation_counter.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+    
+    /// Wait for condition with timeout
+    pub fn wait_for_condition(&self, timeout: Duration) -> Result<bool, SyncError> {
+        let lock = self.inner.global_lock.lock().unwrap();
+        let result = self.inner.condition.wait_timeout(lock, timeout).unwrap();
+        Ok(!result.timed_out())
+    }
+    
+    /// Notify all waiting threads
+    pub fn notify_all(&self) {
+        self.inner.condition.notify_all();
+    }
+    
+    /// Notify one waiting thread
+    pub fn notify_one(&self) {
+        self.inner.condition.notify_one();
+    }
+}
 
-    result
+/// Global lock guard
+pub struct ThreadSafeGlobalLock<'a> {
+    guard: std::sync::MutexGuard<'a, ()>,
+}
+
+impl<'a> Drop for ThreadSafeGlobalLock<'a> {
+    fn drop(&mut self) {
+        // Lock is automatically released when guard is dropped
+    }
+}
+
+/// Synchronization error
+#[derive(Debug, Clone)]
+pub enum SyncError {
+    LockTimeout,
+    DataCorrupted,
+    ThreadError(String),
+    ShutdownInProgress,
+}
+
+impl std::fmt::Display for SyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SyncError::LockTimeout => write!(f, "Lock timeout"),
+            SyncError::DataCorrupted => write!(f, "Data corrupted"),
+            SyncError::ThreadError(msg) => write!(f, "Thread error: {}", msg),
+            SyncError::ShutdownInProgress => write!(f, "Shutdown in progress"),
+        }
+    }
+}
+
+impl std::error::Error for SyncError {}
+
+/// Thread-safe counter
+#[derive(Debug)]
+pub struct ThreadSafeCounter {
+    value: AtomicU64,
+}
+
+impl ThreadSafeCounter {
+    pub fn new(initial: u64) -> Self {
+        Self {
+            value: AtomicU64::new(initial),
+        }
+    }
+    
+    pub fn increment(&self) -> u64 {
+        self.value.fetch_add(1, Ordering::Relaxed)
+    }
+    
+    pub fn decrement(&self) -> u64 {
+        self.value.fetch_sub(1, Ordering::Relaxed)
+    }
+    
+    pub fn get(&self) -> u64 {
+        self.value.load(Ordering::Relaxed)
+    }
+    
+    pub fn set(&self, value: u64) {
+        self.value.store(value, Ordering::Relaxed);
+    }
+    
+    pub fn compare_and_swap(&self, current: u64, new: u64) -> Result<u64, u64> {
+        let result = self.value.compare_exchange(current, new, Ordering::Relaxed, Ordering::Relaxed);
+        match result {
+            Ok(old) => Ok(old),
+            Err(old) => Err(old),
+        }
+    }
+}
+
+/// Thread-safe flag
+#[derive(Debug)]
+pub struct ThreadSafeFlag {
+    flag: AtomicBool,
+}
+
+impl ThreadSafeFlag {
+    pub fn new(initial: bool) -> Self {
+        Self {
+            flag: AtomicBool::new(initial),
+        }
+    }
+    
+    pub fn set(&self, value: bool) {
+        self.flag.store(value, Ordering::Relaxed);
+    }
+    
+    pub fn get(&self) -> bool {
+        self.flag.load(Ordering::Relaxed)
+    }
+    
+    pub fn set_true(&self) {
+        self.flag.store(true, Ordering::Relaxed);
+    }
+    
+    pub fn set_false(&self) {
+        self.flag.store(false, Ordering::Relaxed);
+    }
+    
+    pub fn toggle(&self) {
+        self.flag.fetch_xor(true, Ordering::Relaxed);
+    }
+}
+
+/// Global thread-safe sync instance
+static GLOBAL_THREAD_SAFE_SYNC: std::sync::OnceLock<Arc<ThreadSafeSync>> = std::sync::OnceLock::new();
+
+/// Get global thread-safe sync instance
+pub fn get_global_thread_safe_sync() -> Arc<ThreadSafeSync> {
+    GLOBAL_THREAD_SAFE_SYNC.get_or_init(|| ThreadSafeSync::new_shared()).clone()
+}
+
+/// Helper function to create thread-safe data
+pub fn create_thread_safe_data(value: String) -> SyncData {
+    SyncData {
+        value,
+        timestamp: SystemTime::now(),
+        owner_thread: thread::current().id(),
+        access_count: 0,
+    }
+}
+
+/// Test helper for thread-safe operations
+pub fn test_thread_safe_operation<F>(operation: F) -> Result<(), SyncError>
+where
+    F: FnOnce(&ThreadSafeSync) -> Result<(), SyncError>,
+{
+    let sync = ThreadSafeSync::new();
+    operation(&sync)?;
+    Ok(())
 }

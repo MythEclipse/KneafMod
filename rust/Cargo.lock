@@ -1658,6 +1658,7 @@ dependencies = [
  "criterion",
  "crossbeam",
  "crossbeam-channel",
+ "crossbeam-deque",
  "crossbeam-epoch",
  "crossbeam-queue",
  "crossbeam-utils",

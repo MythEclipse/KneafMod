@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
 
-use crate::config::{PerformanceConfig as PerfConfig, PerformanceMode};
+use crate::config::performance_config::{PerformanceConfig as PerfConfig, PerformanceMode};
 use crate::logging::generate_trace_id;
 use crate::logging::PerformanceLogger;
 use crate::memory::pool::hierarchical::HierarchicalMemoryPool;

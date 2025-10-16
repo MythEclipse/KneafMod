@@ -61,6 +61,7 @@ ctor = "0.2"
 async-trait = "0.1"
 schemars = "0.8"
 flume = "0.11"
+crossbeam-deque = "0.8.6"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 mimalloc = "0.1"

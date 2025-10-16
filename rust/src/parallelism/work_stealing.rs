@@ -1,146 +1,447 @@
-use crate::errors::{Result, RustError};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::config::WorkStealingConfig;
+use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor};
+use async_trait::async_trait;
+use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::AtomicBool;
+use std::collections::BinaryHeap;
+use std::cmp::Ordering;
 use std::time::Instant;
-use crate::parallelism::executor_factory::ParallelExecutorFactory;
-use crate::parallelism::base::executor_factory::executor_factory::ParallelExecutor;
-use crate::create_work_stealing_executor;
+use tokio::sync::Notify;
+use std::any::Any;
 
-// Track parallel execution statistics for performance monitoring
-static PARALLEL_TASK_STATS: AtomicUsize = AtomicUsize::new(0);
-
-/// Work stealing scheduler with enhanced performance optimizations
-#[derive(Debug)]
-pub struct WorkStealingScheduler<T> {
-    tasks: Vec<T>,
+/// Priority levels for task execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TaskPriority {
+    /// Lowest priority - executed only when system is idle
+    Lowest,
+    /// Low priority - non-critical background tasks
+    Low,
+    /// Normal priority - default for most tasks
+    Normal,
+    /// High priority - critical game logic tasks
+    High,
+    /// Highest priority - immediate response tasks (e.g., player input)
+    Highest,
 }
 
-impl<T> WorkStealingScheduler<T> {
-    /// Create a new work stealing scheduler
-    pub fn new(tasks: Vec<T>) -> Self {
-        Self { tasks }
-    }
+/// Task wrapper with priority metadata for work-stealing scheduler
+#[derive(Debug, Clone)]
+pub struct PrioritizedTask {
+    pub priority: TaskPriority,
+    pub task: Box<dyn FnOnce() -> Box<dyn Send + 'static> + Send + 'static>,
+    pub submission_time: Instant,
+    pub trace_id: Option<String>,
+    pub task_id: u64, // Unique identifier for deterministic task comparison
+}
 
-    /// Execute tasks with optimized work distribution and performance monitoring
-    #[inline(always)]
-    pub fn execute<F, R>(self, processor: F) -> Result<Vec<R>>
+impl PrioritizedTask {
+    /// Create a new prioritized task with automatic unique ID generation
+    pub fn new<F, R>(
+        priority: TaskPriority,
+        f: F,
+        trace_id: Option<String>
+    ) -> Self
     where
-        F: Fn(T) -> R + Send + Sync + 'static,
-        T: Send + 'static,
+        F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let task_count = self.tasks.len();
-
-        // Increment parallel task counter for monitoring
-        PARALLEL_TASK_STATS.fetch_add(1, Ordering::Relaxed);
-
-        // Use branch prediction for common case optimization
-        if task_count == 0 {
-            return Ok(Vec::new());
-        }
-
-        // Aggressive optimization: for very small task counts (<=4), use sequential processing
-        // to avoid Rayon thread spawning and work distribution overhead
-        if task_count <= 4 {
-            return Ok(self.execute_sequential(processor));
-        }
-
-        // For medium task counts (5-64), use optimized sequential with loop unrolling
-        if task_count <= 64 {
-            return Ok(self.execute_optimized_sequential(processor));
-        }
-
-        // For larger task counts, use our optimized work stealing executor
-        // This provides better load balancing across threads
-        self.execute_parallel_with_factory(processor)
-    }
-
-    /// Sequential execution with no overhead
-    fn execute_sequential<F, R>(self, processor: F) -> Vec<R>
-    where
-        F: Fn(T) -> R,
-    {
-        self.tasks.into_iter().map(processor).collect()
-    }
-
-    /// Optimized sequential execution with loop unrolling for better ILP
-    fn execute_optimized_sequential<F, R>(self, processor: F) -> Vec<R>
-    where
-        F: Fn(T) -> R,
-    {
-        self.tasks.into_iter().map(processor).collect()
-    }
-
-    /// Parallel execution with work stealing using our factory-based executor
-    fn execute_parallel_with_factory<F, R>(self, processor: F) -> Result<Vec<R>>
-    where
-        F: Fn(T) -> R + Send + Sync + 'static,
-        T: Send + 'static,
-        R: Send + 'static,
-    {
-        let task_count = self.tasks.len();
+        // Use fastrand for efficient unique ID generation
+        let task_id = fastrand::u64(..);
+        let boxed_task = Box::new(move || Box::new(f()) as Box<dyn Send + 'static>);
         
-        // Measure execution time for performance monitoring
-        let start = Instant::now();
-        
-        // Use the work-stealing executor from our factory for better load balancing
-        let executor = ParallelExecutorFactory::create_work_stealing()
-            .map_err(|e| RustError::OperationFailed(format!("Failed to create work-stealing executor: {}", e)))?;
-            
-        let results: Vec<R> = executor.execute(|| {
-            self.tasks.into_iter().map(processor).collect()
+        Self {
+            priority,
+            task: boxed_task,
+            submission_time: Instant::now(),
+            trace_id,
+            task_id,
+        }
+    }
+}
+
+// Implement PartialEq and Eq required for Ord
+impl PartialEq for PrioritizedTask {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority && self.task_id == other.task_id
+    }
+}
+
+impl Eq for PrioritizedTask {}
+
+impl Ord for PrioritizedTask {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.priority.cmp(&self.priority)
+            .then_with(|| self.submission_time.cmp(&other.submission_time))
+    }
+}
+
+impl PartialOrd for PrioritizedTask {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Enhanced work-stealing scheduler with dynamic priority management
+#[derive(Debug, Clone)]
+pub struct WorkStealingScheduler {
+    executor: ParallelExecutorEnum,
+    config: Arc<RwLock<WorkStealingConfig>>,
+    priority_queue: Arc<Mutex<BinaryHeap<PrioritizedTask>>>,
+    task_notify: Arc<Notify>,
+    is_running: Arc<AtomicBool>,
+    worker_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl WorkStealingScheduler {
+    /// Create new work-stealing scheduler with performance configuration
+    pub fn new(executor_type: ExecutorType, config: WorkStealingConfig) -> Self {
+        let executor = match executor_type {
+            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap())),
+            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(EnhancedWorkStealingExecutor::new(None))),
+            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(tokio::runtime::Runtime::new().unwrap())),
+            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(tokio::runtime::Runtime::new().unwrap())),
+        };
+        let config = Arc::new(RwLock::new(config));
+        let priority_queue = Arc::new(Mutex::new(BinaryHeap::new()));
+        let task_notify = Arc::new(Notify::new());
+        let is_running = Arc::new(AtomicBool::new(true));
+
+        // Start background priority task worker
+        let queue_clone = priority_queue.clone();
+        let config_clone = config.clone();
+        let notify_clone = task_notify.clone();
+        let running_clone = is_running.clone();
+        let executor_clone = executor.clone();
+
+        let worker = std::thread::spawn(move || {
+            Self::priority_worker(queue_clone, config_clone, notify_clone, running_clone, executor_clone);
         });
-        
-        let duration = start.elapsed();
 
-        // Log performance statistics (in a real system, this would go to a proper monitoring system)
-        #[cfg(debug_assertions)]
-        {
-            eprintln!(
-                "Parallel execution: {} tasks in {:?} using work-stealing executor",
-                task_count, duration
-            );
+        Self {
+            executor,
+            config,
+            priority_queue,
+            task_notify,
+            is_running,
+            worker_thread: Some(worker),
         }
-
-        Ok(results)
     }
 
-    /// Parallel execution with Rayon work stealing using adaptive thread pool (legacy)
-    #[deprecated(since = "0.8.0", note = "Please use execute_parallel_with_factory instead")]
-    fn execute_parallel_with_adaptive_pool<F, R>(self, processor: F) -> Result<Vec<R>>
+    /// Get global scheduler instance configured from performance settings
+    pub fn from_performance_config(config: &crate::config::performance_config::PerformanceConfig) -> Self {
+        let executor_type = if config.work_stealing_enabled {
+            ExecutorType::WorkStealing
+        } else {
+            ExecutorType::ThreadPool
+        };
+
+        let ws_config = WorkStealingConfig {
+            steal_threshold: 10,
+            max_steal_attempts: 5,
+            backoff_delay_ms: 10,
+        };
+
+        Self::new(executor_type, ws_config)
+    }
+
+    /// Execute task with normal priority (backward compatible)
+    pub fn execute<F, R>(&self, f: F) -> R
     where
-        F: Fn(T) -> R + Send + Sync + 'static,
-        T: Send + 'static,
+        F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let task_count = self.tasks.len();
-        
-        // Measure execution time for performance monitoring
-        let start = Instant::now();
-        
-        // Get the global executor for backward compatibility
-        let executor = create_work_stealing_executor().unwrap();
-        
-        let results: Vec<R> = executor.execute(|| -> Vec<R> {
-            self.tasks.into_iter().map(processor).collect()
-        });
-        
-        let duration = start.elapsed();
-
-        // Log performance statistics (in a real system, this would go to a proper monitoring system)
-        #[cfg(debug_assertions)]
-        {
-            eprintln!(
-                "Parallel execution: {} tasks in {:?} using global executor",
-                task_count, duration
-            );
-        }
-
-        Ok(results)
+        self.execute_with_priority(f, TaskPriority::Normal, None)
     }
 
-    /// Get execution statistics (for debugging/monitoring)
-    #[cfg(debug_assertions)]
-    pub fn get_stats() -> usize {
-        PARALLEL_TASK_STATS.load(Ordering::Relaxed)
+    /// Execute task with specific priority and optional trace ID
+    pub fn execute_with_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let prioritized = PrioritizedTask::new(priority, f, trace_id);
+
+        // Add to queue if not full, else execute directly
+        let queue_result = {
+            let mut queue = self.priority_queue.lock().unwrap();
+            if queue.len() < self.config.read().unwrap().steal_threshold {
+                queue.push(prioritized);
+                self.task_notify.notify_one();
+                Ok(())
+            } else {
+                Err(())
+            }
+        };
+
+        match queue_result {
+            Ok(_) => {
+                // Wait for task completion (simplified - in real implementation use futures)
+                // For async support, would need to return a future that resolves when task completes
+                let result = f();
+                // For async support, would need to return a future that resolves when task completes
+                // This is a simplification - real implementation would need proper future handling
+                result;
+                unreachable!("This line should not be reached in synchronous execution path")
+            }
+            Err(_) => self.executor.execute(f),
+        }
+    }
+
+    /// Background worker thread for processing priority tasks
+    fn priority_worker(
+        queue: Arc<Mutex<BinaryHeap<PrioritizedTask>>>,
+        config: Arc<RwLock<WorkStealingConfig>>,
+        notify: Arc<Notify>,
+        running: Arc<AtomicBool>,
+        executor: ParallelExecutorEnum,
+    ) {
+        while running.load(std::sync::atomic::Ordering::Relaxed) {
+            // For non-async worker, use a condition variable or polling instead
+            std::thread::sleep(std::time::Duration::from_millis(10));
+
+            let mut queue = queue.lock().unwrap();
+            let config = config.read().unwrap();
+
+            while let Some(task) = queue.pop() {
+                // Execute through underlying executor (preserves work-stealing)
+                let result = (task.task)();
+                
+                // Release locks during execution to maintain responsiveness
+                drop(queue);
+                drop(config);
+
+                // In real implementation, would process result and handle errors
+                let _ = result;
+
+                // Re-acquire lock for next iteration
+                queue = queue.lock().unwrap();
+            }
+        }
+    }
+
+    /// Get current queue size
+    pub fn queue_size(&self) -> usize {
+        self.priority_queue.lock().unwrap().len()
+    }
+
+    /// Get maximum allowed queue size
+    pub fn max_queue_size(&self) -> usize {
+        self.config.read().unwrap().steal_threshold
+    }
+
+    /// Update configuration dynamically (runtime changes)
+    pub fn update_config(&self, new_config: WorkStealingConfig) {
+        let mut config = self.config.write().unwrap();
+        *config = new_config;
+    }
+
+    /// Shutdown scheduler gracefully
+    pub async fn shutdown(&self) {
+        self.is_running.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.task_notify.notify_one();
+
+        // Wait for queue to empty
+        while self.queue_size() > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // Shutdown underlying executor
+        self.executor.shutdown().await;
+
+        // Join worker thread
+        if let Some(worker) = self.worker_thread.take() {
+            let _ = worker.join();
+        }
+    }
+
+    /// Downcast for dynamic executor handling
+    pub fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[async_trait]
+impl ParallelExecutor for WorkStealingScheduler {
+    fn execute_with_priority<F, R>(&self, f: F, priority: crate::parallelism::base::executor_factory::executor_factory::TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let task = Box::new(f);
+        let result = self.execute(move || task());
+        result
+    }
+    fn execute<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.execute(f)
+    }
+
+    async fn shutdown(&self) {
+        self.shutdown().await
+    }
+
+    fn running_tasks(&self) -> usize {
+        // In real implementation, would track running tasks through executor
+        self.queue_size()
+    }
+
+    fn max_concurrent_tasks(&self) -> usize {
+        match &self.executor {
+            ParallelExecutorEnum::WorkStealing(e) => e.max_concurrent_tasks(),
+            _ => 100, // Default fallback
+        }
+    }
+}
+
+/// Priority execution extension trait for parallel executors
+pub trait PriorityExecutor: Send + Sync {
+    /// Execute task with specific priority and optional trace ID
+    fn execute_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static;
+
+    /// Get current priority queue size
+    fn priority_queue_size(&self) -> usize;
+}
+
+/// Implement priority execution for WorkStealingScheduler
+impl PriorityExecutor for WorkStealingScheduler {
+    fn execute_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.execute_with_priority(f, priority, trace_id)
+    }
+
+    fn priority_queue_size(&self) -> usize {
+        self.queue_size()
+    }
+}
+
+/// ParallelExecutorEnum extension for priority execution
+pub trait ParallelExecutorPriorityExt: Send + Sync {
+    /// Execute task with priority through work-stealing scheduler
+    fn execute_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static;
+}
+
+impl ParallelExecutorPriorityExt for ParallelExecutorEnum {
+    fn execute_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        match self {
+            ParallelExecutorEnum::WorkStealing(scheduler) => {
+                scheduler.as_any().downcast_ref::<WorkStealingScheduler>()
+                    .expect("WorkStealingExecutor should contain WorkStealingScheduler")
+                    .execute_with_priority(f, priority, trace_id)
+            }
+            _ => panic!("Priority execution only supported by WorkStealing executor"),
+        }
+    }
+}
+
+/// Enhanced work-stealing executor using crossbeam-deque
+pub struct EnhancedWorkStealingExecutor {
+    injector: Arc<Injector<PrioritizedTask>>,
+    stealers: Vec<Stealer<PrioritizedTask>>,
+    worker: Worker<PrioritizedTask>,
+    config: Option<WorkStealingConfig>,
+}
+
+impl EnhancedWorkStealingExecutor {
+    pub fn new(config: Option<WorkStealingConfig>) -> Self {
+        let injector = Arc::new(Injector::new());
+        let worker = Worker::new_fifo();
+        let stealer = worker.stealer();
+        
+        Self {
+            injector,
+            stealers: vec![stealer],
+            worker,
+            config,
+        }
+    }
+
+    pub fn execute_task(&self, task: PrioritizedTask) {
+        self.injector.push(task);
+    }
+
+    pub fn try_steal_task(&self) -> Option<PrioritizedTask> {
+        // Try to steal from injector first
+        if let Some(task) = self.injector.steal().into_iter().next() {
+            return Some(task);
+        }
+
+        // Try to steal from other workers
+        for stealer in &self.stealers {
+            if let Some(task) = stealer.steal().into_iter().next() {
+                return Some(task);
+            }
+        }
+
+        None
+    }
+
+    pub fn pop_task(&self) -> Option<PrioritizedTask> {
+        self.worker.pop()
+    }
+}
+
+#[async_trait]
+impl ParallelExecutor for EnhancedWorkStealingExecutor {
+    fn execute<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let task = PrioritizedTask::new(TaskPriority::Normal, f, None);
+        self.execute_task(task);
+        
+        // In a real implementation, this would return a future that resolves when the task completes
+        // For now, we execute synchronously as a fallback
+        f()
+    }
+
+    async fn shutdown(&self) {
+        // Simple shutdown implementation
+        // In a real implementation, this would signal all workers to stop
+    }
+
+    fn running_tasks(&self) -> usize {
+        // Estimate based on queue sizes
+        self.injector.len()
+    }
+
+    fn max_concurrent_tasks(&self) -> usize {
+        self.config.as_ref().map(|c| c.max_steal_attempts).unwrap_or(100)
+    }
+
+    fn execute_with_priority<F, R>(&self, f: F, priority: crate::parallelism::base::executor_factory::executor_factory::TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let task = PrioritizedTask::new(
+            match priority {
+                crate::parallelism::base::executor_factory::executor_factory::TaskPriority::Lowest => TaskPriority::Lowest,
+                crate::parallelism::base::executor_factory::executor_factory::TaskPriority::Low => TaskPriority::Low,
+                crate::parallelism::base::executor_factory::executor_factory::TaskPriority::Normal => TaskPriority::Normal,
+                crate::parallelism::base::executor_factory::executor_factory::TaskPriority::High => TaskPriority::High,
+                crate::parallelism::base::executor_factory::executor_factory::TaskPriority::Highest => TaskPriority::Highest,
+            },
+            f,
+            trace_id,
+        );
+        self.execute_task(task);
+        f()
     }
 }

@@ -17,9 +17,9 @@ static JNI_BRIDGE_LOGGER: Lazy<PerformanceLogger> =
 
 /// High-performance JNI bridge with zero-copy capabilities and thread safety
 #[derive(Debug)]
-pub struct JniBridge {
+pub struct JniBridge<'a> {
     /// Cache of Java class references for quick lookup
-    class_cache: Arc<std::sync::RwLock<HashMap<String, JClass>>>,
+    class_cache: Arc<std::sync::RwLock<HashMap<String, JClass<'a>>>>,
     
     /// Cache of method IDs for improved performance
     method_cache: Arc<std::sync::RwLock<HashMap<String, jni::sys::jmethodID>>>,
@@ -70,7 +70,7 @@ impl Default for JniBridgeConfig {
     }
 }
 
-impl JniBridge {
+impl<'a> JniBridge<'a> {
     /// Create a new JNI bridge with optional configuration
     pub fn new(config: Option<JniBridgeConfig>) -> Self {
         let config = config.unwrap_or_default();
@@ -321,7 +321,7 @@ impl JniBridge {
     }
 
     /// Execute a Java method asynchronously with timeout
-    pub async fn call_java_method_async<T>(&self, class: &JClass, method_id: jni::sys::jmethodID, args: &[JValue]) -> Result<T>
+    pub async fn call_java_method_async<T>(&self, class: &JClass<'_>, method_id: jni::sys::jmethodID, args: &[JValue<'_, '_>]) -> Result<T>
     where
         T: jni::Convertible,
     {
@@ -460,7 +460,7 @@ impl JniBridgeBuilder {
     }
 
     /// Build the JNI bridge
-    pub fn build(self) -> JniBridge {
+    pub fn build(self) -> JniBridge<'static> {
         JniBridge::new(Some(self.config))
     }
 }
@@ -573,13 +573,13 @@ impl FromJni for Vec<u8> {
 }
 
 /// High-level JNI RPC interface for entity processing
-pub struct JniEntityRpc {
-    bridge: Arc<JniBridge>,
-    entity_class: Arc<std::sync::RwLock<Option<JClass>>>,
+pub struct JniEntityRpc<'a> {
+    bridge: Arc<JniBridge<'a>>,
+    entity_class: Arc<std::sync::RwLock<Option<JClass<'a>>>>,
     logger: PerformanceLogger,
 }
 
-impl JniEntityRpc {
+impl<'a> JniEntityRpc<'a> {
     /// Create a new JNI entity RPC client
     pub fn new(bridge: Arc<JniBridge>) -> Result<Self> {
         let trace_id = generate_trace_id();
@@ -594,7 +594,7 @@ impl JniEntityRpc {
     }
 
     /// Load the Entity class from Java
-    fn load_entity_class(bridge: &JniBridge) -> Result<JClass> {
+    fn load_entity_class<'b>(bridge: &'b JniBridge<'b>) -> Result<JClass<'b>> {
         let trace_id = generate_trace_id();
         
         let class = bridge.get_class("com/kneaf/core/entity/Entity")?;

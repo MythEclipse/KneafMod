@@ -48,8 +48,8 @@ pub use storage::*;
 pub use macros::*;
 
 // Export new modules
-pub use sync::*;
-pub use tests::*;
+pub use crate::sync::*;
+pub use crate::tests::*;
 
 // Export verification test for manual execution
 #[cfg(test)]

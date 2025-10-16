@@ -123,11 +123,11 @@ where
 
 /// Entity processing input structure
 #[derive(Debug, Clone)]
-pub struct ProcessingInput {
+pub struct ProcessingInput<T: EntityConfig> {
     /// Entity to process
     pub entity: EntityData,
     /// Processing configuration
-    pub config: EntityConfig,
+    pub config: T,
     /// Current timestamp
     pub timestamp: Instant,
     /// AI optimization level

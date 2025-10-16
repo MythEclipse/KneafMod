@@ -1,5 +1,5 @@
 use super::types::{MobData, MobInput, MobProcessResult};
-use crate::entities::entity::processing::{process_entities, Input as EntityProcessingInput};
+use crate::entities::entity::processing::process_entities;
 use crate::entities::entity::types::{EntityData, EntityType};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::memory::pool::{

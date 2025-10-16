@@ -1,4 +1,4 @@
-use crate::config::{PerformanceConfig as PerfConfig, WorkStealingConfig};
+use crate::config::performance_config::{PerformanceConfig as PerfConfig, WorkStealingConfig};
 use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor};
 // ParallelExecutorFactory is imported where needed to avoid circular dependencies
 use async_trait::async_trait;
@@ -137,8 +137,9 @@ impl WorkStealingScheduler {
         };
 
         let ws_config = WorkStealingConfig {
-            enabled: config.work_stealing_enabled,
-            queue_size: config.work_stealing_queue_size,
+            steal_threshold: 10,
+            max_steal_attempts: 5,
+            backoff_delay_ms: 10,
         };
 
         Self::new(executor_type, ws_config)
@@ -164,7 +165,7 @@ impl WorkStealingScheduler {
         // Add to queue if not full, else execute directly
         let queue_result = {
             let mut queue = self.priority_queue.lock().unwrap();
-            if queue.len() < self.config.read().unwrap().queue_size {
+            if queue.len() < self.config.read().unwrap().steal_threshold {
                 queue.push(prioritized);
                 self.task_notify.notify_one();
                 Ok(())
@@ -226,7 +227,7 @@ impl WorkStealingScheduler {
 
     /// Get maximum allowed queue size
     pub fn max_queue_size(&self) -> usize {
-        self.config.read().unwrap().queue_size
+        self.config.read().unwrap().steal_threshold
     }
 
     /// Update configuration dynamically (runtime changes)

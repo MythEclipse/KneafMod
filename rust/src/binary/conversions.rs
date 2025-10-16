@@ -524,7 +524,7 @@ impl BinaryConverter for EntityConverter {
             let _ = cur.read_f32::<LittleEndian>();
         }
         
-        use crate::entities::common::types::DefaultEntityConfig;
+        use crate::types::DefaultEntityConfig;
         let cfg = DefaultEntityConfig {
             entity_type: "default".to_string(), // Use a default string since etype is not available
         };

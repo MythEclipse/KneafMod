@@ -7,12 +7,12 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Cursor, Read};
 use once_cell::sync::Lazy;
 use dashmap::DashMap;
-use crate::simd::{SimdF32, SimdI32, SimdU64};
+use crate::simd::base::{SimdF32, SimdI32, SimdU64, SimdOps};
 use crate::errors::{RustError, Result};
 use crate::jni::converter::factory::JniConverter;
 use crate::memory::zero_copy::{ZeroCopyBuffer, ZeroCopyBufferPool, GlobalBufferTracker};
 use crate::binary::zero_copy::ZeroCopyConverter;
-use crate::entities::entity::types::{EntityData, EntityPosition};
+use crate::types::EntityDataTrait as EntityData;
 use crate::entities::block::types::{BlockData, BlockState};
 use crate::entities::item::types::{ItemData, ItemStack};
 use crate::entities::villager::types::{VillagerData, VillagerProfession};
@@ -57,16 +57,16 @@ struct CacheEntry<T> {
 }
 
 /// Enhanced JNI converter with zero-copy capabilities and performance optimizations
-pub struct EnhancedJniConverter {
+pub struct EnhancedJniConverter<'a> {
     config: EnhancedConverterConfig,
     string_cache: DashMap<String, CacheEntry<jstring>>,
-    primitive_cache: DashMap<(String, Vec<u8>), CacheEntry<JObject>>,
+    primitive_cache: DashMap<(String, Vec<u8>), CacheEntry<JObject<'a>>>,
     buffer_pool: ZeroCopyBufferPool,
     performance_metrics: RwLock<HashMap<String, u64>>,
     schema_registry: RwLock<HashMap<String, RootSchema>>,
 }
 
-impl EnhancedJniConverter {
+impl<'a> EnhancedJniConverter<'a> {
     /// Create a new EnhancedJniConverter with default configuration
     pub fn new() -> Self {
         Self::with_config(EnhancedConverterConfig::default())
@@ -311,10 +311,15 @@ impl EnhancedJniConverter {
         let mut result = Vec::with_capacity(len);
         let mut i = 0;
         
-        while i + SimdI32::LANES <= len {
-            let simd_values = unsafe { SimdI32::from_slice(&*elements.add(i)) };
-            result.extend_from_slice(simd_values.as_slice());
-            i += SimdI32::LANES;
+        const SIMD_CHUNK_SIZE: usize = 8; // SimdI32 has 8 lanes
+        
+        while i + SIMD_CHUNK_SIZE <= len {
+            let chunk = unsafe { std::slice::from_raw_parts(elements.add(i), SIMD_CHUNK_SIZE) };
+            let simd_values = SimdI32::load(chunk);
+            let mut temp = vec![0; SIMD_CHUNK_SIZE];
+            SimdI32::store(simd_values, &mut temp);
+            result.extend_from_slice(&temp);
+            i += SIMD_CHUNK_SIZE;
         }
         
         // Handle remaining elements
@@ -365,10 +370,15 @@ impl EnhancedJniConverter {
         let mut result = Vec::with_capacity(len);
         let mut i = 0;
         
-        while i + SimdU64::LANES <= len {
-            let simd_values = unsafe { SimdU64::from_slice(&*elements.add(i)) };
-            result.extend_from_slice(simd_values.as_slice());
-            i += SimdU64::LANES;
+        const SIMD_CHUNK_SIZE: usize = 4; // SimdU64 has 4 lanes
+        
+        while i + SIMD_CHUNK_SIZE <= len {
+            let chunk = unsafe { std::slice::from_raw_parts(elements.add(i), SIMD_CHUNK_SIZE) };
+            let simd_values = SimdU64::load(chunk);
+            let mut temp = vec![0; SIMD_CHUNK_SIZE];
+            SimdU64::store(simd_values, &mut temp);
+            result.extend_from_slice(&temp);
+            i += SIMD_CHUNK_SIZE;
         }
         
         // Handle remaining elements
@@ -584,7 +594,7 @@ impl EnhancedJniConverter {
     }
 }
 
-impl JniConverter for EnhancedJniConverter {
+impl JniConverter for EnhancedJniConverter<'_> {
     fn jstring_to_rust(&self, env: &mut JNIEnv, j_str: JString) -> Result<String> {
         // Use zero-copy implementation by default
         self.zero_copy_jstring_to_rust(env, j_str)
@@ -632,26 +642,26 @@ impl JniConverter for EnhancedJniConverter {
 }
 
 /// Lazy converter that performs conversion only when accessed
-pub struct LazyConverter<F, T>
+pub struct LazyConverter<'a, F, T>
 where
-    F: Fn(&mut JNIEnv, JObject) -> Result<T> + 'static,
+    F: Fn(&mut JNIEnv<'a>, JObject<'a>) -> Result<T> + 'static,
     T: 'static,
 {
-    env: *mut JNIEnv,
-    obj: JObject,
+    env: *mut JNIEnv<'a>,
+    obj: JObject<'a>,
     converter: F,
     result: Option<T>,
 }
 
-unsafe impl<F, T> Send for LazyConverter<F, T> where F: Send + for<'a, 'b, 'c> Fn(&'a mut jni::JNIEnv<'b>, jni::objects::JObject<'c>) -> crate::errors::enhanced_errors::Result<T> + 'static, T: Send {}
-unsafe impl<F, T> Sync for LazyConverter<F, T> where F: Sync + for<'a, 'b, 'c> Fn(&'a mut jni::JNIEnv<'b>, jni::objects::JObject<'c>) -> crate::errors::enhanced_errors::Result<T> + 'static, T: Sync {}
+unsafe impl<'a, F, T> Send for LazyConverter<'a, F, T> where F: Send + for<'b, 'c, 'd> Fn(&'b mut jni::JNIEnv<'c>, jni::objects::JObject<'d>) -> crate::Result<T> + 'static, T: Send {}
+unsafe impl<'a, F, T> Sync for LazyConverter<'a, F, T> where F: Sync + for<'b, 'c, 'd> Fn(&'b mut jni::JNIEnv<'c>, jni::objects::JObject<'d>) -> crate::Result<T> + 'static, T: Sync {}
 
-impl<F, T> LazyConverter<F, T>
+impl<'a, F, T> LazyConverter<'a, F, T>
 where
-    F: Fn(&mut JNIEnv, JObject) -> Result<T> + 'static,
+    F: Fn(&mut JNIEnv<'a>, JObject<'a>) -> Result<T> + 'static,
     T: 'static,
 {
-    pub fn new(env: &mut JNIEnv, obj: JObject, converter: F) -> Self {
+    pub fn new(env: &mut JNIEnv<'a>, obj: JObject<'a>, converter: F) -> Self {
         Self {
             env: env as *mut JNIEnv,
             obj,

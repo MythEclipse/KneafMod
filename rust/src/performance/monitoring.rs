@@ -1,4 +1,4 @@
-use crate::config::{PerformanceConfig as PerfConfig, PerformanceMode};
+use crate::config::performance_config::{PerformanceConfig as PerfConfig, PerformanceMode};
 use crate::errors::{Result, RustError};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::simd_enhanced::{detect_simd_capability, SimdCapability};
@@ -497,11 +497,10 @@ impl PerformanceMonitor {
     pub fn apply_performance_config(&mut self, config: &PerformanceConfig) -> Result<()> {
         // Update monitoring configuration based on performance mode
         match config.performance_mode {
-            PerformanceMode::Normal => self.configure_normal_mode(config),
-            PerformanceMode::Extreme => self.configure_extreme_mode(config),
-            PerformanceMode::Ultra => self.configure_ultra_mode(config),
+            PerformanceMode::Balanced => self.configure_normal_mode(config),
+            PerformanceMode::Performance => self.configure_extreme_mode(config),
+            PerformanceMode::Efficiency => self.configure_ultra_mode(config),
             PerformanceMode::Custom => self.configure_custom_mode(config),
-            PerformanceMode::Auto => self.configure_auto_mode(config)?,
         };
 
         // Store configuration for global access
@@ -516,61 +515,58 @@ impl PerformanceMonitor {
     /// Configure monitor for Normal performance mode
     fn configure_normal_mode(&mut self, config: &PerformanceConfig) {
         // Normal mode: balanced monitoring
-        self.jni_call_threshold_ms.store(config.monitoring_sample_rate, Ordering::Relaxed);
+        self.jni_call_threshold_ms.store(100, Ordering::Relaxed);
         self.lock_wait_threshold_ms.store(50, Ordering::Relaxed);
         self.memory_usage_threshold_pct.store(90, Ordering::Relaxed);
         self.gc_duration_threshold_ms.store(100, Ordering::Relaxed);
         self.alert_cooldown.store(3000, Ordering::Relaxed);
         
         // Enable all safety checks and monitoring
-        self.is_monitoring.store(config.enable_performance_monitoring, Ordering::SeqCst);
+        self.is_monitoring.store(true, Ordering::SeqCst);
     }
 
     /// Configure monitor for Extreme performance mode
     fn configure_extreme_mode(&mut self, config: &PerformanceConfig) {
         // Extreme mode: reduced monitoring overhead
-        self.jni_call_threshold_ms.store(config.monitoring_sample_rate * 2, Ordering::Relaxed);
+        self.jni_call_threshold_ms.store(200, Ordering::Relaxed);
         self.lock_wait_threshold_ms.store(100, Ordering::Relaxed);
         self.memory_usage_threshold_pct.store(95, Ordering::Relaxed);
         self.gc_duration_threshold_ms.store(200, Ordering::Relaxed);
         self.alert_cooldown.store(5000, Ordering::Relaxed);
         
         // Reduce monitoring overhead but keep essential safety
-        self.is_monitoring.store(config.enable_performance_monitoring, Ordering::SeqCst);
+        self.is_monitoring.store(true, Ordering::SeqCst);
     }
 
     /// Configure monitor for Ultra performance mode
     fn configure_ultra_mode(&mut self, config: &PerformanceConfig) {
         // Ultra mode: minimal monitoring for maximum performance
-        self.jni_call_threshold_ms.store(config.monitoring_sample_rate * 10, Ordering::Relaxed);
+        self.jni_call_threshold_ms.store(1000, Ordering::Relaxed);
         self.lock_wait_threshold_ms.store(200, Ordering::Relaxed);
         self.memory_usage_threshold_pct.store(98, Ordering::Relaxed);
         self.gc_duration_threshold_ms.store(500, Ordering::Relaxed);
         self.alert_cooldown.store(10000, Ordering::Relaxed);
         
         // Minimal monitoring only if enabled
-        self.is_monitoring.store(config.enable_performance_monitoring, Ordering::SeqCst);
+        self.is_monitoring.store(true, Ordering::SeqCst);
         
-        if !config.enable_performance_monitoring {
-            // Disable all detailed monitoring in ultra mode when monitoring is off
-            self.logger.log_info(
-                "performance_config",
-                &generate_trace_id(),
-                "Ultra performance mode: Disabling detailed monitoring for maximum speed",
-            );
-        }
+        self.logger.log_info(
+            "performance_config",
+            &generate_trace_id(),
+            "Ultra performance mode: Minimal monitoring for maximum speed",
+        );
     }
 
     /// Configure monitor for Custom performance mode
     fn configure_custom_mode(&mut self, config: &PerformanceConfig) {
         // Custom mode: use exactly what user configured
-        self.jni_call_threshold_ms.store(config.monitoring_sample_rate, Ordering::Relaxed);
-        self.lock_wait_threshold_ms.store(config.monitoring_sample_rate as u64, Ordering::Relaxed);
-        self.memory_usage_threshold_pct.store(config.monitoring_sample_rate as u32, Ordering::Relaxed);
-        self.gc_duration_threshold_ms.store(config.monitoring_sample_rate as u64, Ordering::Relaxed);
-        self.alert_cooldown.store(config.monitoring_sample_rate * 1000, Ordering::Relaxed);
+        self.jni_call_threshold_ms.store(config.max_threads as u64 * 10, Ordering::Relaxed);
+        self.lock_wait_threshold_ms.store(config.thread_pool_size as u64 * 5, Ordering::Relaxed);
+        self.memory_usage_threshold_pct.store(config.memory_pressure_threshold as u32 * 100, Ordering::Relaxed);
+        self.gc_duration_threshold_ms.store(config.circuit_breaker_threshold as u64 * 100, Ordering::Relaxed);
+        self.alert_cooldown.store(3000, Ordering::Relaxed);
         
-        self.is_monitoring.store(config.enable_performance_monitoring, Ordering::SeqCst);
+        self.is_monitoring.store(true, Ordering::SeqCst);
     }
 
     /// Configure monitor for Auto performance mode
@@ -578,10 +574,10 @@ impl PerformanceMonitor {
         let simd_capability = detect_simd_capability();
         
         // Auto-configure based on system capabilities
-        if simd_capability.has_avx512 && num_cpus::get() >= 16 {
+        if simd_capability.max_f32_lanes >= 8 && num_cpus::get() >= 16 {
             // High-end system: use Ultra mode settings
             self.configure_ultra_mode(config);
-        } else if simd_capability.has_avx2 && num_cpus::get() >= 8 {
+        } else if simd_capability.max_f32_lanes >= 4 && num_cpus::get() >= 8 {
             // Mid-range system: use Extreme mode settings
             self.configure_extreme_mode(config);
         } else {

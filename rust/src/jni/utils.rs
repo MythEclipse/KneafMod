@@ -1,135 +1,148 @@
-use jni::{JNIEnv, objects::{JString, JByteArray}, sys::{jstring, jbyteArray}};
-use crate::errors::{RustError, Result};
-use std::sync::{OnceLock, Mutex};
-use std::marker::PhantomData;
-use once_cell::sync::Lazy;
-use std::cell::UnsafeCell;
+use jni::{JNIEnv, objects::JString, sys::{jstring, jbyteArray}};
+use std::sync::{Arc, Mutex, RwLock};
+use crate::errors::{Result, RustError};
 
-pub fn jni_string_to_rust(env: &mut JNIEnv, j_str: JString) -> Result<String> {
-    env.get_string(&j_str).map(|s| s.to_string_lossy().into_owned()).map_err(|e| RustError::JniError(e.to_string()))
+/// Thread-safe JNI environment wrapper
+#[derive(Clone)]
+pub struct ThreadSafeJniEnv {
+    env: Arc<RwLock<Option<JniEnvWrapper>>>,
 }
 
-pub fn create_error_jni_string(env: &mut JNIEnv, error_msg: &str) -> Result<jstring> {
-    let error_str = format!("ERROR: {}", error_msg);
-    env.new_string(error_str).map(|s| s.into_raw()).map_err(|e| RustError::JniError(e.to_string()))
-}
-use std::fmt::Display;
-
-/// Re-export the JniConverter trait and factory for convenience
-pub use crate::jni_converter_factory::{JniConverter, JniConverterFactory};
-
-/// Check if JNI environment operation succeeded
-pub fn check_jni_result<T, E: Display>(
-    result: std::result::Result<T, E>,
-    context: &str,
-) -> crate::errors::Result<T> {
-    result.map_err(|e| crate::errors::RustError::JniError(format!("{}: {}", context, e)))
+/// Wrapper for JNI environment to make it thread-safe
+struct JniEnvWrapper {
+    env: *mut jni::sys::JNIEnv,
 }
 
-/// Get the current JNI environment (for internal use)
-/// JNI environment accessor (internal use only)
-#[derive(Debug)]
-pub struct JniEnvAccessorImpl {
-    env: UnsafeCell<*mut JNIEnv<'static>>,
-    initialized: OnceLock<bool>,
-}
+// SAFETY: We ensure thread safety through proper synchronization
+unsafe impl Send for JniEnvWrapper {}
+unsafe impl Sync for JniEnvWrapper {}
 
-impl JniEnvAccessorImpl {
-    /// Get singleton instance
-    pub fn instance() -> &'static Self {
-        static INSTANCE: OnceLock<Self> = OnceLock::new();
-        INSTANCE.get_or_init(|| Self {
-            env: UnsafeCell::new(std::ptr::null_mut()),
-            initialized: OnceLock::new(),
-        })
-    }
-
-    /// Initialize with JNI environment pointer
-    pub fn initialize(&self, env: *mut JNIEnv) -> Result<()> {
-        if self.initialized.get().is_some() {
-            return Ok(());
-        }
-
-        // Safety: We're the only one initializing this
-        unsafe {
-            *self.env.get() = env as *mut JNIEnv<'static>;
-        }
-
-        self.initialized.set(true).map_err(|_| {
-            RustError::JniError("Failed to mark JNI environment as initialized".into())
-        })
-    }
-
-    /// Get JNI environment pointer (unsafe - caller must ensure thread safety)
-    pub unsafe fn get_env(&self) -> *mut JNIEnv<'static> {
-        *self.env.get()
-    }
-
-    /// Check if JNI environment is initialized
-    pub fn is_initialized(&self) -> bool {
-        self.initialized.get().is_some()
-    }
-}
-
-/// Thread-safe JNI environment accessor
-#[derive(Debug, Clone)]
-pub struct JniEnvAccess {
-    accessor: &'static JniEnvAccessorImpl,
-}
-
-impl JniEnvAccess {
-    /// Create new JNI environment accessor
+impl ThreadSafeJniEnv {
     pub fn new() -> Self {
         Self {
-            accessor: JniEnvAccessorImpl::instance(),
+            env: Arc::new(RwLock::new(None)),
         }
     }
-
-    /// Get JNI environment pointer (safe wrapper)
-    pub fn get_env(&self) -> Result<*mut JNIEnv<'static>> {
-        if !self.accessor.is_initialized() {
-            return Err(RustError::JniError(
-                "JNI environment not initialized. Call initialize_jni_env first.".into()
-            ));
-        }
-
-        Ok(unsafe { self.accessor.get_env() })
+    
+    pub fn set_env(&self, env: *mut jni::sys::JNIEnv) {
+        let mut guard = self.env.write().unwrap();
+        *guard = Some(JniEnvWrapper { env });
     }
-
-    /// Check if JNI environment is attached to current thread
-    pub fn is_attached(&self) -> Result<bool> {
-        static ATTACHED: OnceLock<Mutex<bool>> = OnceLock::new();
-        let attached = ATTACHED.get_or_init(|| Mutex::new(false)).lock()
-            .map_err(|e| RustError::JniError(format!("Failed to check attachment: {}", e)))?;
-        Ok(*attached)
+    
+    pub fn get_env(&self) -> Option<*mut jni::sys::JNIEnv> {
+        let guard = self.env.read().unwrap();
+        guard.as_ref().map(|wrapper| wrapper.env)
     }
-
-    /// Set JNI attachment status
-    pub fn set_attached(&self, status: bool) -> Result<()> {
-        static ATTACHED: OnceLock<Mutex<bool>> = OnceLock::new();
-        let mut attached = ATTACHED.get_or_init(|| Mutex::new(false)).lock()
-            .map_err(|e| RustError::JniError(format!("Failed to set attachment: {}", e)))?;
-        *attached = status;
-        Ok(())
+    
+    pub fn is_attached(&self) -> bool {
+        let guard = self.env.read().unwrap();
+        guard.is_some()
     }
 }
 
-/// Initialize JNI environment (call once at application startup)
-pub fn initialize_jni_env(env: *mut JNIEnv) -> Result<()> {
-    JniEnvAccessorImpl::instance().initialize(env)
+/// Global JNI environment manager
+static JNI_ENV_MANAGER: std::sync::OnceLock<ThreadSafeJniEnv> = std::sync::OnceLock::new();
+
+/// Get the global JNI environment manager
+pub fn get_jni_env_manager() -> ThreadSafeJniEnv {
+    JNI_ENV_MANAGER.get_or_init(|| ThreadSafeJniEnv::new()).clone()
 }
 
-/// Get JNI environment accessor (for internal use)
-pub fn get_jni_env() -> JniEnvAccess {
-    JniEnvAccess::new()
+/// Get the current JNI environment
+pub fn get_jni_env() -> Option<*mut jni::sys::JNIEnv> {
+    get_jni_env_manager().get_env()
 }
 
-/// Check if JNI environment is attached to current thread
-pub fn is_jni_env_attached() -> Result<bool> {
-    get_jni_env().is_attached()
+/// Check if JNI environment is attached
+pub fn is_jni_env_attached() -> bool {
+    get_jni_env_manager().is_attached()
 }
 
-/// Set JNI attachment status (internal use only)
-pub fn set_jni_env_attached(status: bool) -> Result<()> {
-    get_jni_env().set_attached(status)
+/// Convert JNI string to Rust String
+pub fn jni_string_to_rust(env: &JNIEnv, string: jstring) -> Result<String> {
+    if string.is_null() {
+        return Err(RustError::JniError("Null JNI string".to_string()));
+    }
+
+    let java_string = unsafe { JString::from_raw(string) };
+    match env.get_string(&java_string) {
+        Ok(s) => Ok(s.to_string_lossy().to_string()),
+        Err(e) => Err(RustError::JniError(format!("Failed to convert JNI string: {}", e))),
+    }
+}
+
+/// Check JNI result and convert to Rust Result
+pub fn check_jni_result<T>(result: jni::errors::Result<T>, operation: &str) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(e) => Err(RustError::JniError(format!("JNI operation '{}' failed: {}", operation, e))),
+    }
+}
+
+/// Create error JNI string
+pub fn create_error_jni_string(env: &JNIEnv, error: &str) -> jstring {
+    match env.new_string(error) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Convert Rust string to JNI string
+pub fn rust_string_to_jni(env: &JNIEnv, string: &str) -> Result<jstring> {
+    match env.new_string(string) {
+        Ok(s) => Ok(s.into_raw()),
+        Err(e) => Err(RustError::JniError(format!("Failed to create JNI string: {}", e))),
+    }
+}
+
+/// Convert byte array to JNI byte array
+pub fn bytes_to_jni_array(env: &JNIEnv, bytes: &[u8]) -> Result<jbyteArray> {
+    match env.byte_array_from_slice(bytes) {
+        Ok(array) => Ok(array),
+        Err(e) => Err(RustError::JniError(format!("Failed to create JNI byte array: {}", e))),
+    }
+}
+
+/// Convert JNI byte array to Rust bytes
+pub fn jni_array_to_bytes(env: &JNIEnv, array: jbyteArray) -> Result<Vec<u8>> {
+    if array.is_null() {
+        return Err(RustError::JniError("Null JNI byte array".to_string()));
+    }
+
+    let len = match env.get_array_length(array) {
+        Ok(len) => len,
+        Err(e) => return Err(RustError::JniError(format!("Failed to get array length: {}", e))),
+    };
+
+    let mut bytes = vec![0u8; len as usize];
+    match env.get_byte_array_region(array, 0, &mut bytes) {
+        Ok(_) => Ok(bytes),
+        Err(e) => Err(RustError::JniError(format!("Failed to get byte array: {}", e))),
+    }
+}
+
+/// Safe JNI call wrapper with error handling
+pub fn safe_jni_call<F, R>(env: &JNIEnv, operation: &str, func: F) -> Result<R>
+where
+    F: FnOnce(&JNIEnv) -> jni::errors::Result<R>,
+{
+    match func(env) {
+        Ok(result) => Ok(result),
+        Err(e) => Err(RustError::JniError(format!("JNI operation '{}' failed: {}", operation, e))),
+    }
+}
+
+/// JNI call result type alias
+pub type JniCallResult<T> = Result<T>;
+
+/// Initialize JNI environment
+pub fn initialize_jni_env(env: *mut jni::sys::JNIEnv) {
+    let manager = get_jni_env_manager();
+    manager.set_env(env);
+}
+
+/// Cleanup JNI environment
+pub fn cleanup_jni_env() {
+    let manager = get_jni_env_manager();
+    manager.set_env(std::ptr::null_mut());
 }
