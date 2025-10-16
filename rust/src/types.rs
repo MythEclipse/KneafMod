@@ -3,12 +3,6 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
-/// Marker trait for types that can be used with generic EntityConfig implementation
-pub trait EntityConfigMarker: Debug + Clone + Send + Sync + 'static {}
-
-// Implement EntityConfigMarker for all types that aren't DefaultEntityConfig
-impl<T: Debug + Clone + Send + Sync + 'static> EntityConfigMarker for T where T: ?Sized {}
-
 /// Spatial groups for entity organization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpatialGroups {
@@ -27,6 +21,39 @@ pub struct ProcessingStats {
     pub success_rate: f32,
 }
 
+/// Execution strategy for entity processing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionStrategy {
+    /// Default execution strategy
+    Default,
+    /// Priority-based execution
+    Priority,
+    /// Batch processing
+    Batch,
+    /// Real-time processing
+    RealTime,
+}
+
+/// Error type for execution failures
+#[derive(Debug, Clone)]
+pub struct ExecutionError {
+    pub message: String,
+    pub error_type: ExecutionErrorType,
+}
+
+/// Type of execution error
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionErrorType {
+    /// Invalid configuration
+    InvalidConfig,
+    /// Resource exhaustion
+    ResourceExhaustion,
+    /// Timeout
+    Timeout,
+    /// Unknown error
+    Unknown,
+}
+
 /// Configuration for entities
 pub trait EntityConfig: Debug + Send + Sync {
     fn clone_box(&self) -> Box<dyn EntityConfig>;
@@ -39,37 +66,14 @@ pub trait EntityConfig: Debug + Send + Sync {
     
     /// Gets the update interval
     fn update_interval(&self) -> u64;
+    
+    /// Execute with priority
+    fn execute_with_priority(&self, priority: u8) -> Result<(), ExecutionError>;
+    
+    /// Get execution strategy
+    fn get_execution_strategy(&self) -> ExecutionStrategy;
 }
 
-// Generic implementation for EntityConfig - only for types that don't have specific implementations
-impl<T> EntityConfig for T
-where
-    T: EntityConfigMarker
-{
-    fn clone_box(&self) -> Box<dyn EntityConfig> {
-        Box::new(self.clone())
-    }
-
-    fn entity_type(&self) -> EntityType {
-        EntityType::DEFAULT
-    }
-
-    fn is_active(&self) -> bool {
-        true
-    }
-
-    fn update_interval(&self) -> u64 {
-        1000
-    }
-
-    fn execute_with_priority(&self, _priority: u8) -> Result<(), ExecutionError> {
-        Ok(())
-    }
-
-    fn get_execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Default
-    }
-}
 
 pub type BoxedEntityConfig = Box<dyn EntityConfig>;
 
@@ -104,6 +108,14 @@ impl EntityConfig for DefaultEntityConfig {
     
     fn clone_box(&self) -> Box<dyn EntityConfig> {
         Box::new(self.clone())
+    }
+    
+    fn execute_with_priority(&self, _priority: u8) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+    
+    fn get_execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Default
     }
 }
 

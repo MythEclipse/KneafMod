@@ -489,6 +489,56 @@ pub fn process_villagers_json(json_input: &str) -> Result<String, String> {
     Ok(json_result)
 }
 
+/// Process villager AI in JSON format for JNI compatibility
+pub fn process_villager_ai_json(input_json: &str) -> Result<String, String> {
+    process_villagers_json(input_json)
+}
+
+/// Process villager AI in binary batch format for JNI compatibility
+pub fn process_villager_ai_binary_batch(input_bytes: &[u8]) -> Result<String, String> {
+    let trace_id = generate_trace_id();
+    VILLAGER_PROCESSOR_LOGGER.log_info(
+        "binary_batch_process_start",
+        &trace_id,
+        &format!(
+            "process_villager_ai_binary_batch called with {} bytes",
+            input_bytes.len()
+        ),
+    );
+
+    // For now, convert binary to JSON and process (in real implementation, use proper binary format)
+    let input_str = String::from_utf8_lossy(input_bytes);
+    
+    // Try to parse as JSON first
+    if let Ok(input) = serde_json::from_str::<VillagerInput>(&input_str) {
+        let result = process_villagers(input);
+        
+        let json_result = serde_json::to_string(&result).map_err(|e| {
+            VILLAGER_PROCESSOR_LOGGER.log_error(
+                "binary_serialize_error",
+                &trace_id,
+                &format!("ERROR: Failed to serialize result to JSON: {}", e),
+                "VILLAGER_PROCESSING",
+            );
+            format!("Failed to serialize result to JSON: {}", e)
+        })?;
+
+        VILLAGER_PROCESSOR_LOGGER.log_info(
+            "binary_batch_process_complete",
+            &trace_id,
+            &format!(
+                "Villager binary batch processing completed, result length: {}",
+                json_result.len()
+            ),
+        );
+
+        Ok(json_result)
+    } else {
+        // If not valid JSON, return error
+        Err("Invalid binary input format - expected JSON string".to_string())
+    }
+}
+
 /// Thread-safe villager state management with spatial awareness
 #[derive(Debug, Clone)]
 pub struct VillagerStateManager {

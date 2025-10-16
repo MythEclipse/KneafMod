@@ -7,7 +7,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Cursor, Read};
 use once_cell::sync::Lazy;
 use dashmap::DashMap;
-use simd::{SimdF32, SimdI32, SimdU64};
+use crate::simd::{SimdF32, SimdI32, SimdU64};
 use crate::errors::{RustError, Result};
 use crate::jni::converter::factory::JniConverter;
 use crate::memory::zero_copy::{ZeroCopyBuffer, ZeroCopyBufferPool, GlobalBufferTracker};
@@ -643,8 +643,8 @@ where
     result: Option<T>,
 }
 
-unsafe impl<F, T> Send for LazyConverter<F, T> where F: Send, T: Send {}
-unsafe impl<F, T> Sync for LazyConverter<F, T> where F: Sync, T: Sync {}
+unsafe impl<F, T> Send for LazyConverter<F, T> where F: Send + for<'a, 'b, 'c> Fn(&'a mut jni::JNIEnv<'b>, jni::objects::JObject<'c>) -> crate::errors::enhanced_errors::Result<T> + 'static, T: Send {}
+unsafe impl<F, T> Sync for LazyConverter<F, T> where F: Sync + for<'a, 'b, 'c> Fn(&'a mut jni::JNIEnv<'b>, jni::objects::JObject<'c>) -> crate::errors::enhanced_errors::Result<T> + 'static, T: Sync {}
 
 impl<F, T> LazyConverter<F, T>
 where

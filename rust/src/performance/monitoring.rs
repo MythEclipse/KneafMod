@@ -1,4 +1,4 @@
-use crate::config::performance_config::{PerformanceConfig, PerformanceMode};
+use crate::config::{PerformanceConfig as PerfConfig, PerformanceMode};
 use crate::errors::{Result, RustError};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::simd_enhanced::{detect_simd_capability, SimdCapability};

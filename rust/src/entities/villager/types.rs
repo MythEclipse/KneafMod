@@ -7,6 +7,26 @@ use crate::EntityType;
 use crate::EntityData;
 use crate::types::PlayerDataTrait as GlobalPlayerData;
 
+/// Villager profession enum
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum VillagerProfession {
+    Farmer,
+    Librarian,
+    Priest,
+    Blacksmith,
+    Butcher,
+    Nitwit,
+    Cartographer,
+    Shepherd,
+    Fletcher,
+    Fisherman,
+    Leatherworker,
+    Mason,
+    Toolsmith,
+    Weaponsmith,
+    Armorer,
+}
+
 /// Villager-specific data extending the common EntityData
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VillagerData {

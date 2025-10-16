@@ -5,7 +5,7 @@ pub mod spatial;
 pub mod jni;
 pub mod memory;
 pub mod entities;
-// pub mod errors; // Temporarily commented out to resolve compilation error
+pub mod errors;
 pub mod logging;
 pub mod traits;
 pub mod types;

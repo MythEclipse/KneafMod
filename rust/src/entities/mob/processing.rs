@@ -535,3 +535,16 @@ pub trait MobEntityExt: EntityProcessingExt {
     /// Distance to nearest player
     fn distance_to_player(&self) -> Result<f32>;
 }
+
+/// Process mob AI in JSON format for JNI compatibility
+pub fn process_mob_ai_json(input_json: &str) -> Result<String> {
+    // For now, return a simple JSON response since we don't have the full mob processing implementation
+    let result = serde_json::json!({
+        "success": true,
+        "optimized_mobs": [],
+        "message": "Mob AI processing not fully implemented yet"
+    });
+    
+    serde_json::to_string(&result)
+        .map_err(|e| RustError::ValidationError(format!("Failed to serialize mob result: {}", e)))
+}

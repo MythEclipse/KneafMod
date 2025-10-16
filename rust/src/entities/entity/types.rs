@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use crate::types::{EntityConfigTrait as EntityConfig, EntityDataTrait as EntityData, EntityTypeTrait as EntityType, PlayerDataTrait as PlayerData};
 
+/// Entity position data
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct EntityPosition {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Input {

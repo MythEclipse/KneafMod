@@ -1,4 +1,4 @@
-use crate::errors::RustError;
+use crate::errors::base_errors::{RustError, Result};
 use crate::logging::{generate_trace_id, LogEntry, LogSeverity};
 use std::error::Error;
 use std::fmt;
@@ -166,3 +166,60 @@ impl ToEnhancedError for RustError {
 
 /// Result type alias using EnhancedError
 pub type EnhancedResult<T> = std::result::Result<T, EnhancedError>;
+
+/// Error with trace ID
+#[derive(Debug, Clone)]
+pub struct RustErrorWithTraceId {
+    pub error: RustError,
+    pub trace_id: String,
+}
+
+/// Error recovery manager
+pub struct ErrorRecoveryManager {
+    pub strategies: Vec<ErrorRecoveryStrategy>,
+}
+
+/// Error recovery strategy
+#[derive(Debug, Clone)]
+pub enum ErrorRecoveryStrategy {
+    Retry(RetryStrategy),
+    Fallback(FallbackStrategy),
+    CircuitBreaker(CircuitBreakerStrategy),
+}
+
+/// Recovery result
+pub type RecoveryResult<T> = std::result::Result<T, RecoveryError>;
+
+/// Recovery error
+#[derive(Debug, Clone)]
+pub struct RecoveryError {
+    pub original_error: RustError,
+    pub recovery_attempts: usize,
+}
+
+/// Retry strategy
+#[derive(Debug, Clone)]
+pub struct RetryStrategy {
+    pub max_attempts: usize,
+    pub backoff_multiplier: f64,
+    pub initial_delay_ms: u64,
+}
+
+/// Fallback strategy
+#[derive(Debug, Clone)]
+pub struct FallbackStrategy {
+    pub fallback_function: Box<dyn Fn() -> Result<()>>,
+}
+
+/// Circuit breaker strategy
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerStrategy {
+    pub failure_threshold: usize,
+    pub recovery_timeout_ms: u64,
+    pub half_open_requests: usize,
+}
+
+/// Recovery strategy (generic trait for recovery strategies)
+pub trait RecoveryStrategy: Send + Sync {
+    fn recover(&self, error: &RustError) -> RecoveryResult<()>;
+}

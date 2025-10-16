@@ -228,6 +228,11 @@ impl ParallelExecutorFactory {
         }
     }
 
+    /// Creates a new parallel executor enum of the specified type with default configuration
+    pub fn create_executor_enum(executor_type: ExecutorType) -> ParallelExecutorEnum {
+        Self::create_executor(executor_type)
+    }
+
     /// Creates a new parallel executor with performance configuration
     pub fn create_executor_with_config(executor_type: ExecutorType, config: &ExecutorConfig) -> ParallelExecutorEnum {
         match executor_type {

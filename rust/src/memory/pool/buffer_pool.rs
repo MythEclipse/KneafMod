@@ -199,12 +199,12 @@ impl MemoryPool for BufferPool {
         Ok(buffer.to_vec().into_boxed_slice())
     }
 
-    fn deallocate(&self, _ptr: *mut u8, _size: usize) -> Result<()> {
+    fn deallocate(&self, _ptr: *mut u8, _size: usize) {
         // Deallocation is handled by ZeroCopyBuffer's Drop implementation
         Ok(())
     }
 
-    fn get_stats(&self) -> Result<MemoryPoolStats, RustError> {
+    fn get_stats(&self) -> MemoryPoolStats {
         Ok(self.common_stats.clone())
     }
 

@@ -1,7 +1,6 @@
+use crate::config::{PerformanceConfig as PerfConfig, WorkStealingConfig};
 use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor};
-// Use local definitions instead of circular imports
-// TEMP: Comment out problematic import to unblock compilation
-// pub use crate::parallelism::common::{PerformanceConfig, WorkStealingConfig, TaskPriority};
+// ParallelExecutorFactory is imported where needed to avoid circular dependencies
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::AtomicBool;
@@ -97,7 +96,12 @@ pub struct WorkStealingScheduler {
 impl WorkStealingScheduler {
     /// Create new work-stealing scheduler with performance configuration
     pub fn new(executor_type: ExecutorType, config: WorkStealingConfig) -> Self {
-        let executor = ParallelExecutorFactory::create_executor_enum(executor_type);
+        let executor = match executor_type {
+            ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap())),
+            ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(EnhancedWorkStealingExecutor::new(None))),
+            ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(tokio::runtime::Runtime::new().unwrap())),
+            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(tokio::runtime::Runtime::new().unwrap())),
+        };
         let config = Arc::new(RwLock::new(config));
         let priority_queue = Arc::new(Mutex::new(BinaryHeap::new()));
         let task_notify = Arc::new(Notify::new());
@@ -125,7 +129,7 @@ impl WorkStealingScheduler {
     }
 
     /// Get global scheduler instance configured from performance settings
-    pub fn from_performance_config(config: &PerformanceConfig) -> Self {
+    pub fn from_performance_config(config: &PerfConfig) -> Self {
         let executor_type = if config.work_stealing_enabled {
             ExecutorType::WorkStealing
         } else {

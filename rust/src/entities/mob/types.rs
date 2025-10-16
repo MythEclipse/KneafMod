@@ -1,6 +1,62 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::entities::common::types::*;
+
+/// Mob AI complexity levels
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub enum MobAiComplexity {
+    Simple,
+    Medium,
+    Complex,
+    Advanced,
+}
+
+/// Mob state
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub enum MobState {
+    Idle,
+    Wandering,
+    Attacking,
+    Fleeing,
+    Breeding,
+    Sleeping,
+    Eating,
+    Swimming,
+    Flying,
+    Climbing,
+}
+
+/// Mob types
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum MobType {
+    Zombie,
+    Skeleton,
+    Creeper,
+    Spider,
+    Enderman,
+    Piglin,
+    Hoglin,
+    Strider,
+    Ghast,
+    Blaze,
+    WitherSkeleton,
+    MagmaCube,
+    Slime,
+    Silverfish,
+    Endermite,
+    Guardian,
+    ElderGuardian,
+    Drowned,
+    Phantom,
+    Ravager,
+    Pillager,
+    Vindicator,
+    Evoker,
+    Illusioner,
+    Witch,
+    Vex,
+    Other(String),
+}
 use crate::EntityProcessingInput;
 use crate::EntityProcessingResult;
 use crate::EntityType;
