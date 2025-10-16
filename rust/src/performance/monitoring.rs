@@ -731,12 +731,14 @@ impl PerformanceMonitor {
         let simd_capability = detect_simd_capability();
 
         // Get CPU capabilities string
-        let cpu_capabilities = match simd_capability {
-            SimdCapability::Avx512Extreme => "AVX-512 Extreme ✓ AVX-512 ✓ AVX2 ✓ SSE4.2 ✓",
-            SimdCapability::Full => "AVX-512 ✓ AVX2 ✓ SSE4.2 ✓",
-            SimdCapability::Advanced => "AVX2 ✓ SSE4.2 ✓",
-            SimdCapability::Basic => "SSE4.2 ✓",
-            SimdCapability::None => "Scalar (no SIMD)",
+        let cpu_capabilities = if simd_capability.has_avx512 {
+            "AVX-512 ✓ AVX2 ✓ SSE4.2 ✓"
+        } else if simd_capability.has_avx2 {
+            "AVX2 ✓ SSE4.2 ✓"
+        } else if simd_capability.has_sse4_2 {
+            "SSE4.2 ✓"
+        } else {
+            "Scalar (no SIMD)"
         };
 
         PERFORMANCE_MONITOR.logger.log_info("startup", &trace_id,

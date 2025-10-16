@@ -12,20 +12,12 @@ pub enum ExecutorType {
     Async,
 }
 
-/// Trait defining the interface for parallel executors
-/// Trait defining the interface for parallel executors (non-dyn compatible version)
 pub trait ParallelExecutor: Send + Sync {
     /// Executes a function synchronously
-    fn execute_sync<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static;
+    fn execute_sync(&self, f: Box<dyn FnOnce() -> Box<dyn std::any::Any + Send> + Send>) -> Box<dyn std::any::Any + Send>;
 
     /// Executes a function asynchronously, returning a future
-    fn execute<F, R>(&self, f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static;
+    fn execute(&self, f: Box<dyn FnOnce() -> Box<dyn std::any::Any + Send> + Send>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Box<dyn std::any::Any + Send>> + Send>>;
 
     /// Shuts down the executor gracefully
     fn shutdown(&self);

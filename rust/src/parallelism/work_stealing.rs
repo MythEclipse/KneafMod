@@ -116,7 +116,7 @@ impl<T> WorkStealingScheduler<T> {
         let start = Instant::now();
         
         // Get the global executor for backward compatibility
-        let executor = ParallelExecutorFactory::create_executor(ExecutorType::WorkStealing);
+        let executor = create_work_stealing_executor().unwrap();
         
         let results = executor.execute(|| {
             self.tasks.into_iter().map(processor).collect()

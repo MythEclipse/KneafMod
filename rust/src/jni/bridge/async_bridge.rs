@@ -414,8 +414,7 @@ impl AsyncJniBridge {
             results.push(result);
 
             // Release buffer back to pool for reuse with proper cleanup
-            let data = unsafe { std::slice::from_raw_parts(buffer_ref.address as *const u8, buffer_ref.size).to_vec() };
-            self.buffer_pool.release(crate::memory::zero_copy::ZeroCopyBuffer::new(data));
+            self.buffer_pool.release(crate::memory::zero_copy::ZeroCopyBuffer::new(buffer_ref.address, buffer_ref.size, buffer_ref.operation_type));
 
             // Unregister buffer when done with it
             if let Err(e) = self.unregister_buffer(buffer_ref.buffer_id) {

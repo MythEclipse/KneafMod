@@ -1,6 +1,7 @@
 use crate::errors::{Result, RustError};
 use rayon;
 use std::sync::Arc;
+use crate::parallelism::sequential::SequentialExecutor;
 
 pub mod work_stealing;
 pub use crate::parallelism::base::work_stealing::work_stealing::WorkStealingScheduler;
@@ -113,7 +114,7 @@ pub fn create_work_stealing_executor() -> Result<Box<dyn ParallelExecutor>> {
 
 /// Create a sequential executor (single thread, recommended for new code)
 pub fn create_sequential_executor() -> Result<Box<dyn ParallelExecutor>> {
-    ParallelExecutorFactory::create_sequential()
+    Ok(Box::new(SequentialExecutor::new()))
 }
 
 // Re-export performance monitoring under the `monitoring` name so older code

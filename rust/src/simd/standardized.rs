@@ -74,7 +74,7 @@ impl StandardSimdOps {
     pub fn new() -> Self {
         let simd_manager = get_simd_manager();
         let level = simd_manager.get_level();
-        let features = simd_manager.get_features().clone();
+        let features = simd_manager.features.clone();
         
         Self { level, features }
     }
