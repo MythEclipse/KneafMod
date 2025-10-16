@@ -61,8 +61,9 @@ impl LRUList {
             }
         }
 
-        let current_size = self.size.fetch_add(1, Ordering::Relaxed);
-        if current_size + 1 > self.capacity {
+        // Update size and handle eviction atomically
+        let new_size = self.size.fetch_add(1, Ordering::SeqCst) + 1;
+        if new_size > self.capacity {
             self.evict_lru()?;
         }
 
@@ -220,43 +221,21 @@ impl LRUEvictionMemoryPool {
         let start_time = Instant::now();
         let trace_id = generate_trace_id();
 
-        // Check if allocation would exceed capacity
-        let current_size = self.lru_list.read().size.load(Ordering::Relaxed);
-        let usage_ratio = current_size as f64 / self.config.capacity as f64;
-
-        if usage_ratio > self.config.eviction_threshold {
-            self.logger.log_info(
-                "allocate",
-                &trace_id,
-                &format!(
-                    "Memory pressure detected: usage ratio {:.2}% > threshold {:.2}%",
-                    usage_ratio * 100.0,
-                    self.config.eviction_threshold * 100.0
-                ),
-            );
-            
-            // Evict until under threshold
-            while usage_ratio > self.config.eviction_threshold {
-                self.evict_lru()?;
-                let new_size = self.lru_list.read().size.load(Ordering::Relaxed);
-                usage_ratio = new_size as f64 / self.config.capacity as f64;
-            }
-        }
-
-        // Allocate memory
-        let mut buffer = vec![0u8; size].into_boxed_slice();
+        // Allocate memory first to avoid wasting resources if eviction fails
+        let buffer = vec![0u8; size].into_boxed_slice();
         
         // Generate a unique key for this allocation
         let key = format!("alloc_{:x}", fastrand::u64(..));
         
-        // Add to LRU list
+        // Add to LRU list - this handles eviction internally if needed
         self.lru_list.write().push_front(key, buffer.clone())?;
 
         // Update stats
         let mut stats = self.stats.write();
+        let current_size = self.lru_list.read().size.load(Ordering::Relaxed);
         stats.allocated_bytes.fetch_add(size, Ordering::Relaxed);
         stats.total_allocations.fetch_add(1, Ordering::Relaxed);
-        stats.current_usage_ratio = usage_ratio;
+        stats.current_usage_ratio = current_size as f64 / self.config.capacity as f64;
         stats.update_peak_usage();
 
         let elapsed = start_time.elapsed();
@@ -302,51 +281,51 @@ impl LRUEvictionMemoryPool {
 
     /// Evict the least recently used item
     pub fn evict_lru(&self) -> Result<Option<Box<[u8]>>> {
-        let start_time = Instant::now();
-        let trace_id = generate_trace_id();
+       let start_time = Instant::now();
+       let trace_id = generate_trace_id();
 
-        let result = self.lru_list.read().evict_lru();
-        
-        if let Ok(Some(value)) = result {
-            // Update eviction stats
-            let mut eviction_stats = self.eviction_stats.write();
-            eviction_stats.total_evictions.fetch_add(1, Ordering::Relaxed);
-            eviction_stats.evicted_bytes.fetch_add(value.len(), Ordering::Relaxed);
-            
-            let elapsed = start_time.elapsed();
-            let eviction_ns = elapsed.as_nanos() as usize;
-            eviction_stats.eviction_time.fetch_add(eviction_ns, Ordering::Relaxed);
-            
-            // Calculate current eviction rate
-            let total_evictions = eviction_stats.total_evictions.load(Ordering::Relaxed) as f64;
-            let current_rate = if total_evictions > 0.0 {
-                eviction_stats.eviction_time.load(Ordering::Relaxed) as f64 / total_evictions
-            } else {
-                0.0
-            };
-            eviction_stats.current_eviction_rate = current_rate;
-            
-            // Update highest eviction rate if needed
-            if current_rate > eviction_stats.highest_eviction_rate {
-                eviction_stats.highest_eviction_rate = current_rate;
-            }
+       let result = self.lru_list.write().evict_lru();
+       
+       if let Ok(Some(value)) = result {
+           // Update eviction stats
+           let mut eviction_stats = self.eviction_stats.write();
+           eviction_stats.total_evictions.fetch_add(1, Ordering::Relaxed);
+           eviction_stats.evicted_bytes.fetch_add(value.len(), Ordering::Relaxed);
+           
+           let elapsed = start_time.elapsed();
+           let eviction_ns = elapsed.as_nanos() as usize;
+           eviction_stats.eviction_time.fetch_add(eviction_ns, Ordering::Relaxed);
+           
+           // Calculate current eviction rate
+           let total_evictions = eviction_stats.total_evictions.load(Ordering::Relaxed) as f64;
+           let current_rate = if total_evictions > 0.0 {
+               eviction_stats.eviction_time.load(Ordering::Relaxed) as f64 / total_evictions
+           } else {
+               0.0
+           };
+           eviction_stats.current_eviction_rate = current_rate;
+           
+           // Update highest eviction rate if needed
+           if current_rate > eviction_stats.highest_eviction_rate {
+               eviction_stats.highest_eviction_rate = current_rate;
+           }
 
-            self.logger.log_info(
-                "evict_lru",
-                &trace_id,
-                &format!("Evicted LRU item ({} bytes, {}ns)", value.len(), eviction_ns),
-            );
-            
-            Ok(Some(value))
-        } else {
-            self.logger.log_warn(
-                "evict_lru",
-                &trace_id,
-                "No items to evict",
-            );
-            Ok(None)
-        }
-    }
+           self.logger.log_info(
+               "evict_lru",
+               &trace_id,
+               &format!("Evicted LRU item ({} bytes, {}ns)", value.len(), eviction_ns),
+           );
+           
+           Ok(Some(value))
+       } else {
+           self.logger.log_warn(
+               "evict_lru",
+               &trace_id,
+               "No items to evict",
+           );
+           Ok(None)
+       }
+   }
 
     /// Get current memory usage statistics
     pub fn get_memory_usage(&self) -> MemoryPoolStats {

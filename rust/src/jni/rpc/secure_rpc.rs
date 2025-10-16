@@ -36,10 +36,12 @@ use crate::{
 type HmacSha256 = Hmac<Sha256>;
 type AesGcm = Aes256Gcm;
 const NONCE_SIZE: usize = 12;
-const TOKEN_EXPIRY_MINUTES: i64 = 30;
+const TOKEN_EXPIRY_MINUTES: i64 = 15; // Shorter expiry for better security
 const RATE_LIMIT_WINDOW: StdDuration = StdDuration::from_secs(60);
-const MAX_REQUESTS_PER_MINUTE: usize = 100;
-const MAX_CONCURRENT_CONNECTIONS: usize = 50;
+const MAX_REQUESTS_PER_MINUTE: usize = 50; // More restrictive rate limiting
+const MAX_CONCURRENT_CONNECTIONS: usize = 30; // More restrictive connection limits
+const JWT_LEEWAY_SECONDS: i64 = 0; // No clock skew tolerance for security
+const MAX_PAYLOAD_SIZE: usize = 10 * 1024 * 1024; // 10MB hard limit
 
 // ------------------------------
 // RPC Configuration
@@ -228,29 +230,47 @@ pub struct SecureRpcInterface {
     performance_monitor: Arc<PerformanceMonitor>,
     jwt_encoder: jsonwebtoken::Encoder,
     jwt_decoder: jsonwebtoken::Decoder,
+    security_audit_log: Arc<Mutex<Vec<SecurityAuditEntry>>>,
 }
 
 impl SecureRpcInterface {
     // ------------------------------
     // Constructor & Initialization
     // ------------------------------
-    pub fn new(config: Option<RpcConfig>) -> Self {
-        let config = config.unwrap_or_else(RpcConfig::new);
-        
-        let header = Header::default();
-        let encoding_key = EncodingKey::from_secret(&config.jwt_secret);
-        let decoding_key = DecodingKey::from_secret(&config.jwt_secret);
-        
-        Self {
-            config,
-            method_registry: DashMap::new(),
-            rate_limiter: Arc::new(RateLimiter::new(MAX_REQUESTS_PER_MINUTE, RATE_LIMIT_WINDOW)),
-            connection_pool: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS)),
-            performance_monitor: Arc::new(PerformanceMonitor::new()),
-            jwt_encoder: jsonwebtoken::Encoder::new(encoding_key),
-            jwt_decoder: jsonwebtoken::Decoder::new(decoding_key),
+    pub fn new(config: Option<RpcConfig>) -> Result<Self, RpcError> {
+            let config = config.unwrap_or_else(RpcConfig::new);
+            
+            // Validate critical security configurations with stronger checks
+            if config.encryption_key.len() != 32 {
+                return Err(RpcError::EncryptionError("AES-256 requires exactly 32-byte key".into()));
+            }
+            if config.hmac_secret.len() < 32 {
+                return Err(RpcError::HmacError("HMAC secret must be at least 32 bytes for security".into()));
+            }
+            if config.jwt_secret.len() < 32 {
+                return Err(RpcError::JwtError("JWT secret must be at least 32 bytes for security".into()));
+            }
+            if config.compression_threshold == 0 {
+                return Err(RpcError::ValidationError("Compression threshold cannot be zero".into()));
+            }
+    
+            // Create JWT validation with strict security settings
+            let header = Header::default();
+            let encoding_key = EncodingKey::from_secret(&config.jwt_secret);
+            let decoding_key = DecodingKey::from_secret(&config.jwt_secret);
+            
+            Ok(Self {
+                config,
+                method_registry: DashMap::new(),
+                rate_limiter: Arc::new(RateLimiter::new(MAX_REQUESTS_PER_MINUTE, RATE_LIMIT_WINDOW)),
+                connection_pool: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS)),
+                performance_monitor: Arc::new(PerformanceMonitor::new()),
+                jwt_encoder: jsonwebtoken::Encoder::new(encoding_key),
+                jwt_decoder: jsonwebtoken::Decoder::new(decoding_key),
+                // Add security audit log
+                security_audit_log: Arc::new(Mutex::new(Vec::new())),
+            })
         }
-    }
 
     // ------------------------------
     // Public API - Method Registration
@@ -270,57 +290,118 @@ impl SecureRpcInterface {
     // Public API - RPC Method Call
     // ------------------------------
     pub async fn call_rpc_method(
-        &self,
-        env: &mut JNIEnv,
-        method_name: &str,
-        auth_token: Option<String>,
-        client_ip: &str,
-        payload: &[u8],
-    ) -> Result<Vec<u8>, RpcError> {
-        let start_time = Instant::now();
-        let request_id = uuid::Uuid::new_v4().to_string();
-        
-        // 1. Acquire connection from pool
-        let _permit = self.connection_pool.acquire().await.map_err(|e| {
-            RpcError::ConnectionError(format!("Failed to acquire connection: {}", e))
-        })?;
-
-        // 2. Validate request
-        self.validate_rpc_request(method_name, auth_token.as_deref(), client_ip, payload)?;
-
-        // 3. Rate limiting
-        self.rate_limiter.check(client_ip)?;
-
-        // 4. Decrypt and verify payload
-        let decrypted_payload = self.decrypt_payload(payload, auth_token.as_deref())?;
-
-        // 5. Look up method
-        let method = self.method_registry.get(method_name)
-            .ok_or_else(|| RpcError::ProtocolError(format!(
-                "RPC method '{}' not found", method_name
-            )))?;
-
-        // 6. Create context and execute method
-        let context = RpcContext::new(auth_token, client_ip.to_string(), request_id);
-        let result = (method.handler)(env, &context, &decrypted_payload)?;
-
-        // 7. Encrypt response
-        let encrypted_response = self.encrypt_payload(&result, auth_token.as_deref())?;
-
-        // 8. Record performance metrics
-        let duration = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "rpc_call_duration",
-            duration.as_micros() as u64,
-            &[
-                ("method", method_name),
-                ("client_ip", client_ip),
-                ("status", "success"),
-            ]
-        );
-
-        Ok(encrypted_response)
-    }
+            &self,
+            env: &mut JNIEnv,
+            method_name: &str,
+            auth_token: Option<String>,
+            client_ip: &str,
+            payload: &[u8],
+        ) -> Result<Vec<u8>, RpcError> {
+            let start_time = Instant::now();
+            let request_id = uuid::Uuid::new_v4().to_string();
+            
+            // Log request initiation with correlation ID
+            self.log_security_audit(client_ip, &request_id, "rpc_request_initiated", method_name);
+    
+            // 1. Validate payload size before any processing
+            if payload.len() > MAX_PAYLOAD_SIZE {
+                self.log_security_audit(client_ip, &request_id, "payload_too_large", &payload.len().to_string());
+                return Err(RpcError::ValidationError(format!(
+                    "Payload size {} exceeds maximum allowed {}", payload.len(), MAX_PAYLOAD_SIZE
+                )));
+            }
+    
+            // 2. Acquire connection from pool with timeout
+            let timeout = self.config.request_timeout;
+            let _permit = tokio::time::timeout(timeout, self.connection_pool.acquire())
+                .await
+                .map_err(|_| {
+                    self.log_security_audit(client_ip, &request_id, "connection_pool_timeout", "");
+                    RpcError::ConnectionError("Failed to acquire connection - pool timeout".into())
+                })?
+                .map_err(|e| {
+                    self.log_security_audit(client_ip, &request_id, "connection_acquire_failed", &e.to_string());
+                    RpcError::ConnectionError(format!("Failed to acquire connection: {}", e))
+                })?;
+    
+            // 3. Validate request with performance tracking
+            self.validate_rpc_request(method_name, auth_token.as_deref(), client_ip, payload)?;
+    
+            // 4. Rate limiting with request tracking
+            self.rate_limiter.check(client_ip)?;
+    
+            // 5. Decrypt and verify payload with timeout
+            let decrypted_payload = tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || {
+                self.decrypt_payload(payload, auth_token.as_deref())
+            }))
+            .await
+            .map_err(|_| {
+                self.log_security_audit(client_ip, &request_id, "decryption_timeout", "");
+                RpcError::TimeoutError("Payload decryption timed out".into())
+            })?
+            .map_err(|e| {
+                self.log_security_audit(client_ip, &request_id, "decryption_failed", &e.to_string());
+                RpcError::DecryptionError(format!("Decryption task failed: {}", e))
+            })?;
+    
+            // 6. Look up method with caching consideration
+            let method = self.method_registry.get(method_name)
+                .ok_or_else(|| {
+                    let err = RpcError::ProtocolError(format!("RPC method '{}' not found", method_name));
+                    self.log_security_audit(client_ip, &request_id, "method_not_found", method_name);
+                    err
+                })?;
+    
+            // 7. Create context and execute method with timeout
+            let context = RpcContext::new(auth_token.clone(), client_ip.to_string(), request_id.clone());
+            
+            let result = tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || {
+                (method.handler)(env, &context, &decrypted_payload)
+            }))
+            .await
+            .map_err(|_| {
+                self.log_security_audit(client_ip, &request_id, "method_execution_timeout", method_name);
+                RpcError::TimeoutError(format!("Method execution timed out for: {}", method_name))
+            })?
+            .map_err(|e| {
+                self.log_security_audit(client_ip, &request_id, "method_execution_failed", &e.to_string());
+                RpcError::InternalError(format!("Method execution failed: {}", e))
+            })?;
+    
+            // 8. Encrypt response with timeout
+            let encrypted_response = tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || {
+                self.encrypt_payload(&result, auth_token.as_deref())
+            }))
+            .await
+            .map_err(|_| {
+                self.log_security_audit(client_ip, &request_id, "response_encryption_timeout", "");
+                RpcError::TimeoutError("Response encryption timed out".into())
+            })?
+            .map_err(|e| {
+                self.log_security_audit(client_ip, &request_id, "response_encryption_failed", &e.to_string());
+                RpcError::EncryptionError(format!("Response encryption failed: {}", e))
+            })?;
+    
+            // 9. Record performance metrics with detailed context
+            let duration = start_time.elapsed();
+            let status = "success";
+            self.performance_monitor.record_metric(
+                "rpc_call_duration",
+                duration.as_micros() as u64,
+                &[
+                    ("method", method_name),
+                    ("client_ip", client_ip),
+                    ("status", status),
+                    ("duration_ms", format!("{}", duration.as_millis()).as_str()),
+                    ("request_id", &request_id),
+                ]
+            );
+    
+            // 10. Log successful completion
+            self.log_security_audit(client_ip, &request_id, "rpc_request_completed", method_name);
+    
+            Ok(encrypted_response)
+        }
 
     // ------------------------------
     // Security Implementation
@@ -328,6 +409,11 @@ impl SecureRpcInterface {
 
     /// Encrypt payload using AES-256-GCM with HMAC-SHA256 authentication
     pub fn encrypt_payload(&self, payload: &[u8], auth_token: Option<&str>) -> Result<Vec<u8>, RpcError> {
+        // Validate input payload
+        if payload.is_empty() {
+            return Err(RpcError::ValidationError("Empty payload cannot be encrypted".into()));
+        }
+
         let cipher = Aes256Gcm::new_from_slice(&self.config.encryption_key).map_err(|e| {
             RpcError::EncryptionError(format!("Failed to create cipher: {}", e))
         })?;
@@ -340,24 +426,32 @@ impl SecureRpcInterface {
             RpcError::EncryptionError(format!("Encryption failed: {}", e))
         })?;
 
-        // Create HMAC for integrity verification
+        // Create HMAC for integrity verification (includes nonce + ciphertext + auth metadata)
         let mut hmac = HmacSha256::new_from_slice(&self.config.hmac_secret).map_err(|e| {
             RpcError::HmacError(format!("Failed to create HMAC: {}", e))
         })?;
         hmac.update(&nonce);
         hmac.update(&ciphertext);
+        
+        // Include auth token in HMAC calculation for additional integrity
+        if let Some(token) = auth_token {
+            hmac.update(token.as_bytes());
+        }
+        
         let hmac_result = hmac.finalize().into_bytes();
 
-        // Include auth token in metadata if present
+        // Include auth token in metadata if present (length-prefixed for safe parsing)
         let metadata = auth_token.map(|t| t.as_bytes().to_vec()).unwrap_or_default();
 
-        // Combine all components: nonce (12B) + ciphertext + HMAC (32B) + metadata length + metadata
-        let mut encrypted_payload = Vec::with_capacity(NONCE_SIZE + ciphertext.len() + 32 + 4 + metadata.len());
+        // Calculate exact capacity to avoid reallocations
+        let metadata_len_bytes = 4; // u32 length prefix
+        let total_capacity = NONCE_SIZE + ciphertext.len() + 32 + metadata_len_bytes + metadata.len();
+        let mut encrypted_payload = Vec::with_capacity(total_capacity);
+        
+        // Write components in fixed order for consistent parsing
         encrypted_payload.extend_from_slice(&nonce);
         encrypted_payload.extend_from_slice(&ciphertext);
         encrypted_payload.extend_from_slice(&hmac_result);
-        
-        // Write metadata length (big-endian)
         encrypted_payload.extend_from_slice(&(metadata.len() as u32).to_be_bytes());
         encrypted_payload.extend_from_slice(&metadata);
 
@@ -366,31 +460,45 @@ impl SecureRpcInterface {
 
     /// Decrypt payload and verify integrity using AES-256-GCM and HMAC-SHA256
     pub fn decrypt_payload(&self, payload: &[u8], auth_token: Option<&str>) -> Result<Vec<u8>, RpcError> {
-        if payload.len() < NONCE_SIZE + 32 + 4 {
-            return Err(RpcError::DecryptionError("Payload too short"));
+        // Validate minimum payload size before parsing
+        const MIN_PAYLOAD_SIZE: usize = NONCE_SIZE + 32 + 4; // nonce + hmac + metadata length
+        if payload.len() < MIN_PAYLOAD_SIZE {
+            return Err(RpcError::DecryptionError("Payload too short - invalid format".into()));
         }
 
-        // Split components
+        // Split components with proper bounds checking
         let nonce = Nonce::from_slice(&payload[0..NONCE_SIZE]).map_err(|e| {
             RpcError::DecryptionError(format!("Invalid nonce: {}", e))
         })?;
 
-        let hmac_end = NONCE_SIZE + payload.len() - 32 - 4;
+        // Calculate positions with safety checks
+        let payload_len = payload.len();
+        let hmac_end = payload_len - 32 - 4; // HMAC (32B) + metadata length (4B)
+        
+        if NONCE_SIZE > hmac_end {
+            return Err(RpcError::DecryptionError("Invalid payload structure".into()));
+        }
+
         let ciphertext = &payload[NONCE_SIZE..hmac_end];
         let received_hmac = &payload[hmac_end..hmac_end + 32];
 
-        // Verify HMAC first for integrity
+        // Verify HMAC first for integrity (critical security check)
         let mut hmac = HmacSha256::new_from_slice(&self.config.hmac_secret).map_err(|e| {
             RpcError::HmacError(format!("Failed to create HMAC: {}", e))
         })?;
         hmac.update(&nonce);
         hmac.update(ciphertext);
+        
+        // Include auth token in HMAC verification if present
+        if let Some(token) = auth_token {
+            hmac.update(token.as_bytes());
+        }
 
         hmac.verify(received_hmac).map_err(|_| {
-            RpcError::HmacError("HMAC verification failed - payload may be tampered with")
+            RpcError::HmacError("HMAC verification failed - payload integrity compromised".into())
         })?;
 
-        // Decrypt payload
+        // Decrypt payload with authenticated encryption
         let cipher = Aes256Gcm::new_from_slice(&self.config.encryption_key).map_err(|e| {
             RpcError::DecryptionError(format!("Failed to create cipher: {}", e))
         })?;
@@ -399,57 +507,88 @@ impl SecureRpcInterface {
             RpcError::DecryptionError(format!("Decryption failed: {}", e))
         })?;
 
-        // Verify metadata if auth token was provided
+        // Verify metadata with proper bounds checking
         let metadata_start = hmac_end + 32;
-        let metadata_len = u32::from_be_bytes(payload[metadata_start..metadata_start + 4].try_into().map_err(|e| {
-            RpcError::DecryptionError(format!("Failed to read metadata length: {}", e))
-        })?);
+        if metadata_start + 4 > payload_len {
+            return Err(RpcError::DecryptionError("Invalid metadata length field".into()));
+        }
 
+        let metadata_len = u32::from_be_bytes(payload[metadata_start..metadata_start + 4]
+            .try_into()
+            .map_err(|e| RpcError::DecryptionError(format!("Failed to read metadata length: {}", e)))?);
+
+        // Validate metadata boundaries
+        let metadata_end = metadata_start + 4 + metadata_len as usize;
+        if metadata_end > payload_len {
+            return Err(RpcError::DecryptionError("Metadata exceeds payload bounds".into()));
+        }
+
+        // Verify auth token metadata if provided
         if let Some(expected_token) = auth_token {
             let expected_metadata = expected_token.as_bytes();
+            
             if metadata_len as usize != expected_metadata.len() {
-                return Err(RpcError::AuthenticationError("Token mismatch in metadata"));
+                return Err(RpcError::AuthenticationError("Token length mismatch".into()));
             }
             
-            let actual_metadata = &payload[metadata_start + 4..metadata_start + 4 + metadata_len as usize];
+            let actual_metadata = &payload[metadata_start + 4..metadata_end];
             if actual_metadata != expected_metadata {
-                return Err(RpcError::AuthenticationError("Token verification failed"));
+                return Err(RpcError::AuthenticationError("Token verification failed - possible tampering".into()));
             }
         }
 
         Ok(plaintext)
     }
 
-    /// Validate JWT token and check permissions
-    pub fn validate_jwt_token(&self, token: &str, required_permissions: &[String]) -> Result<JwtClaims, RpcError> {
-        let validation = Validation::default();
-        let token_data = self.jwt_decoder.decode(token, &validation).map_err(|e| {
-            RpcError::JwtError(format!("JWT decode failed: {}", e))
-        })?;
-
-        let claims = token_data.claims;
-
-        // Check token expiration
-        if claims.exp < Utc::now().timestamp() {
-            return Err(RpcError::AuthenticationError("Token has expired"));
-        }
-
-        // Check not before
-        if claims.nbf > Utc::now().timestamp() {
-            return Err(RpcError::AuthenticationError("Token not yet valid"));
-        }
-
-        // Check required permissions
-        for required_perm in required_permissions {
-            if !claims.permissions.contains(required_perm) {
-                return Err(RpcError::AuthorizationError(format!(
-                    "Missing required permission: {}", required_perm
-                )));
+    /// Validate JWT token and check permissions with strict security
+        pub fn validate_jwt_token(&self, token: &str, required_permissions: &[String], client_ip: &str, request_id: &str) -> Result<JwtClaims, RpcError> {
+            // Create strict validation with no clock skew tolerance
+            let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+            validation.leeway = JWT_LEEWAY_SECONDS; // Zero tolerance for clock skew
+            validation.validate_exp = true;
+            validation.validate_nbf = true;
+            validation.validate_iat = true;
+            validation.validate_jti = true;
+    
+            let token_data = self.jwt_decoder.decode(token, &validation).map_err(|e| {
+                self.log_security_audit(client_ip, request_id, "jwt_validation_failed", &e.to_string());
+                RpcError::JwtError(format!("JWT decode failed: {}", e))
+            })?;
+    
+            let claims = token_data.claims;
+    
+            // Additional security checks
+            if claims.exp < Utc::now().timestamp() {
+                self.log_security_audit(client_ip, request_id, "token_expired", &claims.exp.to_string());
+                return Err(RpcError::AuthenticationError("Token has expired"));
             }
+    
+            if claims.nbf > Utc::now().timestamp() {
+                self.log_security_audit(client_ip, request_id, "token_not_valid_yet", &claims.nbf.to_string());
+                return Err(RpcError::AuthenticationError("Token not yet valid"));
+            }
+    
+            // Validate JWT ID format (should be UUID)
+            if !Uuid::parse_str(&claims.jti).is_ok() {
+                self.log_security_audit(client_ip, request_id, "invalid_jwt_id", &claims.jti);
+                return Err(RpcError::JwtError("Invalid JWT ID format - must be UUID".into()));
+            }
+    
+            // Check required permissions
+            for required_perm in required_permissions {
+                if !claims.permissions.contains(required_perm) {
+                    self.log_security_audit(client_ip, request_id, "missing_permission", required_perm);
+                    return Err(RpcError::AuthorizationError(format!(
+                        "Missing required permission: {}", required_perm
+                    )));
+                }
+            }
+    
+            // Log successful validation
+            self.log_security_audit(client_ip, request_id, "jwt_validation_successful", &claims.sub);
+    
+            Ok(claims)
         }
-
-        Ok(claims)
-    }
 
     /// Generate JWT token for authenticated clients
     pub fn generate_jwt_token(&self, subject: &str, roles: &[String], permissions: &[String]) -> Result<String, RpcError> {

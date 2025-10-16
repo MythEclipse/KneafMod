@@ -31,6 +31,8 @@ pub enum CleanupTaskType {
     Periodic,
     LRU,
     Emergency,
+    ResourceCleanup, // New: For explicit resource cleanup
+    GracefulShutdown, // New: For graceful degradation support
 }
 
 // Cleanup configuration structure
@@ -81,7 +83,84 @@ pub struct CleanupResult {
     pub timestamp: Instant,
 }
 
-// Background cleanup manager
+// Circuit breaker state for production resilience
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerState {
+    failure_count: usize,
+    last_failure_time: Instant,
+    state: CircuitBreakerStateType,
+    cooldown_period: Duration,
+    failure_threshold: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CircuitBreakerStateType {
+    Closed,    // Normal operation
+    Open,      // Tripped - no operations allowed
+    HalfOpen,  // Testing recovery
+}
+
+impl CircuitBreakerState {
+    pub fn new() -> Self {
+        Self {
+            failure_count: 0,
+            last_failure_time: Instant::now(),
+            state: CircuitBreakerStateType::Closed,
+            cooldown_period: Duration::from_secs(30),
+            failure_threshold: 5,
+        }
+    }
+
+    pub fn record_failure(&mut self) {
+        self.failure_count += 1;
+        self.last_failure_time = Instant::now();
+        
+        if self.failure_count >= self.failure_threshold {
+            self.state = CircuitBreakerStateType::Open;
+            info!("Circuit breaker tripped for excessive failures");
+        }
+    }
+
+    pub fn record_success(&mut self) {
+        self.failure_count = 0;
+        self.state = CircuitBreakerStateType::Closed;
+        info!("Circuit breaker reset to closed state");
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.state == CircuitBreakerStateType::Closed
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.state == CircuitBreakerStateType::Open
+    }
+
+    pub fn check_cooldown(&mut self) -> bool {
+        if self.state == CircuitBreakerStateType::Open {
+            if Instant::now().duration_since(self.last_failure_time) > self.cooldown_period {
+                self.state = CircuitBreakerStateType::HalfOpen;
+                info!("Circuit breaker moved to half-open state");
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        }
+    }
+}
+
+// Graceful shutdown state for production-grade degradation
+#[derive(Debug, Clone, PartialEq)]
+pub enum GracefulShutdownState {
+    Ready,          // Normal operation
+    Degrading,      // Starting graceful degradation
+    Degraded,       // Operating in degraded mode
+    ShuttingDown,   // In process of shutting down
+    Shutdown,       // Completely shut down
+}
+
+// Background cleanup manager with production resilience
 pub struct BackgroundCleanupManager {
     config: RwLock<CleanupConfig>,
     tasks: Mutex<VecDeque<CleanupTask>>,
@@ -98,24 +177,32 @@ pub struct BackgroundCleanupManager {
 impl BackgroundCleanupManager {
     // Create a new BackgroundCleanupManager instance
     pub fn new(
-        monitor: Arc<RealTimeMemoryMonitor>,
-        leak_detector: Arc<MemoryLeakDetector>,
-        lru_pool: Arc<LRUEvictionMemoryPool>,
-        pool_manager: Arc<EnhancedMemoryPoolManager>,
-    ) -> Self {
-        Self {
-            config: RwLock::new(CleanupConfig::default()),
-            tasks: Mutex::new(VecDeque::new()),
-            results: RwLock::new(Vec::new()),
-            is_running: RwLock::new(false),
-            monitor,
-            leak_detector,
-            lru_pool,
-            pool_manager,
-            worker_thread: Mutex::new(None),
-            shutdown_tx: Mutex::new(None),
+            monitor: Arc<RealTimeMemoryMonitor>,
+            leak_detector: Arc<MemoryLeakDetector>,
+            lru_pool: Arc<LRUEvictionMemoryPool>,
+            pool_manager: Arc<EnhancedMemoryPoolManager>,
+        ) -> Self {
+            let mut config = CleanupConfig::default();
+            // Production-ready defaults
+            config.memory_pressure_threshold = 0.90; // More aggressive for production
+            config.leak_detection_threshold = 50;    // More sensitive for production
+            config.emergency_threshold = 0.98;       // Higher emergency threshold
+            
+            Self {
+                config: RwLock::new(config),
+                tasks: Mutex::new(VecDeque::new()),
+                results: RwLock::new(Vec::new()),
+                is_running: RwLock::new(false),
+                monitor,
+                leak_detector,
+                lru_pool,
+                pool_manager,
+                worker_thread: Mutex::new(None),
+                shutdown_tx: Mutex::new(None),
+                alert_manager: Arc::new(Mutex::new(AlertManager::new())),
+                graceful_shutdown_state: Arc::new(RwLock::new(GracefulShutdownState::Ready)),
+            }
         }
-    }
 
     // Start the background cleanup service
     pub fn start_cleanup_service(&self) -> Result<(), KneafError> {
@@ -362,27 +449,62 @@ impl BackgroundCleanupManager {
         debug!("Recorded cleanup result: {:?}", result);
     }
 
-    // Perform memory pressure cleanup
+    // Perform memory pressure cleanup with production-grade safeguards
     fn perform_memory_pressure_cleanup(&self) -> Result<CleanupResult, KneafError> {
         let start_usage = self.monitor.get_total_memory_used();
         let config = self.config.read().unwrap();
         
         info!("Performing memory pressure cleanup (threshold: {})", config.memory_pressure_threshold);
         
-        // Implement memory pressure cleanup logic
+        // Implement memory pressure cleanup logic with production safeguards
+        let start_time = Instant::now();
+        
+        // Add circuit breaker pattern to prevent excessive cleanup
+        if self.should_trigger_circuit_breaker(CleanupTaskType::MemoryPressure) {
+            return Ok(CleanupResult {
+                task_type: CleanupTaskType::MemoryPressure,
+                status: "circuit_breaker_tripped".to_string(),
+                details: "Circuit breaker tripped - skipping cleanup to prevent cascading failures".to_string(),
+                duration: Duration::from_secs(0),
+                memory_reclaimed: 0,
+                timestamp: Instant::now(),
+            });
+        }
+        
         let memory_reclaimed = self.pool_manager.release_unused_memory(config.memory_pressure_threshold)?;
         
         let end_usage = self.monitor.get_total_memory_used();
+        let usage_reduction = if start_usage > 0 {
+            ((start_usage - end_usage) as f64 / start_usage as f64 * 100.0).round()
+        } else {
+            0.0
+        };
+        
         let details = format!(
-            "Reclaimed {} bytes (from {} to {} bytes)",
-            start_usage - end_usage, start_usage, end_usage
+            "Reclaimed {} bytes ({:.1}% reduction) - from {}MB to {}MB",
+            start_usage - end_usage,
+            usage_reduction,
+            start_usage as f64 / (1024.0 * 1024.0),
+            end_usage as f64 / (1024.0 * 1024.0)
         );
+        
+        // Trigger alerting for critical memory conditions
+        if usage_reduction > 50.0 {
+            self.trigger_critical_alert(format!(
+                "Massive memory cleanup: {:.1}% reduction ({:.1}MB reclaimed)",
+                usage_reduction,
+                (start_usage - end_usage) as f64 / (1024.0 * 1024.0)
+            ));
+        }
+        
+        // Update circuit breaker state
+        self.update_circuit_breaker(CleanupTaskType::MemoryPressure, memory_reclaimed > 0);
         
         Ok(CleanupResult {
             task_type: CleanupTaskType::MemoryPressure,
             status: "success".to_string(),
             details,
-            duration: Duration::from_secs(0), // Will be set by caller
+            duration: start_time.elapsed(),
             memory_reclaimed: start_usage - end_usage,
             timestamp: Instant::now(),
         })
@@ -395,20 +517,25 @@ impl BackgroundCleanupManager {
         
         info!("Performing leak cleanup (threshold: {})", config.leak_detection_threshold);
         
-        // Implement leak cleanup logic
+        // Implement leak cleanup logic with production safeguards
+        let start_time = Instant::now();
         let cleaned_leaks = self.leak_detector.clean_leaked_objects()?;
         let memory_reclaimed = self.pool_manager.release_leaked_memory(&cleaned_leaks)?;
         
+        // Log detailed leak information for production monitoring
         let details = format!(
-            "Cleaned {} leaked objects, reclaimed {} bytes",
-            cleaned_leaks.len(), memory_reclaimed
+            "Cleaned {} leaked objects ({}%), reclaimed {} bytes ({}MB)",
+            cleaned_leaks.len(),
+            if leak_count > 0 { (cleaned_leaks.len() as f64 / leak_count as f64 * 100.0).round() } else { 0.0 },
+            memory_reclaimed,
+            memory_reclaimed as f64 / (1024.0 * 1024.0)
         );
         
         Ok(CleanupResult {
             task_type: CleanupTaskType::LeakDetection,
             status: "success".to_string(),
             details,
-            duration: Duration::from_secs(0), // Will be set by caller
+            duration: start_time.elapsed(),
             memory_reclaimed,
             timestamp: Instant::now(),
         })

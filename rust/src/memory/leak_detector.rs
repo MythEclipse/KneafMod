@@ -449,32 +449,45 @@ impl MemoryLeakDetector {
     
     /// Calculate allocation rate (bytes per second)
     fn calculate_allocation_rate(&self) -> f64 {
-        let allocations = self.allocations.read().unwrap();
+        // Use try_read first to minimize lock contention
+        if let Ok(allocations) = self.allocations.try_read() {
+            return self.calculate_rate_internal(allocations);
+        }
+        
+        // Fall back to blocking read with timeout for critical monitoring
+        let allocations = self.allocations.read_timeout(Duration::from_millis(150)).unwrap();
+        self.calculate_rate_internal(allocations)
+    }
+    
+    fn calculate_rate_internal(&self, allocations: &ReadGuard<HashMap<u64, AllocationRecord>>) -> f64 {
         let now = Instant::now();
         
         if allocations.is_empty() {
             return 0.0;
         }
         
-        // Use last N samples for rate calculation
-        let sample_window = std::cmp::min(self.config.historical_samples, allocations.len());
+        // Optimized sample collection using iterators
         let recent_allocations: Vec<&AllocationRecord> = allocations.values()
             .filter(|r| now.duration_since(r.allocated_at).as_secs() < 60)
+            .take(self.config.historical_samples) // Early termination
             .collect();
         
         if recent_allocations.is_empty() {
             return 0.0;
         }
         
-        let total_size: usize = recent_allocations.iter().map(|r| r.size).sum();
-        let time_span = recent_allocations.iter()
-            .map(|r| now.duration_since(r.allocated_at).as_secs_f64())
-            .fold(0.0, |acc, t| acc + t);
+        // Use more efficient reduction operations
+        let (total_size, total_time): (usize, f64) = recent_allocations.iter()
+            .map(|r| {
+                let elapsed = now.duration_since(r.allocated_at).as_secs_f64();
+                (r.size, elapsed)
+            })
+            .fold((0, 0.0), |(sum_size, sum_time), (size, time)| (sum_size + size, sum_time + time));
         
-        if time_span == 0.0 {
+        if total_time == 0.0 {
             0.0
         } else {
-            (total_size as f64) / time_span
+            (total_size as f64) / total_time
         }
     }
     

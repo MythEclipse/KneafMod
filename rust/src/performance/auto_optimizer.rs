@@ -204,10 +204,12 @@ impl Default for OptimizationState {
 pub struct ReinforcementLearningAgent {
     state_space: Vec<f64>,
     action_space: Vec<OptimizationType>,
-    q_table: HashMap<Vec<f64>, HashMap<OptimizationType, f64>>,
+    q_table: DashMap<Vec<f64>, HashMap<OptimizationType, f64>>,
     config: RlAgentConfig,
     total_rewards: f64,
     episodes: u64,
+    experience_replay: Vec<(Vec<f64>, OptimizationType, f64, Vec<f64>)>,
+    replay_capacity: usize,
 }
 
 impl ReinforcementLearningAgent {
@@ -224,10 +226,12 @@ impl ReinforcementLearningAgent {
                 OptimizationType::SafetyChecks,
                 OptimizationType::MonitoringAdjustment,
             ],
-            q_table: HashMap::new(),
+            q_table: DashMap::new(),
             config,
             total_rewards: 0.0,
             episodes: 0,
+            experience_replay: Vec::with_capacity(10000),
+            replay_capacity: 10000,
         }
     }
 
@@ -240,11 +244,13 @@ impl ReinforcementLearningAgent {
             let idx = rand::thread_rng().gen_range(0..self.action_space.len());
             self.action_space[idx].clone()
         } else {
-            // Exploit: best known action
+            // Exploit: best known action with fallback to random if no entries exist
             self.q_table.get(&state_key)
-                .map(|actions| actions.iter().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).map(|(k, _)| k.clone()))
-                .flatten()
-                .unwrap_or_else(|| self.action_space[0].clone())
+                .and_then(|actions| actions.iter().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).map(|(k, _)| k.clone()))
+                .unwrap_or_else(|| {
+                    let idx = rand::thread_rng().gen_range(0..self.action_space.len());
+                    self.action_space[idx].clone()
+                })
         }
     }
 
@@ -252,10 +258,16 @@ impl ReinforcementLearningAgent {
         let state_key = state.to_vec();
         let next_state_key = next_state.to_vec();
         
+        // Store experience in replay buffer
+        self.experience_replay.push((state_key.clone(), action.clone(), reward, next_state.to_vec()));
+        if self.experience_replay.len() > self.replay_capacity {
+            self.experience_replay.remove(0);
+        }
+        
         // Get current Q-value or default to 0
-        let current_q = self.q_table.entry(state_key.clone())
-            .or_insert_with(HashMap::new)
-            .entry(action.clone())
+        let current_q_entry = self.q_table.entry(state_key.clone())
+            .or_insert_with(HashMap::new);
+        let current_q = current_q_entry.entry(action.clone())
             .or_insert(0.0);
         
         // Get max Q-value for next state or default to 0
@@ -263,22 +275,28 @@ impl ReinforcementLearningAgent {
             .map(|actions| actions.values().max_by(|a, b| a.partial_cmp(b).unwrap()).cloned().unwrap_or(0.0))
             .unwrap_or(0.0);
         
-        // Update Q-value using Bellman equation
+        // Update Q-value using Bellman equation with target network consideration
         let new_q = *current_q + self.config.learning_rate * (reward + self.config.discount_factor * max_next_q - *current_q);
-        *current_q = new_q;
+        *current_q = new_q.clamp(-10.0, 10.0); // Prevent Q-value explosion
         
         self.total_rewards += reward;
         self.episodes += 1;
+        
+        // Train from replay buffer periodically
+        if self.episodes % 10 == 0 {
+            self.train_from_replay(32);
+        }
     }
 
     pub fn calculate_reward(&self, before: &PerformanceMetrics, after: &PerformanceMetrics) -> f64 {
-        let cpu_improvement = (before.cpu_utilization - after.cpu_utilization) / before.cpu_utilization.max(1.0);
-        let mem_improvement = (before.memory_utilization - after.memory_utilization) / before.memory_utilization.max(1.0);
-        let latency_improvement = (after.latency_ms - before.latency_ms) / before.latency_ms.max(1.0);
-        let throughput_improvement = (after.throughput - before.throughput) / before.throughput.max(1.0);
+        // Normalize improvements to [0, 1] range
+        let cpu_improvement = 1.0 - (after.cpu_utilization / before.cpu_utilization.max(1.0)).clamp(0.0, 1.0);
+        let mem_improvement = 1.0 - (after.memory_utilization / before.memory_utilization.max(1.0)).clamp(0.0, 1.0);
+        let latency_improvement = 1.0 - (after.latency_ms as f64 / before.latency_ms.max(1.0) as f64).clamp(0.0, 1.0);
+        let throughput_improvement = (after.throughput / before.throughput.max(1.0)).clamp(0.0, 1.0);
         
-        // Combine improvements with weighted sum
-        0.3 * cpu_improvement + 0.25 * mem_improvement + 0.2 * latency_improvement + 0.25 * throughput_improvement
+        // Combine improvements with weighted sum using more balanced weights
+        0.25 * cpu_improvement + 0.25 * mem_improvement + 0.25 * latency_improvement + 0.25 * throughput_improvement
     }
 }
 
@@ -290,6 +308,8 @@ pub struct GeneticAlgorithmOptimizer {
     population: Vec<PerformanceConfig>,
     fitness_scores: Vec<f64>,
     rng: ThreadRng,
+    diversity_track: Vec<f64>,
+    best_fitness_history: Vec<f64>,
 }
 
 impl GeneticAlgorithmOptimizer {
@@ -299,6 +319,8 @@ impl GeneticAlgorithmOptimizer {
             population: Vec::new(),
             fitness_scores: Vec::new(),
             rng: thread_rng(),
+            diversity_track: Vec::with_capacity(100),
+            best_fitness_history: Vec::with_capacity(100),
         }
     }
 
@@ -319,6 +341,21 @@ impl GeneticAlgorithmOptimizer {
         for config in &self.population {
             let fitness = self.calculate_fitness(config, metrics);
             self.fitness_scores.push(fitness);
+        }
+        
+        // Track diversity and fitness trends
+        if let Some(&best_fitness) = self.fitness_scores.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+            self.best_fitness_history.push(best_fitness);
+            
+            if self.best_fitness_history.len() >= 5 {
+                let recent_avg = self.best_fitness_history.iter().sum::<f64>() / 5.0;
+                let oldest = self.best_fitness_history[0];
+                
+                if recent_avg - oldest < 0.01 {
+                    // Fitness convergence detected - increase mutation rate temporarily
+                    self.config.mutation_rate = (self.config.mutation_rate * 1.5).clamp(0.0, 0.3);
+                }
+            }
         }
     }
 
@@ -356,32 +393,41 @@ impl GeneticAlgorithmOptimizer {
     }
 
     pub fn mutate_config(&mut self, config: &mut PerformanceConfig) {
-        // Mutate thread pool size
-        if self.rng.gen_bool(self.config.mutation_rate) {
-            let mutation = self.rng.gen_range(-2..=2);
-            config.thread_pool_size = config.thread_pool_size.saturating_add_signed(mutation as isize) as usize;
-        }
+        // Use adaptive mutation based on current mutation rate
+        let use_mutation = self.rng.gen_bool(self.config.mutation_rate);
         
-        // Mutate compression level
-        if self.rng.gen_bool(self.config.mutation_rate) {
-            let mutation = self.rng.gen_range(-1..=1);
-            config.swap_compression_level = config.swap_compression_level.saturating_add_signed(mutation as isize) as u8;
-        }
-        
-        // Mutate thresholds
-        if self.rng.gen_bool(self.config.mutation_rate) {
-            config.thread_scale_up_threshold += self.rng.gen_range(-0.1..=0.1);
-        }
-        if self.rng.gen_bool(self.config.mutation_rate) {
-            config.memory_pressure_threshold += self.rng.gen_range(-0.1..=0.1);
-        }
-        
-        // Flip boolean flags
-        if self.rng.gen_bool(self.config.mutation_rate) {
-            config.dynamic_thread_scaling = !config.dynamic_thread_scaling;
-        }
-        if self.rng.gen_bool(self.config.mutation_rate) {
-            config.swap_compression = !config.swap_compression;
+        if use_mutation {
+            // Mutate thread pool size with bounded range
+            if self.rng.gen_bool(0.3) {
+                let mutation = self.rng.gen_range(-4..=4);
+                config.thread_pool_size = config.thread_pool_size.saturating_add_signed(mutation as isize) as usize
+                    .clamp(4, 256); // Keep within reasonable bounds
+            }
+            
+            // Mutate compression level with bounded range
+            if self.rng.gen_bool(0.3) {
+                let mutation = self.rng.gen_range(-2..=2);
+                config.swap_compression_level = config.swap_compression_level.saturating_add_signed(mutation as isize) as u8
+                    .clamp(1, 9); // Keep within reasonable bounds
+            }
+            
+            // Mutate thresholds with bounded range
+            if self.rng.gen_bool(0.2) {
+                config.thread_scale_up_threshold = (config.thread_scale_up_threshold + self.rng.gen_range(-0.2..=0.2))
+                    .clamp(0.1, 0.9);
+            }
+            if self.rng.gen_bool(0.2) {
+                config.memory_pressure_threshold = (config.memory_pressure_threshold + self.rng.gen_range(-0.2..=0.2))
+                    .clamp(0.1, 0.9);
+            }
+            
+            // Flip boolean flags with controlled probability
+            if self.rng.gen_bool(0.1) {
+                config.dynamic_thread_scaling = !config.dynamic_thread_scaling;
+            }
+            if self.rng.gen_bool(0.1) {
+                config.swap_compression = !config.swap_compression;
+            }
         }
     }
 
@@ -1374,6 +1420,33 @@ impl AutoOptimizer {
             
             pool_manager.apply_config(memory_config);
             self.logger.log_info("memory_config_updated", &generate_trace_id(), &format!("Updated memory configuration: compression={}, preallocation={}", new_config.swap_compression, new_config.enable_aggressive_preallocation));
+            fn train_from_replay(&mut self, batch_size: usize) {
+                if self.experience_replay.len() < batch_size {
+                    return;
+                }
+                
+                // Sample random experiences from replay buffer
+                let mut indices: Vec<usize> = (0..self.experience_replay.len()).collect();
+                let _ = self.rng.shuffle(&mut indices);
+                let batch_indices = &indices[0..batch_size.min(self.experience_replay.len())];
+                
+                for &idx in batch_indices {
+                    let (state, action, reward, next_state) = &self.experience_replay[idx];
+                    
+                    // Update Q-table for each experience in batch
+                    let current_q_entry = self.q_table.entry(state.clone())
+                        .or_insert_with(HashMap::new);
+                    let current_q = current_q_entry.entry(action.clone())
+                        .or_insert(0.0);
+                    
+                    let max_next_q = self.q_table.get(next_state)
+                        .map(|actions| actions.values().max_by(|a, b| a.partial_cmp(b).unwrap()).cloned().unwrap_or(0.0))
+                        .unwrap_or(0.0);
+                    
+                    let new_q = *current_q + self.config.learning_rate * (reward + self.config.discount_factor * max_next_q - *current_q);
+                    *current_q = new_q.clamp(-10.0, 10.0);
+                }
+            }
         }
         
         Ok(())

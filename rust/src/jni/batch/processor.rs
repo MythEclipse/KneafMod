@@ -320,25 +320,42 @@ impl PriorityBatchQueue {
             // Try to get operations from all shards in parallel without holding locks
             let mut operations = Vec::with_capacity(max_size - batch.len());
 
-            for shard_idx in 0..self.shard_count {
+            // Use more efficient batch gathering with reduced lock contention
+            let mut operations = Vec::with_capacity(max_size);
+            let mut success_count = 0;
+            
+            // Process shards in random order to distribute load more evenly
+            let mut shard_indices: Vec<usize> = (0..self.shard_count).collect();
+            shuffle(&mut shard_indices);
+            
+            for &shard_idx in &shard_indices {
                 if start_time.elapsed() >= timeout {
                     break;
                 }
-
-                // Use try_lock to minimize contention
-                if let Ok(mut queue) = self.queues[shard_idx].try_lock() {
-                    let batch_size = std::cmp::min(max_size - batch.len(), queue.len());
-                    if batch_size > 0 {
-                        // Take operations from the front of the queue
-                        for _ in 0..batch_size {
-                            if let Some(op) = queue.pop_front() {
-                                operations.push(op);
-                            } else {
-                                break;
-                            }
-                        }
+            
+                // Use try_lock with shorter timeout for better throughput
+                if let Ok(mut queue) = self.queues[shard_idx].try_lock_timeout(Duration::from_millis(50)) {
+                    let available = queue.len();
+                    if available == 0 {
+                        continue;
                     }
+            
+                    // Calculate batch size with more efficient transfer
+                    let take_size = std::cmp::min(max_size - operations.len(), available);
+                    let remaining = operations.len() + take_size;
+                    
+                    // Reserve space upfront to avoid reallocations
+                    operations.reserve(take_size);
+                    
+                    // More efficient bulk transfer using drain
+                    operations.extend(queue.drain(0..take_size));
+                    success_count += take_size;
                 }
+            }
+            
+            // Log performance metrics for optimization
+            if success_count > 0 {
+                self.batch_metrics.record_batch_gather(success_count, start_time.elapsed());
             }
 
             // Add all collected operations to the batch

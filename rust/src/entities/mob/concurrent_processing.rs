@@ -8,16 +8,21 @@ use crate::memory::pool::{
 use crate::parallelism::base::work_stealing::WorkStealingScheduler;
 use crate::parallelism::base::executor_factory::executor_factory::ExecutorType;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use dashmap::DashMap;
+use flume::{bounded as flume_bounded, unbounded as flume_unbounded, Receiver as FlumeReceiver, Sender as FlumeSender};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{
-    Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    Arc, AtomicBool, AtomicUsize, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
 use std::time::{Duration, Instant};
 
 static MOB_PROCESSOR_LOGGER: once_cell::sync::Lazy<PerformanceLogger> =
     once_cell::sync::Lazy::new(|| PerformanceLogger::new("mob_processor"));
+
+static MOB_PERFORMANCE_MONITOR: once_cell::sync::Lazy<PerformanceMonitor> =
+    once_cell::sync::Lazy::new(|| PerformanceMonitor::new("mob_performance"));
 
 /// Configuration for mob processing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,14 +57,132 @@ impl Default for MobProcessingConfig {
     }
 }
 
-/// Thread-safe state manager for mob data
+/// Thread-safe state manager for mob data with optimized concurrency
 pub struct MobStateManager {
-    /// Thread-safe storage for all mob data
-    inner: Arc<RwLock<HashMap<u64, MobData>>>,
+    /// High-performance concurrent hash map for mob storage
+    inner: Arc<DashMap<u64, MobData>>,
     /// Configuration for mob processing
     config: MobProcessingConfig,
     /// Memory pool for temporary allocations
     memory_pool: Arc<EnhancedMemoryPoolManager>,
+    /// Spatial index for faster mob lookup by position
+    spatial_index: Arc<Mutex<SpatialIndex>>,
+    /// Cache for recent mob access patterns
+    access_cache: Arc<Mutex<LruCache<u64, MobData>>>,
+}
+
+/// Spatial index for efficient mob lookup
+struct SpatialIndex {
+    cells: HashMap<(i32, i32, i32), Vec<u64>>,
+    cell_size: f32,
+    last_update: Instant,
+}
+
+/// Simple LRU cache for frequent mob access
+struct LruCache<K, V> {
+    capacity: usize,
+    map: HashMap<K, (V, Instant)>,
+    access_order: VecDeque<K>,
+}
+
+impl<K: Eq + Hash, V> LruCache<K, V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            map: HashMap::new(),
+            access_order: VecDeque::new(),
+        }
+    }
+
+    fn get(&mut self, key: &K) -> Option<&V> {
+        if let Some((value, _)) = self.map.get(key) {
+            // Move to front of access order
+            let pos = self.access_order.iter().position(|k| k == key).unwrap();
+            let k = self.access_order.remove(pos).unwrap();
+            self.access_order.push_front(k);
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn put(&mut self, key: K, value: V) {
+        if self.map.contains_key(&key) {
+            // Update existing entry
+            self.map.insert(key.clone(), (value, Instant::now()));
+            let pos = self.access_order.iter().position(|k| k == &key).unwrap();
+            self.access_order.remove(pos);
+        } else {
+            // Remove oldest entry if at capacity
+            if self.map.len() >= self.capacity {
+                let oldest = self.access_order.pop_back().unwrap();
+                self.map.remove(&oldest);
+            }
+            self.map.insert(key.clone(), (value, Instant::now()));
+        }
+        self.access_order.push_front(key);
+    }
+}
+
+impl SpatialIndex {
+    fn new(cell_size: f32) -> Self {
+        Self {
+            cells: HashMap::new(),
+            cell_size,
+            last_update: Instant::now(),
+        }
+    
+        /// Get the spatial index for direct access
+        pub fn spatial_index(&self) -> &Arc<Mutex<SpatialIndex>> {
+            &self.spatial_index
+        }
+    
+        /// Get the access cache for direct access
+        pub fn access_cache(&self) -> &Arc<Mutex<LruCache<u64, MobData>>> {
+            &self.access_cache
+        }
+    }
+
+    fn update(&mut self, mob_id: u64, position: (f32, f32, f32)) {
+        let cell_key = self.get_cell_key(position);
+        self.cells.entry(cell_key).or_insert_with(Vec::new).push(mob_id);
+    }
+
+    fn remove(&mut self, mob_id: u64, position: (f32, f32, f32)) {
+        let cell_key = self.get_cell_key(position);
+        if let Some(cell) = self.cells.get_mut(&cell_key) {
+            cell.retain(|&id| id != mob_id);
+            if cell.is_empty() {
+                self.cells.remove(&cell_key);
+            }
+        }
+    }
+
+    fn get_cell_key(&self, position: (f32, f32, f32)) -> (i32, i32, i32) {
+        let x = (position.0 / self.cell_size) as i32;
+        let y = (position.1 / self.cell_size) as i32;
+        let z = (position.2 / self.cell_size) as i32;
+        (x, y, z)
+    }
+
+    fn get_mobs_in_radius(&self, center: (f32, f32, f32), radius: f32) -> Vec<u64> {
+        let center_cell = self.get_cell_key(center);
+        let radius_cells = (radius / self.cell_size).ceil() as i32;
+        
+        let mut mobs = Vec::new();
+        
+        for x in center_cell.0 - radius_cells..=center_cell.0 + radius_cells {
+            for y in center_cell.1 - radius_cells..=center_cell.1 + radius_cells {
+                for z in center_cell.2 - radius_cells..=center_cell.2 + radius_cells {
+                    if let Some(cell_mobs) = self.cells.get(&(x, y, z)) {
+                        mobs.extend_from_slice(cell_mobs);
+                    }
+                }
+            }
+        }
+        
+        mobs
+    }
 }
 
 impl MobStateManager {

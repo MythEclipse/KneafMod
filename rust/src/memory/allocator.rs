@@ -74,20 +74,24 @@ pub struct AllocationTracker {
 
 impl AllocationTracker {
     pub fn new() -> Self {
-        let shard_count = 16; // 16 shards for reduced lock contention
+        let shard_count = 32; // Increased to 32 shards for better lock contention reduction
         let mut shards = Vec::with_capacity(shard_count);
+        
+        // Pre-allocate shards with more efficient initial capacity
         for _ in 0..shard_count {
-            let mutex = Mutex::new(HashMap::new());
+            let mutex = Mutex::new(HashMap::with_capacity(128)); // Pre-allocate for better performance
             shards.push(std::sync::atomic::AtomicPtr::new(Box::into_raw(Box::new(
                 mutex,
             ))));
         }
-
+    
         Self {
             active_allocations: Arc::new(shards),
             total_allocations: AtomicU64::new(0),
             total_deallocations: AtomicU64::new(0),
             shard_count,
+            // Add pre-allocation hint for small objects
+            small_object_prealloc_size: 1024,
         }
     }
 
@@ -98,10 +102,16 @@ impl AllocationTracker {
     pub fn track_allocation(&self, allocation_id: u64, size: usize) {
         self.total_allocations.fetch_add(1, Ordering::Relaxed);
         let shard_idx = self.get_shard(allocation_id);
-
-        // Lock-free shard access with relaxed ordering where safe
+    
+        // Use try_lock first to minimize contention
         let shard_ptr = self.active_allocations[shard_idx].load(Ordering::Relaxed);
-        let mut shard = unsafe { &mut *shard_ptr }.lock().unwrap();
+        if let Ok(mut shard) = unsafe { &mut *shard_ptr }.try_lock() {
+            shard.insert(allocation_id, (size, std::time::Instant::now()));
+            return;
+        }
+    
+        // Fall back to blocking lock with timeout for critical operations
+        let mut shard = unsafe { &mut *shard_ptr }.lock_timeout(Duration::from_millis(100)).unwrap();
         shard.insert(allocation_id, (size, std::time::Instant::now()));
     }
 

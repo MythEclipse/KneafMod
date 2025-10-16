@@ -1341,20 +1341,26 @@ impl RustDatabaseAdapter {
         }
 
         // Update swap metadata and statistics with consistent lock ordering
-        match acquire_locks_in_order(&self.stats, &self.swap_metadata, None, LOCK_TIMEOUT_MS) {
-                    Ok((mut stats, mut swap_meta, _)) => {
+        // Optimized lock acquisition with better error handling
+        match self.try_acquire_locks_for_swap(key, LOCK_TIMEOUT_MS) {
+            Ok((mut stats, mut swap_meta)) => {
                 if let Some(metadata) = swap_meta.get_mut(key) {
                     metadata.update_access();
                 }
-
+        
+                // Batch update statistics to reduce lock hold time
                 stats.swap_operations_total += 1;
                 stats.swap_in_latency_ms = start_time.elapsed().as_millis() as u64;
                 stats.total_swap_size_bytes = stats.total_swap_size_bytes.saturating_sub(data_size);
                 stats.total_chunks += 1;
                 stats.total_size_bytes += data_size;
+                
+                // Use more efficient memory access pattern
+                self.update_cache_locality(key, data_size);
             }
             Err(e) => {
                 error!("Failed to acquire locks for swap_in_chunk: {}", e);
+                self.record_lock_contention_metric("swap_in_chunk", key);
                 return Err(format!("Failed to update metadata: {}", e));
             }
         }
