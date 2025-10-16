@@ -1,62 +1,148 @@
+use crate::types::{EntityConfigTrait as EntityConfig, EntityDataTrait as EntityData, EntityTypeTrait as EntityType, PlayerDataTrait as PlayerData};
 use std::sync::Arc;
+use std::time::Instant;
 
-/// Trait defining the configuration for any entity type
-pub trait EntityConfig: Send + Sync {
-    /// Get the entity type identifier
-    fn get_entity_type(&self) -> &str;
+/// Entity processing status enum
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProcessingStatus {
+    /// Entity is ready to be processed
+    Ready,
+    /// Entity is currently being processed
+    Processing,
+    /// Entity processing completed successfully
+    Completed,
+    /// Entity processing failed
+    Failed,
+    /// Entity processing was skipped
+    Skipped,
+    /// Entity needs to be retried
+    Retry,
+}
+
+/// Result type for entity processing operations
+pub type ProcessingResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+/// AI optimization types for entity processing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiOptimizationType {
+    /// No optimization - process normally
+    None,
+    /// Basic optimization - skip non-critical updates
+    Basic,
+    /// Advanced optimization - use predictive processing
+    Advanced,
+    /// Extreme optimization - minimal processing only
+    Extreme,
+}
+
+/// Trait for entity processing extensions
+pub trait EntityProcessingExt: Send + Sync {
+    /// Get current processing status
+    fn processing_status(&self) -> ProcessingStatus;
     
-    /// Get a clone of this configuration
-    fn clone_box(&self) -> Box<dyn EntityConfig>;
-
-    /// Get disable AI distance
-    fn get_disable_ai_distance(&self) -> f32 { 32.0 }
-
-    /// Get simplify AI distance
-    fn get_simplify_ai_distance(&self) -> f32 { 64.0 }
-
-    /// Get reduce pathfinding distance
-    fn get_reduce_pathfinding_distance(&self) -> Option<f32> { Some(128.0) }
-
-    /// Get max entities per group
-    fn get_max_entities_per_group(&self) -> usize { 10 }
-
-    /// Get spatial grid size
-    fn get_spatial_grid_size(&self) -> f32 { 100.0 }
-}
-
-/// Default implementation for entity configuration
-#[derive(Debug, Default, Clone)]
-pub struct DefaultEntityConfig {
-    pub entity_type: String,
-}
-
-impl EntityConfig for DefaultEntityConfig {
-    fn get_entity_type(&self) -> &str {
-        &self.entity_type
-    }
+    /// Set processing status
+    fn set_processing_status(&mut self, status: ProcessingStatus);
     
-    fn clone_box(&self) -> Box<dyn EntityConfig> {
-        Box::new(self.clone())
-    }
+    /// Get last processing time
+    fn last_processed(&self) -> Instant;
+    
+    /// Set last processing time
+    fn set_last_processed(&mut self, time: Instant);
+    
+    /// Get AI optimization level
+    fn ai_optimization(&self) -> AiOptimizationType;
+    
+    /// Set AI optimization level
+    fn set_ai_optimization(&mut self, optimization: AiOptimizationType);
 }
 
-/// Type alias for Arc-wrapped EntityConfig
-pub type ArcEntityConfig = Arc<dyn EntityConfig>;
-
-/// Trait defining the interface for entity processors
+/// Base entity processor trait
 pub trait EntityProcessor: Send + Sync {
-    /// Process entities
-    fn process(&self) -> Result<(), String>;
+    /// Process a single entity
+    fn process_entity(&self, entity: &mut EntityData) -> ProcessingResult<()>;
     
-    /// Process entities with input
-    fn process_entities(&self, input: crate::EntityProcessingInput) -> crate::EntityProcessingResult;
+    /// Process multiple entities in batch
+    fn process_entities(&self, entities: &mut Vec<EntityData>) -> ProcessingResult<()>;
     
-    /// Update configuration
-    fn update_config(&self, config: ArcEntityConfig);
+    /// Get processor name/identifier
+    fn processor_name(&self) -> &str;
+}
+
+/// Thread-safe entity processor wrapper
+pub struct ThreadSafeEntityProcessor<T>
+where
+    T: EntityProcessor,
+{
+    processor: Arc<T>,
+}
+
+impl<T> ThreadSafeEntityProcessor<T>
+where
+    T: EntityProcessor,
+{
+    /// Create new thread-safe entity processor
+    pub fn new(processor: T) -> Self {
+        Self {
+            processor: Arc::new(processor),
+        }
+    }
     
-    /// Process entities in batch
-    fn process_entities_batch(&self, inputs: Vec<crate::EntityProcessingInput>) -> Vec<crate::EntityProcessingResult>;
+    /// Get underlying processor reference
+    pub fn get_processor(&self) -> Arc<T> {
+        self.processor.clone()
+    }
+}
+
+impl<T> EntityProcessor for ThreadSafeEntityProcessor<T>
+where
+    T: EntityProcessor,
+{
+    fn process_entity(&self, entity: &mut EntityData) -> ProcessingResult<()> {
+        self.processor.process_entity(entity)
+    }
     
-    /// Get current configuration
-    fn get_config(&self) -> ArcEntityConfig;
+    fn process_entities(&self, entities: &mut Vec<EntityData>) -> ProcessingResult<()> {
+        self.processor.process_entities(entities)
+    }
+    
+    fn processor_name(&self) -> &str {
+        self.processor.processor_name()
+    }
+}
+
+impl<T> Clone for ThreadSafeEntityProcessor<T>
+where
+    T: EntityProcessor,
+{
+    fn clone(&self) -> Self {
+        Self {
+            processor: self.processor.clone(),
+        }
+    }
+}
+
+/// Entity processing input structure
+#[derive(Debug, Clone)]
+pub struct ProcessingInput {
+    /// Entity to process
+    pub entity: EntityData,
+    /// Processing configuration
+    pub config: EntityConfig,
+    /// Current timestamp
+    pub timestamp: Instant,
+    /// AI optimization level
+    pub ai_optimization: AiOptimizationType,
+}
+
+/// Entity processing output structure
+#[derive(Debug, Clone)]
+pub struct ProcessingOutput {
+    /// Processed entity
+    pub entity: EntityData,
+    /// Processing status
+    pub status: ProcessingStatus,
+    /// Processing duration
+    pub duration: std::time::Duration,
+    /// Error message (if any)
+    pub error: Option<String>,
 }

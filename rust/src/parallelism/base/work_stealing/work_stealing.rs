@@ -33,6 +33,32 @@ pub struct PrioritizedTask {
     pub task: Box<dyn FnOnce() -> Box<dyn Send + 'static> + Send + 'static>,
     pub submission_time: Instant,
     pub trace_id: Option<String>,
+    pub task_id: u64, // Unique identifier for deterministic task comparison
+}
+
+impl PrioritizedTask {
+    /// Create a new prioritized task with automatic unique ID generation
+    pub fn new<F, R>(
+        priority: TaskPriority,
+        f: F,
+        trace_id: Option<String>
+    ) -> Self
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        // Use fastrand for efficient unique ID generation
+        let task_id = fastrand::u64(..);
+        let boxed_task = Box::new(move || Box::new(f()) as Box<dyn Send + 'static>);
+        
+        Self {
+            priority,
+            task: boxed_task,
+            submission_time: Instant::now(),
+            trace_id,
+            task_id,
+        }
+    }
 }
 
 // Implement PartialEq and Eq required for Ord
@@ -129,13 +155,7 @@ impl WorkStealingScheduler {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let boxed_task = Box::new(move || Box::new(f()) as Box<dyn Send + 'static>);
-        let prioritized = PrioritizedTask {
-            priority,
-            task: boxed_task,
-            submission_time: Instant::now(),
-            trace_id,
-        };
+        let prioritized = PrioritizedTask::new(priority, f, trace_id);
 
         // Add to queue if not full, else execute directly
         let queue_result = {
@@ -238,7 +258,7 @@ impl WorkStealingScheduler {
 
 #[async_trait]
 impl ParallelExecutor for WorkStealingScheduler {
-    fn execute_with_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    fn execute_with_priority<F, R>(&self, f: F, priority: crate::parallelism::base::executor_factory::executor_factory::TaskPriority, trace_id: Option<String>) -> R
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,

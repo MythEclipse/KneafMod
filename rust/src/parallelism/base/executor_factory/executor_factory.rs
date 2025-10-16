@@ -1,15 +1,12 @@
 use std::sync::{Arc, Mutex, RwLock};
 use async_trait::async_trait;
-// Use local definitions instead of circular imports
-// TEMP: Comment out problematic import to unblock compilation
-// pub use crate::parallelism::common::{PerformanceConfig, WorkStealingConfig, TaskPriority};
-use crate::parallelism::sequential::SequentialExecutor;
 use std::time::Duration;
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;
 use std::time::Instant;
 use tokio::sync::Notify;
 use std::any::Any;
+use fastrand;
 
 /// Enum representing different types of parallel executors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,11 +48,11 @@ pub trait ParallelExecutor: Send + Sync + Any {
 /// Priority levels for task execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TaskPriority {
-    Lowest,
-    Low,
-    Normal,
-    High,
-    Highest,
+    Lowest = 0,
+    Low = 1,
+    Normal = 2,
+    High = 3,
+    Highest = 4,
 }
 
 /// Task wrapper with priority metadata
@@ -65,9 +62,25 @@ pub struct PrioritizedTask {
     pub task: Box<dyn FnOnce() -> Box<dyn Send + 'static> + Send + 'static>,
     pub submission_time: Instant,
     pub trace_id: Option<String>,
+    pub task_id: u64,
 }
 
-// Implement PartialEq and Eq required for Ord
+impl PrioritizedTask {
+    pub fn new<F, R>(priority: TaskPriority, f: F, trace_id: Option<String>) -> Self 
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        Self {
+            priority,
+            task: Box::new(move || Box::new(f()) as Box<dyn Send + 'static>),
+            submission_time: Instant::now(),
+            trace_id,
+            task_id: fastrand::u64(0..u64::MAX),
+        }
+    }
+}
+
 impl PartialEq for PrioritizedTask {
     fn eq(&self, other: &Self) -> bool {
         self.priority == other.priority && self.task_id == other.task_id
@@ -80,6 +93,7 @@ impl Ord for PrioritizedTask {
     fn cmp(&self, other: &Self) -> Ordering {
         other.priority.cmp(&self.priority)
             .then_with(|| self.submission_time.cmp(&other.submission_time))
+            .then_with(|| self.task_id.cmp(&other.task_id))
     }
 }
 
@@ -95,7 +109,7 @@ pub enum ParallelExecutorEnum {
     ThreadPool(Arc<ThreadPoolExecutor>),
     WorkStealing(Arc<EnhancedWorkStealingExecutor>),
     Async(Arc<AsyncExecutor>),
-    Sequential(Arc<SequentialExecutor>),
+    Sequential(Arc<tokio::runtime::Runtime>),
 }
 
 impl ParallelExecutorEnum {
@@ -109,7 +123,7 @@ impl ParallelExecutorEnum {
             ParallelExecutorEnum::ThreadPool(e) => e.execute(f),
             ParallelExecutorEnum::WorkStealing(e) => e.execute(f),
             ParallelExecutorEnum::Async(e) => e.execute(f),
-            ParallelExecutorEnum::Sequential(e) => e.execute(f),
+            ParallelExecutorEnum::Sequential(e) => e.block_on(f),
         }
     }
 
@@ -127,7 +141,7 @@ impl ParallelExecutorEnum {
             ParallelExecutorEnum::Async(_) => {
                 panic!("Priority execution not supported by Async executor")
             }
-            ParallelExecutorEnum::Sequential(e) => e.execute(f), // Fallback for sequential
+            ParallelExecutorEnum::Sequential(e) => e.block_on(f), // Fallback for sequential
         }
     }
 
@@ -137,7 +151,9 @@ impl ParallelExecutorEnum {
             ParallelExecutorEnum::ThreadPool(e) => e.shutdown().await,
             ParallelExecutorEnum::WorkStealing(e) => e.shutdown().await,
             ParallelExecutorEnum::Async(e) => e.shutdown().await,
-            ParallelExecutorEnum::Sequential(e) => e.shutdown().await,
+            ParallelExecutorEnum::Sequential(e) => {
+                // Sequential executor doesn't need explicit shutdown
+            }
         }
     }
 
@@ -147,7 +163,7 @@ impl ParallelExecutorEnum {
             ParallelExecutorEnum::ThreadPool(e) => e.running_tasks(),
             ParallelExecutorEnum::WorkStealing(e) => e.running_tasks(),
             ParallelExecutorEnum::Async(e) => e.running_tasks(),
-            ParallelExecutorEnum::Sequential(e) => e.running_tasks(),
+            ParallelExecutorEnum::Sequential(_) => 0,
         }
     }
 
@@ -157,7 +173,7 @@ impl ParallelExecutorEnum {
             ParallelExecutorEnum::ThreadPool(e) => e.max_concurrent_tasks(),
             ParallelExecutorEnum::WorkStealing(e) => e.max_concurrent_tasks(),
             ParallelExecutorEnum::Async(e) => e.max_concurrent_tasks(),
-            ParallelExecutorEnum::Sequential(e) => e.max_concurrent_tasks(),
+            ParallelExecutorEnum::Sequential(_) => 1,
         }
     }
 }
@@ -208,7 +224,7 @@ impl ParallelExecutorFactory {
             ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(None))),
             ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(EnhancedWorkStealingExecutor::new(None))),
             ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(None))),
-            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
+            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"))),
         }
     }
 
@@ -218,7 +234,7 @@ impl ParallelExecutorFactory {
             ExecutorType::ThreadPool => ParallelExecutorEnum::ThreadPool(Arc::new(ThreadPoolExecutor::new(Some(config)))),
             ExecutorType::WorkStealing => ParallelExecutorEnum::WorkStealing(Arc::new(EnhancedWorkStealingExecutor::new(Some(config)))),
             ExecutorType::Async => ParallelExecutorEnum::Async(Arc::new(AsyncExecutor::new(Some(config)))),
-            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(SequentialExecutor::new())),
+            ExecutorType::Sequential => ParallelExecutorEnum::Sequential(Arc::new(tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"))),
         }
     }
 }
@@ -384,13 +400,7 @@ impl ParallelExecutor for EnhancedWorkStealingExecutor {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let boxed_task = Box::new(move || Box::new(f()) as Box<dyn Send + 'static>);
-        let prioritized_task = PrioritizedTask {
-            priority,
-            task: boxed_task,
-            submission_time: Instant::now(),
-            trace_id,
-        };
+        let prioritized_task = PrioritizedTask::new(priority, f, trace_id);
 
         // Add to priority queue if not full
         let queue_result = {
@@ -528,6 +538,13 @@ impl Default for ParallelExecutorEnum {
 /// Extension trait for performance config integration
 pub trait PerformanceConfigIntegration {
     fn apply_work_stealing_config(&self, executor: &mut EnhancedWorkStealingExecutor) -> Result<(), String>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PerformanceConfig {
+    pub work_stealing_enabled: bool,
+    pub work_stealing_queue_size: usize,
+    // Add other performance-related fields as needed
 }
 
 impl PerformanceConfigIntegration for PerformanceConfig {

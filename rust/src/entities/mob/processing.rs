@@ -1,5 +1,5 @@
 use super::types::{MobAiComplexity, MobState, MobType};
-use crate::entities::common::{
+use crate::entities::common::types::{
     AiOptimizationType, EntityProcessingExt, EntityProcessor, ProcessingResult, ProcessingStatus,
     ThreadSafeEntityProcessor,
 };
