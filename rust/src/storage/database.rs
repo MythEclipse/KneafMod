@@ -9,6 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 use fastnbt::Value;
+use std::fs;
 use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::sys::{jboolean, jbyteArray, jint, jlong};
 use jni::JNIEnv;

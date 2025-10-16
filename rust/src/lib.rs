@@ -48,8 +48,7 @@ pub use storage::*;
 pub use macros::*;
 
 // Export new modules
-pub use crate::sync::*;
-pub use crate::tests::*;
+// Sync and tests modules are available through their respective paths
 
 // Export verification test for manual execution
 #[cfg(test)]

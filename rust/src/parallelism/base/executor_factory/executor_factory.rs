@@ -23,6 +23,8 @@ pub enum ExecutorType {
 
 #[async_trait]
 pub trait ParallelExecutor: Send + Sync + Any {
+    /// Downcast for dynamic executor handling
+    fn as_any(&self) -> &dyn Any;
     /// Executes a function synchronously
     fn execute<F, R>(&self, f: F) -> R
     where

@@ -37,8 +37,28 @@ impl fmt::Display for RustError {
 
 impl Error for RustError {}
 
-/// Result type alias using RustError
-pub type Result<T> = std::result::Result<T, RustError>;
+/// Result type alias using RustError as the default error type.
+/// This accepts one or two generic parameters so existing code that used
+/// `Result<T, E>` or `Result<T>` continues to compile.
+pub type Result<T, E = RustError> = std::result::Result<T, E>;
+
+/// Execution-specific errors used by executor and scheduling logic
+#[derive(Debug, Clone)]
+pub enum ExecutionError {
+    InvalidPriority(u8),
+    Other(String),
+}
+
+impl std::fmt::Display for ExecutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecutionError::InvalidPriority(p) => write!(f, "Invalid priority: {}", p),
+            ExecutionError::Other(msg) => write!(f, "Execution error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionError {}
 
 /// Error messages module
 pub mod messages {

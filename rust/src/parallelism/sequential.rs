@@ -39,4 +39,8 @@ impl ParallelExecutor for SequentialExecutor {
     fn max_concurrent_tasks(&self) -> usize {
         1
     }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }

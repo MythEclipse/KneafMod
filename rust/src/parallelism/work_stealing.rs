@@ -1,5 +1,7 @@
-use crate::config::WorkStealingConfig;
-use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor};
+use crate::config::performance_config::{WorkStealingConfig, PerformanceConfig, PerformanceMode};
+use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor, TaskPriority};
+use crossbeam_deque::{Injector, Stealer, Worker};
+use std::sync::Arc;
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::AtomicBool;
@@ -294,6 +296,10 @@ impl ParallelExecutor for WorkStealingScheduler {
             _ => 100, // Default fallback
         }
     }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// Priority execution extension trait for parallel executors
@@ -353,15 +359,16 @@ impl ParallelExecutorPriorityExt for ParallelExecutorEnum {
 pub struct EnhancedWorkStealingExecutor {
     injector: Arc<Injector<PrioritizedTask>>,
     stealers: Vec<Stealer<PrioritizedTask>>,
-    worker: Worker<PrioritizedTask>,
+    worker: Arc<Mutex<Worker<PrioritizedTask>>>,
     config: Option<WorkStealingConfig>,
 }
 
 impl EnhancedWorkStealingExecutor {
     pub fn new(config: Option<WorkStealingConfig>) -> Self {
         let injector = Arc::new(Injector::new());
-        let worker = Worker::new_fifo();
-        let stealer = worker.stealer();
+    let worker_local = Worker::new_fifo();
+    let stealer = worker_local.stealer();
+    let worker = Arc::new(Mutex::new(worker_local));
         
         Self {
             injector,
@@ -372,7 +379,7 @@ impl EnhancedWorkStealingExecutor {
     }
 
     pub fn execute_task(&self, task: PrioritizedTask) {
-        self.injector.push(task);
+            self.injector.push(task);
     }
 
     pub fn try_steal_task(&self) -> Option<PrioritizedTask> {
@@ -392,7 +399,8 @@ impl EnhancedWorkStealingExecutor {
     }
 
     pub fn pop_task(&self) -> Option<PrioritizedTask> {
-        self.worker.pop()
+        // worker is wrapped in a Mutex to provide Sync
+        self.worker.lock().unwrap().pop()
     }
 }
 
@@ -443,5 +451,9 @@ impl ParallelExecutor for EnhancedWorkStealingExecutor {
         );
         self.execute_task(task);
         f()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

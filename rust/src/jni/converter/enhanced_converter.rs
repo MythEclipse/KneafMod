@@ -1,4 +1,5 @@
 use jni::{JNIEnv, objects::{JString, JByteArray, JObject, JByteBuffer, JIntArray, JFloatArray, JLongArray}, sys::{jstring, jbyteArray, jintArray, jfloatArray, jlongArray}};
+use jni::strings::JavaString;
 use std::sync::{Arc, Mutex, RwLock};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

@@ -3,6 +3,8 @@ use super::advanced_pathfinding::*;
 use super::pathfinding::AdvancedPathfindingOptimizer;
 use crate::entities::entity::processing::*;
 use crate::entities::entity::types::*;
+// Re-exported/common types used across entity processing
+use crate::{EntityProcessingInput, EntityProcessingResult, EntityType};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use crate::memory::pool::object_pool::ObjectPool;
 use crate::parallelism::WorkStealingScheduler;
@@ -422,7 +424,7 @@ fn group_villagers_by_spatial_proximity(villagers: &[VillagerData]) -> Vec<Villa
 }
 
 /// Get default navigation mesh (in real implementation, this would be loaded from game assets)
-fn get_default_navigation_mesh() -> Vec<(f32, f32, f32)> {
+pub(crate) fn get_default_navigation_mesh() -> Vec<(f32, f32, f32)> {
     // Simplified navigation mesh with common game world features
     vec![
         (0.0, 0.0, 0.0),
@@ -537,6 +539,19 @@ pub fn process_villager_ai_binary_batch(input_bytes: &[u8]) -> Result<String, St
         // If not valid JSON, return error
         Err("Invalid binary input format - expected JSON string".to_string())
     }
+}
+
+/// Return simple villager processing statistics for JNI/monitoring.
+/// This is intentionally lightweight and serializable via serde_json.
+pub fn get_villager_processing_stats() -> Result<serde_json::Value, String> {
+    // In a real implementation, gather real metrics (counts, timings, pools)
+    let stats = serde_json::json!({
+        "active_villagers": 0,
+        "villager_groups": 0,
+        "note": "stub statistics - implement real metrics collection for production"
+    });
+
+    Ok(stats)
 }
 
 /// Thread-safe villager state management with spatial awareness

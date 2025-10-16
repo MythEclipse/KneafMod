@@ -1,5 +1,6 @@
 use super::types::*;
 use std::sync::RwLock;
+use crate::ExecutionError;
 use crate::types::EntityConfigTrait as EntityConfig;
 
 lazy_static::lazy_static! {

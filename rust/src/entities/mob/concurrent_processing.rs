@@ -2,6 +2,7 @@ use super::types::{MobData, MobInput, MobProcessResult};
 use crate::entities::entity::processing::process_entities;
 use crate::types::{EntityDataTrait as EntityData, EntityTypeTrait as EntityType};
 use crate::logging::{generate_trace_id, PerformanceLogger};
+use std::hash::Hash;
 use crate::memory::pool::{
     get_global_enhanced_pool, EnhancedMemoryPoolManager, MemoryPoolConfig,
 };
@@ -20,8 +21,8 @@ use std::time::{Duration, Instant};
 static MOB_PROCESSOR_LOGGER: once_cell::sync::Lazy<PerformanceLogger> =
     once_cell::sync::Lazy::new(|| PerformanceLogger::new("mob_processor"));
 
-static MOB_PERFORMANCE_MONITOR: once_cell::sync::Lazy<PerformanceMonitor> =
-    once_cell::sync::Lazy::new(|| PerformanceMonitor::new("mob_performance"));
+static MOB_PERFORMANCE_MONITOR: once_cell::sync::Lazy<PerformanceLogger> =
+    once_cell::sync::Lazy::new(|| PerformanceLogger::new("mob_performance"));
 
 /// Configuration for mob processing
 #[derive(Debug, Clone, Serialize, Deserialize)]

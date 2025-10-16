@@ -1,5 +1,5 @@
-use crate::config::performance_config::{PerformanceConfig as PerfConfig, WorkStealingConfig};
-use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor};
+use crate::config::performance_config::{PerformanceConfig as PerfConfig, WorkStealingConfig, PerformanceMode};
+use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor, TaskPriority};
 // ParallelExecutorFactory is imported where needed to avoid circular dependencies
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex, RwLock};
@@ -294,6 +294,10 @@ impl ParallelExecutor for WorkStealingScheduler {
             ParallelExecutorEnum::WorkStealing(e) => e.max_concurrent_tasks(),
             _ => 100, // Default fallback
         }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

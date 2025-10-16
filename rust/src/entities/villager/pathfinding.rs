@@ -1,4 +1,5 @@
 use super::types::*;
+use crate::EntityType;
 use super::advanced_pathfinding::*;
 use jni::{objects::JClass, JNIEnv};
 use rayon::prelude::*;
@@ -327,7 +328,7 @@ impl AdvancedPathfindingOptimizer {
                 advanced_pathfinder.find_path(villager_id, start, goal)
             } else {
                 // Fall back to default pathfinding if advanced pathfinder not initialized
-                let navigation_mesh = get_default_navigation_mesh();
+                let navigation_mesh = crate::entities::villager::processing::get_default_navigation_mesh();
                 find_basic_path(start, goal, &navigation_mesh, 50)
             }
         }
@@ -367,7 +368,7 @@ impl AdvancedPathfindingOptimizer {
                 advanced_pathfinder.find_paths_for_villagers(&villagers, goal)
             } else {
                 // Fall back to individual pathfinding if advanced pathfinder not initialized
-                let navigation_mesh = get_default_navigation_mesh();
+                let navigation_mesh = crate::entities::villager::processing::get_default_navigation_mesh();
                 villagers.iter().map(|villager| {
                     let path = find_basic_path(villager.position, goal, &navigation_mesh, 50);
                     PathfindingResult {

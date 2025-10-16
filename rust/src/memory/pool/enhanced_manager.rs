@@ -8,6 +8,7 @@ use lazy_static::lazy_static;
 
 use crate::config::performance_config::{PerformanceConfig as PerfConfig, PerformanceMode};
 use crate::logging::generate_trace_id;
+use crate::errors::Result;
 use crate::logging::PerformanceLogger;
 use crate::memory::pool::hierarchical::HierarchicalMemoryPool;
 use crate::memory::pool::object_pool::MemoryPressureLevel;

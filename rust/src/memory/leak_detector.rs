@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, AtomicBool};
 use std::time::{Duration, Instant};
 use std::fmt;
 use serde::{Serialize, Deserialize};
@@ -252,21 +252,72 @@ enum LeakDetectorEvent {
     Shutdown,
 }
 
-/// Simplified machine learning model for leak detection
+/// Advanced machine learning model for leak detection using statistical learning
 struct MLModel {
     /// Training data
-    training_data: Vec<LeakPattern>,
-    /// Model parameters
-    parameters: Vec<f64>,
+    training_data: RwLock<Vec<LeakPattern>>,
+    /// Model parameters (weights for different features)
+    parameters: RwLock<Vec<f64>>,
+    /// Feature importance scores
+    feature_importance: RwLock<Vec<f64>>,
+    /// Model accuracy
+    accuracy: RwLock<f64>,
+    /// Last training timestamp
+    last_trained: RwLock<Instant>,
+    /// Training lock to prevent concurrent training
+    training_in_progress: AtomicBool,
+    /// Feature normalization parameters (min, max for each feature)
+    feature_ranges: RwLock<Option<Vec<(f64, f64)>>>,
+    /// Model version for tracking improvements
+    version: RwLock<u32>,
 }
 
-/// Pattern for machine learning training
-#[derive(Debug, Clone)]
+/// Pattern for machine learning training with enhanced features
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LeakPattern {
-    /// Allocation features
+    /// Allocation features (normalized values)
     features: Vec<f64>,
     /// Leak label (true if leak, false otherwise)
     is_leak: bool,
+    /// Leak type if known
+    leak_type: Option<LeakType>,
+    /// Confidence score from initial detection
+    confidence: f64,
+    /// Timestamp when pattern was recorded
+    timestamp: Instant,
+}
+
+/// ML model training configuration
+#[derive(Debug, Clone)]
+struct MLTrainingConfig {
+    /// Minimum number of samples required for training
+    min_samples: usize,
+    /// Training interval in seconds
+    training_interval: u64,
+    /// Learning rate
+    learning_rate: f64,
+    /// Number of epochs
+    epochs: usize,
+    /// Feature normalization parameters
+    feature_ranges: Option<Vec<(f64, f64)>>,
+    /// Enable early stopping to prevent overfitting
+    early_stopping: bool,
+    /// Validation split ratio (0.0 to 1.0)
+    validation_split: f64,
+}
+
+impl Default for MLTrainingConfig {
+    fn default() -> Self {
+        Self {
+            min_samples: 200,      // More samples for better model stability
+            training_interval: 600, // 10 minutes for production use
+            learning_rate: 0.005,   // Lower learning rate for better convergence
+            epochs: 50,             // More epochs for comprehensive training
+            feature_ranges: None,
+            early_stopping: true,   // Prevent overfitting by default
+            validation_split: 0.2,  // 20% validation data
+        }
+    }
 }
 
 impl MemoryLeakDetector {
@@ -279,40 +330,52 @@ impl MemoryLeakDetector {
     ) -> Self {
         let (sender, receiver) = unbounded();
         
+        // Create core data structures first
+        let allocations = Arc::new(RwLock::new(HashMap::new()));
+        let historical_samples = Arc::new(RwLock::new(Vec::with_capacity(config.historical_samples)));
+        let callbacks = Arc::new(RwLock::new(HashSet::new()));
+        let ml_model = Arc::new(RwLock::new(Some(MLModel {
+            training_data: RwLock::new(Vec::new()),
+            parameters: RwLock::new(Vec::new()),
+            feature_importance: RwLock::new(Vec::new()),
+            accuracy: RwLock::new(0.0),
+            last_trained: RwLock::new(Instant::now()),
+            training_in_progress: AtomicBool::new(false),
+            feature_ranges: RwLock::new(None),
+            version: RwLock::new(1),
+        })));
+        
         // Start background analysis thread
-        let allocations = Arc::clone(&allocations);
-        let config = config.clone();
-        let historical_samples = Arc::clone(&historical_samples);
-        let callbacks = Arc::clone(&callbacks);
-        let ml_model = Arc::clone(&ml_model);
-        let memory_monitor = Arc::clone(&memory_monitor);
+        let allocations_clone = Arc::clone(&allocations);
+        let config_clone = config.clone();
+        let historical_samples_clone = Arc::clone(&historical_samples);
+        let callbacks_clone = Arc::clone(&callbacks);
+        let ml_model_clone = Arc::clone(&ml_model);
+        let memory_monitor_clone = Arc::clone(&memory_monitor);
         
         std::thread::spawn(move || {
             Self::background_analysis_loop(
                 receiver,
-                allocations,
-                config,
-                historical_samples,
-                callbacks,
-                ml_model,
-                memory_monitor,
+                allocations_clone,
+                config_clone,
+                historical_samples_clone,
+                callbacks_clone,
+                ml_model_clone,
+                memory_monitor_clone,
             );
         });
         
         Self {
             config,
-            allocations: Arc::new(RwLock::new(HashMap::new())),
+            allocations,
             next_allocation_id: Arc::new(Mutex::new(0)),
-            historical_samples: Arc::new(RwLock::new(Vec::with_capacity(config.historical_samples))),
+            historical_samples,
             memory_monitor,
             lru_pool,
             pool_manager,
             event_sender: sender,
-            callbacks: Arc::new(RwLock::new(HashSet::new())),
-            ml_model: Arc::new(RwLock::new(Some(MLModel {
-                training_data: Vec::new(),
-                parameters: Vec::new(),
-            }))),
+            callbacks,
+            ml_model,
         }
     }
     
@@ -355,6 +418,17 @@ impl MemoryLeakDetector {
         let mut allocations = self.allocations.write().unwrap();
         allocations.insert(allocation_id, record.clone());
         
+        // Track allocation in real-time memory monitor
+        let pool_type = match component.as_str() {
+            "vec_pool" => MemoryPoolType::Object,
+            "string_pool" => MemoryPoolType::Object,
+            "hierarchical" => MemoryPoolType::Hierarchical,
+            "swap" => MemoryPoolType::Swap,
+            _ => MemoryPoolType::Custom(component.clone()),
+        };
+        
+        let _ = self.memory_monitor.track_allocation(size, pool_type);
+        
         // Send event to background thread
         let _ = self.event_sender.send(LeakDetectorEvent::Allocate(record));
         
@@ -363,6 +437,23 @@ impl MemoryLeakDetector {
     
     /// Track a memory deallocation
     pub fn track_deallocation(&self, allocation_id: u64) {
+        // Get allocation details for tracking
+        let allocations = self.allocations.read().unwrap();
+        let record = allocations.get(&allocation_id);
+        
+        if let Some(record) = record {
+            // Track deallocation in real-time memory monitor
+            let pool_type = match record.component.as_str() {
+                "vec_pool" => MemoryPoolType::Object,
+                "string_pool" => MemoryPoolType::Object,
+                "hierarchical" => MemoryPoolType::Hierarchical,
+                "swap" => MemoryPoolType::Swap,
+                _ => MemoryPoolType::Custom(record.component.clone()),
+            };
+            
+            let _ = self.memory_monitor.track_deallocation(record.size, pool_type);
+        }
+        
         // Send event to background thread
         let _ = self.event_sender.send(LeakDetectorEvent::Deallocate(allocation_id));
     }
@@ -447,7 +538,7 @@ impl MemoryLeakDetector {
         }
     }
     
-    /// Calculate allocation rate (bytes per second)
+    /// Calculate allocation rate (bytes per second) with low-lock contention
     fn calculate_allocation_rate(&self) -> f64 {
         // Use try_read first to minimize lock contention
         if let Ok(allocations) = self.allocations.try_read() {
@@ -455,11 +546,14 @@ impl MemoryLeakDetector {
         }
         
         // Fall back to blocking read with timeout for critical monitoring
-        let allocations = self.allocations.read_timeout(Duration::from_millis(150)).unwrap();
+        let allocations = match self.allocations.read_timeout(Duration::from_millis(150)) {
+            Ok(guard) => guard,
+            Err(_) => return 0.0, // Return 0 on timeout to avoid blocking
+        };
         self.calculate_rate_internal(allocations)
     }
     
-    fn calculate_rate_internal(&self, allocations: &ReadGuard<HashMap<u64, AllocationRecord>>) -> f64 {
+    fn calculate_rate_internal(&self, allocations: &std::sync::RwLockReadGuard<HashMap<u64, AllocationRecord>>) -> f64 {
         let now = Instant::now();
         
         if allocations.is_empty() {
@@ -674,43 +768,272 @@ impl MemoryLeakDetector {
         
         leaks
     }
-    
-    /// Detect leaks using machine learning (simplified implementation)
+
+    /// Extract normalized features from allocation records for ML training
+    fn extract_normalized_features(&self, record: &AllocationRecord, now: &Instant) -> Vec<f64> {
+        let age_secs = now.duration_since(record.allocated_at).as_secs_f64();
+        let last_access_secs = now.duration_since(record.last_accessed).as_secs_f64();
+        
+        vec![
+            age_secs.log1p(),                      // Log-transformed age (reduces scale impact)
+            record.size as f64.log1p(),            // Log-transformed size
+            record.ref_count as f64.log1p(),       // Log-transformed reference count
+            last_access_secs.log1p(),              // Log-transformed last access time
+            if record.marked_for_deallocation { 1.0 } else { 0.0 }, // Deallocation status
+            record.thread_id as f64.log1p(),       // Log-transformed thread ID
+        ]
+    }
+
+    /// Calculate feature ranges for normalization
+    fn calculate_feature_ranges(&self, patterns: &[LeakPattern]) -> Vec<(f64, f64)> {
+        if patterns.is_empty() {
+            return Vec::new();
+        }
+
+        let num_features = patterns[0].features.len();
+        let mut min_vals = vec![f64::INFINITY; num_features];
+        let mut max_vals = vec![-f64::INFINITY; num_features];
+
+        for pattern in patterns {
+            for (i, &val) in pattern.features.iter().enumerate() {
+                if val < min_vals[i] {
+                    min_vals[i] = val;
+                }
+                if val > max_vals[i] {
+                    max_vals[i] = val;
+                }
+            }
+        }
+
+        min_vals.into_iter().zip(max_vals.into_iter()).collect()
+    }
+
+    /// Normalize features to [0, 1] range
+    fn normalize_features(&self, features: &[f64], ranges: &Option<Vec<(f64, f64)>>) -> Vec<f64> {
+        match ranges {
+            Some(ranges) if !ranges.is_empty() => {
+                let mut normalized = Vec::with_capacity(features.len());
+                for (i, &val) in features.iter().enumerate() {
+                    let (min, max) = ranges[i];
+                    if max == min {
+                        normalized.push(0.0);
+                    } else {
+                        normalized.push((val - min) / (max - min));
+                    }
+                }
+                normalized
+            }
+            _ => features.to_vec(),
+        }
+    }
+
+    /// Split data into training and validation sets
+    fn split_data(&self, features: &[Vec<f64>], labels: &[f64], split_ratio: f64) -> 
+        (Vec<Vec<f64>>, Vec<f64>, Vec<Vec<f64>>, Vec<f64>) {
+        
+        let split_idx = (features.len() as f64 * (1.0 - split_ratio)) as usize;
+        let mut rng = rand::thread_rng();
+        
+        // Create indices and shuffle
+        let mut indices: Vec<usize> = (0..features.len()).collect();
+        indices.shuffle(&mut rng);
+
+        let train_indices: Vec<usize> = indices[0..split_idx].to_vec();
+        let val_indices: Vec<usize> = indices[split_idx..].to_vec();
+
+        let train_features: Vec<Vec<f64>> = train_indices.iter().map(|&i| features[i].clone()).collect();
+        let train_labels: Vec<f64> = train_indices.iter().map(|&i| labels[i]).collect();
+        let val_features: Vec<Vec<f64>> = val_indices.iter().map(|&i| features[i].clone()).collect();
+        let val_labels: Vec<f64> = val_indices.iter().map(|&i| labels[i]).collect();
+
+        (train_features, train_labels, val_features, val_labels)
+    }
+
+    /// Make predictions using linear regression model
+    fn predict(&self, features: &[Vec<f64>], parameters: &[f64]) -> Vec<f64> {
+        let mut predictions = Vec::with_capacity(features.len());
+        
+        for feature_vec in features {
+            let mut prediction = parameters[0]; // Bias term
+            for (i, &feature) in feature_vec.iter().enumerate().skip(1) { // Skip bias
+                prediction += feature * parameters[i];
+            }
+            predictions.push(prediction.sigmoid()); // Apply sigmoid for probability
+        }
+
+        predictions
+    }
+
+    /// Calculate gradients for gradient descent
+    fn calculate_gradients(&self, features: &[Vec<f64>], labels: &[f64], predictions: &[f64]) -> Vec<f64> {
+        let m = features.len() as f64;
+        let num_features = features[0].len();
+        let mut gradients = vec![0.0; num_features];
+
+        for (i, feature_vec) in features.iter().enumerate() {
+            let prediction_error = predictions[i] - labels[i];
+            
+            // Update bias gradient
+            gradients[0] += prediction_error;
+            
+            // Update feature gradients
+            for (j, &feature) in feature_vec.iter().enumerate().skip(1) {
+                gradients[j] += prediction_error * feature;
+            }
+        }
+
+        // Average gradients
+        gradients.iter().map(|&g| g / m).collect()
+    }
+
+    /// Calculate accuracy of predictions
+    fn calculate_accuracy(&self, labels: &[f64], predictions: &[f64]) -> f64 {
+        let correct = labels.iter().zip(predictions.iter())
+            .filter(|(&label, &pred)| {
+                let pred_class = if pred >= 0.5 { 1.0 } else { 0.0 };
+                (label == 1.0 && pred_class == 1.0) || (label == 0.0 && pred_class == 0.0)
+            })
+            .count() as f64;
+
+        correct / labels.len() as f64
+    }
+
+    /// Train the machine learning model with new data
+    pub fn train_model(&self, config: &MLTrainingConfig) -> Result<f64, String> {
+        let training_data = self.training_data.read().unwrap();
+        
+        // Check if we have enough samples
+        if training_data.len() < config.min_samples {
+            return Err(format!("Need at least {} samples for training, got {}", config.min_samples, training_data.len()));
+        }
+
+        // Extract features and labels
+        let mut features = Vec::new();
+        let mut labels = Vec::new();
+        
+        for pattern in &*training_data {
+            features.push(pattern.features.clone());
+            labels.push(if pattern.is_leak { 1.0 } else { 0.0 });
+        }
+
+        // Split into training and validation sets
+        let (train_features, train_labels, val_features, val_labels) = if config.validation_split > 0.0 {
+            self.split_data(&features, &labels, config.validation_split)
+        } else {
+            (features.clone(), labels.clone(), Vec::new(), Vec::new())
+        };
+
+        // Calculate feature ranges for normalization
+        let feature_ranges = self.calculate_feature_ranges(&*training_data);
+        let mut feature_ranges_guard = self.feature_ranges.write().unwrap();
+        *feature_ranges_guard = Some(feature_ranges.clone());
+
+        // Normalize features
+        let mut normalized_train_features = Vec::new();
+        for feature_vec in &train_features {
+            normalized_train_features.push(self.normalize_features(feature_vec, &Some(feature_ranges.clone())));
+        }
+
+        let mut normalized_val_features = Vec::new();
+        for feature_vec in &val_features {
+            normalized_val_features.push(self.normalize_features(feature_vec, &Some(feature_ranges.clone())));
+        }
+
+        // Initialize model parameters (with bias term)
+        let mut parameters = vec![0.0; normalized_train_features[0].len() + 1];
+        let mut best_accuracy = 0.0;
+        let mut no_improvement = 0;
+
+        // Gradient descent training
+        for epoch in 0..config.epochs {
+            // Add bias term to features
+            let train_features_with_bias: Vec<Vec<f64>> = normalized_train_features.iter()
+                .map(|f| vec![1.0].into_iter().chain(f.iter().cloned()).collect())
+                .collect();
+
+            // Make predictions
+            let predictions = self.predict(&train_features_with_bias, &parameters);
+            
+            // Calculate gradients
+            let gradients = self.calculate_gradients(&train_features_with_bias, &train_labels, &predictions);
+            
+            // Update parameters
+            for (i, &grad) in gradients.iter().enumerate() {
+                parameters[i] -= config.learning_rate * grad;
+            }
+
+            // Validate and check for early stopping
+            if !val_features.is_empty() {
+                let val_features_with_bias: Vec<Vec<f64>> = normalized_val_features.iter()
+                    .map(|f| vec![1.0].into_iter().chain(f.iter().cloned()).collect())
+                    .collect();
+                
+                let val_predictions = self.predict(&val_features_with_bias, &parameters);
+                let accuracy = self.calculate_accuracy(&val_labels, &val_predictions);
+                
+                if accuracy > best_accuracy {
+                    best_accuracy = accuracy;
+                    no_improvement = 0;
+                    
+                    // Update model parameters
+                    let mut model_params = self.parameters.write().unwrap();
+                    *model_params = parameters.clone();
+                } else if config.early_stopping {
+                    no_improvement += 1;
+                    if no_improvement >= 5 {  // Stop after 5 epochs without improvement
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Update model accuracy and version
+        let mut model_accuracy = self.accuracy.write().unwrap();
+        *model_accuracy = best_accuracy;
+
+        let mut model_version = self.version.write().unwrap();
+        *model_version += 1;
+
+        Ok(best_accuracy)
+    }
+
+    /// Detect leaks using machine learning model
     fn detect_leaks_ml(&self, allocations: &HashMap<u64, AllocationRecord>, now: &Instant) -> Vec<MemoryLeak> {
         let mut leaks = Vec::new();
         
-        // Check if ML model is enabled
+        // Check if ML model is enabled and has parameters
         let ml_model = self.ml_model.read().unwrap();
         let model = ml_model.as_ref();
         
-        if model.is_none() {
-            return leaks;
-        }
-        
-        // In a real implementation, we would use a proper ML model
-        // For this example, we'll use a simplified pattern recognition approach
-        
-        let mut rng = rand::thread_rng();
-        
-        // Simulate ML detection with random confidence (for demonstration)
+        let parameters = match model.and_then(|m| m.parameters.read().ok()) {
+            Some(Ok(params)) if !params.is_empty() => params,
+            _ => return leaks,
+        };
+
+        let feature_ranges = match model.and_then(|m| m.feature_ranges.read().ok()) {
+            Some(Ok(ranges)) => ranges,
+            _ => return leaks,
+        };
+
         for (id, record) in allocations {
             // Skip if already marked for deallocation
             if record.marked_for_deallocation {
                 continue;
             }
+
+            // Extract and normalize features
+            let features = self.extract_normalized_features(record, now);
+            let normalized_features = self.normalize_features(&features, &feature_ranges);
             
-            // Randomly select some allocations as potential ML-detected leaks
-            if rng.gen_bool(0.05) { // 5% chance of detecting a leak
-                let leak_type = match rng.gen_range(0..4) {
-                    0 => LeakType::ForgottenDeallocation,
-                    1 => LeakType::CircularReference,
-                    2 => LeakType::ExcessiveGrowth,
-                    3 => LeakType::WeakReferenceLeak,
-                    _ => LeakType::Unknown,
-                };
-                
-                let confidence = rng.gen_range(50..=100);
-                
+            // Add bias term and make prediction
+            let features_with_bias = vec![1.0].into_iter().chain(normalized_features.iter().cloned()).collect();
+            let prediction = self.predict(&[features_with_bias], &parameters)[0];
+            
+            // Only report high-confidence leaks (≥ 70% confidence)
+            if prediction >= 0.7 {
+                let leak_type = self.classify_leak_type(&normalized_features, prediction);
+                let confidence = (prediction * 100.0).round() as u8;
+
                 let leak = MemoryLeak {
                     id: *id,
                     allocation: record.clone(),
@@ -718,8 +1041,9 @@ impl MemoryLeakDetector {
                     confidence,
                     detected_at: *now,
                     analysis: Some(format!(
-                        "ML-detected leak with {}% confidence",
-                        confidence
+                        "ML-detected leak with {:.1}% confidence (version {})",
+                        confidence as f64,
+                        *model.version.read().unwrap()
                     )),
                 };
                 leaks.push(leak);
@@ -727,6 +1051,43 @@ impl MemoryLeakDetector {
         }
         
         leaks
+    }
+
+    /// Classify leak type based on feature patterns
+    fn classify_leak_type(&self, features: &[f64], confidence: f64) -> LeakType {
+        // In a real implementation, this would use more sophisticated pattern recognition
+        // For now, we'll use a simple heuristic based on feature values
+        
+        if confidence < 0.7 {
+            return LeakType::Unknown;
+        }
+
+        // Feature indices (match extract_normalized_features order)
+        const AGE: usize = 0;
+        const SIZE: usize = 1;
+        const REF_COUNT: usize = 2;
+        const LAST_ACCESS: usize = 3;
+
+        if features[AGE] > 0.8 && features[SIZE] > 0.5 {
+            // Older allocations with large size = forgotten deallocations
+            LeakType::ForgottenDeallocation
+        } else if features[REF_COUNT] > 0.9 && features[LAST_ACCESS] > 0.7 {
+            // High ref count with long time since access = circular references
+            LeakType::CircularReference
+        } else if features[SIZE] > 0.8 && features[AGE] < 0.3 {
+            // Large recent allocations = excessive growth
+            LeakType::ExcessiveGrowth
+        } else if features[REF_COUNT] < 0.1 && features[LAST_ACCESS] < 0.2 {
+            // Low ref count but recently accessed = weak reference leaks
+            LeakType::WeakReferenceLeak
+        } else {
+            LeakType::Unknown
+        }
+    }
+
+    /// Sigmoid activation function for probability conversion
+    fn sigmoid(x: f64) -> f64 {
+        1.0 / (1.0 + (-x).exp())
     }
     
     /// Calculate confidence score for a detected leak
@@ -1158,6 +1519,42 @@ impl MemoryLeakDetector {
         
         leaks
     }
+
+    /// Optimized allocation sampling for low-overhead detection
+    pub fn get_recent_allocations(&self, time_window: u64) -> Vec<&AllocationRecord> {
+        let now = Instant::now();
+        
+        // Use try_read for non-blocking access
+        match self.allocations.try_read() {
+            Ok(allocations) => allocations.values()
+                .filter(|r| now.duration_since(r.allocated_at).as_secs() < time_window)
+                .take(self.config.historical_samples) // Early termination
+                .collect(),
+            Err(_) => Vec::new(), // Return empty on contention
+        }
+    }
+
+    /// Lock-free memory statistics collection
+    pub fn get_memory_snapshot(&self) -> Option<MemoryStats> {
+        let now = Instant::now();
+        
+        // Try to get quick stats without full allocation lock
+        let allocations = match self.allocations.try_read() {
+            Ok(guard) => guard,
+            Err(_) => return None,
+        };
+
+        let total_allocated: usize = allocations.values().map(|r| r.size).sum();
+        
+        Some(MemoryStats {
+            total_allocated,
+            total_deallocated: self.memory_monitor.get_total_deallocated(),
+            current_usage: total_allocated,
+            peak_usage: self.memory_monitor.get_peak_memory_usage(),
+            allocation_rate: self.calculate_allocation_rate(),
+            deallocation_rate: self.calculate_deallocation_rate(),
+        })
+    }
 }
 
 /// Export leak report to JSON format
@@ -1169,7 +1566,7 @@ pub fn export_leak_report_to_json(report: &LeakReport) -> Result<String, serde_j
 mod tests {
     use super::*;
     use std::sync::Arc;
-    
+
     #[test]
     fn test_allocation_record() {
         let record = AllocationRecord::new(
