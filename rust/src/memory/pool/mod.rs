@@ -38,9 +38,9 @@ pub use enhanced_manager::{
 pub use factory::{MemoryPoolFactory, MemoryPoolType};
 pub use hierarchical::{
     FastObjectPool, HierarchicalMemoryPool, HierarchicalPoolConfig,
-pub use lru_eviction::{EvictionStats, LRUEvictionConfig, LRUEvictionMemoryPool};
     PooledVec as HierarchicalPooledVec,
 };
+pub use super::lru_eviction::{EvictionStats, LRUEvictionConfig, LRUEvictionMemoryPool};
 pub use lightweight::{
     ArenaHandle, ArenaStats, FastArena, LightweightMemoryPool, LightweightPoolStats,
     LightweightPooledObject, ScopedArena, ThreadLocalLightweightPool,

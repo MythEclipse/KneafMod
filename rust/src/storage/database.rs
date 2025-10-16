@@ -16,7 +16,7 @@ use lz4_flex::block;
 use memmap2::{Mmap, MmapOptions};
 use sled::Db;
 use std::collections::HashMap;
-use std::fs;
+use std::fs as std_fs;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};

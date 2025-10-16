@@ -352,9 +352,9 @@ impl SwapMemoryPool {
         // Calculate checksum
         let checksum = crc32fast::hash(&compressed_data);
 
-    if cfg!(test) {
-        println!("SWAP_OUT_MARKER: checksum calculated {} for page {}", checksum, page_id);
-    }
+        if cfg!(test) {
+            println!("SWAP_OUT_MARKER: checksum calculated {} for page {}", checksum, page_id);
+        }
 
         // Write to swap file
         let mut file = self.swap_file.write().unwrap();
@@ -618,27 +618,36 @@ impl SwapMemoryPool {
             Ok(offset)
         };
 
-    let offset = write_result?;
-    println!("WRITE_SYNC_MARKER: obtained offset={}, now updating metadata", offset);
-    let _ = std::io::stdout().flush();
+       let offset = write_result?;
+       if cfg!(test) {
+           println!("WRITE_SYNC_MARKER: obtained offset={}, now updating metadata", offset);
+           let _ = std::io::stdout().flush();
+       }
 
-        // Update page metadata
-    println!("WRITE_SYNC_MARKER: about to acquire pages write lock");
-    let _ = std::io::stdout().flush();
-    let mut page = self.pages.write().unwrap();
-    println!("WRITE_SYNC_MARKER: acquired pages write lock");
-    let _ = std::io::stdout().flush();
-        let page = page
-            .get_mut(&page_id)
-            .ok_or_else(|| format!("Page {} not found", page_id))?;
+       // Update page metadata
+       if cfg!(test) {
+           println!("WRITE_SYNC_MARKER: about to acquire pages write lock");
+           let _ = std::io::stdout().flush();
+       }
+       let mut page = self.pages.write().unwrap();
+       if cfg!(test) {
+           println!("WRITE_SYNC_MARKER: acquired pages write lock");
+           let _ = std::io::stdout().flush();
+       }
+       let page = page
+           .get_mut(&page_id)
+           .ok_or_else(|| format!("Page {} not found", page_id))?;
 
-        page.offset = offset;
-        page.compressed_size = compressed_data.len();
-        page.is_compressed = is_compressed;
-        page.checksum = checksum;
-    page.last_access = std::time::SystemTime::now();
-    println!("WRITE_SYNC_MARKER: metadata updated for page {}", page_id);
-    let _ = std::io::stdout().flush();
+       page.offset = offset;
+       page.compressed_size = compressed_data.len();
+       page.is_compressed = is_compressed;
+       page.checksum = checksum;
+       page.last_access = std::time::SystemTime::now();
+       
+       if cfg!(test) {
+           println!("WRITE_SYNC_MARKER: metadata updated for page {}", page_id);
+           let _ = std::io::stdout().flush();
+       }
 
         self.logger.log_info(
             "write_data_sync",
@@ -652,8 +661,10 @@ impl SwapMemoryPool {
         );
 
         // Debug around logger usage
-        println!("WRITE_SYNC_MARKER: before logger.log_info page_id={}", page_id);
-        let _ = std::io::stdout().flush();
+        if cfg!(test) {
+            println!("WRITE_SYNC_MARKER: before logger.log_info page_id={}", page_id);
+            let _ = std::io::stdout().flush();
+        }
         self.logger.log_info(
             "write_data_sync",
             &trace_id,
@@ -664,8 +675,10 @@ impl SwapMemoryPool {
                 is_compressed
             ),
         );
-        println!("WRITE_SYNC_MARKER: after logger.log_info page_id={}", page_id);
-        let _ = std::io::stdout().flush();
+        if cfg!(test) {
+            println!("WRITE_SYNC_MARKER: after logger.log_info page_id={}", page_id);
+            let _ = std::io::stdout().flush();
+        }
 
         // Extra debug marker to confirm the function returns to the caller
         println!("WRITE_SYNC_MARKER: exiting write_data_sync page_id={}", page_id);
@@ -988,7 +1001,9 @@ impl SwapPooledVec {
     pub fn mark_swapped(&mut self) {
         if !self.is_swapped && self.dirty {
             // Data was modified, need to write back to disk first
-            // This would be handled by the pool's swap_out_page method
+            if let Some(pool_arc) = self.pool.upgrade() {
+                let _ = pool_arc.swap_out_page(self.page_id);
+            }
         }
         self.is_swapped = true;
         self.data.clear(); // Clear memory copy

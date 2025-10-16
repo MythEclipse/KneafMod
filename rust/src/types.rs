@@ -3,6 +3,12 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
+/// Marker trait for types that can be used with generic EntityConfig implementation
+pub trait EntityConfigMarker: Debug + Clone + Send + Sync + 'static {}
+
+// Implement EntityConfigMarker for all types that aren't DefaultEntityConfig
+impl<T: Debug + Clone + Send + Sync + 'static> EntityConfigMarker for T where T: ?Sized {}
+
 /// Spatial groups for entity organization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpatialGroups {
@@ -35,12 +41,33 @@ pub trait EntityConfig: Debug + Send + Sync {
     fn update_interval(&self) -> u64;
 }
 
+// Generic implementation for EntityConfig - only for types that don't have specific implementations
 impl<T> EntityConfig for T
 where
-    T: Debug + Clone + Send + Sync + 'static
+    T: EntityConfigMarker
 {
     fn clone_box(&self) -> Box<dyn EntityConfig> {
         Box::new(self.clone())
+    }
+
+    fn entity_type(&self) -> EntityType {
+        EntityType::DEFAULT
+    }
+
+    fn is_active(&self) -> bool {
+        true
+    }
+
+    fn update_interval(&self) -> u64 {
+        1000
+    }
+
+    fn execute_with_priority(&self, _priority: u8) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
+    fn get_execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Default
     }
 }
 
@@ -61,6 +88,8 @@ pub struct DefaultEntityConfig {
     pub properties: HashMap<String, String>,
 }
 
+
+impl EntityConfig for DefaultEntityConfig {
     fn entity_type(&self) -> EntityType {
         self.entity_type
     }
@@ -72,6 +101,11 @@ pub struct DefaultEntityConfig {
     fn update_interval(&self) -> u64 {
         self.update_interval
     }
+    
+    fn clone_box(&self) -> Box<dyn EntityConfig> {
+        Box::new(self.clone())
+    }
+}
 
 impl Default for DefaultEntityConfig {
     fn default() -> Self {

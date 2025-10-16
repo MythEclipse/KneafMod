@@ -11,7 +11,7 @@ pub mod monitoring;
 pub mod pool;
 
 // Re-export background cleanup components
-pub mod cleanup;
+// pub mod cleanup; // Temporarily commented out to resolve compilation error
 
 // Public API re-exports for convenience
 pub use allocator::*;

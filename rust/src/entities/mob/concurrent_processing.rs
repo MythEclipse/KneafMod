@@ -13,9 +13,8 @@ use flume::{bounded as flume_bounded, unbounded as flume_unbounded, Receiver as 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{
-    Arc, AtomicBool, AtomicUsize, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
-};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::{Duration, Instant};
 
 static MOB_PROCESSOR_LOGGER: once_cell::sync::Lazy<PerformanceLogger> =
@@ -131,16 +130,16 @@ impl SpatialIndex {
             cell_size,
             last_update: Instant::now(),
         }
-    
-        /// Get the spatial index for direct access
-        pub fn spatial_index(&self) -> &Arc<Mutex<SpatialIndex>> {
-            &self.spatial_index
-        }
-    
-        /// Get the access cache for direct access
-        pub fn access_cache(&self) -> &Arc<Mutex<LruCache<u64, MobData>>> {
-            &self.access_cache
-        }
+    }
+
+    // Get the spatial index for direct access
+    pub fn spatial_index(&self) -> &Arc<Mutex<SpatialIndex>> {
+        &self.spatial_index
+    }
+     
+    /// Get the access cache for direct access
+    pub fn access_cache(&self) -> &Arc<Mutex<LruCache<u64, MobData>>> {
+        &self.access_cache
     }
 
     fn update(&mut self, mob_id: u64, position: (f32, f32, f32)) {

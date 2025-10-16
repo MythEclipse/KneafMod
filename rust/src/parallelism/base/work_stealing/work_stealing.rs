@@ -1,7 +1,8 @@
 use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor};
 use crate::config::performance_config::{PerformanceConfig, WorkStealingConfig};
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex, RwLock, AtomicBool};
+use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::AtomicBool;
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;
 use std::time::Instant;
@@ -31,6 +32,15 @@ pub struct PrioritizedTask {
     pub submission_time: Instant,
     pub trace_id: Option<String>,
 }
+
+// Implement PartialEq and Eq required for Ord
+impl PartialEq for PrioritizedTask {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority && self.task_id == other.task_id
+    }
+}
+
+impl Eq for PrioritizedTask {}
 
 impl Ord for PrioritizedTask {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -141,10 +151,10 @@ impl WorkStealingScheduler {
             Ok(_) => {
                 // Wait for task completion (simplified - in real implementation use futures)
                 // For async support, would need to return a future that resolves when task completes
-                tokio::task::spawn_blocking(move || {
-                    // This is a simplification - real implementation would need proper future handling
-                    let _ = f();
-                }).await.unwrap();
+                let result = f();
+                // For async support, would need to return a future that resolves when task completes
+                // This is a simplification - real implementation would need proper future handling
+                result;
                 unreachable!("This line should not be reached in synchronous execution path")
             }
             Err(_) => self.executor.execute(f),
@@ -160,7 +170,8 @@ impl WorkStealingScheduler {
         executor: ParallelExecutorEnum,
     ) {
         while running.load(std::sync::atomic::Ordering::Relaxed) {
-            notify.notified().await;
+            // For non-async worker, use a condition variable or polling instead
+            std::thread::sleep(std::time::Duration::from_millis(10));
 
             let mut queue = queue.lock().unwrap();
             let config = config.read().unwrap();
@@ -225,6 +236,15 @@ impl WorkStealingScheduler {
 
 #[async_trait]
 impl ParallelExecutor for WorkStealingScheduler {
+    fn execute_with_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let task = Box::new(f);
+        let result = self.execute(move || task());
+        result
+    }
     fn execute<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send + 'static,

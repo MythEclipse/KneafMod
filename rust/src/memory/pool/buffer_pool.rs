@@ -99,7 +99,12 @@ impl ZeroCopyBuffer {
 impl Drop for ZeroCopyBuffer {
     fn drop(&mut self) {
         // Return buffer to pool when dropped
-        let _ = self.pool.return_buffer(Arc::clone(&self.data));
+        match self.pool.return_buffer(Arc::clone(&self.data)) {
+            Ok(_) => {},
+            Err(e) => {
+                self.pool.logger.error(&format!("Failed to return buffer to pool: {}", e));
+            }
+        }
     }
 }
 
@@ -161,7 +166,8 @@ pub struct BufferPool {
 }
 
 impl MemoryPool for BufferPool {
-    type Object = ();
+    type Object = Box<[u8]>;
+    
     fn new(config: MemoryPoolConfig) -> Self {
         let buffer_config = BufferPoolConfig::from(config);
         let mut shards = Vec::with_capacity(buffer_config.shard_count);
@@ -181,27 +187,46 @@ impl MemoryPool for BufferPool {
         }
     }
 
-    fn allocate(&self, size: usize) -> Result<Box<[u8]>> {
+    fn allocate(&self, size: usize) -> Result<Self::Object> {
         if size > self.config.buffer_size {
             return Err(RustError::BufferError(format!("Allocation size {} exceeds buffer size {}", size, self.config.buffer_size)));
         }
-        let temp_self = self.clone();
-        let arc_self = Arc::new(temp_self);
-        let buffer = arc_self.acquire_buffer()?;
+        
+        let arc_self = Arc::new(self.clone());
+        let buffer = arc_self.acquire_buffer().map_err(|e| RustError::BufferError(e))?;
+        self.stats.total_acquired.fetch_add(1, Ordering::Relaxed);
+        self.stats.current_allocated.fetch_add(1, Ordering::Relaxed);
         Ok(buffer.to_vec().into_boxed_slice())
     }
 
-    fn deallocate(&self, _ptr: *mut u8, _size: usize) {
+    fn deallocate(&self, _ptr: *mut u8, _size: usize) -> Result<()> {
         // Deallocation is handled by ZeroCopyBuffer's Drop implementation
+        Ok(())
     }
 
-    fn get_stats(&self) -> MemoryPoolStats {
-        self.common_stats.clone()
+    fn get_stats(&self) -> Result<MemoryPoolStats, RustError> {
+        Ok(self.common_stats.clone())
     }
 
     fn get_memory_pressure(&self) -> f64 {
-        self.get_memory_pressure()
+        let current_allocated = self.stats.current_allocated.load(Ordering::Relaxed);
+        let max_possible = self.config.max_buffers * self.config.buffer_size;
+        
+        if max_possible == 0 {
+            0.0
+        } else {
+            current_allocated as f64 / max_possible as f64
+        }
     }
+}
+
+/// Buffer pool specific statistics
+#[derive(Debug, Default)]
+struct BufferPoolStats {
+    total_acquired: AtomicUsize,
+    total_returned: AtomicUsize,
+    total_created: AtomicUsize,
+    current_allocated: AtomicUsize,
 }
 
 impl Clone for BufferPoolStats {
@@ -213,14 +238,6 @@ impl Clone for BufferPoolStats {
             current_allocated: AtomicUsize::new(self.current_allocated.load(Ordering::Relaxed)),
         }
     }
-}
-/// Buffer pool specific statistics
-#[derive(Debug, Default)]
-struct BufferPoolStats {
-    total_acquired: AtomicUsize,
-    total_returned: AtomicUsize,
-    total_created: AtomicUsize,
-    current_allocated: AtomicUsize,
 }
 
 /// Combined statistics for BufferPool (implements MemoryPoolStats)
@@ -259,11 +276,11 @@ impl BufferPool {
     }
 
     /// Get buffer pool statistics
-    pub fn get_stats(&self) -> CombinedBufferPoolStats {
-        CombinedBufferPoolStats {
+    pub fn get_stats(&self) -> Result<CombinedBufferPoolStats, RustError> {
+        Ok(CombinedBufferPoolStats {
             common_stats: self.common_stats.clone(),
             buffer_stats: self.stats.clone(),
-        }
+        })
     }
 
     /// Get current memory pressure level (0.0 to 1.0)
@@ -293,6 +310,7 @@ impl BufferPool {
         // Try to get buffer from preferred shard first
         if let Some(buffer) = self.shards[shard_idx].acquire_buffer() {
             self.stats.total_acquired.fetch_add(1, Ordering::Relaxed);
+            self.stats.current_allocated.fetch_add(1, Ordering::Relaxed);
             return Ok(ZeroCopyBuffer {
                 data: buffer,
                 size: 0,
@@ -305,6 +323,7 @@ impl BufferPool {
             let idx = (shard_idx + i) % self.shard_count;
             if let Some(buffer) = self.shards[idx].acquire_buffer() {
                 self.stats.total_acquired.fetch_add(1, Ordering::Relaxed);
+                self.stats.current_allocated.fetch_add(1, Ordering::Relaxed);
                 return Ok(ZeroCopyBuffer {
                     data: buffer,
                     size: 0,
@@ -332,6 +351,7 @@ impl BufferPool {
         // Try to return to preferred shard first
         if self.shards[shard_idx].return_buffer(Arc::clone(&buffer)) {
             self.stats.total_returned.fetch_add(1, Ordering::Relaxed);
+            self.stats.current_allocated.fetch_sub(1, Ordering::Relaxed);
             return Ok(());
         }
 
@@ -340,6 +360,7 @@ impl BufferPool {
             let idx = (shard_idx + i) % self.shard_count;
             if self.shards[idx].return_buffer(Arc::clone(&buffer)) {
                 self.stats.total_returned.fetch_add(1, Ordering::Relaxed);
+                self.stats.current_allocated.fetch_sub(1, Ordering::Relaxed);
                 return Ok(());
             }
         }
@@ -350,30 +371,34 @@ impl BufferPool {
     }
 
     /// Get legacy buffer pool statistics (for backward compatibility)
-    pub fn get_legacy_stats(&self) -> BufferPoolStatsSnapshot {
-        BufferPoolStatsSnapshot {
+    pub fn get_legacy_stats(&self) -> Result<BufferPoolStatsSnapshot, RustError> {
+        Ok(BufferPoolStatsSnapshot {
             total_acquired: self.stats.total_acquired.load(Ordering::Relaxed),
             total_returned: self.stats.total_returned.load(Ordering::Relaxed),
             total_created: self.stats.total_created.load(Ordering::Relaxed),
             current_allocated: self.stats.current_allocated.load(Ordering::Relaxed),
             total_available: self.shards.iter().map(|s| s.len()).sum(),
-        }
+        })
     }
 
     /// Pre-allocate buffers for better performance
-    pub fn preallocate_buffers(&self, count: usize) {
+    pub fn preallocate_buffers(&self, count: usize) -> Result<()> {
         let buffers_per_shard = count / self.shard_count;
         for shard in &self.shards {
-            let mut buffers = shard.buffers.lock().unwrap();
+            let mut buffers = shard.buffers.lock().map_err(|e| RustError::LockError(e.to_string()))?;
             let current_count = buffers.len();
             let needed = buffers_per_shard.saturating_sub(current_count);
 
             for _ in 0..needed {
                 if buffers.len() < shard.max_buffers {
                     buffers.push(Arc::new(vec![0u8; self.config.buffer_size]));
+                } else {
+                    self.logger.warn("Buffer shard reached maximum capacity during pre-allocation");
+                    break;
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -387,25 +412,44 @@ pub struct BufferPoolStatsSnapshot {
     pub total_available: usize,
 }
 
-// Global buffer pool instance
+// Global buffer pool instance (thread-safe)
 lazy_static::lazy_static! {
-    static ref GLOBAL_BUFFER_POOL: Arc<BufferPool> = BufferPool::new(BufferPoolConfig::default());
+    static ref GLOBAL_BUFFER_POOL: Mutex<Arc<BufferPool>> = Mutex::new(BufferPool::new(BufferPoolConfig::default()));
 }
 
 /// Get global buffer pool instance
-pub fn get_global_buffer_pool() -> &'static Arc<BufferPool> {
-    &GLOBAL_BUFFER_POOL
+pub fn get_global_buffer_pool() -> Result<Arc<BufferPool>> {
+    GLOBAL_BUFFER_POOL.lock()
+        .map_err(|e| RustError::LockError(format!("Failed to lock global buffer pool: {}", e)))
+        .map(|pool| pool.clone())
 }
 
 /// Acquire buffer from global pool
 pub fn acquire_buffer() -> Result<ZeroCopyBuffer> {
-    get_global_buffer_pool().acquire_buffer()
+    let pool = get_global_buffer_pool()?;
+    pool.acquire_buffer()
 }
 
 /// Initialize global buffer pool with custom configuration
 pub fn init_global_buffer_pool(config: BufferPoolConfig) -> Result<()> {
+    // Validate configuration first
+    if config.buffer_size == 0 {
+        return Err(RustError::ConfigurationError("Buffer size cannot be zero".to_string()));
+    }
+    if config.shard_count == 0 {
+        return Err(RustError::ConfigurationError("Shard count cannot be zero".to_string()));
+    }
+    if config.max_buffers == 0 {
+        return Err(RustError::ConfigurationError("Max buffers cannot be zero".to_string()));
+    }
+    
+    // Replace global pool with new configuration
+    let new_pool = BufferPool::new(config.clone());
+    let mut pool = GLOBAL_BUFFER_POOL.lock().map_err(|e| RustError::LockError(format!("Failed to lock global buffer pool: {}", e)))?;
+    *pool = new_pool;
+    
     // Pre-allocate some buffers for immediate use
-    get_global_buffer_pool().preallocate_buffers(config.max_buffers / 4);
+    get_global_buffer_pool().preallocate_buffers(config.max_buffers / 4)?;
     Ok(())
 }
 

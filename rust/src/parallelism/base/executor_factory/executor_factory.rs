@@ -65,6 +65,15 @@ pub struct PrioritizedTask {
     pub trace_id: Option<String>,
 }
 
+// Implement PartialEq and Eq required for Ord
+impl PartialEq for PrioritizedTask {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority && self.task_id == other.task_id
+    }
+}
+
+impl Eq for PrioritizedTask {}
+
 impl Ord for PrioritizedTask {
     fn cmp(&self, other: &Self) -> Ordering {
         other.priority.cmp(&self.priority)
@@ -330,7 +339,8 @@ impl EnhancedWorkStealingExecutor {
         base_executor: rayon::ThreadPool,
     ) {
         while running.load(std::sync::atomic::Ordering::Relaxed) {
-            notify.notified().await;
+            // For non-async worker, use a condition variable or polling instead
+            std::thread::sleep(std::time::Duration::from_millis(10));
 
             let mut queue = queue.lock().unwrap();
             let config = config.read().unwrap();

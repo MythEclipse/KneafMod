@@ -12,6 +12,15 @@ impl SequentialExecutor {
 
 #[async_trait]
 impl ParallelExecutor for SequentialExecutor {
+    fn execute_with_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let task = Box::new(f);
+        let result = self.execute(move || task());
+        result
+    }
     fn execute<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send + 'static,
