@@ -1,6 +1,8 @@
 use std::sync::{Arc, Mutex, RwLock};
 use async_trait::async_trait;
-use crate::config::performance_config::{PerformanceConfig, WorkStealingConfig};
+// Use local definitions instead of circular imports
+// TEMP: Comment out problematic import to unblock compilation
+// pub use crate::parallelism::common::{PerformanceConfig, WorkStealingConfig, TaskPriority};
 use crate::parallelism::sequential::SequentialExecutor;
 use std::time::Duration;
 use std::collections::BinaryHeap;

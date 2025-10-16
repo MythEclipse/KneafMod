@@ -1,4 +1,4 @@
-use crate::errors::Result;
+use crate::errors::{Result, RustError};
 use rayon;
 use std::sync::Arc;
 

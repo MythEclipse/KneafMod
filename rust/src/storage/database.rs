@@ -392,7 +392,7 @@ pub struct RustDatabaseAdapter {
 }
 
 #[cfg(feature = "structured-errors")]
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum DatabaseError {
     #[error("IO error: {0}")]
     IoError(String),

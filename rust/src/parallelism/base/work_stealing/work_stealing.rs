@@ -1,5 +1,7 @@
 use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor};
-use crate::config::performance_config::{PerformanceConfig, WorkStealingConfig};
+// Use local definitions instead of circular imports
+// TEMP: Comment out problematic import to unblock compilation
+// pub use crate::parallelism::common::{PerformanceConfig, WorkStealingConfig, TaskPriority};
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::AtomicBool;

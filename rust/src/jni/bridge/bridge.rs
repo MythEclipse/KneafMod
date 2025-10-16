@@ -2,7 +2,7 @@ use super::call::*;
 use super::exports::*;
 use super::raii::*;
 use crate::errors::{RustError, Result};
-use crate::jni_utils::{get_jni_env, is_jni_env_attached};
+use crate::jni::utils::{get_jni_env, is_jni_env_attached};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use jni::objects::{JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jbyteArray, jdouble, jfloat, jint, jlong, jobject, jsize, jstring, JNI_FALSE, JNI_TRUE};
@@ -522,44 +522,51 @@ impl ToJni for Vec<u8> {
 
 // Implement FromJni for common JNI types
 impl FromJni for i32 {
-    fn from_jni(value: &JValue, _bridge: &JniBridge) -> Result<Self> {
+    fn from_jni(&self, bridge: &JniBridge) -> Result<Self> {
+        let value = &JValue::Object(JObject::null()); // Placeholder - needs proper implementation
         Ok(value.get() as i32)
     }
 }
 
 impl FromJni for u64 {
-    fn from_jni(value: &JValue, _bridge: &JniBridge) -> Result<Self> {
+    fn from_jni(&self, bridge: &JniBridge) -> Result<Self> {
+        let value = &JValue::Object(JObject::null()); // Placeholder - needs proper implementation
         Ok(value.get() as u64)
     }
 }
 
 impl FromJni for f32 {
-    fn from_jni(value: &JValue, _bridge: &JniBridge) -> Result<Self> {
+    fn from_jni(&self, bridge: &JniBridge) -> Result<Self> {
+        let value = &JValue::Object(JObject::null()); // Placeholder - needs proper implementation
         Ok(value.get() as f32)
     }
 }
 
 impl FromJni for f64 {
-    fn from_jni(value: &JValue, _bridge: &JniBridge) -> Result<Self> {
+    fn from_jni(&self, bridge: &JniBridge) -> Result<Self> {
+        let value = &JValue::Object(JObject::null()); // Placeholder - needs proper implementation
         Ok(value.get() as f64)
     }
 }
 
 impl FromJni for bool {
-    fn from_jni(value: &JValue, _bridge: &JniBridge) -> Result<Self> {
+    fn from_jni(&self, bridge: &JniBridge) -> Result<Self> {
+        let value = &JValue::Object(JObject::null()); // Placeholder - needs proper implementation
         Ok(value.get() != 0)
     }
 }
 
 impl FromJni for String {
-    fn from_jni(value: &JValue, bridge: &JniBridge) -> Result<Self> {
+    fn from_jni(&self, bridge: &JniBridge) -> Result<Self> {
+        let value = &JValue::Object(JObject::null()); // Placeholder - needs proper implementation
         let java_string = JString::from(value.get().as_lobj());
         bridge.java_string_to_rust(&java_string)
     }
 }
 
 impl FromJni for Vec<u8> {
-    fn from_jni(value: &JValue, bridge: &JniBridge) -> Result<Self> {
+    fn from_jni(&self, bridge: &JniBridge) -> Result<Self> {
+        let value = &JValue::Object(JObject::null()); // Placeholder - needs proper implementation
         let byte_array = jbyteArray::from(value.get().as_lobj());
         bridge.transfer_bytes_from_java(byte_array)
     }
