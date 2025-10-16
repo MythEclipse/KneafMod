@@ -1,24 +1,23 @@
-use crate::parallelism::base::ExecutorType;
+use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutorFactory};
 use crate::ParallelExecutor;
-use crate::ParallelExecutorFactory;
 use std::sync::Arc;
 
 /// Work-stealing scheduler for parallel task execution
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WorkStealingScheduler {
-    executor: Arc<dyn ParallelExecutor>,
+    executor: ParallelExecutorEnum,
 }
 
 impl WorkStealingScheduler {
     /// Create a new work-stealing scheduler with the specified executor type
     pub fn new(executor_type: ExecutorType) -> Self {
-        let executor = ParallelExecutorFactory::new(executor_type).create_executor();
+        let executor = ParallelExecutorFactory::create_executor_enum(executor_type);
         Self { executor }
     }
 
     /// Get a global shared work-stealing scheduler instance
     pub fn get_global_scheduler() -> Self {
-        let executor = ParallelExecutorFactory::create_executor(ExecutorType::WorkStealing);
+        let executor = ParallelExecutorFactory::create_executor_enum(ExecutorType::WorkStealing);
         Self { executor }
     }
 
@@ -28,6 +27,6 @@ impl WorkStealingScheduler {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.executor.execute(f)
+        self.executor.execute_sync(f)
     }
 }
