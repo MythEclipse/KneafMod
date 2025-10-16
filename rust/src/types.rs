@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,7 @@ pub struct SpatialGroups {
 }
 
 /// Processing statistics for entity operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProcessingStats {
     pub operation_time: f64,
     pub memory_used: usize,
@@ -21,7 +22,9 @@ pub struct ProcessingStats {
 }
 
 /// Configuration for entities
-pub trait EntityConfig: Debug + Clone + Send + Sync {
+pub trait EntityConfig: Debug + Send + Sync {
+    fn clone_box(&self) -> Box<dyn EntityConfig>;
+    
     /// Gets the entity type
     fn entity_type(&self) -> EntityType;
     
@@ -30,6 +33,23 @@ pub trait EntityConfig: Debug + Clone + Send + Sync {
     
     /// Gets the update interval
     fn update_interval(&self) -> u64;
+}
+
+impl<T> EntityConfig for T
+where
+    T: Debug + Clone + Send + Sync + 'static
+{
+    fn clone_box(&self) -> Box<dyn EntityConfig> {
+        Box::new(self.clone())
+    }
+}
+
+pub type BoxedEntityConfig = Box<dyn EntityConfig>;
+
+impl Clone for BoxedEntityConfig {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
 }
 
 /// Default entity configuration implementation
@@ -41,7 +61,6 @@ pub struct DefaultEntityConfig {
     pub properties: HashMap<String, String>,
 }
 
-impl EntityConfig for DefaultEntityConfig {
     fn entity_type(&self) -> EntityType {
         self.entity_type
     }
@@ -53,7 +72,6 @@ impl EntityConfig for DefaultEntityConfig {
     fn update_interval(&self) -> u64 {
         self.update_interval
     }
-}
 
 impl Default for DefaultEntityConfig {
     fn default() -> Self {

@@ -165,7 +165,7 @@ impl EnhancedMemoryPoolManager {
         let config = config.unwrap_or_default();
         let trace_id = generate_trace_id();
 
-        let hierarchical_pool = HierarchicalMemoryPool::new(None);
+        let hierarchical_pool = HierarchicalMemoryPool::new_with_config(None);
 
         let swap_pool = if config.enable_swap {
             Some(SwapMemoryPool::new_arc(None)?)
@@ -289,7 +289,7 @@ impl EnhancedMemoryPoolManager {
             }
             Err(e) => {
                 self.performance_monitor.record_pool_miss();
-                Err(e)
+                Err(e.to_string())
             }
         }
     }

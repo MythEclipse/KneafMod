@@ -1,7 +1,7 @@
 use crate::errors::{Result, RustError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
-use crate::parallelism::executor_factory::{ParallelExecutorFactory, ExecutorType};
+use crate::parallelism::executor_factory::ParallelExecutorFactory;
 use crate::parallelism::base::executor_factory::executor_factory::ParallelExecutor;
 use crate::create_work_stealing_executor;
 

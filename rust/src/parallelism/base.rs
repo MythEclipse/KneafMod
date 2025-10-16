@@ -1,7 +1,6 @@
-use crate::errors::{Result, RustError};
+use crate::errors::Result;
 use rayon;
 use std::sync::Arc;
-use crate::parallelism::sequential::SequentialExecutor;
 
 pub mod work_stealing;
 pub use crate::parallelism::base::work_stealing::work_stealing::WorkStealingScheduler;

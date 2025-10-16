@@ -1,5 +1,4 @@
 use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutorFactory, ParallelExecutor};
-use std::sync::Arc;
 
 /// Work-stealing scheduler for parallel task execution
 #[derive(Debug, Default, Clone)]

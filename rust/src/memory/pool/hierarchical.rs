@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::errors::{RustError, Result};
 use crate::logging::generate_trace_id;
 use crate::logging::PerformanceLogger;
 use crate::memory::pool::common::{MemoryPool, MemoryPoolConfig, MemoryPoolStats};
@@ -110,10 +112,101 @@ pub struct HierarchicalMemoryPool {
     config: HierarchicalPoolConfig,
     size_class_order: Vec<SizeClass>, // Ordered by size for efficient best-fit lookup
     slab_allocator: Option<Arc<SlabAllocator<u8>>>,
+    common_stats: MemoryPoolStats,
+}
+
+impl MemoryPool for HierarchicalMemoryPool {
+    type Object = Vec<u8>;
+
+    fn new(config: MemoryPoolConfig) -> Self {
+        Self::new_with_config(None)
+    }
+
+
+    fn get_stats(&self) -> MemoryPoolStats {
+        self.common_stats.clone()
+    }
+
+    fn get_memory_pressure(&self) -> f64 {
+        let mut total_usage = 0;
+        let mut total_capacity = 0;
+
+        for (_, pool) in &self.pools {
+            let stats = pool.get_monitoring_stats();
+            total_usage += stats.available_objects;
+            total_capacity += stats.max_size;
+        }
+
+        let usage_ratio = if total_capacity > 0 {
+            total_usage as f64 / total_capacity as f64
+        } else {
+            0.0
+        };
+
+        usage_ratio
+    }
+
+    fn allocate(&self, size: usize) -> Result<Box<[u8]>> {
+        let trace_id = generate_trace_id();
+        let size_class = self.find_best_fit_size_class(size);
+        let pool = self.pools.get(&size_class).ok_or_else(|| {
+            RustError::PoolError(format!("Failed to find pool for size class: {:?}", size_class))
+        })?;
+
+        self.logger.log_info(
+            "allocate",
+            &trace_id,
+            &format!(
+                "Allocating {} bytes from {} pool (best-fit)",
+                size, size_class
+            ),
+        );
+
+        let mut pooled = pool.get();
+        let vec = pooled.as_mut();
+        vec.clear();
+        vec.resize(size, 0u8);
+
+        Ok(vec.clone().into_boxed_slice())
+    }
+
+    fn deallocate(&self, _ptr: *mut u8, size: usize) {
+        // For hierarchical pool, deallocation is handled through PooledObject's Drop trait
+        self.common_stats.total_deallocations.fetch_add(1, Ordering::Relaxed);
+        self.common_stats.allocated_bytes.fetch_sub(size, Ordering::Relaxed);
+    }
+
+    fn update_peak_usage(&self) {
+        let current_allocated = self.common_stats.allocated_bytes.load(Ordering::Relaxed);
+        let peak_allocated = self.common_stats.peak_allocated_bytes.load(Ordering::Relaxed);
+        
+        if current_allocated > peak_allocated {
+            self.common_stats.peak_allocated_bytes.store(current_allocated, Ordering::Relaxed);
+        }
+    }
+
+    fn clone_shallow(&self) -> Self {
+        let mut pools = HashMap::new();
+        for (size_class, pool) in &self.pools {
+            pools.insert(*size_class, pool.clone_shallow());
+        }
+
+        Self {
+            pools,
+            logger: self.logger.clone(),
+            config: self.config.clone(),
+            size_class_order: self.size_class_order.clone(),
+            slab_allocator: self
+                .slab_allocator
+                .as_ref()
+                .map(|_| SlabAllocator::new(SlabAllocatorConfig::default())),
+            common_stats: self.common_stats.clone(),
+        }
+    }
 }
 
 impl HierarchicalMemoryPool {
-    pub fn new(config: Option<HierarchicalPoolConfig>) -> Self {
+    pub fn new_with_config(config: Option<HierarchicalPoolConfig>) -> Self {
         let config = config.unwrap_or_default();
         let mut pools = HashMap::new();
 
@@ -144,12 +237,13 @@ impl HierarchicalMemoryPool {
         }
 
         Self {
-            pools,
-            logger: PerformanceLogger::new("hierarchical_memory_pool"),
-            config,
-            size_class_order,
-            slab_allocator: Some(SlabAllocator::new(SlabAllocatorConfig::default())),
-        }
+           pools,
+           logger: PerformanceLogger::new("hierarchical_memory_pool"),
+           config,
+           size_class_order,
+           slab_allocator: Some(SlabAllocator::new(SlabAllocatorConfig::default())),
+           common_stats: MemoryPoolStats::default(),
+       }
     }
 
     /// Allocate memory with size-based bucket selection and best-fit strategy
@@ -362,22 +456,22 @@ impl HierarchicalMemoryPool {
         &self,
         size: usize,
         alignment: usize,
-    ) -> Result<(PooledVec<u8>, usize), String> {
+    ) -> Result<(PooledVec<u8>, usize)> {
         let trace_id = generate_trace_id();
 
         // Ensure alignment is power of 2 (required for SIMD operations)
         if alignment == 0 || (alignment & (alignment - 1)) != 0 {
-            return Err(format!(
+            return Err(RustError::PoolError(format!(
                 "Invalid alignment: {} (must be power of 2)",
                 alignment
-            ));
+            )));
         }
 
         let size_class = self.find_best_fit_size_class(size);
         let pool = self
             .pools
             .get(&size_class)
-            .ok_or_else(|| format!("Failed to find pool for size class: {:?}", size_class))?;
+            .ok_or_else(|| RustError::PoolError(format!("Failed to find pool for size class: {:?}", size_class)))?;
 
         self.logger.log_info(
             "allocate_simd_aligned",
@@ -462,6 +556,7 @@ impl Clone for HierarchicalMemoryPool {
                 .slab_allocator
                 .as_ref()
                 .map(|_| SlabAllocator::new(SlabAllocatorConfig::default())),
+            common_stats: self.common_stats.clone(),
         }
     }
 }
