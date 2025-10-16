@@ -6,6 +6,7 @@ pub mod config;
 pub mod bindings;
 pub mod pathfinding;
 pub mod spatial;
+pub mod advanced_pathfinding;
 
 // Re-export common entity types for convenience
 pub use crate::entities::common::types::*;
@@ -18,3 +19,4 @@ pub use config::*;
 pub use bindings::*;
 pub use pathfinding::*;
 pub use spatial::*;
+pub use advanced_pathfinding::*;

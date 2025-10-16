@@ -1,18 +1,63 @@
 use super::types::*;
+use super::advanced_pathfinding::*;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use crate::types::PlayerDataTrait as PlayerData;
+use crate::logging::{generate_trace_id, PerformanceLogger};
+use std::time::Instant;
 
 const CHUNK_SIZE: f32 = 16.0;
 const MAX_GROUP_RADIUS: f32 = 32.0;
+const PATH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+const FLOW_FIELD_UPDATE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 // Global lock-free spatial grouping cache
 static VILLAGER_SPATIAL_CACHE: Lazy<DashMap<(i32, i32), Vec<SpatialGroup>>> =
     Lazy::new(DashMap::new);
 
+// Global advanced pathfinding components
+static ADVANCED_PATHFINDING_CONTEXT: Lazy<Arc<AdvancedPathfindingContext>> =
+    Lazy::new(|| {
+        let path_cache = Arc::new(PathCache::new(PATH_CACHE_TTL));
+        let terrain_monitor = Arc::new(TerrainMonitor::new());
+        let flow_field_manager = Arc::new(FlowFieldManager::new(CHUNK_SIZE));
+        
+        Arc::new(AdvancedPathfindingContext {
+            path_cache,
+            terrain_monitor,
+            flow_field_manager,
+            last_flow_field_update: Instant::now(),
+        })
+    });
+
+static SPATIAL_LOGGER: Lazy<PerformanceLogger> =
+    Lazy::new(|| PerformanceLogger::new("villager_spatial"));
+
 pub fn group_villagers_by_proximity(
+    villagers: &[VillagerData],
+    players: &[PlayerData],
+) -> Vec<SpatialGroup> {
+    let trace_id = generate_trace_id();
+    let start_time = Instant::now();
+    
+    let result = group_villagers_by_proximity_impl(villagers, players);
+    
+    SPATIAL_LOGGER.log_debug(
+        "grouping_complete",
+        &trace_id,
+        &format!("Grouped {} villagers into {} spatial groups in {:?}",
+            villagers.len(),
+            result.len(),
+            start_time.elapsed()
+        ),
+    );
+    
+    result
+}
+
+fn group_villagers_by_proximity_impl(
     villagers: &[VillagerData],
     players: &[PlayerData],
 ) -> Vec<SpatialGroup> {

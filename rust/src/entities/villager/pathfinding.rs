@@ -1,8 +1,10 @@
 use super::types::*;
+use super::advanced_pathfinding::*;
 use jni::{objects::JClass, JNIEnv};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct PathfindingCache {
@@ -12,19 +14,21 @@ pub struct PathfindingCache {
     pub path_success_rate: f32, // 0.0 to 1.0, higher means more successful paths
     pub consecutive_failures: u8,
     pub cached_path_validity: u8, // How many ticks the current path is still valid
+    pub last_algorithm: Option<PathfindingAlgorithm>, // Track which algorithm was last used
 }
 
 impl PathfindingCache {
     pub fn new(villager_id: u64) -> Self {
-        Self {
-            villager_id,
-            last_pathfind_tick: 0,
-            target_position: (0.0, 0.0, 0.0),
-            path_success_rate: 1.0,
-            consecutive_failures: 0,
-            cached_path_validity: 0,
+            Self {
+                villager_id,
+                last_pathfind_tick: 0,
+                target_position: (0.0, 0.0, 0.0),
+                path_success_rate: 1.0,
+                consecutive_failures: 0,
+                cached_path_validity: 0,
+                last_algorithm: None,
+            }
         }
-    }
 
     pub fn should_pathfind(&self, current_tick: u64, config: &VillagerConfig) -> bool {
         let ticks_since_last = current_tick.saturating_sub(self.last_pathfind_tick);
@@ -47,24 +51,26 @@ impl PathfindingCache {
     }
 
     pub fn update_pathfind_result(
-        &mut self,
-        current_tick: u64,
-        success: bool,
-        target_position: (f32, f32, f32),
-    ) {
-        self.last_pathfind_tick = current_tick;
-        self.target_position = target_position;
-
-        if success {
-            self.consecutive_failures = 0;
-            self.path_success_rate = (self.path_success_rate * 0.9 + 1.0 * 0.1).min(1.0);
-            self.cached_path_validity = 10; // Path is valid for 10 ticks on success
-        } else {
-            self.consecutive_failures += 1;
-            self.path_success_rate = (self.path_success_rate * 0.9 + 0.0 * 0.1).max(0.0);
-            self.cached_path_validity = 0;
+            &mut self,
+            current_tick: u64,
+            success: bool,
+            target_position: (f32, f32, f32),
+            algorithm: Option<PathfindingAlgorithm>,
+        ) {
+            self.last_pathfind_tick = current_tick;
+            self.target_position = target_position;
+            self.last_algorithm = algorithm;
+    
+            if success {
+                self.consecutive_failures = 0;
+                self.path_success_rate = (self.path_success_rate * 0.9 + 1.0 * 0.1).min(1.0);
+                self.cached_path_validity = 10; // Path is valid for 10 ticks on success
+            } else {
+                self.consecutive_failures += 1;
+                self.path_success_rate = (self.path_success_rate * 0.9 + 0.0 * 0.1).max(0.0);
+                self.cached_path_validity = 0;
+            }
         }
-    }
 
     pub fn decrement_cache_validity(&mut self) {
         if self.cached_path_validity > 0 {
@@ -76,15 +82,17 @@ impl PathfindingCache {
 pub struct PathfindingOptimizer {
     cache: HashMap<u64, PathfindingCache>,
     current_tick: u64,
+    advanced_pathfinder: Option<Arc<AdvancedPathfindingManager>>,
 }
 
 impl PathfindingOptimizer {
     pub fn new() -> Self {
-        Self {
-            cache: HashMap::new(),
-            current_tick: 0,
+            Self {
+                cache: HashMap::new(),
+                current_tick: 0,
+                advanced_pathfinder: None,
+            }
         }
-    }
 }
 
 impl Default for PathfindingOptimizer {
@@ -104,54 +112,58 @@ impl PathfindingOptimizer {
     }
 
     pub fn optimize_villager_pathfinding(
-        &mut self,
-        villagers: &mut [VillagerData],
-        config: &VillagerConfig,
-    ) -> Vec<u64> {
-        // First pass: determine which villagers should have reduced pathfinding
-        let villager_ids_to_reduce: Vec<u64> = villagers
-            .par_iter()
-            .filter_map(|villager| {
+            &mut self,
+            villagers: &mut [VillagerData],
+            config: &VillagerConfig,
+        ) -> Vec<u64> {
+            // First pass: determine which villagers should have reduced pathfinding
+            let villager_ids_to_reduce: Vec<u64> = villagers
+                .par_iter()
+                .filter_map(|villager| {
+                    if villager.distance > config.reduce_pathfinding_distance {
+                        Some(villager.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+    
+            // Second pass: update cache and villager frequencies
+            for villager in villagers.iter_mut() {
+                let cache = self
+                    .cache
+                    .entry(villager.id)
+                    .or_insert_with(|| PathfindingCache::new(villager.id));
+    
                 if villager.distance > config.reduce_pathfinding_distance {
-                    Some(villager.id)
+                    if !cache.should_pathfind(self.current_tick, config) {
+                        villager.pathfind_frequency = 15; // Reduce frequency
+                    } else {
+                        // Allow pathfinding but update cache
+                        let algorithm = cache.last_algorithm.clone();
+                        cache.update_pathfind_result(
+                            self.current_tick,
+                            true, // Assume success for now
+                            villager.position,
+                            algorithm,
+                        );
+                        villager.pathfind_frequency = config.pathfinding_tick_interval;
+                    }
                 } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Second pass: update cache and villager frequencies
-        for villager in villagers.iter_mut() {
-            let cache = self
-                .cache
-                .entry(villager.id)
-                .or_insert_with(|| PathfindingCache::new(villager.id));
-
-            if villager.distance > config.reduce_pathfinding_distance {
-                if !cache.should_pathfind(self.current_tick, config) {
-                    villager.pathfind_frequency = 15; // Reduce frequency
-                } else {
-                    // Allow pathfinding but update cache
+                    // Close villagers get normal pathfinding
+                    villager.pathfind_frequency = 1;
+                    let algorithm = cache.last_algorithm.clone();
                     cache.update_pathfind_result(
                         self.current_tick,
-                        true, // Assume success for now
+                        true,
                         villager.position,
+                        algorithm,
                     );
-                    villager.pathfind_frequency = config.pathfinding_tick_interval;
                 }
-            } else {
-                // Close villagers get normal pathfinding
-                villager.pathfind_frequency = 1;
-                cache.update_pathfind_result(
-                    self.current_tick,
-                    true,
-                    villager.position,
-                );
             }
+    
+            villager_ids_to_reduce
         }
-
-        villager_ids_to_reduce
-    }
 
     pub fn batch_optimize_pathfinding(
         &mut self,
@@ -229,50 +241,152 @@ pub struct PathfindingCacheStats {
 pub struct AdvancedPathfindingOptimizer {
     base_optimizer: PathfindingOptimizer,
     group_pathfind_cache: HashMap<u32, GroupPathfindingCache>,
+    advanced_manager: Arc<AdvancedPathfindingManager>,
 }
 
 impl AdvancedPathfindingOptimizer {
     pub fn new() -> Self {
-        Self {
-            base_optimizer: PathfindingOptimizer::new(),
-            group_pathfind_cache: HashMap::new(),
+            let config = AdvancedPathfindingConfig::default();
+            let advanced_manager = AdvancedPathfindingManager::new(config);
+            
+            Self {
+                base_optimizer: PathfindingOptimizer::new(),
+                group_pathfind_cache: HashMap::new(),
+                advanced_manager: Arc::new(advanced_manager),
+            }
         }
-    }
 
     pub fn optimize_large_villager_groups(
-        &mut self,
-        groups: &mut [VillagerGroup],
-        config: &VillagerConfig,
-    ) -> Vec<u64> {
-        let mut villagers_to_reduce = Vec::new();
-
-        // Process groups sequentially to avoid closure borrowing issues
-        for group in groups.iter_mut() {
-            // Check if group needs pathfinding this tick
-            if self.base_optimizer.current_tick % group.ai_tick_rate as u64 != 0 {
-                continue;
+            &mut self,
+            groups: &mut [VillagerGroup],
+            config: &VillagerConfig,
+        ) -> Vec<u64> {
+            let mut villagers_to_reduce = Vec::new();
+    
+            // Process groups sequentially to avoid closure borrowing issues
+            for group in groups.iter_mut() {
+                // Check if group needs pathfinding this tick
+                if self.base_optimizer.current_tick % group.ai_tick_rate as u64 != 0 {
+                    continue;
+                }
+    
+                // Get or create group cache
+                let group_cache = self
+                    .group_pathfind_cache
+                    .entry(group.group_id)
+                    .or_insert_with(|| GroupPathfindingCache::new(group.group_id));
+    
+                // Optimize pathfinding for the entire group
+                let should_reduce = group_cache.optimize_group_pathfinding(
+                    group,
+                    config,
+                    self.base_optimizer.current_tick,
+                );
+    
+                if should_reduce {
+                    villagers_to_reduce.extend(&group.villager_ids);
+                }
             }
-
-            // Get or create group cache
-            let group_cache = self
-                .group_pathfind_cache
-                .entry(group.group_id)
-                .or_insert_with(|| GroupPathfindingCache::new(group.group_id));
-
-            // Optimize pathfinding for the entire group
-            let should_reduce = group_cache.optimize_group_pathfinding(
-                group,
-                config,
-                self.base_optimizer.current_tick,
-            );
-
-            if should_reduce {
-                villagers_to_reduce.extend(&group.villager_ids);
+    
+            villagers_to_reduce
+        }
+    
+        /// Initialize advanced pathfinding algorithms for the manager
+        pub fn initialize_advanced_pathfinders(&mut self, navigation_mesh: NavigationMesh) {
+            let config = AdvancedPathfindingConfig::default();
+            
+            // Create different pathfinders
+            let astar = Arc::new(StandardAStar::new(navigation_mesh.clone(), config.clone())) as Arc<dyn Pathfinder>;
+            let theta_star = Arc::new(ThetaStar::new(navigation_mesh.clone(), config.clone())) as Arc<dyn Pathfinder>;
+            let jps_grid = Grid {
+                width: 100,
+                height: 100,
+                depth: 100,
+                cells: vec![false; 100*100*100],
+                grid_size: 1.0,
+            };
+            let jps = Arc::new(JumpPointSearch::new(jps_grid, config.clone())) as Arc<dyn Pathfinder>;
+            
+            // Add pathfinders to the manager
+            self.advanced_manager.add_pathfinder(astar);
+            self.advanced_manager.add_pathfinder(theta_star);
+            self.advanced_manager.add_pathfinder(jps);
+            
+            // Set the base optimizer to use the advanced pathfinder
+            self.base_optimizer.advanced_pathfinder = Some(self.advanced_manager.clone());
+        }
+    
+        /// Find path for a single villager using the most appropriate algorithm
+        pub fn find_villager_path(
+            &self,
+            villager_id: u64,
+            start: (f32, f32, f32),
+            goal: (f32, f32, f32),
+        ) -> Option<Vec<(f32, f32, f32)>> {
+            if let Some(advanced_pathfinder) = &self.base_optimizer.advanced_pathfinder {
+                advanced_pathfinder.find_path(villager_id, start, goal)
+            } else {
+                // Fall back to default pathfinding if advanced pathfinder not initialized
+                let navigation_mesh = get_default_navigation_mesh();
+                find_basic_path(start, goal, &navigation_mesh, 50)
             }
         }
-
-        villagers_to_reduce
-    }
+    
+        /// Find paths for multiple villagers in parallel
+        pub fn find_paths_for_group(
+            &self,
+            group: &VillagerGroup,
+            goal: (f32, f32, f32),
+        ) -> Vec<PathfindingResult> {
+            let mut villagers = Vec::new();
+            
+            // In a real implementation, we would fetch the actual villager data
+            // For this example, we'll create dummy data
+            for &villager_id in &group.villager_ids {
+                villagers.push(VillagerData {
+                    id: villager_id,
+                    entity_type: EntityType::Villager,
+                    position: (
+                        group.center_x + (villager_id as f32 % 5.0 - 2.0),
+                        group.center_y,
+                        group.center_z + (villager_id as f32 % 5.0 - 2.0),
+                    ),
+                    distance: 0.0,
+                    profession: "farmer".to_string(),
+                    level: 1,
+                    has_workstation: true,
+                    is_resting: false,
+                    is_breeding: false,
+                    last_pathfind_tick: 0,
+                    pathfind_frequency: 1,
+                    ai_complexity: 1,
+                });
+            }
+            
+            if let Some(advanced_pathfinder) = &self.base_optimizer.advanced_pathfinder {
+                advanced_pathfinder.find_paths_for_villagers(&villagers, goal)
+            } else {
+                // Fall back to individual pathfinding if advanced pathfinder not initialized
+                let navigation_mesh = get_default_navigation_mesh();
+                villagers.iter().map(|villager| {
+                    let path = find_basic_path(villager.position, goal, &navigation_mesh, 50);
+                    PathfindingResult {
+                        request_id: villager.id,
+                        villager_id: villager.id,
+                        path,
+                        success: path.is_some(),
+                        algorithm: PathfindingAlgorithm::AStar,
+                    }
+                }).collect()
+            }
+        }
+    
+        /// Update the pathfinder with new terrain data
+        pub fn update_terrain(&mut self, terrain_state: TerrainState) {
+            if let Some(advanced_pathfinder) = &self.base_optimizer.advanced_pathfinder {
+                advanced_pathfinder.update_terrain(terrain_state);
+            }
+        }
 }
 
 impl Default for AdvancedPathfindingOptimizer {

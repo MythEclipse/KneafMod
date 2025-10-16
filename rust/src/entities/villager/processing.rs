@@ -1,4 +1,6 @@
 use super::types::*;
+use super::advanced_pathfinding::*;
+use super::pathfinding::AdvancedPathfindingOptimizer;
 use crate::entities::entity::processing::*;
 use crate::entities::entity::types::*;
 use crate::logging::{generate_trace_id, PerformanceLogger};
@@ -15,118 +17,84 @@ use std::time::Instant;
 static VILLAGER_PROCESSOR_LOGGER: Lazy<PerformanceLogger> =
     Lazy::new(|| PerformanceLogger::new("villager_processor"));
 
-/// Efficient pathfinding for villagers using spatial partitioning and navigation meshes
+// Global advanced pathfinding optimizer for all villager processing
+static ADVANCED_PATHFINDING_OPTIMIZER: Lazy<Arc<AdvancedPathfindingOptimizer>> =
+    Lazy::new(|| {
+        let optimizer = AdvancedPathfindingOptimizer::new();
+        // In a real implementation, you would initialize with actual navigation mesh data
+        Arc::new(optimizer)
+    });
+
+/// Efficient pathfinding for villagers using the advanced pathfinding system
 pub fn find_villager_path(
+    villager_id: u64,
     start: (f32, f32, f32),
     goal: (f32, f32, f32),
-    navigation_mesh: &Vec<(f32, f32, f32)>,
-    max_steps: usize,
 ) -> Option<Vec<(f32, f32, f32)>> {
     let trace_id = generate_trace_id();
     VILLAGER_PROCESSOR_LOGGER.log_debug(
         "pathfind_start",
         &trace_id,
         &format!(
-            "Finding path from {:?} to {:?}",
-            start, goal
+            "Finding path for villager {} from {:?} to {:?}",
+            villager_id, start, goal
         ),
     );
 
     let start_time = Instant::now();
-
-    // Use A* algorithm with navigation mesh optimization
-    let mut open_set = HashSet::new();
-    let mut closed_set = HashSet::new();
-    let mut came_from = HashMap::new();
-    let mut g_score = HashMap::new();
-    let mut f_score = HashMap::new();
-
-    // Initialize with start node
-    let start_node = start;
-    open_set.insert(start_node);
-    g_score.insert(start_node, 0.0);
-    f_score.insert(start_node, heuristic_cost_estimate(start_node, goal));
-
-    let mut current_node = start_node;
-
-    for step in 0..max_steps {
-        // Find node with lowest f_score in open set
-        let mut next_node = current_node;
-        let mut lowest_f_score = f_score[&current_node];
-
-        for node in &open_set {
-            let score = *f_score.get(node).unwrap_or(&f32::INFINITY);
-            if score < lowest_f_score {
-                lowest_f_score = score;
-                next_node = *node;
-            }
-        }
-
-        // Check if we've reached the goal
-        if (next_node.0 - goal.0).abs() < 0.1 && 
-           (next_node.1 - goal.1).abs() < 0.1 && 
-           (next_node.2 - goal.2).abs() < 0.1 {
-            VILLAGER_PROCESSOR_LOGGER.log_debug(
-                "pathfind_success",
-                &trace_id,
-                &format!("Path found in {} steps", step),
-            );
-            return reconstruct_path(came_from, start_node, next_node);
-        }
-
-        // Remove current node from open set and add to closed set
-        open_set.remove(&next_node);
-        closed_set.insert(next_node);
-
-        // Get neighbors from navigation mesh (simplified for example)
-        let neighbors = get_navigation_neighbors(next_node, navigation_mesh);
-
-        for neighbor in neighbors {
-            // Skip neighbors that are in closed set
-            if closed_set.contains(&neighbor) {
-                continue;
-            }
-
-            // Calculate tentative g score
-            let tentative_g_score = *g_score.get(&next_node).unwrap_or(&f32::INFINITY) + 
-                distance_between(next_node, neighbor);
-
-            // Check if this is a better path
-            let neighbor_g_score = g_score.get(&neighbor).copied().unwrap_or(f32::INFINITY);
-            let is_better = tentative_g_score < neighbor_g_score;
-
-            if !open_set.contains(&neighbor) {
-                open_set.insert(neighbor);
-            } else if !is_better {
-                continue;
-            }
-
-            // This path is better - update
-            came_from.insert(neighbor, next_node);
-            g_score.insert(neighbor, tentative_g_score);
-            f_score.insert(neighbor, tentative_g_score + heuristic_cost_estimate(neighbor, goal));
-
-            // Early exit if we found a good path
-            if distance_between(neighbor, goal) < 1.0 {
-                VILLAGER_PROCESSOR_LOGGER.log_debug(
-                    "pathfind_near_goal",
-                    &trace_id,
-                    &format!("Near goal, optimizing path"),
-                );
-                break;
-            }
-        }
-
-        current_node = next_node;
+    
+    // Use the advanced pathfinding optimizer
+    let path = ADVANCED_PATHFINDING_OPTIMIZER.find_villager_path(villager_id, start, goal);
+    
+    if path.is_some() {
+        VILLAGER_PROCESSOR_LOGGER.log_debug(
+            "pathfind_success",
+            &trace_id,
+            &format!("Path found for villager {}", villager_id),
+        );
+    } else {
+        VILLAGER_PROCESSOR_LOGGER.log_debug(
+            "pathfind_failed",
+            &trace_id,
+            &format!("No path found for villager {} after {:?}", villager_id, start_time.elapsed()),
+        );
     }
+    
+    path
+}
 
-    // No path found within max steps
+/// Find paths for a group of villagers using the advanced pathfinding system
+pub fn find_paths_for_villager_group(
+    group: &VillagerGroup,
+    goal: (f32, f32, f32),
+) -> Vec<PathfindingResult> {
+    let trace_id = generate_trace_id();
     VILLAGER_PROCESSOR_LOGGER.log_debug(
-        "pathfind_failed",
+        "group_pathfind_start",
         &trace_id,
-        &format!("No path found after {} steps", max_steps),
+        &format!(
+            "Finding paths for group {} ({} villagers) to {:?}",
+            group.group_id, group.villager_ids.len(), goal
+        ),
     );
-    None
+
+    let start_time = Instant::now();
+    
+    // Use the advanced pathfinding optimizer for group pathfinding
+    let results = ADVANCED_PATHFINDING_OPTIMIZER.find_paths_for_group(group, goal);
+    
+    VILLAGER_PROCESSOR_LOGGER.log_debug(
+        "group_pathfind_complete",
+        &trace_id,
+        &format!(
+            "Pathfinding completed for group {} in {:?}, successful paths: {}",
+            group.group_id,
+            start_time.elapsed(),
+            results.iter().filter(|r| r.success).count()
+        ),
+    );
+    
+    results
 }
 
 /// Heuristic cost estimate (Manhattan distance for 3D space)
@@ -187,7 +155,7 @@ fn reconstruct_path(
     Some(path)
 }
 
-/// Process villager entities with spatial optimization and pathfinding
+/// Process villager entities with spatial optimization and advanced pathfinding
 pub fn process_villagers(input: VillagerInput) -> VillagerProcessResult {
     let trace_id = generate_trace_id();
     VILLAGER_PROCESSOR_LOGGER.log_info(
@@ -218,6 +186,23 @@ pub fn process_villagers(input: VillagerInput) -> VillagerProcessResult {
     // Get player position (assuming first player is the one we care about)
     let player_position = input.players.first().map(|p| (p.x as f32, p.y as f32, p.z as f32)).unwrap_or((0.0, 0.0, 0.0));
 
+    // Group villagers spatially first
+    let mut villager_groups = group_villagers_by_spatial_proximity(&input.villagers);
+    
+    // Process groups with advanced pathfinding
+    let mut pathfinding_results = Vec::new();
+    
+    for group in &villager_groups {
+        // Only pathfind for groups near the player
+        if group.center_x > 256.0 {
+            continue;
+        }
+        
+        // Use advanced pathfinding for the group
+        let results = find_paths_for_villager_group(group, player_position);
+        pathfinding_results.extend(results);
+    }
+
     // Use work-stealing scheduler for optimal thread distribution
     let scheduler = WorkStealingScheduler::new();
     
@@ -239,11 +224,10 @@ pub fn process_villagers(input: VillagerInput) -> VillagerProcessResult {
         process_villager_entity(input, player_position)
     });
 
-    // Process results to determine optimization needs and group villagers
+    // Process results to determine optimization needs
     let mut villagers_to_disable_ai = Vec::new();
     let mut villagers_to_simplify_ai = Vec::new();
     let mut villagers_to_reduce_pathfinding = Vec::new();
-    let mut villager_groups = group_villagers_by_spatial_proximity(&input.villagers);
 
     for result in results {
         let villager_id = result.entity_id.parse::<u64>().unwrap_or(0);
@@ -259,9 +243,8 @@ pub fn process_villagers(input: VillagerInput) -> VillagerProcessResult {
                 villagers_to_reduce_pathfinding.push(villager_id);
             }
 
-            // Update pathfinding logic based on performance configuration
+            // Update group AI tick rate based on group size
             if let Some(group) = villager_groups.iter_mut().find(|g| g.villager_ids.contains(&villager_id)) {
-                // Adjust group AI tick rate based on group size
                 if group.villager_ids.len() > 50 {
                     group.ai_tick_rate = 3; // Reduce tick rate for large groups
                 } else if group.villager_ids.len() > 20 {
@@ -295,7 +278,7 @@ pub fn process_villagers(input: VillagerInput) -> VillagerProcessResult {
     }
 }
 
-/// Process a single villager entity with memory pooling and pathfinding optimization
+/// Process a single villager entity with memory pooling and advanced pathfinding optimization
 fn process_villager_entity(input: EntityProcessingInput, player_position: (f32, f32, f32)) -> EntityProcessingResult {
     let trace_id = generate_trace_id();
     let start_time = Instant::now();
@@ -326,11 +309,10 @@ fn process_villager_entity(input: EntityProcessingInput, player_position: (f32, 
         }
     }
 
-    // Simple pathfinding example - in real implementation this would be more sophisticated
+    // Advanced pathfinding using our new system
     let path = if villager_data.distance < 64.0 {
         // Only pathfind for villagers close to player
-        let navigation_mesh = get_default_navigation_mesh();
-        find_villager_path(villager_data.position, player_position, &navigation_mesh, 50)
+        find_villager_path(villager_data.id, villager_data.position, player_position)
     } else {
         None
     };

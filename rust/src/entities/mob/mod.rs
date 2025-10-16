@@ -4,6 +4,7 @@ pub mod types;
 pub mod processing;
 pub mod config;
 pub mod bindings;
+pub mod concurrent_processing;
 
 // Re-export common entity types for convenience
 pub use crate::entities::common::types::*;
@@ -14,3 +15,4 @@ pub use types::*;
 pub use processing::*;
 pub use config::*;
 pub use bindings::*;
+pub use concurrent_processing::*;

@@ -708,3 +708,213 @@ impl ConcurrentMobProcessor {
         let collision_threshold = 2.0; // 2 blocks distance for collision
         let mut collision_pairs = Vec::new();
 
+        // Parallel collision detection using rayon
+        mobs.par_iter().enumerate().for_each(|(i, mob_a)| {
+            let mob_a_id = mob_a.id;
+            let mob_a_pos = mob_a.position;
+            
+            // Only check against mobs with higher indices to avoid duplicate pairs
+            for mob_b in mobs.iter().skip(i + 1) {
+                let mob_b_id = mob_b.id;
+                let mob_b_pos = mob_b.position;
+                
+                let dx = mob_a_pos.0 - mob_b_pos.0;
+                let dy = mob_a_pos.1 - mob_b_pos.1;
+                let dz = mob_a_pos.2 - mob_b_pos.2;
+                let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+                
+                if distance < collision_threshold {
+                    // Found a collision
+                    collision_pairs.push((mob_a_id, mob_b_id));
+                }
+            }
+        });
+
+        MOB_PROCESSOR_LOGGER.log_debug(
+            "collision_detection_complete",
+            &trace_id,
+            &format!("Parallel collision detection completed, found {} pairs", collision_pairs.len()),
+        );
+
+        collision_pairs
+    }
+
+    /// Shutdown the concurrent processor and wait for all workers to complete
+    pub fn shutdown(&self, timeout: Duration) -> Result<(), String> {
+        let trace_id = generate_trace_id();
+        let start_time = Instant::now();
+
+        MOB_PROCESSOR_LOGGER.log_info(
+            "shutdown_start",
+            &trace_id,
+            "Starting shutdown of concurrent mob processor",
+        );
+
+        // Close the task channel to signal workers to stop
+        drop(self.task_sender);
+
+        // Wait for all workers to complete
+        let worker_count = self.config.worker_threads;
+        let mut completed_workers = 0;
+
+        while completed_workers < worker_count {
+            match self.worker_completion.recv_timeout(timeout) {
+                Ok(_) => {
+                    completed_workers += 1;
+                    MOB_PROCESSOR_LOGGER.log_info(
+                        "worker_shutdown_complete",
+                        &trace_id,
+                        &format!("Worker {} completed shutdown", completed_workers),
+                    );
+                }
+                Err(_) => {
+                    MOB_PROCESSOR_LOGGER.log_warning(
+                        "worker_shutdown_timeout",
+                        &trace_id,
+                        &format!("Timeout waiting for worker {} to shutdown", completed_workers + 1),
+                    );
+                    break;
+                }
+            }
+        }
+
+        let elapsed = start_time.elapsed();
+        MOB_PROCESSOR_LOGGER.log_info(
+            "shutdown_complete",
+            &trace_id,
+            &format!(
+                "Concurrent mob processor shutdown completed in {:?}, {} workers completed",
+                elapsed, completed_workers
+            ),
+        );
+
+        Ok(())
+    }
+}
+
+/// Process mob input in a thread-safe manner
+pub fn process_mob_input(input: MobInput) -> Result<MobProcessResult, String> {
+    let trace_id = generate_trace_id();
+    let start_time = Instant::now();
+
+    MOB_PROCESSOR_LOGGER.log_info(
+        "input_process_start",
+        &trace_id,
+        &format!("Processing mob input with {} mobs", input.mobs.len()),
+    );
+
+    // Create a temporary state manager for this input
+    let state_manager = MobStateManager::new();
+    
+    // Add all mobs to the state manager
+    for mob in &input.mobs {
+        state_manager.update_mob(mob.id, mob.clone());
+    }
+
+    // Create a concurrent processor with default config
+    let processor = ConcurrentMobProcessor::new();
+    
+    // Process all mobs in parallel
+    let center = (0.0, 0.0, 0.0); // Use world center as default
+    let results = processor.process_mobs_parallel(center, input.tick_count as f32 / 1000.0)?;
+
+    // Merge results from all mobs
+    let mut final_result = MobProcessResult {
+        mobs_to_disable_ai: Vec::new(),
+        mobs_to_simplify_ai: Vec::new(),
+    };
+
+    for result in results {
+        final_result.mobs_to_disable_ai.extend(result.mobs_to_disable_ai);
+        final_result.mobs_to_simplify_ai.extend(result.mobs_to_simplify_ai);
+    }
+
+    let elapsed = start_time.elapsed();
+    MOB_PROCESSOR_LOGGER.log_info(
+        "input_process_complete",
+        &trace_id,
+        &format!(
+            "Mob input processing completed in {:?}, result: {:?}",
+            elapsed, final_result
+        ),
+    );
+
+    Ok(final_result)
+}
+
+/// Example usage of the concurrent mob processor
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entities::entity::types::EntityType;
+
+    #[test]
+    fn test_mob_processing_basic() {
+        // Create test mob data
+        let mob_data = MobData {
+            id: 1,
+            entity_type: EntityType::Mob,
+            position: (0.0, 0.0, 0.0),
+            distance: 10.0,
+            is_passive: true,
+        };
+
+        // Create state manager and add mob
+        let state_manager = MobStateManager::new();
+        state_manager.update_mob(1, mob_data);
+
+        // Create processor and process mob
+        let processor = ConcurrentMobProcessor::new();
+        let center = (0.0, 0.0, 0.0);
+        let delta_time = 0.05;
+
+        let result = processor.process_mobs_parallel(center, delta_time);
+        
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_mob_state_manager() {
+        let state_manager = MobStateManager::new();
+        
+        // Test adding and retrieving a mob
+        let mob_data = MobData {
+            id: 1,
+            entity_type: EntityType::Mob,
+            position: (0.0, 0.0, 0.0),
+            distance: 10.0,
+            is_passive: true,
+        };
+        
+        state_manager.update_mob(1, mob_data.clone());
+        
+        let retrieved = state_manager.get_mob(1);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().id, 1);
+        
+        // Test removing a mob
+        state_manager.remove_mob(1);
+        let retrieved = state_manager.get_mob(1);
+        assert!(retrieved.is_none());
+    }
+
+    #[test]
+    fn test_mob_processing_config() {
+        let config = MobProcessingConfig {
+            worker_threads: 2,
+            batch_size: 32,
+            simulation_distance: 64.0,
+            lod_simplification_distance: 48.0,
+            ai_culling_distance: 32.0,
+            enable_spatial_partitioning: true,
+            enable_parallel_collision: true,
+        };
+        
+        let state_manager = MobStateManager::with_config(config.clone());
+        assert_eq!(state_manager.config().worker_threads, 2);
+        assert_eq!(state_manager.config().batch_size, 32);
+        assert_eq!(state_manager.config().simulation_distance, 64.0);
+    }
+}

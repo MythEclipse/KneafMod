@@ -1,21 +1,22 @@
 use jni::{JNIEnv, objects::{JString, JByteArray, JObject}, sys::jstring};
 use std::fmt::Display;
 use crate::errors::{RustError, Result};
+use super::enhanced_converter::{EnhancedJniConverter, EnhancedJniConverterFactory, EnhancedConverterConfig};
 
 /// Trait defining the conversion capabilities for JNI types
 pub trait JniConverter {
     /// Convert JNI string to Rust string
     fn jstring_to_rust(&self, env: &mut JNIEnv, j_str: JString) -> Result<String>;
-    
+     
     /// Convert Rust string to JNI string
     fn rust_string_to_jni(&self, env: &mut JNIEnv, s: &str) -> Result<jstring>;
-    
+     
     /// Convert JNI byte array to Rust Vec<u8>
     fn jbyte_array_to_vec(&self, env: &mut JNIEnv, array: JByteArray) -> Result<Vec<u8>>;
-    
+     
     /// Convert Rust Vec<u8> to JNI byte array
     fn vec_to_jbyte_array(&self, env: &mut JNIEnv, vec: &[u8]) -> Result<JByteArray>;
-    
+     
     /// Create error JNI string
     fn create_error_jni_string(&self, env: &mut JNIEnv, error: &str) -> jstring;
 }
@@ -61,14 +62,34 @@ impl JniConverter for DefaultJniConverter {
 pub struct JniConverterFactory;
 
 impl JniConverterFactory {
-    /// Create a default JNI converter
+    /// Create a default JNI converter (standard implementation)
     pub fn create_default() -> Box<dyn JniConverter> {
         Box::new(DefaultJniConverter)
     }
-    
+     
     /// Create a converter with custom error handling (example configuration)
     pub fn create_with_custom_error_handling() -> Box<dyn JniConverter> {
         Box::new(DefaultJniConverter) // In a real implementation, this would return a different converter
+    }
+
+    /// Create an enhanced JNI converter with zero-copy capabilities
+    pub fn create_enhanced() -> Box<dyn JniConverter> {
+        EnhancedJniConverterFactory::create_default()
+    }
+
+    /// Create an enhanced JNI converter with custom configuration
+    pub fn create_enhanced_with_config(config: EnhancedConverterConfig) -> Box<dyn JniConverter> {
+        EnhancedJniConverterFactory::create_with_config(config)
+    }
+
+    /// Create an enhanced JNI converter optimized for game entities
+    pub fn create_enhanced_for_game_entities() -> Box<dyn JniConverter> {
+        EnhancedJniConverterFactory::create_for_game_entities()
+    }
+
+    /// Create an enhanced JNI converter optimized for large datasets
+    pub fn create_enhanced_for_large_datasets() -> Box<dyn JniConverter> {
+        EnhancedJniConverterFactory::create_for_large_datasets()
     }
 }
 
@@ -101,12 +122,18 @@ mod tests {
     fn test_default_converter() {
         let converter = DefaultJniConverter;
         let mut env = MockJNIEnv::new();
-        
+         
         // Set up mock expectations
         env.expect_get_string()
             .returning(|_| Ok(jni::objects::String::from("test")));
-        
+         
         let result = converter.jstring_to_rust(&mut env, JString::from_raw(std::ptr::null_mut()));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_enhanced_converter_creation() {
+        let converter = JniConverterFactory::create_enhanced();
+        assert!(converter.is::<EnhancedJniConverter>());
     }
 }
