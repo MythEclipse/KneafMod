@@ -1,5 +1,4 @@
-use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutorFactory};
-use crate::ParallelExecutor;
+use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutorFactory, ParallelExecutor};
 use std::sync::Arc;
 
 /// Work-stealing scheduler for parallel task execution
@@ -27,6 +26,9 @@ impl WorkStealingScheduler {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.executor.execute_sync(f)
+        match &self.executor {
+            ParallelExecutorEnum::WorkStealing(e) => e.execute(f),
+            _ => panic!("WorkStealingScheduler should only contain WorkStealing executor"),
+        }
     }
 }

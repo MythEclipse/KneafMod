@@ -18,7 +18,7 @@ where
 
 impl<T> Clone for VecPool<T>
 where
-    T: Debug + Default + Clone + Send + 'static,
+    T: Debug + Default + Clone + Send + Sync + 'static,
 {
     fn clone(&self) -> Self {
         VecPool {
@@ -30,11 +30,11 @@ where
 
 impl<T> VecPool<T>
 where
-    T: Debug + Default + Clone + Send + 'static,
+    T: Debug + Default + Clone + Send + 'static + std::marker::Sync,
 {
     pub fn new(max_size: usize) -> Self {
         Self {
-            pool: ObjectPool::new(max_size),
+            pool: ObjectPool::new(MemoryPoolConfig::new(max_size)),
             logger: PerformanceLogger::new("vec_pool"),
         }
     }
@@ -152,7 +152,7 @@ impl Clone for StringPool {
 impl StringPool {
     pub fn new(max_size: usize) -> Self {
         Self {
-            pool: ObjectPool::new(max_size),
+            pool: ObjectPool::new(MemoryPoolConfig::new(max_size)),
             logger: PerformanceLogger::new("string_pool"),
         }
     }

@@ -1610,7 +1610,9 @@ impl RustDatabaseAdapter {
         stats_guard.memory_mapped_files_active += 1;
 
         // Store in memory-mapped files cache
-        mm_files_guard.insert(key.to_string(), cache_mmap);
+        if let Some(ref mut mm_files) = mm_files_guard {
+            mm_files.insert(key.to_string(), cache_mmap);
+        }
 
         Ok(return_mmap)
     }
@@ -1665,7 +1667,9 @@ impl RustDatabaseAdapter {
             stats_guard.memory_mapped_files_active.saturating_sub(1);
 
         // Remove from cache
-        mm_files_guard.remove(key);
+        if let Some(ref mut mm_files) = mm_files_guard {
+            mm_files.remove(key);
+        }
 
         Ok(())
     }

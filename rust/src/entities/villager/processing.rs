@@ -3,7 +3,7 @@ use crate::entities::common::factory::EntityProcessorFactory;
 use crate::entities::common::types::EntityProcessor;
 use crate::types::EntityTypeTrait as EntityType;
 use crate::simd_standardized::{get_standard_simd_ops, StandardSimdOps};
-use crate::parallelism::executor_factory::ParallelExecutorFactory;
+use crate::parallelism::base::create_default_executor;
 use crate::ParallelExecutor;
 use crate::entities::common::types::EntityConfig;
 use crate::EntityProcessingInput;
@@ -35,7 +35,7 @@ pub struct VillagerEntityProcessor {
 }
 
 impl VillagerEntityProcessor {
-    pub fn new(simd_ops: Arc<StandardSimdOps>, executor: ParallelExecutorEnum) -> Self {
+    pub fn new(simd_ops: Arc<dyn StandardSimdOps>, executor: ParallelExecutorEnum) -> Self {
         Self { simd_ops, executor }
     }
 
@@ -128,8 +128,8 @@ pub struct VillagerProcessingManager {
 impl VillagerProcessingManager {
     /// Create a new villager processing manager with all optimizations
     pub fn new(config: VillagerProcessingConfig) -> Result<Self, String> {
-        let simd_processor = Arc::new(get_standard_simd_ops().clone());
-        let executor = ParallelExecutorFactory::create_default()
+        let simd_processor = get_standard_simd_ops();
+        let executor = create_default_executor()
             .map_err(|e| format!("Failed to create parallel executor: {}", e))?;
         
         // Create a villager entity processor with the given config
@@ -200,7 +200,7 @@ impl VillagerProcessingManager {
 
     /// Update AI configuration
     pub fn update_ai_config(&mut self, new_config: VillagerConfig) {
-        let config = Arc::new(new_config) as Arc<dyn EntityConfig>;
+        let config = Arc::new(new_config.clone()) as Arc<dyn EntityConfig>;
         self.processor.update_config(config);
         self.config.ai_config = new_config;
     }
@@ -334,8 +334,7 @@ impl From<EntityProcessingResult> for EnhancedVillagerProcessResult {
             villagers_to_reduce_pathfinding.extend(pathfinding_list);
         }
         
-        let villager_groups = result.groups.map(|spatial_groups| {
-            spatial_groups.into_iter().map(|group| VillagerGroup {
+        let villager_groups = result.villager_groups.into_iter().map(|group| VillagerGroup {
                 group_id: group.group_id,
                 center_x: group.center_position.0,
                 center_y: group.center_position.1,
@@ -348,8 +347,7 @@ impl From<EntityProcessingResult> for EnhancedVillagerProcessResult {
                     _ => "generic".to_string(),
                 },
                 ai_tick_rate: group.ai_tick_rate.unwrap_or(1),
-            }).collect()
-        });
+            }).collect();
         
         EnhancedVillagerProcessResult {
             villagers_to_disable_ai: result.entities_to_disable_ai,
@@ -357,7 +355,7 @@ impl From<EntityProcessingResult> for EnhancedVillagerProcessResult {
             villagers_to_reduce_pathfinding,
             villagers_to_process_behavior,
             villager_groups,
-            processing_stats: result.processing_stats,
+            processing_stats: result.processing_stats.unwrap_or_default(),
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 use dashmap::DashMap;
+use std::time::Duration;
 
 /// JNI connection pool for managing bridge connections
 pub struct JNIConnectionPool {
@@ -76,6 +77,16 @@ impl JniBridgeBuilder {
 
     pub fn with_config(mut self, config: BridgeConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    pub fn max_connections(mut self, max: usize) -> Self {
+        self.config.max_connections = max;
+        self
+    }
+
+    pub fn idle_timeout(mut self, duration: Duration) -> Self {
+        self.config.timeout_ms = duration.as_millis() as u64;
         self
     }
 

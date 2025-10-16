@@ -60,6 +60,9 @@ impl ZeroCopyConverter for MobZeroCopyConverter {
         let mut mobs = Vec::with_capacity(num);
         for _ in 0..num {
             let id = cur.read_u64::<LittleEndian>()?;
+            let x = cur.read_f32::<LittleEndian>()?;
+            let y = cur.read_f32::<LittleEndian>()?;
+            let z = cur.read_f32::<LittleEndian>()?;
             let distance = cur.read_f32::<LittleEndian>()?;
             let passive = cur.read_u8()? != 0;
             let etype_len = cur.read_i32::<LittleEndian>()? as usize;
@@ -74,6 +77,7 @@ impl ZeroCopyConverter for MobZeroCopyConverter {
 
             mobs.push(crate::mob::types::MobData {
                 id,
+                position: (x, y, z),
                 distance,
                 entity_type: EntityType::Generic,
                 is_passive: passive,

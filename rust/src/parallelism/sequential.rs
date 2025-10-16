@@ -1,5 +1,7 @@
 use crate::ParallelExecutor;
+use async_trait::async_trait;
 
+#[derive(Debug)]
 pub struct SequentialExecutor;
 
 impl SequentialExecutor {
@@ -8,8 +10,9 @@ impl SequentialExecutor {
     }
 }
 
+#[async_trait]
 impl ParallelExecutor for SequentialExecutor {
-    fn execute_sync<F, R>(&self, f: F) -> R
+    fn execute<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -17,12 +20,7 @@ impl ParallelExecutor for SequentialExecutor {
         f()
     }
 
-    fn execute<F, R>(&self, f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        Box::pin(async move { f() })
+    async fn shutdown(&self) {
     }
 
     fn running_tasks(&self) -> usize {

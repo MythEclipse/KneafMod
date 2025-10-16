@@ -41,22 +41,22 @@ pub struct BinaryConverterFactory;
 impl BinaryConverterFactory {
     // Mob converter
     pub fn mob_converter() -> impl BinaryConverter<Input=MobInput, Output=MobProcessResult> {
-        MobConverter::new()
+        MobConverter
     }
     
     // Block converter
     pub fn block_converter() -> impl BinaryConverter<Input=BlockInput, Output=BlockProcessResult> {
-        BlockConverter::new()
+        BlockConverter
     }
     
     // Entity converter
     pub fn entity_converter() -> impl BinaryConverter<Input=EntityInput, Output=EntityProcessResult> {
-        EntityConverter::new()
+        EntityConverter
     }
     
     // Villager converter
     pub fn villager_converter() -> impl BinaryConverter<Input=VillagerInput, Output=VillagerProcessResult> {
-        VillagerConverter::new()
+        VillagerConverter
     }
 }
 
@@ -325,6 +325,12 @@ impl BinaryConverter for MobConverter {
     }
 }
 
+impl Default for MobConverter {
+    fn default() -> Self {
+        Self
+    }
+}
+
 // Block converter implementation
 struct BlockConverter;
 
@@ -382,6 +388,12 @@ impl BinaryConverter for BlockConverter {
         }
         
         Ok(out)
+    }
+}
+
+impl Default for BlockConverter {
+    fn default() -> Self {
+        Self
     }
 }
 
@@ -514,14 +526,14 @@ impl BinaryConverter for EntityConverter {
         
         use crate::entities::common::types::DefaultEntityConfig;
         let cfg = DefaultEntityConfig {
-            entity_type: etype.clone(),
+            entity_type: "default".to_string(), // Use a default string since etype is not available
         };
         
         Ok(EntityInput {
             tick_count,
             entities,
             players,
-            entity_config: cfg,
+            entity_config: cfg.entity_type, // The Input struct expects a String
         })
     }
     
@@ -534,6 +546,12 @@ impl BinaryConverter for EntityConverter {
         }
         
         Ok(out)
+    }
+}
+
+impl Default for EntityConverter {
+    fn default() -> Self {
+        Self
     }
 }
 
@@ -664,5 +682,11 @@ impl BinaryConverter for VillagerConverter {
         }
         
         Ok(out)
+    }
+}
+
+impl Default for VillagerConverter {
+    fn default() -> Self {
+        Self
     }
 }

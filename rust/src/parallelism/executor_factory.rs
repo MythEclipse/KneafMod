@@ -142,6 +142,7 @@ impl ParallelExecutorFactory {
 }
 
 /// Unified parallel executor interface
+#[derive(Clone)]
 pub struct ParallelExecutor {
     thread_pool: Arc<rayon::ThreadPool>,
     executor_type: ExecutorType,

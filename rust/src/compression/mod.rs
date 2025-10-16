@@ -275,7 +275,7 @@ impl ChunkCompressor {
     pub fn compress(&self, data: &[u8]) -> Result<Vec<u8>, CompressionError> {
         match self.algorithm {
             CompressionAlgorithm::Lz4 => {
-                compress_prepend_size(data).map_err(CompressionError::Lz4)
+                Ok(compress_prepend_size(data))
             }
             CompressionAlgorithm::None => Ok(data.to_vec()),
         }

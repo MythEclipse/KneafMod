@@ -785,7 +785,7 @@ impl SwapMemoryPool {
         stats.total_uncompressed += data.len();
         stats.total_compressed += compressed.len();
         stats.compression_time += elapsed;
-        stats.compression_time_ms += elapsed.as_millis() as u64;
+        stats.compression_time += elapsed;
 
         if stats.total_uncompressed > 0 {
             stats.compression_ratio =

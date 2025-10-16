@@ -18,9 +18,6 @@ pub trait JniConverter {
     
     /// Create error JNI string
     fn create_error_jni_string(&self, env: &mut JNIEnv, error: &str) -> jstring;
-    
-    /// Check if JNI environment operation succeeded
-    fn check_jni_result<T, E: Display>(&self, result: std::result::Result<T, E>, context: &str) -> Result<T>;
 }
 
 /// Default implementation of JniConverter with standard behavior
@@ -58,10 +55,6 @@ impl JniConverter for DefaultJniConverter {
             }
         }
     }
-
-    fn check_jni_result<T, E: Display>(&self, result: std::result::Result<T, E>, context: &str) -> Result<T> {
-        result.map_err(|e| RustError::JniError(format!("{}: {}", context, e)))
-    }
 }
 
 /// Factory for creating JNI converters with different configurations
@@ -76,6 +69,12 @@ impl JniConverterFactory {
     /// Create a converter with custom error handling (example configuration)
     pub fn create_with_custom_error_handling() -> Box<dyn JniConverter> {
         Box::new(DefaultJniConverter) // In a real implementation, this would return a different converter
+    }
+}
+
+impl Default for JniConverterFactory {
+    fn default() -> Self {
+        JniConverterFactory
     }
 }
 

@@ -309,6 +309,11 @@ impl SimdProcessor {
         }
         success
     }
+
+    /// Get the detected SIMD features
+    pub fn get_features(&self) -> &SimdFeatures {
+        &self.features
+    }
 }
 
 impl Initializable for SimdProcessor {

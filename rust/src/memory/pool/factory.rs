@@ -59,7 +59,7 @@ impl MemoryPoolFactory {
     }
     
     /// Create a memory pool of the specified type with default configuration
-    pub fn create_pool(&self, pool_type: MemoryPoolType) -> Result<Box<dyn MemoryPool>> {
+    pub fn create_pool(&self, pool_type: MemoryPoolType) -> Result<Box<dyn MemoryPool<Object = ()>>> {
         self.create_pool_with_config(pool_type, None)
     }
     
@@ -68,7 +68,7 @@ impl MemoryPoolFactory {
         &self,
         pool_type: MemoryPoolType,
         custom_config: Option<&MemoryPoolConfig>,
-    ) -> Result<Box<dyn MemoryPool>> {
+    ) -> Result<Box<dyn MemoryPool<Object = ()>>> {
         let config = custom_config.unwrap_or(&self.common_config);
         
         match pool_type {
@@ -89,20 +89,22 @@ impl MemoryPoolFactory {
                     common_config: config.clone(),
                 };
                 
-                let pool = ObjectPool::new(object_config);
+                let pool = ObjectPool::new(object_config.common_config);
                 Ok(Box::new(pool))
             }
             
             MemoryPoolType::SlabAllocator => {
-                let slab_config = SlabAllocatorObjectConfig {
-                    slab_size: 1024, // 1024 objects per slab
-                    max_slabs_per_class: 8,
+                // Temporarily use ObjectPool until SlabAllocator implements MemoryPool
+                let object_config = ObjectPoolObjectConfig {
+                    max_size: config.max_size,
                     pre_allocate: config.pre_allocate,
-                    allow_overcommit: false,
+                    high_water_mark_ratio: config.high_water_mark_ratio,
+                    cleanup_threshold: config.cleanup_threshold,
+                    logger_name: config.logger_name.clone(),
                     common_config: config.clone(),
                 };
-
-                let pool: Arc<SlabAllocator<u8>> = SlabAllocator::new(slab_config);
+                
+                let pool = ObjectPool::new(object_config.common_config);
                 Ok(Box::new(pool))
             }
             
@@ -124,7 +126,7 @@ impl MemoryPoolFactory {
     }
     
     /// Create a memory pool using a builder pattern
-    pub fn create_pool_with_builder<F>(&self, pool_type: MemoryPoolType, builder: F) -> Result<Box<dyn MemoryPool>>
+    pub fn create_pool_with_builder<F>(&self, pool_type: MemoryPoolType, builder: F) -> Result<Box<dyn MemoryPool<Object = ()>>>
     where
         F: FnOnce(MemoryPoolBuilder) -> MemoryPoolBuilder,
     {

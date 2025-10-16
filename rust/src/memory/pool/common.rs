@@ -15,7 +15,7 @@ use crate::logging::PerformanceLogger;
 pub trait MemoryPool: Debug + Send + Sync {
     // Use a default associated type to allow trait objects where implementations
     // may not specify a concrete `Object` type in older code paths.
-    type Object: Debug + Send + Sync + Default + Clone = ();
+    type Object: Debug + Send + Sync + Default + Clone;
 
     /// Create a new memory pool with the given configuration
     fn new(config: MemoryPoolConfig) -> Self where Self: Sized;
@@ -155,6 +155,15 @@ impl Default for MemoryPoolConfig {
             high_water_mark_ratio: 0.9,
             cleanup_threshold: 0.8,
             logger_name: "memory_pool".to_string(),
+        }
+    }
+}
+
+impl MemoryPoolConfig {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            max_size,
+            ..Default::default()
         }
     }
 }

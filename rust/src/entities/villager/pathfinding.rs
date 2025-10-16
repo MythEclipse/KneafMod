@@ -512,7 +512,7 @@ pub fn check_path_obstacles_simd(
 
                 // Check against all obstacles
                 for obstacle in obstacles {
-                    if obstacle.contains_point(pos_vec) {
+                    if obstacle.contains(pos_vec) {
                         return true; // Position is blocked
                     }
                 }

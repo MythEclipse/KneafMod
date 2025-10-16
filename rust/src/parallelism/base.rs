@@ -114,7 +114,7 @@ pub fn create_work_stealing_executor() -> Result<crate::parallelism::base::execu
 
 /// Create a sequential executor (single thread, recommended for new code)
 pub fn create_sequential_executor() -> Result<crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum> {
-    Ok(crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum::ThreadPool(std::sync::Arc::new(crate::parallelism::sequential::SequentialExecutor::new())))
+    Ok(crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum::Sequential(std::sync::Arc::new(crate::parallelism::sequential::SequentialExecutor::new())))
 }
 
 // Re-export performance monitoring under the `monitoring` name so older code

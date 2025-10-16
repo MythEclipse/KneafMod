@@ -16,12 +16,12 @@ pub struct JniRequest {
 /// not hold that borrow across the call site.
 pub fn build_request(env: &mut JNIEnv<'_>, operation: JString<'_>, parameters: JObjectArray<'_>) -> Result<JniRequest, jbyteArray> {
     // Get a default converter from the factory
-    let converter = JniConverterFactory::default().create_default_converter().unwrap();
+    let converter = JniConverterFactory::create_default();
     let op_name: String = match converter.jstring_to_rust(env, operation) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[rustperf] Failed to parse operation name: {:?}", e);
-            return Err(jni_error_bytes!(env, "Failed to parse operation name"));
+            return Err(create_error_byte_array(env, "Failed to parse operation name"));
         }
     };
 
@@ -29,11 +29,11 @@ pub fn build_request(env: &mut JNIEnv<'_>, operation: JString<'_>, parameters: J
     let params_bytes = match env.get_object_array_element(&parameters, 0) {
         Ok(obj) => match convert_jobject_to_bytes(env, obj) {
             Ok(b) => b,
-            Err(_) => return Err(jni_error_bytes!(env, "Failed to convert parameters to bytes")),
+            Err(_) => return Err(create_error_byte_array(env, "Failed to convert parameters to bytes")),
         },
         Err(e) => {
             eprintln!("[rustperf] Failed to get parameters array: {:?}", e);
-            return Err(jni_error_bytes!(env, "Failed to get parameters array"));
+            return Err(create_error_byte_array(env, "Failed to get parameters array"));
         }
     };
 
@@ -47,7 +47,7 @@ pub fn convert_jobject_to_bytes(env: &mut JNIEnv<'_>, obj: JObject<'_>) -> Resul
     let byte_array: JByteArray = obj.into();
     
     // Get a default converter from the factory
-    let converter = JniConverterFactory::default().create_default_converter().unwrap();
+    let converter = JniConverterFactory::create_default();
     
     match converter.jbyte_array_to_vec(env, byte_array) {
         Ok(bytes) => Ok(bytes),
@@ -60,6 +60,10 @@ pub fn convert_jobject_to_bytes(env: &mut JNIEnv<'_>, obj: JObject<'_>) -> Resul
 
 /// Create a JNI-compatible error byte array to return to Java
 pub fn create_error_byte_array(env: &mut JNIEnv<'_>, error_msg: &str) -> jbyteArray {
-    // Use the new jni_error_bytes macro for consistency
-    jni_error_bytes!(env, error_msg)
+    env.byte_array_from_slice(error_msg.as_bytes())
+        .unwrap_or_else(|_| {
+            // Fallback: create an empty array if conversion fails
+            env.byte_array_from_slice(b"Internal error").unwrap()
+        })
+        .into_raw()
 }

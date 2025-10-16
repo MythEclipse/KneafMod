@@ -31,5 +31,6 @@ pub fn build_request(operation: String, data: Vec<u8>) -> JniRequest {
 /// Create error byte array for JNI
 pub fn create_error_byte_array(env: &mut JNIEnv, message: &str) -> Result<jni::sys::jbyteArray, String> {
     env.byte_array_from_slice(message.as_bytes())
+        .map(|arr| arr.into_raw())
         .map_err(|e| format!("Failed to create error byte array: {}", e))
 }

@@ -177,11 +177,11 @@ pub fn process_entities(input: Input) -> ProcessResult {
 
     // Pre-allocate vectors with better size estimates
     // Use scoped arena for temporary allocations during entity grouping
-    let _arena = ScopedArena::new(get_global_arena_pool());
+    let _arena = ScopedArena::new("entity_processing");
 
     for entity in &input.entities {
         entities_by_type
-            .entry(entity.entity_type.clone())
+            .entry(format!("{:?}", entity.entity_type))
             .or_insert_with(|| Vec::with_capacity(entity_count / estimated_types + 5))
             .push(entity);
     }

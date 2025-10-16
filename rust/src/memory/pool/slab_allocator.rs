@@ -246,7 +246,7 @@ impl Slab {
     }
 
     /// Allocate a slot from this slab
-    pub fn allocate(&mut self) -> Option<usize> {
+    pub fn allocate_slot(&mut self) -> Option<usize> {
         let _guard = self.lock.lock().unwrap();
 
         for i in 0..self.total_slots {
@@ -260,7 +260,7 @@ impl Slab {
     }
 
     /// Deallocate a slot
-    pub fn deallocate(&mut self, slot_index: usize) {
+    pub fn deallocate_slot(&mut self, slot_index: usize) {
         let _guard = self.lock.lock().unwrap();
 
         if slot_index < self.total_slots && self.allocation_mask[slot_index] {
@@ -424,7 +424,7 @@ impl<T> SlabAllocator<T> {
             % slabs.len();
 
         // Try to allocate from current slab
-        if let Some(slot_idx) = slabs[current_slab_idx].allocate() {
+        if let Some(slot_idx) = slabs[current_slab_idx].allocate_slot() {
             return Ok(SlabAllocation {
                 slab_index: current_slab_idx,
                 slot_index: slot_idx,
@@ -440,7 +440,7 @@ impl<T> SlabAllocator<T> {
             if i == current_slab_idx {
                 continue; // Already tried this one
             }
-            if let Some(slot_idx) = slab.allocate() {
+            if let Some(slot_idx) = slab.allocate_slot() {
                 return Ok(SlabAllocation {
                     slab_index: i,
                     slot_index: slot_idx,
@@ -454,8 +454,8 @@ impl<T> SlabAllocator<T> {
 
         // All slabs are full, need to allocate new slab
         Self::allocate_new_slab(&mut self.slabs, &self.config, &size_class);
-        if let Some(slab) = self.slabs.get_mut(&size_class)?.last_mut() {
-            if let Some(slot_idx) = slab.allocate() {
+        if let Some(slab) = self.slabs.get_mut(&size_class).ok_or(RustError::PoolError("Size class not found".to_string()))?.last_mut() {
+            if let Some(slot_idx) = slab.allocate_slot() {
                 let slab_idx = self.slabs.get(&size_class).unwrap().len() - 1;
                 return Ok(SlabAllocation {
                     slab_index: slab_idx,
@@ -487,7 +487,7 @@ impl<T> SlabAllocator<T> {
     }
 
     /// Allocate memory of the specified size
-    pub fn allocate(&mut self, size: usize) -> Option<SlabAllocation> {
+    pub fn allocate_from_slabs(&mut self, size: usize) -> Option<SlabAllocation> {
         let _global_guard = self.lock.write().unwrap();
         let size_class = SizeClass::find_smallest_fit(size);
 
@@ -507,7 +507,7 @@ impl<T> SlabAllocator<T> {
             % slabs.len();
 
         // Try to allocate from current slab
-        if let Some(slot_idx) = slabs[current_slab_idx].allocate() {
+        if let Some(slot_idx) = slabs[current_slab_idx].allocate_slot() {
             return Some(SlabAllocation {
                 slab_index: current_slab_idx,
                 slot_index: slot_idx,
@@ -521,7 +521,7 @@ impl<T> SlabAllocator<T> {
             if i == current_slab_idx {
                 continue; // Already tried this one
             }
-            if let Some(slot_idx) = slab.allocate() {
+            if let Some(slot_idx) = slab.allocate_slot() {
                 return Some(SlabAllocation {
                     slab_index: i,
                     slot_index: slot_idx,
@@ -533,7 +533,7 @@ impl<T> SlabAllocator<T> {
 
         // All slabs are full, need to allocate new slab
         Self::allocate_new_slab(&mut self.slabs, &self.config, &size_class);
-        if let Some(slot_idx) = self.slabs.get_mut(&size_class)?.last_mut()?.allocate() {
+        if let Some(slot_idx) = self.slabs.get_mut(&size_class)?.last_mut()?.allocate_slot() {
             let slab_idx = self.slabs.get(&size_class)?.len() - 1;
             return Some(SlabAllocation {
                 slab_index: slab_idx,
@@ -552,12 +552,12 @@ impl<T> SlabAllocator<T> {
     }
 
     /// Deallocate memory
-    pub fn deallocate(&mut self, allocation: SlabAllocation) {
+    pub fn deallocate_slab(&mut self, allocation: SlabAllocation) {
         let _global_guard = self.lock.write().unwrap();
 
         if let Some(slabs) = self.slabs.get_mut(&allocation.size_class) {
             if let Some(slab) = slabs.get_mut(allocation.slab_index) {
-                slab.deallocate(allocation.slot_index);
+                slab.deallocate_slot(allocation.slot_index);
             }
         }
     }
@@ -732,8 +732,8 @@ mod tests {
         let mut slab = Slab::new(64, 10);
 
         // Allocate slots
-        let slot1 = slab.allocate().unwrap();
-        let slot2 = slab.allocate().unwrap();
+        let slot1 = slab.allocate_slot().unwrap();
+        let slot2 = slab.allocate_slot().unwrap();
 
         assert_ne!(slot1, slot2);
         assert!(slot1 < 10);
@@ -745,7 +745,7 @@ mod tests {
         assert_eq!(stats.total_slots, 10);
 
         // Deallocate
-        slab.deallocate(slot1);
+        slab.deallocate_slot(slot1);
         let stats_after = slab.stats();
         assert_eq!(stats_after.allocated_slots, 1);
     }
@@ -769,8 +769,8 @@ mod tests {
         assert_eq!(alloc2.size_class, SizeClass::Tiny64B);
 
         // Deallocate
-        allocator.deallocate(alloc1);
-        allocator.deallocate(alloc2);
+        allocator.deallocate_slab(alloc1);
+        allocator.deallocate_slab(alloc2);
 
         // Check stats
         let stats = allocator.stats();

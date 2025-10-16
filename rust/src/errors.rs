@@ -89,6 +89,9 @@ pub enum RustError {
     
         /// Shared buffer lock failed error
         SharedBufferLockFailed,
+        
+        /// Memory pool operation error
+        PoolError(String),
     }
 
 impl fmt::Display for RustError {
@@ -102,13 +105,15 @@ impl fmt::Display for RustError {
             RustError::JniError(msg) => write!(f, "JNI error: {}", msg),
             RustError::TimeoutError(msg) => write!(f, "Timeout error: {}", msg),
             RustError::OperationFailed(msg) => write!(f, "Operation failed: {}", msg),
+            RustError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
+            RustError::InvalidInputError(msg) => write!(f, "Invalid input: {}", msg),
             RustError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
             RustError::DeserializationError(msg) => write!(f, "Deserialization error: {}", msg),
             RustError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
             RustError::ResourceExhaustionError(msg) => write!(f, "Resource exhaustion: {}", msg),
             RustError::InternalError(msg) => write!(f, "Internal error: {}", msg),
             RustError::NotInitializedError(msg) => write!(f, "Not initialized: {}", msg),
-            RustError::InvalidInputError(msg) => write!(f, "Invalid input: {}", msg),
+            RustError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
             RustError::InvalidArgumentError(msg) => write!(f, "Invalid argument: {}", msg),
             RustError::BufferError(msg) => write!(f, "Buffer error: {}", msg),
             RustError::ParseError(msg) => write!(f, "Parse error: {}", msg),
@@ -122,6 +127,7 @@ impl fmt::Display for RustError {
             RustError::AsyncTaskSendFailed { source } => write!(f, "Async task send failed: {}", source),
             RustError::AsyncResultReceiveFailed { source } => write!(f, "Async result receive failed: {}", source),
             RustError::SharedBufferLockFailed => write!(f, "Failed to acquire shared buffer lock"),
+            RustError::PoolError(msg) => write!(f, "Pool error: {}", msg),
         }
     }
 }

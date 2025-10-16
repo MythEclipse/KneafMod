@@ -21,7 +21,7 @@ pub struct ProcessingStats {
 }
 
 /// Configuration for entities
-pub trait EntityConfig: Send + Sync {
+pub trait EntityConfig: Debug + Clone + Send + Sync {
     /// Gets the entity type
     fn entity_type(&self) -> EntityType;
     

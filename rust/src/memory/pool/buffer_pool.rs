@@ -161,6 +161,7 @@ pub struct BufferPool {
 }
 
 impl MemoryPool for BufferPool {
+    type Object = ();
     fn new(config: MemoryPoolConfig) -> Self {
         let buffer_config = BufferPoolConfig::from(config);
         let mut shards = Vec::with_capacity(buffer_config.shard_count);
@@ -250,7 +251,7 @@ impl BufferPool {
         Arc::new(Self {
             shards,
             shard_count: config.shard_count,
-            config,
+            config: config.clone(),
             stats: BufferPoolStats::default(),
             common_stats: MemoryPoolStats::default(),
             logger: PerformanceLogger::new(&config.common_config.logger_name),

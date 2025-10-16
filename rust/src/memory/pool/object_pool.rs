@@ -290,29 +290,22 @@ where
 
     /// Allocate memory from the pool (implements MemoryPool trait)
     fn allocate(&self, size: usize) -> Result<Box<[u8]>> {
-        // For object pool, we allocate based on object count, not byte size
-        // Convert byte size to approximate object count for allocation purposes
-        let object_size_estimate = std::mem::size_of::<T>();
-        let object_count = if object_size_estimate == 0 {
-            1 // Handle zero-sized types carefully
-        } else {
-            (size + object_size_estimate - 1) / object_size_estimate // Ceiling division
-        };
-
+        // For MemoryPool trait, we allocate raw bytes
         // Check if we can allocate without exceeding max size
         let current_size = self.atomic_state.get_current_size();
-        if current_size + object_count > self.max_size {
+        if current_size + size > self.max_size {
+            return Err(RustError::PoolError(format!("Allocation would exceed max pool size: {} + {} > {}", current_size, size, self.max_size)));
         }
 
-        // Get object from pool or create new one
-        let obj = self.get_lockfree().unwrap_or_else(T::default);
+        // Allocate new bytes
+        let bytes = vec![0u8; size].into_boxed_slice();
         
         // Update statistics
         self.common_stats.allocated_bytes.fetch_add(size, Ordering::Relaxed);
         self.common_stats.total_allocations.fetch_add(1, Ordering::Relaxed);
         self.update_peak_usage();
         
-        Ok(obj as Box<[u8]>) // SAFETY: Only valid if T is [u8]
+        Ok(bytes)
     }
 
     /// Deallocate memory (implements MemoryPool trait)
@@ -794,21 +787,12 @@ pub enum MemoryPressureLevel {
 
 impl MemoryPressureLevel {
     pub fn from_usage_ratio(usage_ratio: f64) -> Self {
-        if let Ok(config) = GLOBAL_MEMORY_PRESSURE_CONFIG.read() {
-            match usage_ratio {
-                r if r < config.normal_threshold => MemoryPressureLevel::Normal,
-                r if r < config.moderate_threshold => MemoryPressureLevel::Moderate,
-                r if r < config.high_threshold => MemoryPressureLevel::High,
-                _ => MemoryPressureLevel::Critical,
-            }
-        } else {
-            // Fallback to default values if config is unavailable
-            match usage_ratio {
-                r if r < 0.7 => MemoryPressureLevel::Normal,
-                r if r < 0.85 => MemoryPressureLevel::Moderate,
-                r if r < 0.95 => MemoryPressureLevel::High,
-                _ => MemoryPressureLevel::Critical,
-            }
+        let config = &*GLOBAL_MEMORY_PRESSURE_CONFIG;
+        match usage_ratio {
+            r if r < config.normal_threshold => MemoryPressureLevel::Normal,
+            r if r < config.moderate_threshold => MemoryPressureLevel::Moderate,
+            r if r < config.high_threshold => MemoryPressureLevel::High,
+            _ => MemoryPressureLevel::Critical,
         }
     }
 }

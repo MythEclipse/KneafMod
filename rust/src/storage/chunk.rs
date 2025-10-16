@@ -17,7 +17,7 @@ pub struct ChunkGenerator {
     #[allow(dead_code)]
     generation_stats: Arc<ChunkGenerationStats>,
     #[allow(dead_code)]
-    arena_pool: Arc<crate::memory::pool::EnhancedMemoryPoolManager>,
+    arena_pool: Arc<crate::memory::arena::ScopedArena>,
     #[allow(dead_code)]
     is_critical_operation: AtomicBool,
 }

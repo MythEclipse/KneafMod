@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::logging::generate_trace_id;
 use crate::logging::PerformanceLogger;
@@ -108,7 +109,7 @@ pub struct HierarchicalMemoryPool {
     logger: PerformanceLogger,
     config: HierarchicalPoolConfig,
     size_class_order: Vec<SizeClass>, // Ordered by size for efficient best-fit lookup
-    slab_allocator: Option<SlabAllocator<u8>>,
+    slab_allocator: Option<Arc<SlabAllocator<u8>>>,
 }
 
 impl HierarchicalMemoryPool {

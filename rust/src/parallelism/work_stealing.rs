@@ -2,6 +2,7 @@ use crate::errors::{Result, RustError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use crate::parallelism::executor_factory::{ParallelExecutorFactory, ExecutorType};
+use crate::parallelism::base::executor_factory::executor_factory::ParallelExecutor;
 use crate::create_work_stealing_executor;
 
 // Track parallel execution statistics for performance monitoring
@@ -85,7 +86,7 @@ impl<T> WorkStealingScheduler<T> {
         let executor = ParallelExecutorFactory::create_work_stealing()
             .map_err(|e| RustError::OperationFailed(format!("Failed to create work-stealing executor: {}", e)))?;
             
-        let results = executor.execute(|| {
+        let results: Vec<R> = executor.execute(|| {
             self.tasks.into_iter().map(processor).collect()
         });
         
@@ -119,7 +120,7 @@ impl<T> WorkStealingScheduler<T> {
         // Get the global executor for backward compatibility
         let executor = create_work_stealing_executor().unwrap();
         
-        let results = executor.execute(|| {
+        let results: Vec<R> = executor.execute(|| -> Vec<R> {
             self.tasks.into_iter().map(processor).collect()
         });
         
