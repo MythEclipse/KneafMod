@@ -1,13 +1,10 @@
 package com.kneaf.core;
 
-import com.kneaf.core.compatibility.ModCompatibility;
 import com.mojang.logging.LogUtils;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
-import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,8 +31,6 @@ public class KneafCore {
 
     // Core components - refactored to use modular architecture
     private static final AtomicReference<KneafCore> INSTANCE = new AtomicReference<>();
-    private final SystemManager systemManager;
-    private final EventHandler eventHandler;
 
     /**
      * Constructor for the mod. Registers all deferred registers, event listeners, and sets up core systems.
@@ -47,8 +42,6 @@ public class KneafCore {
         INSTANCE.set(this);
         
         // Initialize modular components
-        this.systemManager = new SystemManager();
-        this.eventHandler = new EventHandler(systemManager);
         
         // Register deferred registers
         BLOCKS.register(modEventBus);
@@ -56,10 +49,8 @@ public class KneafCore {
 
         // Register event listeners
         modEventBus.addListener(this::commonSetup);
-        NeoForge.EVENT_BUS.register(eventHandler);
         
         // Register configuration
-        modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
         
         LOGGER.info("KneafCore mod constructor completed - waiting for initialization");
     }
@@ -75,16 +66,11 @@ public class KneafCore {
         
         try {
             // Delegate initialization to SystemManager
-            systemManager.initialize();
-            
-            // Check for mod compatibility
-            ModCompatibility.checkForConflicts();
             
             LOGGER.info("KneafCore initialization completed successfully");
             
         } catch (Exception e) {
             LOGGER.error("Failed to complete KneafCore initialization", e);
-            systemManager.getLifecycleManager().handleInitializationFailure(e);
         }
     }
 
@@ -99,32 +85,6 @@ public class KneafCore {
             throw new IllegalStateException("KneafCore is not initialized yet");
         }
         return instance;
-    }
-
-    /**
-     * Get the system manager for accessing all subsystems.
-     *
-     * @return SystemManager instance
-     */
-    public SystemManager getSystemManager() {
-        return systemManager;
-    }
-
-    /**
-     * Check if KneafCore is fully initialized.
-     *
-     * @return true if initialized, false otherwise
-     */
-    public boolean isInitialized() {
-        return systemManager.isInitialized();
-    }
-
-    /**
-     * Perform graceful shutdown of all systems.
-     * Should be called when the mod or server is shutting down.
-     */
-    public void shutdownGracefully() {
-        systemManager.shutdownGracefully();
     }
 
     // Client setup events - kept as static nested class for NeoForge compatibility

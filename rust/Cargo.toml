@@ -73,3 +73,7 @@ rand = "0.8"
 lto = true
 codegen-units = 1
 opt-level = 3
+
+[[example]]
+name = "memory_leak_detector"
+path = "examples/memory_leak_detector_example.rs"

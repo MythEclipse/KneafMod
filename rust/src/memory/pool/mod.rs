@@ -8,6 +8,7 @@
 //! - **EnhancedMemoryPoolManager**: Intelligent pool manager with automatic selection
 //! - **LightweightMemoryPool**: Single-threaded pool with minimal overhead
 //! - **SlabAllocator**: Fixed-size block allocation with size classes
+//! - **LRUEvictionMemoryPool**: Thread-safe memory pool with LRU eviction policy
 //! - **BufferPool**: Zero-copy buffer pool for high-performance data transfer
 
 pub mod atomic_state;
@@ -17,6 +18,7 @@ pub mod enhanced_manager;
 pub mod factory;
 pub mod hierarchical;
 pub mod lightweight;
+pub mod lru_eviction;
 pub mod object_pool;
 pub mod slab_allocator;
 pub mod specialized_pools;
@@ -36,6 +38,7 @@ pub use enhanced_manager::{
 pub use factory::{MemoryPoolFactory, MemoryPoolType};
 pub use hierarchical::{
     FastObjectPool, HierarchicalMemoryPool, HierarchicalPoolConfig,
+pub use lru_eviction::{EvictionStats, LRUEvictionConfig, LRUEvictionMemoryPool};
     PooledVec as HierarchicalPooledVec,
 };
 pub use lightweight::{

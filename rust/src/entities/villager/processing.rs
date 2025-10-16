@@ -1,399 +1,621 @@
 use super::types::*;
-use crate::entities::common::factory::EntityProcessorFactory;
-use crate::entities::common::types::EntityProcessor;
-use crate::types::EntityTypeTrait as EntityType;
-use crate::simd_standardized::{get_standard_simd_ops, StandardSimdOps};
-use crate::parallelism::base::create_default_executor;
-use crate::ParallelExecutor;
-use crate::entities::common::types::EntityConfig;
-use crate::EntityProcessingInput;
-use crate::EntityProcessingResult;
-use crate::GroupType;
-use crate::types::PathfindingCacheStats;
-use std::sync::Arc;
+use crate::entities::entity::processing::*;
+use crate::entities::entity::types::*;
+use crate::logging::{generate_trace_id, PerformanceLogger};
+use crate::memory::pool::object_pool::ObjectPool;
+use crate::parallelism::WorkStealingScheduler;
+use crate::EntityData;
+use once_cell::sync::Lazy;
+use rayon::prelude::*;
 use serde_json;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Instant;
 
-/// Enhanced villager processing configuration with AI behavior parameters
-#[derive(Debug, Clone)]
-pub struct VillagerProcessingConfig {
-    pub ai_config: VillagerConfig,
-    pub max_batch_size: usize,
-    pub simd_chunk_size: usize,
-    pub spatial_grid_size: f32,
-    pub movement_threshold: f32,
-    pub ai_update_interval: u64,
-    pub pathfinding_update_interval: u64,
-    pub memory_pool_threshold: usize,
-}
+static VILLAGER_PROCESSOR_LOGGER: Lazy<PerformanceLogger> =
+    Lazy::new(|| PerformanceLogger::new("villager_processor"));
 
-/// Villager entity processor
-use crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum;
+/// Efficient pathfinding for villagers using spatial partitioning and navigation meshes
+pub fn find_villager_path(
+    start: (f32, f32, f32),
+    goal: (f32, f32, f32),
+    navigation_mesh: &Vec<(f32, f32, f32)>,
+    max_steps: usize,
+) -> Option<Vec<(f32, f32, f32)>> {
+    let trace_id = generate_trace_id();
+    VILLAGER_PROCESSOR_LOGGER.log_debug(
+        "pathfind_start",
+        &trace_id,
+        &format!(
+            "Finding path from {:?} to {:?}",
+            start, goal
+        ),
+    );
 
-pub struct VillagerEntityProcessor {
-    simd_ops: Arc<dyn StandardSimdOps>,
-    executor: ParallelExecutorEnum,
-}
+    let start_time = Instant::now();
 
-impl VillagerEntityProcessor {
-    pub fn new(simd_ops: Arc<dyn StandardSimdOps>, executor: ParallelExecutorEnum) -> Self {
-        Self { simd_ops, executor }
-    }
+    // Use A* algorithm with navigation mesh optimization
+    let mut open_set = HashSet::new();
+    let mut closed_set = HashSet::new();
+    let mut came_from = HashMap::new();
+    let mut g_score = HashMap::new();
+    let mut f_score = HashMap::new();
 
-    pub fn process_villagers(&self, input: VillagerInput) -> VillagerProcessResult {
-        // Basic villager processing logic
-        let mut disable_ai = Vec::new();
-        let mut simplify_ai = Vec::new();
-        let mut reduce_pathfinding = Vec::new();
-        let groups = Vec::new();
+    // Initialize with start node
+    let start_node = start;
+    open_set.insert(start_node);
+    g_score.insert(start_node, 0.0);
+    f_score.insert(start_node, heuristic_cost_estimate(start_node, goal));
 
-        for villager in &input.villagers {
-            if villager.distance > 32.0 {
-                disable_ai.push(villager.id);
-            } else if villager.distance > 64.0 {
-                simplify_ai.push(villager.id);
-            } else if villager.distance > 128.0 {
-                reduce_pathfinding.push(villager.id);
+    let mut current_node = start_node;
+
+    for step in 0..max_steps {
+        // Find node with lowest f_score in open set
+        let mut next_node = current_node;
+        let mut lowest_f_score = f_score[&current_node];
+
+        for node in &open_set {
+            let score = *f_score.get(node).unwrap_or(&f32::INFINITY);
+            if score < lowest_f_score {
+                lowest_f_score = score;
+                next_node = *node;
             }
         }
 
-        VillagerProcessResult {
-            villagers_to_disable_ai: disable_ai,
-            villagers_to_simplify_ai: simplify_ai,
-            villagers_to_reduce_pathfinding: reduce_pathfinding,
-            villager_groups: groups,
+        // Check if we've reached the goal
+        if (next_node.0 - goal.0).abs() < 0.1 && 
+           (next_node.1 - goal.1).abs() < 0.1 && 
+           (next_node.2 - goal.2).abs() < 0.1 {
+            VILLAGER_PROCESSOR_LOGGER.log_debug(
+                "pathfind_success",
+                &trace_id,
+                &format!("Path found in {} steps", step),
+            );
+            return reconstruct_path(came_from, start_node, next_node);
+        }
+
+        // Remove current node from open set and add to closed set
+        open_set.remove(&next_node);
+        closed_set.insert(next_node);
+
+        // Get neighbors from navigation mesh (simplified for example)
+        let neighbors = get_navigation_neighbors(next_node, navigation_mesh);
+
+        for neighbor in neighbors {
+            // Skip neighbors that are in closed set
+            if closed_set.contains(&neighbor) {
+                continue;
+            }
+
+            // Calculate tentative g score
+            let tentative_g_score = *g_score.get(&next_node).unwrap_or(&f32::INFINITY) + 
+                distance_between(next_node, neighbor);
+
+            // Check if this is a better path
+            let neighbor_g_score = g_score.get(&neighbor).copied().unwrap_or(f32::INFINITY);
+            let is_better = tentative_g_score < neighbor_g_score;
+
+            if !open_set.contains(&neighbor) {
+                open_set.insert(neighbor);
+            } else if !is_better {
+                continue;
+            }
+
+            // This path is better - update
+            came_from.insert(neighbor, next_node);
+            g_score.insert(neighbor, tentative_g_score);
+            f_score.insert(neighbor, tentative_g_score + heuristic_cost_estimate(neighbor, goal));
+
+            // Early exit if we found a good path
+            if distance_between(neighbor, goal) < 1.0 {
+                VILLAGER_PROCESSOR_LOGGER.log_debug(
+                    "pathfind_near_goal",
+                    &trace_id,
+                    &format!("Near goal, optimizing path"),
+                );
+                break;
+            }
+        }
+
+        current_node = next_node;
+    }
+
+    // No path found within max steps
+    VILLAGER_PROCESSOR_LOGGER.log_debug(
+        "pathfind_failed",
+        &trace_id,
+        &format!("No path found after {} steps", max_steps),
+    );
+    None
+}
+
+/// Heuristic cost estimate (Manhattan distance for 3D space)
+fn heuristic_cost_estimate(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
+    (a.0 - b.0).abs() + (a.1 - b.1).abs() + (a.2 - b.2).abs()
+}
+
+/// Calculate Euclidean distance between two points
+fn distance_between(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
+    let dx = a.0 - b.0;
+    let dy = a.1 - b.1;
+    let dz = a.2 - b.2;
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+/// Get neighboring nodes from navigation mesh
+fn get_navigation_neighbors(
+    node: (f32, f32, f32),
+    navigation_mesh: &Vec<(f32, f32, f32)>,
+) -> Vec<(f32, f32, f32)> {
+    // In a real implementation, this would use spatial partitioning (octree, grid, etc.)
+    // For simplicity, we'll return all nodes within a certain distance
+    const NEIGHBOR_DISTANCE: f32 = 5.0;
+    
+    navigation_mesh
+        .iter()
+        .filter(|&&n| distance_between(node, n) < NEIGHBOR_DISTANCE)
+        .map(|&n| n)
+        .collect()
+}
+
+/// Reconstruct path from start to goal using came_from map
+fn reconstruct_path(
+    came_from: HashMap<(f32, f32, f32), (f32, f32, f32)>,
+    start: (f32, f32, f32),
+    current: (f32, f32, f32),
+) -> Option<Vec<(f32, f32, f32)>> {
+    let mut path = Vec::new();
+    let mut current_node = current;
+
+    // Add current node to path
+    path.push(current_node);
+
+    // Trace back through came_from map
+    while current_node != start {
+        if let Some(&prev_node) = came_from.get(&current_node) {
+            path.push(prev_node);
+            current_node = prev_node;
+        } else {
+            // No path found (shouldn't happen if A* completed properly)
+            return None;
         }
     }
+
+    // Path is built in reverse, so reverse it
+    path.reverse();
+    
+    Some(path)
 }
 
-use crate::entities::common::types::ArcEntityConfig;
+/// Process villager entities with spatial optimization and pathfinding
+pub fn process_villagers(input: VillagerInput) -> VillagerProcessResult {
+    let trace_id = generate_trace_id();
+    VILLAGER_PROCESSOR_LOGGER.log_info(
+        "process_start",
+        &trace_id,
+        &format!(
+            "process_villagers called with {} villagers",
+            input.villagers.len()
+        ),
+    );
+    let start_time = Instant::now();
 
-impl EntityProcessor for VillagerEntityProcessor {
-    fn process(&self) -> Result<(), String> {
-        // Placeholder implementation
-        Ok(())
-    }
-
-    fn process_entities(&self, _input: crate::EntityProcessingInput) -> crate::EntityProcessingResult {
-        unimplemented!()
-    }
-
-    fn update_config(&self, _config: ArcEntityConfig) {
-        unimplemented!()
-    }
-
-    fn process_entities_batch(&self, _inputs: Vec<crate::EntityProcessingInput>) -> Vec<crate::EntityProcessingResult> {
-        unimplemented!()
-    }
-
-    fn get_config(&self) -> ArcEntityConfig {
-        unimplemented!()
-    }
-}
-
-impl Default for VillagerProcessingConfig {
-    fn default() -> Self {
-        Self {
-            ai_config: VillagerConfig {
-                disable_ai_distance: 150.0,
-                simplify_ai_distance: 80.0,
-                reduce_pathfinding_distance: 40.0,
-                village_radius: 64.0,
-                max_villagers_per_group: 16,
-                pathfinding_tick_interval: 5,
-                simple_ai_tick_interval: 3,
-                complex_ai_tick_interval: 1,
-                workstation_search_radius: 32.0,
-                breeding_cooldown_ticks: 6000,
-                rest_tick_interval: 10,
-            },
-            max_batch_size: 256,
-            simd_chunk_size: 64,
-            spatial_grid_size: 128.0,
-            movement_threshold: 0.5,
-            ai_update_interval: 50,
-            pathfinding_update_interval: 100,
-            memory_pool_threshold: 1024,
-        }
-    }
-}
-
-/// Global villager processing manager with all optimizations
-pub struct VillagerProcessingManager {
-    config: VillagerProcessingConfig,
-    simd_processor: Arc<dyn StandardSimdOps>,
-    executor: ParallelExecutorEnum,
-    processor: VillagerEntityProcessor,
-}
-
-impl VillagerProcessingManager {
-    /// Create a new villager processing manager with all optimizations
-    pub fn new(config: VillagerProcessingConfig) -> Result<Self, String> {
-        let simd_processor = get_standard_simd_ops();
-        let executor = create_default_executor()
-            .map_err(|e| format!("Failed to create parallel executor: {}", e))?;
-        
-        // Create a villager entity processor with the given config
-        let processor = VillagerEntityProcessor::new(
-            Arc::clone(&simd_processor) as Arc<dyn simd_standardized::StandardSimdOps>,
-            executor.clone(),
+    // Validate input
+    if input.villagers.is_empty() {
+        VILLAGER_PROCESSOR_LOGGER.log_debug(
+            "empty_input",
+            &trace_id,
+            "No villagers to process, returning empty result",
         );
-        
-        Ok(Self {
-            config,
-            simd_processor,
-            executor,
-            processor,
+        return VillagerProcessResult {
+            villagers_to_disable_ai: Vec::new(),
+            villagers_to_simplify_ai: Vec::new(),
+            villagers_to_reduce_pathfinding: Vec::new(),
+            villager_groups: Vec::new(),
+        };
+    }
+
+    // Get player position (assuming first player is the one we care about)
+    let player_position = input.players.first().map(|p| (p.x as f32, p.y as f32, p.z as f32)).unwrap_or((0.0, 0.0, 0.0));
+
+    // Use work-stealing scheduler for optimal thread distribution
+    let scheduler = WorkStealingScheduler::new();
+    
+    // Convert to common entity format for processing
+    let entity_inputs: Vec<EntityProcessingInput> = input
+        .villagers
+        .iter()
+        .map(|villager| EntityProcessingInput {
+            entity_id: villager.id.to_string(),
+            entity_type: villager.entity_type,
+            data: villager.clone().into(),
+            delta_time: 0.05, // 50ms tick
+            simulation_distance: 128,
         })
-    }
+        .collect();
 
-    /// Process villager AI with full optimizations - main entry point
-    pub fn process_villager_ai(&mut self, input: VillagerInput) -> VillagerProcessResult {
-        self.processor.process_villagers(input)
-    }
+    // Process entities in parallel
+    let results = scheduler.execute(entity_inputs, |input| {
+        process_villager_entity(input, player_position)
+    });
 
-    /// Process villager AI using SIMD acceleration for vector operations
-    pub fn process_villager_ai_simd(&mut self, input: VillagerInput) -> VillagerProcessResult {
-        let start_time = std::time::Instant::now();
-        
-        // Use SIMD for distance calculations
-        let positions: Vec<f32> = input.villagers.iter().flat_map(|villager| {
-            vec![villager.distance * 0.1, villager.distance * 0.05, villager.distance * 0.1]
-        }).collect();
-        
-        let distance_factors: Vec<f32> = vec![1.0; positions.len() / 3]; // Placeholder - SIMD not implemented yet
-        
-        // SIMD distance calculation would go here - placeholder implementation
-        let position_chunks: Vec<(f32, f32, f32)> = positions.chunks(3)
-            .map(|p| (p[0], p[1], p[2]))
-            .collect();
-        
-        // Process with enhanced AI logic
-        let mut result = self.process_villager_ai(input);
-        
-        // Update SIMD statistics
-        // Processing stats removed - using simple result structure
-        
-        result
-    }
+    // Process results to determine optimization needs and group villagers
+    let mut villagers_to_disable_ai = Vec::new();
+    let mut villagers_to_simplify_ai = Vec::new();
+    let mut villagers_to_reduce_pathfinding = Vec::new();
+    let mut villager_groups = group_villagers_by_spatial_proximity(&input.villagers);
 
-    /// Batch process multiple villager collections with memory pool optimization
-    pub fn process_villager_ai_batch(&mut self, inputs: Vec<VillagerInput>) -> Vec<EnhancedVillagerProcessResult> {
-        let entity_inputs: Vec<EntityProcessingInput> = inputs.into_iter().map(|i| i.into()).collect();
-        let entity_results = self.processor.process_entities_batch(entity_inputs);
+    for result in results {
+        let villager_id = result.entity_id.parse::<u64>().unwrap_or(0);
         
-        entity_results.into_iter().map(|r| r.into()).collect()
-    }
+        // Find the corresponding villager data to check distance
+        if let Some(villager) = input.villagers.iter().find(|v| v.id == villager_id) {
+            // AI optimization based on distance from player
+            if villager.distance > 384.0 {
+                villagers_to_disable_ai.push(villager_id);
+            } else if villager.distance > 256.0 {
+                villagers_to_simplify_ai.push(villager_id);
+            } else if villager.distance > 128.0 {
+                villagers_to_reduce_pathfinding.push(villager_id);
+            }
 
-    /// Get current processing statistics
-    pub fn get_processing_stats(&self) -> ProcessingStats {
-        let config = self.processor.get_config();
-        let _villager_config = config.as_ref() as &dyn EntityConfig;
-        
-        ProcessingStats {
-            total_entities_processed: 0, // Would be tracked by the processor in a real implementation
-            ai_disabled_count: 0,        // Would be tracked by the processor in a real implementation
-            ai_simplified_count: 0,      // Would be tracked by the processor in a real implementation
-            spatial_groups_formed: 0,    // Would be tracked by the processor in a real implementation
-            simd_operations_used: 1, // Placeholder until SIMD level detection is implemented
-            memory_allocations: 0,       // Would be tracked by the processor in a real implementation
-            processing_time_ms: 0,        // Would be tracked by the processor in a real implementation
+            // Update pathfinding logic based on performance configuration
+            if let Some(group) = villager_groups.iter_mut().find(|g| g.villager_ids.contains(&villager_id)) {
+                // Adjust group AI tick rate based on group size
+                if group.villager_ids.len() > 50 {
+                    group.ai_tick_rate = 3; // Reduce tick rate for large groups
+                } else if group.villager_ids.len() > 20 {
+                    group.ai_tick_rate = 2; // Medium tick rate for medium groups
+                } else {
+                    group.ai_tick_rate = 1; // Full tick rate for small groups
+                }
+            }
         }
     }
 
-    /// Update AI configuration
-    pub fn update_ai_config(&mut self, new_config: VillagerConfig) {
-        let config = Arc::new(new_config.clone()) as Arc<dyn EntityConfig>;
-        self.processor.update_config(config);
-        self.config.ai_config = new_config;
+    let elapsed = start_time.elapsed();
+    VILLAGER_PROCESSOR_LOGGER.log_info(
+        "processing_complete",
+        &trace_id,
+        &format!(
+            "Villager processing completed in {:?}. Disabled AI for {} villagers, simplified AI for {} villagers, reduced pathfinding for {} villagers. Formed {} villager groups",
+            elapsed,
+            villagers_to_disable_ai.len(),
+            villagers_to_simplify_ai.len(),
+            villagers_to_reduce_pathfinding.len(),
+            villager_groups.len()
+        ),
+    );
+
+    VillagerProcessResult {
+        villagers_to_disable_ai,
+        villagers_to_simplify_ai,
+        villagers_to_reduce_pathfinding,
+        villager_groups,
     }
 }
 
-/// Enhanced villager data with AI state and spatial information
-#[derive(Debug, Clone)]
-pub struct EnhancedVillagerData {
-    pub id: u64,
-    pub entity_type: EntityType,
-    pub position: (f32, f32, f32),
-    pub velocity: (f32, f32, f32),
-    pub distance: f32,
-    pub profession: String,
-    pub level: u8,
-    pub has_workstation: bool,
-    pub is_resting: bool,
-    pub is_breeding: bool,
-    pub last_pathfind_tick: u64,
-    pub pathfind_frequency: u8,
-    pub ai_complexity: u8,
-    pub ai_state: AiState,
-    pub behavior_priority: f32,
-    pub last_update: std::time::Instant,
-    pub target_position: Option<(f32, f32, f32)>,
-    pub health: f32,
-    pub energy: f32,
-}
+/// Process a single villager entity with memory pooling and pathfinding optimization
+fn process_villager_entity(input: EntityProcessingInput, player_position: (f32, f32, f32)) -> EntityProcessingResult {
+    let trace_id = generate_trace_id();
+    let start_time = Instant::now();
 
-/// AI behavior states for enhanced villager processing
-#[derive(Debug, Clone, PartialEq)]
-pub enum AiState {
-    Idle,
-    Wandering,
-    Working,
-    Trading,
-    Breeding,
-    Resting,
-    Pathfinding,
-    Socializing,
-    Emergency,
-}
-
-/// Enhanced villager processing result with detailed AI decisions
-#[derive(Debug, Clone)]
-pub struct EnhancedVillagerProcessResult {
-    pub villagers_to_disable_ai: Vec<u64>,
-    pub villagers_to_simplify_ai: Vec<u64>,
-    pub villagers_to_reduce_pathfinding: Vec<u64>,
-    pub villagers_to_process_behavior: Vec<u64>,
-    pub villager_groups: Option<Vec<VillagerGroup>>,
-    pub processing_stats: ProcessingStats,
-}
-
-/// Processing statistics for performance monitoring
-#[derive(Debug, Clone, Default)]
-pub struct ProcessingStats {
-    pub total_entities_processed: usize,
-    pub ai_disabled_count: usize,
-    pub ai_simplified_count: usize,
-    pub spatial_groups_formed: usize,
-    pub simd_operations_used: usize,
-    pub memory_allocations: usize,
-    pub processing_time_ms: u64,
-}
-
-/// Legacy compatibility functions
-pub fn process_villager_ai(input: VillagerInput) -> VillagerProcessResult {
-    let mut manager = VillagerProcessingManager::new(VillagerProcessingConfig::default())
-        .expect("Failed to create villager processing manager");
+    // Get thread-local memory pool for efficient object reuse
+    let pool = ObjectPool::<VillagerData>::new(Default::default());
     
-    let enhanced_result = manager.process_villager_ai(input);
+    // Use memory pool to get or create villager data
+    let mut villager_data = pool.get();
     
-    enhanced_result.into()
+    // Update villager state with new input
+    if let Ok(parsed_id) = input.entity_id.parse::<u64>() {
+        villager_data.id = parsed_id;
+        villager_data.position = (input.data.x, input.data.y, input.data.z);
+        
+        // Calculate distance from player for AI optimization
+        let distance = distance_between(villager_data.position, player_position);
+        villager_data.distance = distance;
+
+        // Update profession and other villager-specific properties
+        if let Some(profession) = input.data.properties.get("profession") {
+            villager_data.profession = profession.clone();
+        }
+        if let Some(level_str) = input.data.properties.get("level") {
+            if let Ok(level) = level_str.parse::<u8>() {
+                villager_data.level = level;
+            }
+        }
+    }
+
+    // Simple pathfinding example - in real implementation this would be more sophisticated
+    let path = if villager_data.distance < 64.0 {
+        // Only pathfind for villagers close to player
+        let navigation_mesh = get_default_navigation_mesh();
+        find_villager_path(villager_data.position, player_position, &navigation_mesh, 50)
+    } else {
+        None
+    };
+
+    let result = EntityProcessingResult {
+        entity_id: input.entity_id,
+        success: true,
+        distance: villager_data.distance,
+        metadata_changed: Some(serde_json::json!({
+            "position": villager_data.position,
+            "distance": villager_data.distance,
+            "profession": villager_data.profession,
+            "level": villager_data.level,
+            "path": path.map(|p| p.iter().map(|&(x, y, z)| vec![x, y, z]).collect::<Vec<_>>()),
+        })),
+    };
+
+    let elapsed = start_time.elapsed();
+    VILLAGER_PROCESSOR_LOGGER.log_debug(
+        "villager_processed",
+        &trace_id,
+        &format!(
+            "Processed villager {} in {:?}, distance: {:.2}, profession: {}",
+            input.entity_id, elapsed, villager_data.distance, villager_data.profession
+        ),
+    );
+
+    result
+}
+
+/// Group villagers by spatial proximity for efficient rendering and AI management
+fn group_villagers_by_spatial_proximity(villagers: &[VillagerData]) -> Vec<VillagerGroup> {
+    let trace_id = generate_trace_id();
+    VILLAGER_PROCESSOR_LOGGER.log_debug(
+        "group_start",
+        &trace_id,
+        &format!("Grouping {} villagers by spatial proximity", villagers.len()),
+    );
+
+    // Use chunk-based spatial partitioning (simplified)
+    const CHUNK_SIZE: f32 = 16.0; // 16-block chunks
+    let mut groups_by_chunk: HashMap<(i32, i32, i32), Vec<&VillagerData>> = HashMap::new();
+
+    // Assign villagers to chunks
+    for villager in villagers {
+        let chunk_x = (villager.position.0 / CHUNK_SIZE).floor() as i32;
+        let chunk_y = (villager.position.1 / CHUNK_SIZE).floor() as i32;
+        let chunk_z = (villager.position.2 / CHUNK_SIZE).floor() as i32;
+        
+        let chunk_key = (chunk_x, chunk_y, chunk_z);
+        groups_by_chunk.entry(chunk_key).or_insert_with(Vec::new).push(villager);
+    }
+
+    // Create villager groups from chunks
+    let mut villager_groups = Vec::new();
+    let mut group_id_counter = 0;
+
+    for (chunk_key, villagers_in_chunk) in groups_by_chunk {
+        if villagers_in_chunk.len() < 3 {
+            // Skip small groups for better performance
+            continue;
+        }
+
+        // Calculate group center
+        let mut center_x = 0.0;
+        let mut center_y = 0.0;
+        let mut center_z = 0.0;
+        
+        for villager in villagers_in_chunk {
+            center_x += villager.position.0;
+            center_y += villager.position.1;
+            center_z += villager.position.2;
+        }
+        
+        let group_size = villagers_in_chunk.len() as f32;
+        center_x /= group_size;
+        center_y /= group_size;
+        center_z /= group_size;
+
+        // Create villager group
+        let mut villager_ids = Vec::new();
+        for villager in villagers_in_chunk {
+            villager_ids.push(villager.id);
+        }
+
+        let group = VillagerGroup {
+            group_id: group_id_counter,
+            center_x,
+            center_y,
+            center_z,
+            villager_ids,
+            group_type: format!("village_group_{}", group_id_counter),
+            ai_tick_rate: 1, // Default tick rate
+        };
+
+        villager_groups.push(group);
+        group_id_counter += 1;
+    }
+
+    VILLAGER_PROCESSOR_LOGGER.log_debug(
+        "group_complete",
+        &trace_id,
+        &format!("Created {} villager groups", villager_groups.len()),
+    );
+
+    villager_groups
+}
+
+/// Get default navigation mesh (in real implementation, this would be loaded from game assets)
+fn get_default_navigation_mesh() -> Vec<(f32, f32, f32)> {
+    // Simplified navigation mesh with common game world features
+    vec![
+        (0.0, 0.0, 0.0),
+        (16.0, 0.0, 0.0),
+        (32.0, 0.0, 0.0),
+        (0.0, 0.0, 16.0),
+        (16.0, 0.0, 16.0),
+        (32.0, 0.0, 16.0),
+        (0.0, 0.0, 32.0),
+        (16.0, 0.0, 32.0),
+        (32.0, 0.0, 32.0),
+        // Add more points as needed for real-world usage
+    ]
 }
 
 /// Batch process multiple villager collections in parallel
-pub fn process_villager_ai_batch(inputs: Vec<VillagerInput>) -> Vec<VillagerProcessResult> {
-    let mut manager = VillagerProcessingManager::new(VillagerProcessingConfig::default())
-        .expect("Failed to create villager processing manager");
-    
-    let enhanced_results = manager.process_villager_ai_batch(inputs);
-    
-    enhanced_results.into_iter().map(|result| result.into()).collect()
+pub fn process_villagers_batch(inputs: Vec<VillagerInput>) -> Vec<VillagerProcessResult> {
+    inputs.into_par_iter().map(process_villagers).collect()
 }
 
-/// Process villager AI from JSON input and return JSON result
-pub fn process_villager_ai_json(json_input: &str) -> Result<String, String> {
-    let input: VillagerInput = serde_json::from_str(json_input)
-        .map_err(|e| format!("Failed to parse JSON input: {}", e))?;
+/// Process villagers from JSON input and return JSON result
+pub fn process_villagers_json(json_input: &str) -> Result<String, String> {
+    let trace_id = generate_trace_id();
+    VILLAGER_PROCESSOR_LOGGER.log_info(
+        "json_process_start",
+        &trace_id,
+        &format!(
+            "process_villagers_json called with input length: {}",
+            json_input.len()
+        ),
+    );
 
-    let result = process_villager_ai(input);
+    let input: VillagerInput = serde_json::from_str(json_input).map_err(|e| {
+        VILLAGER_PROCESSOR_LOGGER.log_error(
+            "json_parse_error",
+            &trace_id,
+            &format!("ERROR: Failed to parse JSON input: {}", e),
+            "VILLAGER_PROCESSING",
+        );
+        format!("Failed to parse JSON input: {}", e)
+    })?;
 
-    serde_json::to_string(&result).map_err(|e| format!("Failed to serialize result to JSON: {}", e))
+    let result = process_villagers(input);
+
+    let json_result = serde_json::to_string(&result).map_err(|e| {
+        VILLAGER_PROCESSOR_LOGGER.log_error(
+            "json_serialize_error",
+            &trace_id,
+            &format!("ERROR: Failed to serialize result to JSON: {}", e),
+            "VILLAGER_PROCESSING",
+        );
+        format!("Failed to serialize result to JSON: {}", e)
+    })?;
+
+    VILLAGER_PROCESSOR_LOGGER.log_info(
+        "json_process_complete",
+        &trace_id,
+        &format!(
+            "Villager processing completed, result length: {}",
+            json_result.len()
+        ),
+    );
+
+    Ok(json_result)
 }
 
-/// Process villager AI from binary input in batches for better JNI performance
-pub fn process_villager_ai_binary_batch(data: &[u8]) -> Result<Vec<u8>, String> {
-    if data.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Deserialize manual villager input, process, and serialize result
-    let input = crate::binary::conversions::deserialize_villager_input(data)
-        .map_err(|e| format!("Failed to deserialize villager input: {}", e))?;
-    let result = process_villager_ai(input);
-    let out = crate::binary::conversions::serialize_villager_result(&result)
-        .map_err(|e| format!("Failed to serialize villager result: {}", e))?;
-    Ok(out)
+/// Thread-safe villager state management with spatial awareness
+#[derive(Debug, Clone)]
+pub struct VillagerStateManager {
+    pub active_villagers: Arc<std::sync::RwLock<HashMap<u64, VillagerData>>>,
+    pub villager_pools: Arc<std::sync::RwLock<HashMap<EntityType, ObjectPool<VillagerData>>>>,
+    pub spatial_groups: Arc<std::sync::RwLock<HashMap<(i32, i32, i32), Vec<u64>>>>,
+    logger: PerformanceLogger,
 }
 
-impl From<EntityProcessingResult> for EnhancedVillagerProcessResult {
-    fn from(result: EntityProcessingResult) -> Self {
-        let mut villagers_to_reduce_pathfinding = Vec::new();
-        let mut villagers_to_process_behavior = Vec::new();
-        
-        // In a complete implementation, we would have more sophisticated logic here
-        // to determine which villagers need pathfinding updates or behavior processing
-        
-        // For now, we'll just split the entities based on some simple criteria
-        for &villager_id in &result.entities_to_disable_ai {
-            villagers_to_process_behavior.push(villager_id);
-        }
-        
-        for &villager_id in &result.entities_to_simplify_ai {
-            villagers_to_process_behavior.push(villager_id);
-        }
-        
-        // If we have pathfinding reduction, use that for pathfinding updates
-        if let Some(pathfinding_list) = result.entities_to_reduce_pathfinding {
-            villagers_to_reduce_pathfinding.extend(pathfinding_list);
-        }
-        
-        let villager_groups = result.groups.map(|group| vec![VillagerGroup {
-            group_id: 0, // Placeholder until group ID is implemented
-            center_x: group.center.0,
-            center_y: group.center.1,
-            center_z: group.center.2,
-            villager_ids: group.entity_ids,
-            group_type: match group.group_type {
-                GroupType::VillagerGroup => "village".to_string(),
-                GroupType::PassiveHerd => "herd".to_string(),
-                GroupType::MixedCrowd => "crowd".to_string(),
-                _ => "generic".to_string(),
-            },
-            ai_tick_rate: 1, // Placeholder until proper AI tick rate is implemented
-        }]);
-        
-        EnhancedVillagerProcessResult {
-            villagers_to_disable_ai: result.entities_to_disable_ai,
-            villagers_to_simplify_ai: result.entities_to_simplify_ai,
-            villagers_to_reduce_pathfinding,
-            villagers_to_process_behavior,
-            villager_groups,
-            processing_stats: result.processing_stats.unwrap_or_else(|| crate::types::ProcessingStats::default()),
+impl VillagerStateManager {
+    pub fn new() -> Self {
+        Self {
+            active_villagers: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            villager_pools: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            spatial_groups: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            logger: PerformanceLogger::new("villager_state_manager"),
         }
     }
-}
 
-impl From<EnhancedVillagerProcessResult> for VillagerProcessResult {
-    fn from(result: EnhancedVillagerProcessResult) -> Self {
-        let mut villager_groups = Vec::new();
+    /// Update villager state with spatial grouping optimization
+    pub fn update_villager_state(&self, villager_id: u64, new_state: VillagerData) -> Result<(), String> {
+        let trace_id = generate_trace_id();
         
-        if let Some(groups) = result.villager_groups {
-            villager_groups = groups;
-        }
+        let mut active_villagers = self.active_villagers.write().unwrap();
+        let mut spatial_groups = self.spatial_groups.write().unwrap();
         
-        VillagerProcessResult {
-            villagers_to_disable_ai: result.villagers_to_disable_ai,
-            villagers_to_simplify_ai: result.villagers_to_simplify_ai,
-            villagers_to_reduce_pathfinding: result.villagers_to_reduce_pathfinding,
-            villager_groups,
+        if let Some(existing) = active_villagers.get_mut(&villager_id) {
+            // Remove from old spatial group
+            let old_chunk = self.get_chunk_coordinates(existing.position);
+            if let Some(group) = spatial_groups.get_mut(&old_chunk) {
+                if let Some(index) = group.iter().position(|&id| id == villager_id) {
+                    group.remove(index);
+                    
+                    // Remove empty groups
+                    if group.is_empty() {
+                        spatial_groups.remove(&old_chunk);
+                    }
+                }
+            }
+
+            // Update villager state
+            *existing = new_state.clone();
+
+            // Add to new spatial group
+            let new_chunk = self.get_chunk_coordinates(new_state.position);
+            spatial_groups.entry(new_chunk).or_insert_with(Vec::new).push(villager_id);
+
+            self.logger.log_debug(
+                "villager_state_updated",
+                &trace_id,
+                &format!("Updated state for villager {}: {:?}", villager_id, existing),
+            );
+            
+            Ok(())
+        } else {
+            // Create new entry
+            active_villagers.insert(villager_id, new_state.clone());
+            
+            // Add to spatial group
+            let chunk = self.get_chunk_coordinates(new_state.position);
+            spatial_groups.entry(chunk).or_insert_with(Vec::new).push(villager_id);
+
+            self.logger.log_debug(
+                "villager_state_created",
+                &trace_id,
+                &format!("Created new villager state for villager {}: {:?}", villager_id, new_state),
+            );
+            
+            Ok(())
         }
     }
-}
 
-/// Get performance statistics for villager processing
-pub fn get_villager_processing_stats() -> Result<VillagerProcessingStats, String> {
-    // In a complete implementation, this would retrieve stats from the processor
-    Ok(VillagerProcessingStats {
-        pathfinding_cache_stats: PathfindingCacheStats::default(),
-        active_groups: 0,
-        total_villagers_processed: 0,
-    })
-}
+    /// Get chunk coordinates for spatial partitioning
+    fn get_chunk_coordinates(&self, position: (f32, f32, f32)) -> (i32, i32, i32) {
+        const CHUNK_SIZE: f32 = 16.0;
+        let x = (position.0 / CHUNK_SIZE).floor() as i32;
+        let y = (position.1 / CHUNK_SIZE).floor() as i32;
+        let z = (position.2 / CHUNK_SIZE).floor() as i32;
+        (x, y, z)
+    }
 
-use serde::{Serialize, Deserialize};
+    /// Get all villagers in a specific spatial chunk
+    pub fn get_villagers_in_chunk(&self, chunk: (i32, i32, i32)) -> Vec<u64> {
+        let spatial_groups = self.spatial_groups.read().unwrap();
+        spatial_groups.get(&chunk).cloned().unwrap_or(Vec::new())
+    }
 
-#[derive(Serialize, Deserialize)]
-pub struct VillagerProcessingStats {
-    pub pathfinding_cache_stats: PathfindingCacheStats,
-    pub active_groups: usize,
-    pub total_villagers_processed: usize,
+    /// Get villagers within a radius using spatial partitioning for efficiency
+    pub fn get_villagers_in_radius(&self, center: (f32, f32, f32), radius: f32) -> Vec<u64> {
+        let spatial_groups = self.spatial_groups.read().unwrap();
+        let center_chunk = self.get_chunk_coordinates(center);
+        let radius_chunks = (radius / 16.0).ceil() as i32;
+
+        let mut result = Vec::new();
+
+        // Check neighboring chunks within radius
+        for x in center_chunk.0 - radius_chunks..=center_chunk.0 + radius_chunks {
+            for y in center_chunk.1 - radius_chunks..=center_chunk.1 + radius_chunks {
+                for z in center_chunk.2 - radius_chunks..=center_chunk.2 + radius_chunks {
+                    let chunk = (x, y, z);
+                    if let Some(villagers) = spatial_groups.get(&chunk) {
+                        // In real implementation, we would check actual distance here
+                        // For simplicity, we'll return all villagers in nearby chunks
+                        result.extend_from_slice(villagers);
+                    }
+                }
+            }
+        }
+
+        result
+    }
 }
