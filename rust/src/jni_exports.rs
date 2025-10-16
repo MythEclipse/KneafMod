@@ -32,43 +32,43 @@ impl WorkerData {
 }
 
 // Stub functions for missing operations - these will be implemented later
-pub fn process_villager_operation(_input: &str) -> Result<String, crate::errors::RustError> {
+pub fn process_villager_operation(_input: &str) -> Result<String> {
     Ok("{\"villagers_to_disable_ai\": [], \"villagers_to_simplify_ai\": [], \"villagers_to_reduce_pathfinding\": [], \"villager_groups\": []}".to_string())
 }
 
-pub fn process_entity_operation(_input: &str) -> Result<String, crate::errors::RustError> {
+pub fn process_entity_operation(_input: &str) -> Result<String> {
     Ok("{\"entities_to_tick\": []}".to_string())
 }
 
-pub fn process_mob_operation(_input: &str) -> Result<String, crate::errors::RustError> {
+pub fn process_mob_operation(_input: &str) -> Result<String> {
     Ok("{\"mobs_to_disable_ai\": [], \"mobs_to_simplify_ai\": []}".to_string())
 }
 
-pub fn process_block_operation(_input: &str) -> Result<String, crate::errors::RustError> {
+pub fn process_block_operation(_input: &str) -> Result<String> {
     Ok("{\"block_entities_to_tick\": []}".to_string())
 }
 
-pub fn get_entities_to_tick_operation(_input: &str) -> Result<String, crate::errors::RustError> {
+pub fn get_entities_to_tick_operation(_input: &str) -> Result<String> {
     Ok("{\"entities_to_tick\": []}".to_string())
 }
 
-pub fn get_block_entities_to_tick_operation(_input: &str) -> Result<String, crate::errors::RustError> {
+pub fn get_block_entities_to_tick_operation(_input: &str) -> Result<String> {
     Ok("{\"block_entities_to_tick\": []}".to_string())
 }
 
-pub fn process_mob_ai_operation(_input: &str) -> Result<String, crate::errors::RustError> {
+pub fn process_mob_ai_operation(_input: &str) -> Result<String> {
     Ok("{\"mobs_to_disable_ai\": [], \"mobs_to_simplify_ai\": []}".to_string())
 }
 
-pub fn pre_generate_nearby_chunks_operation(_input: &str) -> Result<String, crate::errors::RustError> {
+pub fn pre_generate_nearby_chunks_operation(_input: &str) -> Result<String> {
     Ok("{\"chunks_generated\": 0}".to_string())
 }
 
-pub fn set_current_tps_operation(_input: &str) -> Result<String, crate::errors::RustError> {
+pub fn set_current_tps_operation(_input: &str) -> Result<String> {
     Ok("{\"tps_set\": true}".to_string())
 }
 
-fn execute_operation(main_data: &str, operation: &str) -> Result<String, RustError> {
+fn execute_operation(main_data: &str, operation: &str) -> Result<String> {
     match operation {
         "process_villager" => process_villager_operation(main_data),
         "process_entity" => process_entity_operation(main_data),

@@ -13,6 +13,8 @@ use crate::logging::PerformanceLogger;
 
 /// Common trait for all memory pool implementations
 pub trait MemoryPool: Debug + Send + Sync {
+    type Object: Debug + Send + Sync + Default + Clone;
+
     /// Create a new memory pool with the given configuration
     fn new(config: MemoryPoolConfig) -> Self where Self: Sized;
     
@@ -46,13 +48,13 @@ pub trait MemoryPool: Debug + Send + Sync {
     }
     
     /// Get an object from the pool
-    fn get(&self) -> PooledObject<Self> where Self: Sized, Self::Object: Debug + Send + Sync + Default + Clone {
+    fn get(&self) -> PooledObject<Self::Object> where Self: Sized {
         // Default implementation - can be overridden by specific implementations
         unimplemented!("get not implemented for this MemoryPool type")
     }
     
     /// Get an object from the pool using lock-free operations
-    fn get_lockfree(&self) -> Option<Self::Object> where Self: Sized, Self::Object: Debug + Send + Sync + Default + Clone {
+    fn get_lockfree(&self) -> Option<Self::Object> where Self: Sized {
         // Default implementation - can be overridden by specific implementations
         None
     }
@@ -63,7 +65,7 @@ pub trait MemoryPool: Debug + Send + Sync {
         size_bytes: u64,
         allocation_tracker: Arc<RwLock<SwapAllocationMetrics>>,
         allocation_type: &str,
-    ) -> PooledObject<Self> where Self: Sized, Self::Object: Debug + Send + Sync + Default + Clone {
+    ) -> PooledObject<Self::Object> where Self: Sized {
         // Default implementation - can be overridden by specific implementations
         unimplemented!("get_with_tracking not implemented for this MemoryPool type")
     }

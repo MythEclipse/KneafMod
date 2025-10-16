@@ -30,7 +30,7 @@ pub struct VillagerProcessingConfig {
 use crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum;
 
 pub struct VillagerEntityProcessor {
-    simd_ops: Arc<StandardSimdOps>,
+    simd_ops: Arc<dyn StandardSimdOps>,
     executor: ParallelExecutorEnum,
 }
 
@@ -65,10 +65,28 @@ impl VillagerEntityProcessor {
     }
 }
 
+use crate::entities::common::types::ArcEntityConfig;
+
 impl EntityProcessor for VillagerEntityProcessor {
     fn process(&self) -> Result<(), String> {
         // Placeholder implementation
         Ok(())
+    }
+
+    fn process_entities(&self, input: crate::EntityProcessingInput) -> crate::EntityProcessingResult {
+        unimplemented!()
+    }
+
+    fn update_config(&self, config: ArcEntityConfig) {
+        unimplemented!()
+    }
+
+    fn process_entities_batch(&self, inputs: Vec<crate::EntityProcessingInput>) -> Vec<crate::EntityProcessingResult> {
+        unimplemented!()
+    }
+
+    fn get_config(&self) -> ArcEntityConfig {
+        unimplemented!()
     }
 }
 
@@ -102,7 +120,7 @@ impl Default for VillagerProcessingConfig {
 /// Global villager processing manager with all optimizations
 pub struct VillagerProcessingManager {
     config: VillagerProcessingConfig,
-    simd_processor: Arc<StandardSimdOps>,
+    simd_processor: Arc<dyn StandardSimdOps>,
     executor: ParallelExecutorEnum,
     processor: VillagerEntityProcessor,
 }

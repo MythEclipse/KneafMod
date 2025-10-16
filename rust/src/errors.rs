@@ -202,13 +202,6 @@ impl From<crate::memory::allocator::AllocationError> for RustError {
     }
 }
 
-/// Implement From trait for crc32fast::Error
-impl From<std::io::Error> for RustError {
-    fn from(error: std::io::Error) -> Self {
-        RustError::ChecksumError(error.to_string())
-    }
-}
-
 /// Implement From trait for tokio::io::Error
 impl From<tokio::io::Error> for RustError {
     fn from(error: tokio::io::Error) -> Self {

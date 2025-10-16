@@ -240,18 +240,22 @@ impl<T> MemoryPool for ObjectPool<T>
 where
     T: Debug + Send + Sync + Default + Clone,
 {
-    fn new(config: ObjectPoolConfig) -> Self {
+    type Object = T;
+
+    fn new(config: MemoryPoolConfig) -> Self {
         // Validate configuration
         if config.max_size == 0 {
             panic!("Max size cannot be zero");
         }
 
+        let pool_config = ObjectPoolConfig::from(config);
+
         Self {
             pool: Arc::new(Mutex::new(HashMap::new())),
             access_order: Arc::new(Mutex::new(BTreeMap::new())),
             next_id: CachePadded::new(AtomicU64::new(0)),
-            max_size: config.max_size,
-            logger: PerformanceLogger::new(&config.logger_name),
+            max_size: pool_config.max_size,
+            logger: PerformanceLogger::new(&pool_config.logger_name),
             high_water_mark: CachePadded::new(AtomicUsize::new(0)),
             allocation_count: CachePadded::new(AtomicUsize::new(0)),
             last_cleanup_time: CachePadded::new(AtomicUsize::new(
@@ -263,8 +267,8 @@ where
             is_monitoring: AtomicBool::new(false),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             pressure_monitor: Arc::new(RwLock::new(MemoryPressureMonitor::new())),
-            atomic_state: Arc::new(AtomicPoolState::new(config.max_size)),
-            config,
+            atomic_state: Arc::new(AtomicPoolState::new(pool_config.max_size)),
+            config: pool_config,
             common_stats: MemoryPoolStats::default(),
         }
     }

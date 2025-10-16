@@ -32,6 +32,14 @@ pub fn get_villager_config() -> VillagerConfig {
 
 // Implement EntityConfig trait for VillagerConfig
 impl EntityConfig for VillagerConfig {
+    fn get_entity_type(&self) -> &str {
+        "villager"
+    }
+
+    fn clone_box(&self) -> Box<dyn EntityConfig> {
+        Box::new(self.clone())
+    }
+
     fn get_disable_ai_distance(&self) -> f32 {
         self.disable_ai_distance
     }

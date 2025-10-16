@@ -720,7 +720,7 @@ impl PerformanceMonitor {
 
     pub fn log_periodic_status() {
         let trace_id = generate_trace_id();
-        let status = get_system_status();
+        let status = Self::get_system_status();
         PERFORMANCE_MONITOR
             .logger
             .log_info("system_status", &trace_id, &status);

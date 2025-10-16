@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-// Remove conflicting import - we define our own ExecutorType
+use async_trait::async_trait;
 
 /// Enum representing different types of parallel executors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,15 +12,22 @@ pub enum ExecutorType {
     Async,
 }
 
+#[async_trait]
 pub trait ParallelExecutor: Send + Sync {
     /// Executes a function synchronously
-    fn execute_sync(&self, f: Box<dyn FnOnce() -> Box<dyn std::any::Any + Send> + Send>) -> Box<dyn std::any::Any + Send>;
+    fn execute_sync<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static;
 
     /// Executes a function asynchronously, returning a future
-    fn execute(&self, f: Box<dyn FnOnce() -> Box<dyn std::any::Any + Send> + Send>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Box<dyn std::any::Any + Send>> + Send>>;
+    fn execute<F, R>(&self, f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static;
 
     /// Shuts down the executor gracefully
-    fn shutdown(&self);
+    async fn shutdown(&self);
 
     /// Gets the current number of running tasks
     fn running_tasks(&self) -> usize;
@@ -37,6 +44,7 @@ pub enum ParallelExecutorEnum {
     Async(Arc<AsyncExecutor>),
 }
 
+#[async_trait]
 impl ParallelExecutor for ParallelExecutorEnum {
     fn execute_sync<F, R>(&self, f: F) -> R
     where
@@ -62,11 +70,11 @@ impl ParallelExecutor for ParallelExecutorEnum {
         }
     }
 
-    fn shutdown(&self) {
+    async fn shutdown(&self) {
         match self {
-            ParallelExecutorEnum::ThreadPool(e) => e.shutdown(),
-            ParallelExecutorEnum::WorkStealing(e) => e.shutdown(),
-            ParallelExecutorEnum::Async(e) => e.shutdown(),
+            ParallelExecutorEnum::ThreadPool(e) => e.shutdown().await,
+            ParallelExecutorEnum::WorkStealing(e) => e.shutdown().await,
+            ParallelExecutorEnum::Async(e) => e.shutdown().await,
         }
     }
 
@@ -124,7 +132,6 @@ impl ParallelExecutorFactory {
 
 /// Thread pool executor implementation
 struct ThreadPoolExecutor {
-    // Simplified implementation for demonstration
     pool: tokio::runtime::Runtime,
 }
 
@@ -135,32 +142,39 @@ impl ThreadPoolExecutor {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ParallelExecutor for ThreadPoolExecutor {
+    fn execute_sync<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.pool.block_on(async { f() })
+    }
+
     fn execute<F, R>(&self, f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        Box::pin(self.pool.spawn_blocking(f))
+        Box::pin(self.pool.spawn_blocking(move || f()))
     }
 
     async fn shutdown(&self) {
-        self.pool.shutdown().await;
+        // Tokio runtime shutdown is not async
     }
 
     fn running_tasks(&self) -> usize {
-        0 // Simplified - real implementation would track this
+        0 
     }
 
     fn max_concurrent_tasks(&self) -> usize {
-        100 // Default value
+        100
     }
 }
 
 /// Work stealing executor implementation
 struct WorkStealingExecutor {
-    // Simplified implementation for demonstration
     executor: rayon::ThreadPool,
 }
 
@@ -174,8 +188,16 @@ impl WorkStealingExecutor {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ParallelExecutor for WorkStealingExecutor {
+    fn execute_sync<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.executor.install(f)
+    }
+
     fn execute<F, R>(&self, f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -190,11 +212,10 @@ impl ParallelExecutor for WorkStealingExecutor {
     }
 
     async fn shutdown(&self) {
-        // Rayon doesn't have a graceful shutdown, so we just return immediately
     }
 
     fn running_tasks(&self) -> usize {
-        0 // Simplified - real implementation would track this
+        0
     }
 
     fn max_concurrent_tasks(&self) -> usize {
@@ -204,7 +225,6 @@ impl ParallelExecutor for WorkStealingExecutor {
 
 /// Async executor implementation
 struct AsyncExecutor {
-    // Simplified implementation for demonstration
     runtime: tokio::runtime::Runtime,
 }
 
@@ -215,14 +235,22 @@ impl AsyncExecutor {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ParallelExecutor for AsyncExecutor {
+    fn execute_sync<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.runtime.block_on(async { f() })
+    }
+
     fn execute<F, R>(&self, f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        Box::pin(self.runtime.spawn(f))
+        Box::pin(self.runtime.spawn(async move { f() }))
     }
 
     async fn shutdown(&self) {
@@ -230,38 +258,26 @@ impl ParallelExecutor for AsyncExecutor {
     }
 
     fn running_tasks(&self) -> usize {
-        0 // Simplified - real implementation would track this
+        0
     }
 
     fn max_concurrent_tasks(&self) -> usize {
-        100 // Default value
+        100
     }
 }
 
 /// Global executor instance for the application
 static GLOBAL_EXECUTOR: Mutex<Option<ParallelExecutorEnum>> = Mutex::new(None);
 
-/// Initializes the global executor with the specified type
 pub fn initialize_global_executor(executor_type: ExecutorType) {
     let mut global_executor = GLOBAL_EXECUTOR.lock().expect("Failed to lock global executor");
     *global_executor = Some(ParallelExecutorFactory::create_executor_enum(executor_type));
 }
 
-/// Gets the global executor instance
-// pub fn get_global_executor() -> Arc<Box<dyn ParallelExecutor>> {
-//     GLOBAL_EXECUTOR.lock()
-//         .expect("Failed to lock global executor")
-//         .as_ref()
-//         .cloned()
-//         .expect("Global executor not initialized")
-// }
-
-/// Initializes the global executor with a default work-stealing executor
 pub fn initialize_default_executor() {
     initialize_global_executor(ExecutorType::WorkStealing);
 }
 
-// Initialize the global executor with a default work-stealing executor on first use
 #[ctor::ctor]
 fn init() {
     initialize_default_executor();

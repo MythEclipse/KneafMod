@@ -534,7 +534,7 @@ pub fn process_block_entities_batch(inputs: Vec<BlockInput>) -> Vec<BlockProcess
 }
 
 /// Process block entities from JSON input
-pub fn process_block_entities_json(json_input: &str) -> Result<String, RustError> {
+pub fn process_block_entities_json(json_input: &str) -> Result<String> {
     let input: BlockInput = serde_json::from_str(json_input)
         .map_err(|e| RustError::DeserializationError(e.to_string()))?;
 
@@ -544,7 +544,7 @@ pub fn process_block_entities_json(json_input: &str) -> Result<String, RustError
 }
 
 /// Process block entities from binary input
-pub fn process_block_entities_binary_batch(data: &[u8]) -> Result<Vec<u8>, RustError> {
+pub fn process_block_entities_binary_batch(data: &[u8]) -> Result<Vec<u8>> {
     if data.is_empty() {
         return Ok(Vec::new());
     }
