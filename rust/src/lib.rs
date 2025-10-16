@@ -25,6 +25,10 @@ pub mod jni_call;
 pub mod jni_exports;
 pub mod jni_utils;
 
+// New modules
+pub mod sync;
+pub mod tests;
+
 // Export all public modules for use outside the crate
 pub use parallelism::*;
 pub use performance::*;
@@ -42,6 +46,10 @@ pub use compression::*;
 pub use batch::*;
 pub use storage::*;
 pub use macros::*;
+
+// Export new modules
+pub use sync::*;
+pub use tests::*;
 
 // Export verification test for manual execution
 #[cfg(test)]
