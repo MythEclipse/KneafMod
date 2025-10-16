@@ -13,7 +13,9 @@ use crate::logging::PerformanceLogger;
 
 /// Common trait for all memory pool implementations
 pub trait MemoryPool: Debug + Send + Sync {
-    type Object: Debug + Send + Sync + Default + Clone;
+    // Use a default associated type to allow trait objects where implementations
+    // may not specify a concrete `Object` type in older code paths.
+    type Object: Debug + Send + Sync + Default + Clone = ();
 
     /// Create a new memory pool with the given configuration
     fn new(config: MemoryPoolConfig) -> Self where Self: Sized;

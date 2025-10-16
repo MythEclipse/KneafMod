@@ -512,9 +512,9 @@ impl BinaryConverter for EntityConverter {
             let _ = cur.read_f32::<LittleEndian>();
         }
         
-        use crate::entities::mob::types::DefaultEntityConfig;
+        use crate::entities::common::types::DefaultEntityConfig;
         let cfg = DefaultEntityConfig {
-            entity_type: entity_type.clone(),
+            entity_type: etype.clone(),
         };
         
         Ok(EntityInput {

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::RwLock;
+use std::sync::{RwLock, Arc};
 
 use crate::errors::{RustError, Result};
 use crate::logging::PerformanceLogger;

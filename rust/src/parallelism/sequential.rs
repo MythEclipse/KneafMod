@@ -1,5 +1,4 @@
-use crate::parallelism::base::executor_factory::ParallelExecutor;
-use crate::errors::Result;
+use crate::ParallelExecutor;
 
 pub struct SequentialExecutor;
 
@@ -10,26 +9,27 @@ impl SequentialExecutor {
 }
 
 impl ParallelExecutor for SequentialExecutor {
-    fn execute<F, R>(&self, f: F) -> R
+    fn execute_sync<F, R>(&self, f: F) -> R
     where
-        F: FnOnce() -> R + Send,
-        R: Send,
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
     {
         f()
     }
 
-    fn spawn<F>(&self, f: F)
+    fn execute<F, R>(&self, f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
     {
-        f()
+        Box::pin(async move { f() })
     }
 
-    fn current_thread_count(&self) -> usize {
+    fn running_tasks(&self) -> usize {
+        0
+    }
+
+    fn max_concurrent_tasks(&self) -> usize {
         1
-    }
-
-    fn name(&self) -> &str {
-        "sequential"
     }
 }

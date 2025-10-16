@@ -93,28 +93,28 @@ pub fn get_rayon_thread_pool() -> Arc<rayon::ThreadPool> {
 }
 
 /// Create a default parallel executor (recommended for new code)
-pub fn create_default_executor() -> Result<Box<dyn ParallelExecutor>> {
-    ParallelExecutorFactory::create_default()
+pub fn create_default_executor() -> Result<crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum> {
+    Ok(ParallelExecutorFactory::create_executor_enum(ExecutorType::ThreadPool))
 }
 
 /// Create a CPU-bound optimized executor (recommended for new code)
-pub fn create_cpu_bound_executor() -> Result<Box<dyn ParallelExecutor>> {
-    ParallelExecutorFactory::create_cpu_bound()
+pub fn create_cpu_bound_executor() -> Result<crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum> {
+    Ok(ParallelExecutorFactory::create_executor_enum(ExecutorType::ThreadPool))
 }
 
 /// Create an I/O-bound optimized executor (recommended for new code)
-pub fn create_io_bound_executor() -> Result<Box<dyn ParallelExecutor>> {
-    ParallelExecutorFactory::create_io_bound()
+pub fn create_io_bound_executor() -> Result<crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum> {
+    Ok(ParallelExecutorFactory::create_executor_enum(ExecutorType::Async))
 }
 
 /// Create a work-stealing optimized executor (recommended for new code)
-pub fn create_work_stealing_executor() -> Result<Box<dyn ParallelExecutor>> {
-    ParallelExecutorFactory::create_work_stealing()
+pub fn create_work_stealing_executor() -> Result<crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum> {
+    Ok(ParallelExecutorFactory::create_executor_enum(ExecutorType::WorkStealing))
 }
 
 /// Create a sequential executor (single thread, recommended for new code)
-pub fn create_sequential_executor() -> Result<Box<dyn ParallelExecutor>> {
-    Ok(Box::new(SequentialExecutor::new()))
+pub fn create_sequential_executor() -> Result<crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum> {
+    Ok(crate::parallelism::base::executor_factory::executor_factory::ParallelExecutorEnum::ThreadPool(std::sync::Arc::new(crate::parallelism::sequential::SequentialExecutor::new())))
 }
 
 // Re-export performance monitoring under the `monitoring` name so older code

@@ -202,12 +202,8 @@ impl From<crate::memory::allocator::AllocationError> for RustError {
     }
 }
 
-/// Implement From trait for tokio::io::Error
-impl From<tokio::io::Error> for RustError {
-    fn from(error: tokio::io::Error) -> Self {
-        RustError::IoError(error.to_string())
-    }
-}
+// Note: tokio::io::Error currently maps to std::io::Error; avoid duplicate From impl
+// If needed, conversion can be performed at the call site via `std::io::Error::from(tokio_err)`.
 
 /// Implement From trait for j4rs::errors::J4RsError
 impl From<j4rs::errors::J4RsError> for RustError {

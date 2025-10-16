@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 /// Standard SIMD operations interface
-pub trait StandardSimdOps {
+pub trait StandardSimdOps: Send + Sync {
     fn vector_add(&self, a: &[f32], b: &[f32]) -> Vec<f32>;
     fn vector_mul(&self, a: &[f32], b: &[f32]) -> Vec<f32>;
     fn vector_dot(&self, a: &[f32], b: &[f32]) -> f32;

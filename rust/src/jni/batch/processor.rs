@@ -1450,7 +1450,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_submitAsy
 use std::sync::OnceLock;
 use std::collections::HashMap;
 
-'''/// JNI function to poll async batch operation results
+/// JNI function to poll async batch operation results
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_pollAsyncBatchResult(
     mut env: JNIEnv,
@@ -1478,7 +1478,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_EnhancedNativeBridge_pollAsync
             env.byte_array_from_slice(error_msg.as_bytes()).map(|arr| arr.into_raw()).unwrap_or(std::ptr::null_mut())
         }
     }
-}'''
+}
 
 /// JNI function to submit batched operations from Java
 #[no_mangle]

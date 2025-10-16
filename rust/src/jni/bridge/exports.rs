@@ -1,4 +1,4 @@
-'''// Minimal, clean JNI exports for rustperf crate.
+// Minimal, clean JNI exports for rustperf crate.
 // Provides the native symbols referenced by the Java side so the library builds.
 
 use jni::JNIEnv;
@@ -949,4 +949,3 @@ pub fn set_current_tps_operation(_data: &[u8]) -> Result<Vec<u8>, String> {
     // This function has been moved to appropriate module
     Err("Function moved to appropriate module".to_string())
 }
-''

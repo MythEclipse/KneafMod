@@ -2,10 +2,8 @@ use jni::JNIEnv;
 use jni::objects::{JObject, JString, JObjectArray, JByteArray};
 use jni::sys::jbyteArray;
 
-use crate::jni::converter::factory::JniConverter;
-use crate::jni_converter_factory::{JniConverter, JniConverterFactory};
+use crate::jni::converter::factory::{JniConverter, JniConverterFactory};
 use crate::jni_errors::jni_error_bytes;
-use crate::jni_error_bytes;
 
 /// Simple request type returned by the parser
 pub struct JniRequest {
