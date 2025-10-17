@@ -2,9 +2,10 @@
 //! Provides real entity processing optimizations using SIMD and mathematical acceleration
 
 use jni::JNIEnv;
-use jni::objects::{JClass, JString, JDoubleArray};
+use jni::objects::{JClass, JString, JDoubleArray, JBooleanArray};
 use jni::sys::{jint, jboolean};
 use std::ffi::c_void;
+use serde_json;
 
 // Import our performance modules
 mod performance;
@@ -89,4 +90,43 @@ fn calculate_optimal_entity_target(entity_count: i32, dimension: &str) -> i32 {
         _ => 0.80,
     };
     (entity_count as f64 * base_rate).ceil() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_1tick_1entities<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    entity_data: JDoubleArray,
+    on_grounds: JBooleanArray,
+    entity_count: jint,
+    level_dimension: JString,
+) -> JDoubleArray<'a> {
+    let dimension_str: String = env.get_string(&level_dimension).expect("Couldn't get java string!").into();
+    let mut data_buf = vec![0.0; (entity_count * 6) as usize];
+    env.get_double_array_region(&entity_data, 0, &mut data_buf).expect("Couldn't get entity data region");
+    let mut entities: Vec<[f64;6]> = data_buf.chunks_exact(6).map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5]]).collect();
+    let mut on_ground_buf = vec![0i8; entity_count as usize];
+    env.get_boolean_array_region(&on_grounds, 0, &mut on_ground_buf).expect("Couldn't get on grounds region");
+    let on_grounds_bool: Vec<bool> = on_ground_buf.into_iter().map(|b| b != 0).collect();
+    performance::batch_tick_entities(&mut entities, &on_grounds_bool, &dimension_str);
+    let flattened: Vec<f64> = entities.into_iter().flatten().collect();
+    let output_array = env.new_double_array((entity_count * 6) as i32).expect("Couldn't create new double array");
+    env.set_double_array_region(&output_array, 0, &flattened).expect("Couldn't set result array region");
+    output_array
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1parallel_1a_1star<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    grid_json: JString,
+    queries_json: JString,
+) -> JString<'a> {
+    let grid_str: String = env.get_string(&grid_json).expect("Couldn't get grid json").into();
+    let queries_str: String = env.get_string(&queries_json).expect("Couldn't get queries json").into();
+    let grid: Vec<Vec<bool>> = serde_json::from_str(&grid_str).expect("Invalid grid json");
+    let queries: Vec<performance::PathQuery> = serde_json::from_str(&queries_str).expect("Invalid queries json");
+    let results = performance::parallel_a_star(&grid, &queries);
+    let results_json = serde_json::to_string(&results).expect("Failed to serialize results");
+    env.new_string(results_json).expect("Couldn't create java string!")
 }

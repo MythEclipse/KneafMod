@@ -9,7 +9,9 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 // Simple internal math types to avoid compile-time dependency on Minecraft/Parched mappings
 // These are lightweight and used only by this class. They do not replace game runtime types.
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 
 /**
  * Main mod class for KneafCore. Refactored to use modular architecture with clear separation of concerns.
@@ -112,7 +114,7 @@ public class KneafCore {
         if (a == null || b == null) throw new IllegalArgumentException("Matrices cannot be null");
         if (a.length != 16 || b.length != 16) throw new IllegalArgumentException("Only 4x4 matrices are supported");
         float[] r = new float[16];
-        for (int row = 0; row < 4; row++) {
+        IntStream.range(0, 4).parallel().forEach(row -> {
             for (int col = 0; col < 4; col++) {
                 float sum = 0f;
                 for (int k = 0; k < 4; k++) {
@@ -120,7 +122,7 @@ public class KneafCore {
                 }
                 r[row * 4 + col] = sum;
             }
-        }
+        });
         return r;
     }
 
@@ -307,6 +309,22 @@ public class KneafCore {
     private static int heuristic(int x, int y, int gx, int gy) {
         // Manhattan distance
         return Math.abs(x - gx) + Math.abs(y - gy);
+    }
+
+    /**
+     * Performs A* pathfinding asynchronously on a 2D grid.
+     *
+     * @param grid the grid as a boolean array (true for obstacles)
+     * @param width the width of the grid
+     * @param height the height of the grid
+     * @param startX the starting X coordinate
+     * @param startY the starting Y coordinate
+     * @param goalX the goal X coordinate
+     * @param goalY the goal Y coordinate
+     * @return a CompletableFuture that completes with the path as an array of coordinates [x1, y1, x2, y2, ...] or null if no path found
+     */
+    public static CompletableFuture<int[]> aStarPathfindAsync(boolean[] grid, int width, int height, int startX, int startY, int goalX, int goalY) {
+        return CompletableFuture.supplyAsync(() -> aStarPathfind(grid, width, height, startX, startY, goalX, goalY));
     }
 
     // Client setup events - kept as static nested class for NeoForge compatibility

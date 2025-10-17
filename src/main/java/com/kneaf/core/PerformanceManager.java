@@ -10,6 +10,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.Properties;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -195,6 +197,15 @@ public final class PerformanceManager {
         isRustIntegrationEnabled.set(enabled);
     }
     
+    /**
+     * Load configuration asynchronously using virtual threads (Java 21+).
+     *
+     * @return a CompletableFuture that completes when configuration loading is done
+     */
+    public CompletableFuture<Void> loadConfigurationAsync() {
+        return CompletableFuture.runAsync(this::loadConfiguration, Executors.newVirtualThreadPerTaskExecutor());
+    }
+
     /**
      * Get string representation of current optimization state.
      * @return formatted string with current optimization states

@@ -2,6 +2,8 @@ use std::collections::BinaryHeap;
 use std::cmp::Ordering;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 const GRAVITY: f64 = 0.08;
 const AIR_DAMPING: f64 = 0.98;
@@ -240,4 +242,26 @@ fn reconstruct_path(came_from: &std::collections::HashMap<(i32, i32), (i32, i32)
     }
     path.reverse();
     path
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PathQuery {
+    pub start: (i32, i32),
+    pub goal: (i32, i32),
+}
+
+pub fn batch_tick_entities(entities: &mut Vec<[f64;6]>, on_grounds: &[bool], dimension: &str) {
+    let start_time = std::time::Instant::now();
+    entities.par_iter_mut().zip(on_grounds.par_iter()).for_each(|(entity, &on_ground)| {
+        *entity = tick_entity_physics(entity, on_ground);
+    });
+    let elapsed = start_time.elapsed().as_nanos() as u64;
+    let entity_count = entities.len() as u64;
+    if let Ok(mut stats) = ENTITY_PROCESSING_STATS.lock() {
+        stats.record_processing(dimension, entity_count, entity_count, elapsed);
+    }
+}
+
+pub fn parallel_a_star(grid: &Vec<Vec<bool>>, queries: &[PathQuery]) -> Vec<Option<Vec<(i32,i32)>>> {
+    queries.par_iter().map(|query| a_star_pathfind(grid, query.start, query.goal)).collect()
 }

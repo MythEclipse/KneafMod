@@ -8,6 +8,9 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import org.slf4j.Logger;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -20,6 +23,8 @@ public final class OptimizationInjector {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     private static final PerformanceManager PERFORMANCE_MANAGER = PerformanceManager.getInstance();
+
+    private static final ExecutorService ENTITY_EXECUTOR = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
     private static final AtomicInteger optimizationHits = new AtomicInteger(0);
     private static final AtomicInteger optimizationMisses = new AtomicInteger(0);
@@ -64,39 +69,40 @@ public final class OptimizationInjector {
             return;
         }
 
-        try {
-            long startTime = System.nanoTime();
-            
-            // Prepare data for the native function
-            double[] entityData = new double[]{
-                    entity.getX(), entity.getY(), entity.getZ(),
-                    entity.getDeltaMovement().x, entity.getDeltaMovement().y, entity.getDeltaMovement().z
-            };
+        long startTime = System.nanoTime();
 
-            // Call the native Rust function to perform the tick logic
-            double[] resultData = rustperf_tick_entity(entityData, entity.onGround());
-            
-            totalEntitiesProcessed.incrementAndGet();
+        // Prepare data for the native function
+        double[] entityData = new double[]{
+                 entity.getX(), entity.getY(), entity.getZ(),
+                 entity.getDeltaMovement().x, entity.getDeltaMovement().y, entity.getDeltaMovement().z
+        };
 
-            if (resultData != null && resultData.length == 6) {
-                // If the native function succeeds, apply the results
-                entity.setPos(resultData[0], resultData[1], resultData[2]);
-                entity.setDeltaMovement(resultData[3], resultData[4], resultData[5]);
-                
-                // CRUCIAL: Cancel the event to prevent the vanilla tick logic from running.
-                event.setCanceled(true);
+        // Submit entity processing task to executor for async execution
+        CompletableFuture.supplyAsync(() -> rustperf_tick_entity(entityData, entity.onGround()), ENTITY_EXECUTOR)
+            .thenAccept(resultData -> {
+                totalEntitiesProcessed.incrementAndGet();
 
-                long duration = System.nanoTime() - startTime;
-                recordOptimizationHit(String.format("Native tick for entity %d in %dns", entity.getId(), duration));
-            } else {
-                // If native fails, do nothing and let the original vanilla tick proceed.
-                recordOptimizationMiss("Native tick failed for entity " + entity.getId() + ", falling back to vanilla.");
-            }
-        } catch (Throwable t) { // Catch Throwable to include potential LinkageErrors
-            LOGGER.error("Unrecoverable error during native entity tick for entity " + entity.getId() + ". Falling back to vanilla.", t);
-            recordOptimizationMiss("Native tick threw an error for entity " + entity.getId());
-            // Do not cancel the event, let vanilla handle it as a fallback.
-        }
+                if (resultData != null && resultData.length == 6) {
+                    // Apply results on main thread for thread safety
+                    entity.level().getServer().execute(() -> {
+                        entity.setPos(resultData[0], resultData[1], resultData[2]);
+                        entity.setDeltaMovement(resultData[3], resultData[4], resultData[5]);
+                    });
+
+                    long duration = System.nanoTime() - startTime;
+                    recordOptimizationHit(String.format("Async native tick for entity %d in %dns", entity.getId(), duration));
+                } else {
+                    recordOptimizationMiss("Async native tick failed for entity " + entity.getId() + ", falling back to vanilla.");
+                }
+            })
+            .exceptionally(throwable -> {
+                LOGGER.error("Unrecoverable error during async native entity tick for entity " + entity.getId() + ". Falling back to vanilla.", throwable);
+                recordOptimizationMiss("Async native tick threw an error for entity " + entity.getId());
+                return null;
+            });
+
+        // Cancel the event immediately to prevent vanilla tick
+        event.setCanceled(true);
     }
 
     // --- Native Method Declarations ---
@@ -108,12 +114,26 @@ public final class OptimizationInjector {
     // --- Metrics Methods ---
     private static void recordOptimizationHit(String details) {
         optimizationHits.incrementAndGet();
-        LOGGER.debug("Optimization hit: {}", details);
+        LOGGER.info("Native optimization applied: {}", details);
+        if (optimizationHits.get() % 100 == 0) {
+            logPerformanceStats();
+        }
     }
 
     private static void recordOptimizationMiss(String details) {
         optimizationMisses.incrementAndGet();
-        LOGGER.debug("Optimization miss: {}", details);
+        LOGGER.info("Optimization fallback: {}", details);
+    }
+    private static void logPerformanceStats() {
+        if (isNativeLibraryLoaded) {
+            CompletableFuture.supplyAsync(() -> rustperf_get_performance_stats(), ENTITY_EXECUTOR)
+                .thenAccept(nativeStats -> LOGGER.info("Native performance stats: {}", nativeStats))
+                .exceptionally(t -> {
+                    LOGGER.warn("Failed to retrieve async native performance stats: {}", t.getMessage());
+                    return null;
+                });
+        }
+        LOGGER.info("Java optimization metrics: {}", getOptimizationMetrics());
     }
 
     public static String getOptimizationMetrics() {
