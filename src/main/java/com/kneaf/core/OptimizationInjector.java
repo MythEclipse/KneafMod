@@ -3,17 +3,14 @@ package com.kneaf.core;
 import com.mojang.logging.LogUtils;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.level.Level;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
-import net.neoforged.neoforge.server.ServerLifecycleHooks;
 import org.slf4j.Logger;
 
 import java.net.URL;
-import java.util.stream.StreamSupport;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -81,7 +78,6 @@ public final class OptimizationInjector {
 
                 // Try absolute path as fallback
                 String os = System.getProperty("os.name").toLowerCase();
-                String arch = System.getProperty("os.arch");
                 String libExtension = os.contains("win") ? "dll" :
                                     os.contains("mac") ? "dylib" : "so";
                  
@@ -148,8 +144,6 @@ public final class OptimizationInjector {
         if (entity instanceof Player) {
             return;
         }
-
-        long startTime = System.nanoTime();
 
         try {
             // Extract ONLY raw physics data (NO game state, NO AI, NO entity decisions, NO game context)
@@ -360,10 +354,8 @@ public final class OptimizationInjector {
         double z = position[2];
 
         try {
-            long startTime = System.nanoTime();
+            System.nanoTime();
             double[] resultData = rustperf_calculate_physics(x, y, z, onGround);
-            long elapsedNs = System.nanoTime() - startTime;
-
             boolean validResult = true;
             for (double res : resultData) {
                 if (Double.isNaN(res) || Double.isInfinite(res)) {
