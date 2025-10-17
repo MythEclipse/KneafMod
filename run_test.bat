@@ -1,6 +1,0 @@
-@echo off
-echo Running RustPerformanceTest using Gradle's dedicated task (handles dependencies and classpath automatically)...
-echo Starting RustPerformance test...
-call ./gradlew runRustTest
-echo Test execution completed.
-pause

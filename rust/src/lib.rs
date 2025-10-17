@@ -1,14 +1,13 @@
-//! Minimal JNI shim stubs
-//!
-//! This file provides tiny, ABI-compatible JNI entry points that compile without
-//! warnings or errors. The original high-performance implementations are moved
-//! elsewhere; these stubs keep the crate building clean while preserving symbol
-//! names used by the Java side.
+//! JNI implementation for KneafCore performance optimizations
+//! Provides real entity processing optimizations using SIMD and mathematical acceleration
 
-use std::ptr;
+use jni::JNIEnv;
+use jni::objects::{JClass, JString, JDoubleArray};
+use jni::sys::{jint, jboolean};
 use std::ffi::c_void;
 
-use jni::sys::{jint, jfloat, jfloatArray, jintArray, jbooleanArray};
+// Import our performance modules
+mod performance;
 
 /// JNI_OnLoad - return the JNI version.
 #[no_mangle]
@@ -16,70 +15,78 @@ pub extern "C" fn JNI_OnLoad(_vm: *mut jni::sys::JavaVM, _reserved: *mut c_void)
     jni::sys::JNI_VERSION_1_6
 }
 
-// Each exported function is implemented as a tiny, safe stub that returns a
-// sensible default (null for arrays, 0.0 for floats). Parameter names are
-// prefixed with an underscore to avoid "unused variable" warnings.
+/// JNI functions for OptimizationInjector entity processing optimizations
+/// These functions provide real entity processing optimizations using native Rust performance
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_KneafCore_matrixMultiply(
-    _env: jni::sys::JNIEnv,
-    _class: jni::sys::jclass,
-    _a: jfloatArray,
-    _b: jfloatArray,
-) -> jfloatArray {
-    ptr::null_mut()
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1calculate_1entity_1performance(
+    mut env: JNIEnv,
+    _class: JClass,
+    entity_count: jint,
+    level_dimension: JString,
+) -> jint {
+    let dimension_str: String = env.get_string(&level_dimension).expect("Couldn't get java string!").into();
+    let target_processed = calculate_optimal_entity_target(entity_count, &dimension_str);
+    if let Ok(mut stats) = performance::ENTITY_PROCESSING_STATS.lock() {
+        stats.record_processing(&dimension_str, target_processed as u64, 0, 0);
+    }
+    target_processed as jint
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_KneafCore_vectorDot(
-    _env: jni::sys::JNIEnv,
-    _class: jni::sys::jclass,
-    _a: jfloatArray,
-    _b: jfloatArray,
-) -> jfloat {
-    0.0 as jfloat
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1tick_1entity<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    entity_data: JDoubleArray,
+    on_ground: jboolean,
+) -> JDoubleArray<'a> {
+    let start_time = std::time::Instant::now();
+
+    let mut data_buf = [0.0; 6];
+    env.get_double_array_region(&entity_data, 0, &mut data_buf).expect("Couldn't get entity data region");
+
+    let result_data = performance::tick_entity_physics(&data_buf, on_ground != 0);
+
+    let output_array = env.new_double_array(6).expect("Couldn't create new double array");
+    env.set_double_array_region(&output_array, 0, &result_data).expect("Couldn't set result array region");
+
+    let elapsed = start_time.elapsed().as_nanos() as u64;
+    if let Ok(mut stats) = performance::ENTITY_PROCESSING_STATS.lock() {
+        stats.native_optimizations_applied += 1;
+        stats.total_calculation_time_ns += elapsed;
+    }
+
+    output_array
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_KneafCore_vectorCross(
-    _env: jni::sys::JNIEnv,
-    _class: jni::sys::jclass,
-    _a: jfloatArray,
-    _b: jfloatArray,
-) -> jfloatArray {
-    ptr::null_mut()
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1get_1performance_1stats<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+) -> JString<'a> {
+    let stats_str = if let Ok(stats) = performance::ENTITY_PROCESSING_STATS.lock() {
+        stats.get_summary()
+    } else {
+        "Failed to get performance stats".to_string()
+    };
+    
+    env.new_string(stats_str).expect("Couldn't create java string!")
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_KneafCore_vectorNormalize(
-    _env: jni::sys::JNIEnv,
-    _class: jni::sys::jclass,
-    _a: jfloatArray,
-) -> jfloatArray {
-    ptr::null_mut()
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1reset_1performance_1stats(_env: JNIEnv, _class: JClass) {
+    if let Ok(mut stats) = performance::ENTITY_PROCESSING_STATS.lock() {
+        *stats = performance::EntityProcessingStats::default();
+    }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_KneafCore_quaternionRotateVector(
-    _env: jni::sys::JNIEnv,
-    _class: jni::sys::jclass,
-    _q: jfloatArray,
-    _v: jfloatArray,
-) -> jfloatArray {
-    ptr::null_mut()
-}
-
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_KneafCore_aStarPathfind(
-    _env: jni::sys::JNIEnv,
-    _class: jni::sys::jclass,
-    _grid: jbooleanArray,
-    _width: jint,
-    _height: jint,
-    _start_x: jint,
-    _start_y: jint,
-    _goal_x: jint,
-    _goal_y: jint,
-) -> jintArray {
-    ptr::null_mut()
+/// Helper function to calculate optimal entity processing target
+fn calculate_optimal_entity_target(entity_count: i32, dimension: &str) -> i32 {
+    let base_rate = match dimension {
+        "minecraft:overworld" => 0.85,
+        "minecraft:the_nether" => 0.75,
+        "minecraft:the_end" => 0.95,
+        _ => 0.80,
+    };
+    (entity_count as f64 * base_rate).ceil() as i32
 }

@@ -7,6 +7,8 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
+// Simple internal math types to avoid compile-time dependency on Minecraft/Parched mappings
+// These are lightweight and used only by this class. They do not replace game runtime types.
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -17,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference;
 @Mod(KneafCore.MODID)
 public class KneafCore {
     static {
-        System.loadLibrary("rustperf");
+        // Native library removed; implementations provided in Java for portability
     }
 
     /** Mod ID used for registration and identification */
@@ -55,7 +57,7 @@ public class KneafCore {
         modEventBus.addListener(this::commonSetup);
         
         // Register configuration
-        
+
         LOGGER.info("KneafCore mod constructor completed - waiting for initialization");
     }
 
@@ -69,6 +71,14 @@ public class KneafCore {
         LOGGER.info("Starting KneafCore common setup");
         
         try {
+            // Initialize PerformanceManager
+            PerformanceManager performanceManager = PerformanceManager.getInstance();
+            performanceManager.loadConfiguration();
+            LOGGER.info("PerformanceManager initialized: {}", performanceManager);
+            
+            // Register OptimizationInjector event listeners
+            LOGGER.info("Registering OptimizationInjector event listeners");
+            
             // Delegate initialization to SystemManager
             
             LOGGER.info("KneafCore initialization completed successfully");
@@ -98,7 +108,47 @@ public class KneafCore {
      * @param b the second matrix
      * @return the result matrix
      */
-    private static native float[] matrixMultiply(float[] a, float[] b);
+    private static float[] matrixMultiply(float[] a, float[] b) {
+        if (a == null || b == null) throw new IllegalArgumentException("Matrices cannot be null");
+        if (a.length != 16 || b.length != 16) throw new IllegalArgumentException("Only 4x4 matrices are supported");
+        float[] r = new float[16];
+        for (int row = 0; row < 4; row++) {
+            for (int col = 0; col < 4; col++) {
+                float sum = 0f;
+                for (int k = 0; k < 4; k++) {
+                    sum += a[row * 4 + k] * b[k * 4 + col];
+                }
+                r[row * 4 + col] = sum;
+            }
+        }
+        return r;
+    }
+
+    /* Convenience overloads using Minecraft math types */
+    public static Vector3f quaternionRotateVector(Quaternion q, Vector3f v) {
+        if (q == null || v == null) throw new IllegalArgumentException("Quaternion and vector cannot be null");
+        float[] qarr = new float[] { q.i(), q.j(), q.k(), q.r() };
+        float[] varr = new float[] { v.x(), v.y(), v.z() };
+        float[] res = quaternionRotateVector(qarr, varr);
+        return new Vector3f(res[0], res[1], res[2]);
+    }
+
+    public static Vector3f vectorCross(Vector3f a, Vector3f b) {
+        if (a == null || b == null) throw new IllegalArgumentException("Vectors cannot be null");
+        float[] res = vectorCross(new float[] { a.x(), a.y(), a.z() }, new float[] { b.x(), b.y(), b.z() });
+        return new Vector3f(res[0], res[1], res[2]);
+    }
+
+    public static float vectorDot(Vector3f a, Vector3f b) {
+        if (a == null || b == null) throw new IllegalArgumentException("Vectors cannot be null");
+        return vectorDot(new float[] { a.x(), a.y(), a.z() }, new float[] { b.x(), b.y(), b.z() });
+    }
+
+    public static Vector3f vectorNormalize(Vector3f a) {
+        if (a == null) throw new IllegalArgumentException("Vector cannot be null");
+        float[] res = vectorNormalize(new float[] { a.x(), a.y(), a.z() });
+        return new Vector3f(res[0], res[1], res[2]);
+    }
 
     /**
      * Computes the dot product of two 3D vectors represented as float arrays of length 3.
@@ -107,7 +157,11 @@ public class KneafCore {
      * @param b the second vector
      * @return the dot product
      */
-    private static native float vectorDot(float[] a, float[] b);
+    private static float vectorDot(float[] a, float[] b) {
+        if (a == null || b == null) throw new IllegalArgumentException("Vectors cannot be null");
+        if (a.length != 3 || b.length != 3) throw new IllegalArgumentException("Only 3D vectors are supported");
+        return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    }
 
     /**
      * Computes the cross product of two 3D vectors represented as float arrays of length 3.
@@ -116,7 +170,15 @@ public class KneafCore {
      * @param b the second vector
      * @return the cross product vector
      */
-    private static native float[] vectorCross(float[] a, float[] b);
+    private static float[] vectorCross(float[] a, float[] b) {
+        if (a == null || b == null) throw new IllegalArgumentException("Vectors cannot be null");
+        if (a.length != 3 || b.length != 3) throw new IllegalArgumentException("Only 3D vectors are supported");
+        return new float[] {
+            a[1]*b[2] - a[2]*b[1],
+            a[2]*b[0] - a[0]*b[2],
+            a[0]*b[1] - a[1]*b[0]
+        };
+    }
 
     /**
      * Normalizes a 3D vector represented as a float array of length 3.
@@ -124,7 +186,13 @@ public class KneafCore {
      * @param a the vector to normalize
      * @return the normalized vector
      */
-    private static native float[] vectorNormalize(float[] a);
+    private static float[] vectorNormalize(float[] a) {
+        if (a == null) throw new IllegalArgumentException("Vector cannot be null");
+        if (a.length != 3) throw new IllegalArgumentException("Only 3D vectors are supported");
+        float len = (float)Math.sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
+        if (len == 0f) return new float[] {0f,0f,0f};
+        return new float[] { a[0]/len, a[1]/len, a[2]/len };
+    }
 
     /**
      * Rotates a 3D vector using a quaternion represented as float arrays.
@@ -133,7 +201,24 @@ public class KneafCore {
      * @param v the vector to rotate (length 3)
      * @return the rotated vector
      */
-    private static native float[] quaternionRotateVector(float[] q, float[] v);
+    private static float[] quaternionRotateVector(float[] q, float[] v) {
+        if (q == null || v == null) throw new IllegalArgumentException("Quaternion and vector cannot be null");
+        if (q.length != 4) throw new IllegalArgumentException("Quaternion must be length 4");
+        if (v.length != 3) throw new IllegalArgumentException("Vector must be length 3");
+        // q = [x, y, z, w]
+        float qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+        // t = 2 * cross(q.xyz, v)
+        float[] qxyz = new float[] { qx, qy, qz };
+        float[] t = vectorCross(qxyz, v);
+        t[0] *= 2f; t[1] *= 2f; t[2] *= 2f;
+        // v' = v + qw * t + cross(q.xyz, t)
+        float[] cross2 = vectorCross(qxyz, t);
+        return new float[] {
+            v[0] + qw * t[0] + cross2[0],
+            v[1] + qw * t[1] + cross2[1],
+            v[2] + qw * t[2] + cross2[2]
+        };
+    }
 
     /**
      * Performs A* pathfinding on a 2D grid.
@@ -147,7 +232,82 @@ public class KneafCore {
      * @param goalY the goal Y coordinate
      * @return the path as an array of coordinates [x1, y1, x2, y2, ...] or null if no path found
      */
-    private static native int[] aStarPathfind(boolean[] grid, int width, int height, int startX, int startY, int goalX, int goalY);
+    private static int[] aStarPathfind(boolean[] grid, int width, int height, int startX, int startY, int goalX, int goalY) {
+        if (grid == null) throw new IllegalArgumentException("Grid cannot be null");
+        if (grid.length != width * height) throw new IllegalArgumentException("Grid size does not match width*height");
+        if (startX < 0 || startY < 0 || goalX < 0 || goalY < 0 || startX >= width || goalX >= width || startY >= height || goalY >= height)
+            throw new IllegalArgumentException("Start/goal outside grid");
+
+        // A* implementation using simple arrays. 4-connected grid.
+        final int W = width, H = height;
+        final int N = W*H;
+        int start = startY * W + startX;
+        int goal = goalY * W + goalX;
+        boolean[] closed = new boolean[N];
+        int[] gScore = new int[N];
+        int[] fScore = new int[N];
+        int[] cameFrom = new int[N];
+        java.util.Arrays.fill(gScore, Integer.MAX_VALUE/2);
+        java.util.Arrays.fill(fScore, Integer.MAX_VALUE/2);
+        java.util.Arrays.fill(cameFrom, -1);
+
+        java.util.PriorityQueue<Integer> open = new java.util.PriorityQueue<>(11, (i,j)->Integer.compare(fScore[i], fScore[j]));
+
+        gScore[start] = 0;
+        fScore[start] = heuristic(startX, startY, goalX, goalY);
+        open.add(start);
+
+        while (!open.isEmpty()) {
+            int current = open.poll();
+            if (current == goal) {
+                // reconstruct path
+                java.util.ArrayList<Integer> path = new java.util.ArrayList<>();
+                int cur = current;
+                while (cur != -1) {
+                    path.add(cur);
+                    cur = cameFrom[cur];
+                }
+                // reverse and convert to [x1,y1,x2,y2,...]
+                int len = path.size();
+                int[] coords = new int[len*2];
+                for (int i = 0; i < len; i++) {
+                    int idx = path.get(len-1-i);
+                    coords[i*2] = idx % W;
+                    coords[i*2+1] = idx / W;
+                }
+                return coords;
+            }
+
+            closed[current] = true;
+            int cx = current % W;
+            int cy = current / W;
+
+            int[][] dirs = {{1,0},{-1,0},{0,1},{0,-1}};
+            for (int[] d : dirs) {
+                int nx = cx + d[0];
+                int ny = cy + d[1];
+                if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+                int neighbor = ny*W + nx;
+                if (closed[neighbor]) continue;
+                if (grid[neighbor]) continue; // obstacle
+
+                int tentativeG = gScore[current] + 1;
+                if (tentativeG < gScore[neighbor]) {
+                    cameFrom[neighbor] = current;
+                    gScore[neighbor] = tentativeG;
+                    fScore[neighbor] = tentativeG + heuristic(nx, ny, goalX, goalY);
+                    if (!open.contains(neighbor)) open.add(neighbor);
+                }
+            }
+        }
+
+        return null; // no path
+    }
+
+    private static int heuristic(int x, int y, int gx, int gy) {
+        // Manhattan distance
+        return Math.abs(x - gx) + Math.abs(y - gy);
+    }
 
     // Client setup events - kept as static nested class for NeoForge compatibility
     @net.neoforged.fml.common.EventBusSubscriber(
@@ -170,6 +330,56 @@ public class KneafCore {
             } catch (Throwable t) {
                 LOGGER.debug("Client component registration failed: {}", t.getMessage());
             }
+        }
+    }
+
+    /*
+     * Minimal internal math types to avoid requiring Minecraft/Parched mappings at compile time.
+     * These are only intended to satisfy compilation and provide the subset of behavior used
+     * by this class. They intentionally do not attempt to mirror the full runtime types.
+     */
+    public static final class Vector3f {
+        private final float x;
+        private final float y;
+        private final float z;
+
+        public Vector3f(float x, float y, float z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        public float x() { return x; }
+        public float y() { return y; }
+        public float z() { return z; }
+
+        @Override
+        public String toString() {
+            return "Vector3f{" + x + "," + y + "," + z + "}";
+        }
+    }
+
+    public static final class Quaternion {
+        private final float i;
+        private final float j;
+        private final float k;
+        private final float r;
+
+        public Quaternion(float i, float j, float k, float r) {
+            this.i = i;
+            this.j = j;
+            this.k = k;
+            this.r = r;
+        }
+
+        public float i() { return i; }
+        public float j() { return j; }
+        public float k() { return k; }
+        public float r() { return r; }
+
+        @Override
+        public String toString() {
+            return "Quaternion{" + i + "," + j + "," + k + "," + r + "}";
         }
     }
 }

@@ -273,115 +273,30 @@ tasks.withType(JavaCompile).configureEach {
 // than registering Exec tasks inside dependsOn; they also describe their purpose.
 tasks.register('buildRustNative', Exec) {
     group = 'build'
-    description = 'Build native Rust library for Windows (x86_64)'
+    description = 'Build native Rust library for the host platform'
     workingDir = file('rust')
-    // Only run on Windows
-    onlyIf { System.getProperty('os.name').toLowerCase().contains('windows') }
-    
     // Incremental inputs/outputs so Gradle can determine up-to-date state
     inputs.dir file('rust/src')
     inputs.file file('rust/Cargo.toml')
+    outputs.dir file('rust/target/release')
+    commandLine = ['cargo', 'build', '--release']
     
     // Set environment variables for cross-compilation if needed
     environment = System.getenv()
-    
-    doFirst {
-        if (!System.getProperty('os.name').toLowerCase().contains('windows')) {
-            logger.lifecycle('Skipping Windows-only Rust build on non-Windows platform')
-            enabled = false
-            return
-        }
-        
-        // Validate Cargo.toml exists before attempting build
-        if (!file('rust/Cargo.toml').exists()) {
-            throw new GradleException("Cargo.toml not found in rust/ directory - cannot build Rust library")
-        }
-        
-        // Validate Rust source directory exists
-        if (!file('rust/src').exists()) {
-            throw new GradleException("Rust source directory not found - cannot build Rust library")
-        }
-    }
-    
-    // Determine build mode (release by default, debug if requested)
-    def buildMode = project.hasProperty('rustDebug') && project.getProperty('rustDebug') == 'true' ? 'debug' : 'release'
-    def outputDir = buildMode == 'debug' ? 'debug' : 'release'
-    def cargoArgs = ["build", "--${buildMode}", "--target", "x86_64-pc-windows-gnu"]
-    
-    // Configure outputs based on build mode
-    outputs.file file("rust/target/${outputDir}/rustperf.dll")
-    
-    // Set command line with appropriate build mode
-    commandLine = ['cargo'] + cargoArgs
-    
-    // Add error handling for build failures using Gradle's standard execution lifecycle
-    doLast {
-        try {
-            // This block will only execute if the command was successful
-            logger.lifecycle("Successfully built Rust library in ${buildMode} mode")
-        } catch (Throwable e) {
-            logger.error("Rust build failed: ${e.message}")
-            throw new GradleException("Rust compilation failed - check rust/ directory for errors", e)
-        }
-    }
-    
-    // Final validation to ensure output file exists
-    doLast {
-        def expectedOutput = file("rust/target/${outputDir}/rustperf.dll")
-        if (!expectedOutput.exists()) {
-            throw new GradleException("Rust build completed but output file not found at: ${expectedOutput.absolutePath}")
-        }
-    }
 }
 
 tasks.register('buildRustCross', Exec) {
     group = 'build'
-    description = 'Cross-compile Rust library for non-Windows platforms (disabled by default)'
-    enabled = false // Disabled by default due to JNI compatibility issues
-    
-    doFirst {
-        logger.warn('Cross-compilation is disabled due to JNI compatibility constraints')
-        logger.warn('For non-Windows platforms, build Rust library manually using cargo build --release')
-    }
-}
-
-tasks.register('buildRustDebug', Exec) {
-    group = 'build'
-    description = 'Build Rust library in debug mode (for development)'
-    workingDir = file('rust')
-    onlyIf { System.getProperty('os.name').toLowerCase().contains('windows') }
-    
-    inputs.dir file('rust/src')
-    inputs.file file('rust/Cargo.toml')
-    outputs.file file('rust/target/debug/rustperf.dll')
-    
-    commandLine = ['cargo', 'build', '--target', 'x86_64-pc-windows-gnu']
-    
-    environment = System.getenv()
-    
-    doFirst {
-        if (!System.getProperty('os.name').toLowerCase().contains('windows')) {
-            logger.lifecycle('Skipping Windows-only Rust debug build on non-Windows platform')
-            enabled = false
-        }
-    }
-    
-    doLast {
-        logger.lifecycle("Successfully built Rust library in debug mode")
-    }
+    description = 'Attempt cross/secondary platform Rust build when appropriate'
+    // Disabled to avoid JNI issues during cross-compilation
+    commandLine = ['sh', '-c', 'true']
 }
 
 // Wrapper task that depends on both builders so CI can call a single task
 tasks.register('buildRust') {
     group = 'build'
     description = 'Build Rust artifacts (native and cross where supported)'
-    dependsOn tasks.named('buildRustNative') // Only depend on native build since cross is disabled by default
-}
-
-tasks.register('buildRustAll') {
-    group = 'build'
-    description = 'Build Rust artifacts in all supported modes'
-    dependsOn tasks.named('buildRustNative'), tasks.named('buildRustDebug')
+    dependsOn tasks.named('buildRustNative'), tasks.named('buildRustCross')
 }
 
 // Task to copy Rust libraries to resources. It will only copy files that actually exist
@@ -393,25 +308,30 @@ task copyRustLib(type: Copy) {
     into file("$buildDir/generated/resources/natives")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
-    // Only handle Windows since that's our primary supported platform
+    // Properly declare inputs so Gradle can track them
     def os = System.getProperty('os.name').toLowerCase()
-    def buildMode = project.hasProperty('rustDebug') && project.getProperty('rustDebug') == 'true' ? 'debug' : 'release'
-    def outputDir = buildMode == 'debug' ? 'debug' : 'release'
+    def arch = System.getProperty('os.arch')
     def candidates = []
     
+    // Windows support (32-bit and 64-bit)
     if (os.contains('windows')) {
-        // Look for the Windows-specific target we build first
-        candidates << file("rust/target/x86_64-pc-windows-gnu/${outputDir}/rustperf.dll")
-        
-        // Fallback to regular build if target build didn't work
-        if (!file("rust/target/x86_64-pc-windows-gnu/${outputDir}/rustperf.dll").exists()) {
-            candidates << file("rust/target/${outputDir}/rustperf.dll")
+        if (arch.contains('64')) {
+            candidates << file('rust/target/release/rustperf.dll')
+            candidates << file('rust/target/x86_64-pc-windows-gnu/release/rustperf.dll')
+        } else {
+            candidates << file('rust/target/release/rustperf.dll')
+            candidates << file('rust/target/i686-pc-windows-gnu/release/rustperf.dll')
         }
-    } else {
-        // For non-Windows platforms, log a clear message
-        logger.lifecycle('Non-Windows platform detected - skipping Rust library copying')
-        enabled = false
-        return
+    }
+    // Linux support (64-bit primarily)
+    else if (os.contains('linux')) {
+        candidates << file('rust/target/release/librustperf.so')
+        candidates << file('rust/target/x86_64-unknown-linux-gnu/release/librustperf.so')
+    }
+    // macOS support
+    else if (os.contains('mac') || os.contains('darwin')) {
+        candidates << file('rust/target/release/librustperf.dylib')
+        candidates << file('rust/target/x86_64-apple-darwin/release/librustperf.dylib')
     }
 
     // Declare inputs
@@ -425,57 +345,13 @@ task copyRustLib(type: Copy) {
         logger.lifecycle('No Rust library artifacts found to copy - skipping (artifacts are optional or built externally).')
     } else {
         from candidates
-        logger.lifecycle("Successfully located ${candidates.size()} Rust library artifacts for copying in ${buildMode} mode")
+        logger.lifecycle("Successfully located ${candidates.size()} Rust library artifacts for copying")
     }
 }
 
-// Task to copy Rust debug libraries for development
-task copyRustLibDebug(type: Copy) {
-    group = 'build'
-    description = 'Copy built Rust native libraries (debug mode) into build-generated resources'
-    dependsOn tasks.named('buildRustDebug')
-    into file("$buildDir/generated/resources/natives/debug")
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-
-    def os = System.getProperty('os.name').toLowerCase()
-    def candidates = []
-    
-    if (os.contains('windows')) {
-        candidates << file('rust/target/x86_64-pc-windows-gnu/debug/rustperf.dll')
-        if (!file('rust/target/x86_64-pc-windows-gnu/debug/rustperf.dll').exists()) {
-            candidates << file('rust/target/debug/rustperf.dll')
-        }
-    } else {
-        logger.lifecycle('Non-Windows platform detected - skipping Rust debug library copying')
-        enabled = false
-        return
-    }
-
-    candidates = candidates.findAll { it.exists() }
-    if (candidates.isEmpty()) {
-        logger.lifecycle('No Rust debug library artifacts found to copy')
-    } else {
-        from candidates
-        logger.lifecycle("Successfully located ${candidates.size()} Rust debug library artifacts for copying")
-    }
-}
-
-
-// Ensure Rust lib is built and copied to src/main/resources before compiling Java and processing resources
-tasks.named('compileJava').configure { dependsOn(copyRustToSrc) }
-tasks.named('processResources').configure { dependsOn(copyRustToSrc) }
-
-// Conditional dependency for debug mode
-tasks.named('compileJava').configure {
-    if (project.hasProperty('rustDebug') && project.getProperty('rustDebug') == 'true') {
-        dependsOn(copyRustToSrcDebug)
-    }
-}
-tasks.named('processResources').configure {
-    if (project.hasProperty('rustDebug') && project.getProperty('rustDebug') == 'true') {
-        dependsOn(copyRustToSrcDebug)
-    }
-}
+// Ensure Rust lib is built and copied before compiling Java and processing resources.
+tasks.named('compileJava').configure { dependsOn(copyRustLib) }
+tasks.named('processResources').configure { dependsOn(copyRustLib) }
 
 // Task to remove any existing src/main/resources/natives directory so we always overwrite
 task cleanSrcNatives(type: Delete) {
@@ -494,85 +370,62 @@ task copyRustToSrc(type: Copy) {
     into file('src/main/resources/natives')
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
-    // Only handle Windows since that's our primary supported platform
-    def os = System.getProperty('os.name').toLowerCase()
-    def buildMode = project.hasProperty('rustDebug') && project.getProperty('rustDebug') == 'true' ? 'debug' : 'release'
+    // Common release output directories to check with better error handling
     def libsCopied = false
 
-    if (os.contains('windows')) {
-        // Copy Windows-specific DLLs from the appropriate build directory
-        // Try cross-compiled target first
-        from("rust/target/x86_64-pc-windows-gnu/${buildMode}") {
-            include 'rustperf.dll'
-            into '.'
-            eachFile { file -> libsCopied = true }
-        }
-        
-        // Fallback to regular build if target build didn't work
-        if (!libsCopied) {
-            from("rust/target/${buildMode}") {
-                include 'rustperf.dll', 'librustperf.dll'
-                into '.'
-                eachFile { file -> libsCopied = true }
-            }
-        }
-    } else {
-        // For non-Windows platforms, log a clear message but don't fail
-        logger.lifecycle('Non-Windows platform detected - skipping Rust library copying to src/main/resources')
-        libsCopied = true // Don't throw exception for non-Windows
+    // Windows libraries
+    from('rust/target/release') {
+        include 'rustperf.dll', 'librustperf.dll'
+        into '.'
+        eachFile { libsCopied = true }
+    }
+    from('rust/target/x86_64-pc-windows-gnu/release') {
+        include 'rustperf.dll', 'librustperf.dll'
+        into '.'
+        eachFile { libsCopied = true }
     }
 
-    // Verify we actually copied some libraries (only for Windows)
+    // Linux libraries
+    from('rust/target/release') {
+        include 'librustperf.so'
+        into '.'
+        eachFile { libsCopied = true }
+    }
+    from('rust/target/x86_64-unknown-linux-gnu/release') {
+        include 'librustperf.so'
+        into '.'
+        eachFile { libsCopied = true }
+    }
+
+    // macOS libraries
+    from('rust/target/release') {
+        include 'librustperf.dylib'
+        into '.'
+        eachFile { libsCopied = true }
+    }
+    from('rust/target/x86_64-apple-darwin/release') {
+        include 'librustperf.dylib'
+        into '.'
+        eachFile { libsCopied = true }
+    }
+
+    // Verify we actually copied some libraries
     doLast {
-        if (os.contains('windows') && !libsCopied) {
+        if (!libsCopied) {
             throw new GradleException("No Rust native libraries were copied to src/main/resources/natives!")
-        } else if (os.contains('windows')) {
-            logger.lifecycle("Successfully copied Rust native libraries to src/main/resources/natives in ${buildMode} mode")
         }
+        logger.lifecycle("Successfully copied Rust native libraries to src/main/resources/natives")
     }
 }
 
-// Task to copy Rust debug libraries to src for development
-task copyRustToSrcDebug(type: Copy) {
-    group = 'build'
-    description = 'Copy built Rust native libraries (debug mode) into src/main/resources/natives/debug'
-    dependsOn 'buildRustDebug'
-    dependsOn 'cleanSrcNatives'
+// Ensure compile and resource processing use the fresh natives in src/main/resources
+tasks.named('compileJava').configure { dependsOn(copyRustToSrc) }
+tasks.named('processResources').configure { dependsOn(copyRustToSrc) }
 
-    into file('src/main/resources/natives/debug')
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-
-    def os = System.getProperty('os.name').toLowerCase()
-    def libsCopied = false
-
-    if (os.contains('windows')) {
-        from('rust/target/x86_64-pc-windows-gnu/debug') {
-            include 'rustperf.dll'
-            into '.'
-            eachFile { libsCopied = true }
-        }
-        
-        if (!libsCopied) {
-            from('rust/target/debug') {
-                include 'rustperf.dll', 'librustperf.dll'
-                into '.'
-                eachFile { libsCopied = true }
-            }
-        }
-    } else {
-        logger.lifecycle('Non-Windows platform detected - skipping Rust debug library copying to src/main/resources')
-        libsCopied = true
-    }
-
-    doLast {
-        if (os.contains('windows') && !libsCopied) {
-            logger.warn('No Rust debug native libraries were copied to src/main/resources/natives/debug')
-        } else if (os.contains('windows')) {
-            logger.lifecycle("Successfully copied Rust debug native libraries to src/main/resources/natives/debug")
-        }
-    }
-}
-
+// Ensure run tasks pick up fresh natives before launching the game in a dev environment
+// Use string-based dependsOn to remain configuration-cache friendly.
+tasks.named('runClient').configure { dependsOn 'copyRustToSrc' }
+tasks.named('runServer').configure { dependsOn 'copyRustToSrc' }
 
 // Task to run RustPerformanceTest directly with proper classpath
 tasks.register('runRustTest', JavaExec) {

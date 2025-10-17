@@ -1,5 +1,77 @@
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use lazy_static::lazy_static;
+use std::sync::Mutex;
+
+const GRAVITY: f64 = 0.08;
+const AIR_DAMPING: f64 = 0.98;
+
+lazy_static! {
+    pub static ref ENTITY_PROCESSING_STATS: Mutex<EntityProcessingStats> = Mutex::new(EntityProcessingStats::default());
+}
+
+#[derive(Default)]
+pub struct EntityProcessingStats {
+    pub total_entities_processed: u64,
+    pub native_optimizations_applied: u64,
+    pub total_calculation_time_ns: u64,
+    pub dimension_stats: std::collections::HashMap<String, u64>,
+}
+
+impl EntityProcessingStats {
+    pub fn record_processing(&mut self, dimension: &str, entities_processed: u64, optimizations_applied: u64, calculation_time_ns: u64) {
+        self.total_entities_processed += entities_processed;
+        self.native_optimizations_applied += optimizations_applied;
+        self.total_calculation_time_ns += calculation_time_ns;
+        
+        let dim_entry = self.dimension_stats.entry(dimension.to_string()).or_insert(0);
+        *dim_entry += entities_processed;
+    }
+    
+    pub fn get_summary(&self) -> String {
+        let total_time_ms = (self.total_calculation_time_ns as f64 / 1_000_000.0).round() as u64;
+        let avg_time_per_entity = if self.native_optimizations_applied > 0 {
+            (self.total_calculation_time_ns as f64 / self.native_optimizations_applied as f64).round() as u64
+        } else {
+            0
+        };
+        
+        let mut dimension_summary = String::new();
+        for (dim, count) in &self.dimension_stats {
+            dimension_summary.push_str(&format!("{}:{} ", dim, count));
+        }
+        
+        format!("NativeEntityStats{{totalProcessed:{}, optimized:{}, totalTimeMs:{}, avgTimePerEntityNs:{}, dimensions:{}}}",
+                self.total_entities_processed,
+                self.native_optimizations_applied,
+                total_time_ms,
+                avg_time_per_entity,
+                dimension_summary.trim_end_matches(&[' ', ','][..]))
+    }
+}
+
+pub fn tick_entity_physics(data: &[f64; 6], on_ground: bool) -> [f64; 6] {
+    let mut pos = [data[0], data[1], data[2]];
+    let mut vel = [data[3], data[4], data[5]];
+
+    // Apply gravity if not on ground
+    if !on_ground {
+        vel[1] -= GRAVITY;
+    }
+
+    // Apply air damping
+    vel[0] *= AIR_DAMPING;
+    vel[1] *= AIR_DAMPING;
+    vel[2] *= AIR_DAMPING;
+
+    // Update position
+    pos[0] += vel[0];
+    pos[1] += vel[1];
+    pos[2] += vel[2];
+
+    [pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]]
+}
+
 
 #[derive(Clone, Copy, Debug)]
 pub struct Matrix4(pub [f32; 16]);

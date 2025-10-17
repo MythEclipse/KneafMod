@@ -6,10 +6,13 @@ This directory contains the Rust implementation for high-performance native exte
 
 1. **Rust Toolchain**: Install via [rustup](https://rustup.rs/)
 2. **Windows Target**: For cross-compilation from any OS:
+
    ```bash
    rustup target add x86_64-pc-windows-gnu
    ```
+
 3. **LLVM Tools**: Required for LTO optimizations
+
    ```bash
    rustup component add llvm-tools-preview
    ```
@@ -17,6 +20,7 @@ This directory contains the Rust implementation for high-performance native exte
 ## Build Configuration
 
 ### Cargo.toml Features
+
 - `jni`: JNI bindings for Java integration
 - `lz4`: Compression support
 - `serde`: Data serialization
@@ -26,6 +30,7 @@ This directory contains the Rust implementation for high-performance native exte
 ### Gradle Integration
 
 The build system automatically:
+
 1. Compiles Rust library when Java project builds
 2. Copies DLL to `src/main/resources/natives/`
 3. Supports both debug and release modes
@@ -34,17 +39,21 @@ The build system automatically:
 ## Build Modes
 
 ### Release Build (Default)
+
 ```bash
 ./gradlew buildRustNative
 ```
+
 - Full LTO optimizations
 - Stripped binary
 - Production-ready performance
 
 ### Debug Build
+
 ```bash
 ./gradlew buildRustDebug -PrustDebug=true
 ```
+
 - No optimizations (`opt-level = 0`)
 - Debug symbols included
 - Faster compilation
@@ -52,6 +61,7 @@ The build system automatically:
 ## Manual Build Commands
 
 ### From Rust Directory
+
 ```bash
 # Release build
 cargo build --release --target x86_64-pc-windows-gnu
@@ -61,6 +71,7 @@ cargo build --target x86_64-pc-windows-gnu
 ```
 
 ### From Java Project Root
+
 ```bash
 # Build and copy all Rust artifacts
 ./gradlew buildRustAll
@@ -88,6 +99,7 @@ cargo build --target x86_64-pc-windows-gnu
 ## Performance Configuration
 
 See `config/rustperf.toml` for algorithm-specific tuning parameters:
+
 - Sorting algorithms (quicksort/mergesort)
 - Compression levels
 - Thread pool sizes
@@ -96,6 +108,7 @@ See `config/rustperf.toml` for algorithm-specific tuning parameters:
 ## Dependencies
 
 ### Cargo Dependencies
+
 - `jni = "0.21.1"` - JNI bindings
 - `lz4 = "1.34.0"` - Compression
 - `serde = { version = "1.0", features = ["derive"] }` - Serialization
@@ -103,6 +116,7 @@ See `config/rustperf.toml` for algorithm-specific tuning parameters:
 - `chrono = { version = "0.4", features = ["serde"] }` - Timestamps
 
 ### Gradle Dependencies
+
 - `io.github.astonbitecode:j4rs:0.17.0` - Rust-Java bridge
 - `org.lz4:lz4-java:1.8.0` - Java LZ4 bindings (for consistency)
 
@@ -124,12 +138,14 @@ See `config/rustperf.toml` for algorithm-specific tuning parameters:
 ## CI/CD Integration
 
 The build system includes:
+
 - Automatic dependency validation
 - Build failure handling with clear error messages
 - Incremental builds (only rebuilds when sources change)
 - Cross-platform compatibility checks
 
 For CI environments, ensure:
+
 - Rust toolchain is installed
 - Windows target is added
 - Appropriate PATH variables are set for MinGW tools
