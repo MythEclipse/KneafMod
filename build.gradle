@@ -27,6 +27,7 @@ repositories {
     mavenCentral()
     maven { url = "https://repo1.maven.org/maven2/" }
     maven { url = "https://jitpack.io" }
+    maven { url = "https://maven.neoforged.net/releases" }
 }
 
 base {
@@ -134,6 +135,8 @@ configurations {
 }
 
 dependencies {
+    // NeoForge dependency
+    implementation 'net.neoforged:neoforge:21.0.167'
     // j4rs for Rust FFI
     implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'io.github.astonbitecode:j4rs:0.17.0'

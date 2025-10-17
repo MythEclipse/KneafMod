@@ -1,0 +1,21 @@
+{
+  "parent": "minecraft:entity/zombie",
+  "textures": {
+    "layer0": "kneafcore:entity/shadow_zombie_ninja"
+  },
+  "elements": [
+    {
+      "name": "ninja_mask",
+      "from": [4, 24, 3],
+      "to": [12, 32, 4],
+      "faces": {
+        "north": {"uv": [0, 0, 8, 8], "texture": "#layer0"},
+        "east": {"uv": [0, 0, 1, 8], "texture": "#layer0"},
+        "south": {"uv": [0, 0, 8, 8], "texture": "#layer0"},
+        "west": {"uv": [0, 0, 1, 8], "texture": "#layer0"},
+        "up": {"uv": [0, 0, 8, 1], "texture": "#layer0"},
+        "down": {"uv": [0, 0, 8, 1], "texture": "#layer0"}
+      }
+    }
+  ]
+}

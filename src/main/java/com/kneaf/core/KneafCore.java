@@ -1,10 +1,13 @@
 package com.kneaf.core;
 
+import com.kneaf.entities.ModEntities;
+import com.kneaf.entities.ShadowZombieNinjaRenderer;
 import com.mojang.logging.LogUtils;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 // Simple internal math types to avoid compile-time dependency on Minecraft/Parched mappings
@@ -54,6 +57,7 @@ public class KneafCore {
         // Register deferred registers
         BLOCKS.register(modEventBus);
         ITEMS.register(modEventBus);
+        ModEntities.ENTITIES.register(modEventBus);
 
         // Register event listeners
         modEventBus.addListener(this::commonSetup);
@@ -340,14 +344,19 @@ public class KneafCore {
         static void onClientSetup(net.neoforged.fml.event.lifecycle.FMLClientSetupEvent event) {
             LOGGER.info("HELLO FROM CLIENT SETUP");
             LOGGER.info("MINECRAFT NAME >> {}", net.minecraft.client.Minecraft.getInstance().getUser().getName());
-            
+
             try {
                 // Register client-specific components
                 // For example: PerformanceOverlayClient.registerClient(event);
-                
+
             } catch (Throwable t) {
                 LOGGER.debug("Client component registration failed: {}", t.getMessage());
             }
+        }
+
+        @net.neoforged.bus.api.SubscribeEvent
+        static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {
+            event.registerEntityRenderer(ModEntities.SHADOW_ZOMBIE_NINJA.get(), ShadowZombieNinjaRenderer::new);
         }
     }
 

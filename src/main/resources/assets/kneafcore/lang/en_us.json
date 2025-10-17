@@ -1,5 +1,6 @@
 {
   "itemGroup.kneafcore": "Kneaf Core Tab",
   "block.kneafcore.example_block": "Example Block",
-  "item.kneafcore.example_item": "Example Item"
+  "item.kneafcore.example_item": "Example Item",
+  "entity.kneafcore.shadow_zombie_ninja": "Shadow Zombie Ninja"
 }
