@@ -26,6 +26,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import java.util.EnumSet;
+import javax.annotation.Nonnull;
 
 public class ShadowZombieNinja extends Zombie {
     private final ServerBossEvent bossEvent = new ServerBossEvent(
@@ -64,7 +65,7 @@ public class ShadowZombieNinja extends Zombie {
     }
 
     @Override
-    public boolean doHurtTarget(Entity target) {
+    public boolean doHurtTarget(@Nonnull Entity target) {
         boolean flag = super.doHurtTarget(target);
         if (flag && target instanceof LivingEntity livingTarget) {
             // Ninja melee attack - extra damage
@@ -74,13 +75,13 @@ public class ShadowZombieNinja extends Zombie {
     }
 
     @Override
-    public void startSeenByPlayer(ServerPlayer player) {
+    public void startSeenByPlayer(@Nonnull ServerPlayer player) {
         super.startSeenByPlayer(player);
         this.bossEvent.addPlayer(player);
     }
 
     @Override
-    public void stopSeenByPlayer(ServerPlayer player) {
+    public void stopSeenByPlayer(@Nonnull ServerPlayer player) {
         super.stopSeenByPlayer(player);
         this.bossEvent.removePlayer(player);
     }
@@ -105,6 +106,7 @@ public class ShadowZombieNinja extends Zombie {
         if (this.blinkCooldown > 0 || this.getTarget() == null) return;
 
         LivingEntity target = this.getTarget();
+        if (target == null) return;
         Vec3 targetPos = target.position();
         Vec3 currentPos = this.position();
 
@@ -128,7 +130,6 @@ public class ShadowZombieNinja extends Zombie {
     }
 
     private void performRangedAttack(LivingEntity target) {
-        Vec3 vec3 = this.getViewVector(1.0F);
         double d0 = target.getX() - this.getX();
         double d1 = target.getY(0.3333333333333333D) - this.getY();
         double d2 = target.getZ() - this.getZ();

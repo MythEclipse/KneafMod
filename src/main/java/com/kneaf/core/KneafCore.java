@@ -1,17 +1,24 @@
 package com.kneaf.core;
 
 import com.kneaf.entities.ModEntities;
+import com.kneaf.entities.ShadowZombieNinja;
 import com.kneaf.entities.ShadowZombieNinjaRenderer;
 import com.mojang.logging.LogUtils;
+import net.minecraft.world.item.CreativeModeTabs;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
+
+import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
+import net.neoforged.neoforge.event.entity.EntityAttributeCreationEvent;
 import net.neoforged.neoforge.registries.DeferredRegister;
+import net.neoforged.neoforge.registries.DeferredItem;
+import net.neoforged.neoforge.common.DeferredSpawnEggItem;
+import org.joml.Vector3f;
+import org.joml.Quaternionf;
 import org.slf4j.Logger;
-// Simple internal math types to avoid compile-time dependency on Minecraft/Parched mappings
-// These are lightweight and used only by this class. They do not replace game runtime types.
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
@@ -20,6 +27,7 @@ import java.util.stream.IntStream;
  * Main mod class for KneafCore. Refactored to use modular architecture with clear separation of concerns.
  * Delegates responsibilities to specialized classes: ModInitializer, EventHandler, SystemManager, LifecycleManager.
  * Follows SOLID principles and provides proper lifecycle management.
+ * Uses JOML math types for vector and quaternion operations.
  */
 @Mod(KneafCore.MODID)
 public class KneafCore {
@@ -40,6 +48,11 @@ public class KneafCore {
     /** Deferred register for items */
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(MODID);
 
+    /** Spawn egg for ShadowZombieNinja */
+    public static final DeferredItem<DeferredSpawnEggItem> SHADOW_ZOMBIE_NINJA_SPAWN_EGG = ITEMS.registerItem("shadow_zombie_ninja_spawn_egg",
+        (properties) -> new DeferredSpawnEggItem(ModEntities.SHADOW_ZOMBIE_NINJA, 0x000000, 0xFFFFFF, properties)
+    );
+
     // Core components - refactored to use modular architecture
     private static final AtomicReference<KneafCore> INSTANCE = new AtomicReference<>();
 
@@ -53,14 +66,16 @@ public class KneafCore {
         INSTANCE.set(this);
         
         // Initialize modular components
-        
+
         // Register deferred registers
+        ModEntities.ENTITIES.register(modEventBus);
         BLOCKS.register(modEventBus);
         ITEMS.register(modEventBus);
-        ModEntities.ENTITIES.register(modEventBus);
 
         // Register event listeners
         modEventBus.addListener(this::commonSetup);
+        modEventBus.addListener(this::registerEntityAttributes);
+        modEventBus.addListener(this::buildCreativeTabContents);
         
         // Register configuration
 
@@ -92,6 +107,15 @@ public class KneafCore {
         } catch (Exception e) {
             LOGGER.error("Failed to complete KneafCore initialization", e);
         }
+    }
+
+    /**
+     * Registers entity attributes for custom entities.
+     *
+     * @param event The entity attribute creation event
+     */
+    private void registerEntityAttributes(EntityAttributeCreationEvent event) {
+        event.put(ModEntities.SHADOW_ZOMBIE_NINJA.get(), ShadowZombieNinja.createAttributes().build());
     }
 
     /**
@@ -130,10 +154,10 @@ public class KneafCore {
         return r;
     }
 
-    /* Convenience overloads using Minecraft math types */
-    public static Vector3f quaternionRotateVector(Quaternion q, Vector3f v) {
+    /* Convenience overloads using JOML math types */
+    public static Vector3f quaternionRotateVector(Quaternionf q, Vector3f v) {
         if (q == null || v == null) throw new IllegalArgumentException("Quaternion and vector cannot be null");
-        float[] qarr = new float[] { q.i(), q.j(), q.k(), q.r() };
+        float[] qarr = new float[] { q.x(), q.y(), q.z(), q.w() };
         float[] varr = new float[] { v.x(), v.y(), v.z() };
         float[] res = quaternionRotateVector(qarr, varr);
         return new Vector3f(res[0], res[1], res[2]);
@@ -331,6 +355,17 @@ public class KneafCore {
         return CompletableFuture.supplyAsync(() -> aStarPathfind(grid, width, height, startX, startY, goalX, goalY));
     }
 
+    /**
+     * Builds the contents of creative mode tabs.
+     *
+     * @param event The build creative mode tab contents event
+     */
+    private void buildCreativeTabContents(BuildCreativeModeTabContentsEvent event) {
+        if (event.getTabKey() == CreativeModeTabs.SPAWN_EGGS) {
+            event.accept(SHADOW_ZOMBIE_NINJA_SPAWN_EGG);
+        }
+    }
+
     // Client setup events - kept as static nested class for NeoForge compatibility
     @net.neoforged.fml.common.EventBusSubscriber(
         modid = MODID,
@@ -360,53 +395,4 @@ public class KneafCore {
         }
     }
 
-    /*
-     * Minimal internal math types to avoid requiring Minecraft/Parched mappings at compile time.
-     * These are only intended to satisfy compilation and provide the subset of behavior used
-     * by this class. They intentionally do not attempt to mirror the full runtime types.
-     */
-    public static final class Vector3f {
-        private final float x;
-        private final float y;
-        private final float z;
-
-        public Vector3f(float x, float y, float z) {
-            this.x = x;
-            this.y = y;
-            this.z = z;
-        }
-
-        public float x() { return x; }
-        public float y() { return y; }
-        public float z() { return z; }
-
-        @Override
-        public String toString() {
-            return "Vector3f{" + x + "," + y + "," + z + "}";
-        }
-    }
-
-    public static final class Quaternion {
-        private final float i;
-        private final float j;
-        private final float k;
-        private final float r;
-
-        public Quaternion(float i, float j, float k, float r) {
-            this.i = i;
-            this.j = j;
-            this.k = k;
-            this.r = r;
-        }
-
-        public float i() { return i; }
-        public float j() { return j; }
-        public float k() { return k; }
-        public float r() { return r; }
-
-        @Override
-        public String toString() {
-            return "Quaternion{" + i + "," + j + "," + k + "," + r + "}";
-        }
-    }
 }
