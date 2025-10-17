@@ -16,6 +16,10 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Mod(KneafCore.MODID)
 public class KneafCore {
+    static {
+        System.loadLibrary("rustperf");
+    }
+
     /** Mod ID used for registration and identification */
     public static final String MODID = "kneafcore";
 
@@ -86,6 +90,64 @@ public class KneafCore {
         }
         return instance;
     }
+
+    /**
+     * Multiplies two 4x4 matrices represented as float arrays of length 16.
+     *
+     * @param a the first matrix
+     * @param b the second matrix
+     * @return the result matrix
+     */
+    private static native float[] matrixMultiply(float[] a, float[] b);
+
+    /**
+     * Computes the dot product of two 3D vectors represented as float arrays of length 3.
+     *
+     * @param a the first vector
+     * @param b the second vector
+     * @return the dot product
+     */
+    private static native float vectorDot(float[] a, float[] b);
+
+    /**
+     * Computes the cross product of two 3D vectors represented as float arrays of length 3.
+     *
+     * @param a the first vector
+     * @param b the second vector
+     * @return the cross product vector
+     */
+    private static native float[] vectorCross(float[] a, float[] b);
+
+    /**
+     * Normalizes a 3D vector represented as a float array of length 3.
+     *
+     * @param a the vector to normalize
+     * @return the normalized vector
+     */
+    private static native float[] vectorNormalize(float[] a);
+
+    /**
+     * Rotates a 3D vector using a quaternion represented as float arrays.
+     *
+     * @param q the quaternion (length 4)
+     * @param v the vector to rotate (length 3)
+     * @return the rotated vector
+     */
+    private static native float[] quaternionRotateVector(float[] q, float[] v);
+
+    /**
+     * Performs A* pathfinding on a 2D grid.
+     *
+     * @param grid the grid as a boolean array (true for obstacles)
+     * @param width the width of the grid
+     * @param height the height of the grid
+     * @param startX the starting X coordinate
+     * @param startY the starting Y coordinate
+     * @param goalX the goal X coordinate
+     * @param goalY the goal Y coordinate
+     * @return the path as an array of coordinates [x1, y1, x2, y2, ...] or null if no path found
+     */
+    private static native int[] aStarPathfind(boolean[] grid, int width, int height, int startX, int startY, int goalX, int goalY);
 
     // Client setup events - kept as static nested class for NeoForge compatibility
     @net.neoforged.fml.common.EventBusSubscriber(

@@ -1,0 +1,43 @@
+[performance]
+# Sorting algorithm configuration
+sorting_algorithm = "quicksort"  # Options: quicksort, mergesort, introsort
+sort_threshold = 1024           # Switch to insertion sort for small arrays
+parallel_sort_threshold = 8192  # Use parallel sorting for arrays above this size
+
+# Compression settings
+compression_level = 9           # 0-9 (9 = maximum compression)
+use_checksumming = true         # Enable CRC32 checksumming for compressed data
+chunk_size = 65536              # Compression chunk size in bytes
+
+# Thread pool configuration
+thread_pool_size = 4            # Number of worker threads for parallel operations
+max_queue_size = 1000           # Maximum number of queued tasks
+
+# Memory management
+buffer_pool_size = 10            # Number of pre-allocated buffers
+buffer_size = 1048576           # Size of each buffer in bytes (1MB)
+use_direct_buffers = true        # Use direct ByteBuffer for native operations
+
+# JNI bridge settings
+jni_timeout_ms = 5000           # Maximum time to wait for JNI calls
+max_batch_size = 1000           # Maximum number of elements per JNI call
+use_nio_buffers = true          # Use NIO buffers for efficient data transfer
+
+# Logging configuration
+log_level = "info"              # Options: trace, debug, info, warn, error
+log_to_file = false             # Enable file logging (in addition to console)
+log_file_path = "rustperf.log"  # Path for log file when enabled
+
+# Algorithm-specific optimizations
+[performance.math]
+use_simd = true                 # Enable SIMD instructions for math operations
+floating_point_precision = "double"  # Options: float, double
+
+[performance.lz4]
+block_size = 262144             # LZ4 block size (256KB)
+fast_mode = false               # Disable fast mode for better compression ratio
+
+[performance.network]
+tcp_buffer_size = 32768         # TCP socket buffer size
+udp_buffer_size = 65536         # UDP socket buffer size
+connection_timeout = 30000      # Connection timeout in milliseconds
