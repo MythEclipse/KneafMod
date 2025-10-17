@@ -96,9 +96,6 @@ opt-level = 0
 # Build configuration for Gradle integration
 gradle = { output_dir = "target/release", windows_dll_name = "rustperf.dll" }
 
-[[example]]
-name = "memory_leak_detector"
-path = "examples/memory_leak_detector_example.rs"
-
-## There is no loader binary in this workspace; the [[bin]] entry was removed to
-## keep the manifest consistent with the source tree.
+## There is no loader binary or broken example in this workspace; example entry
+## was removed to keep the manifest consistent with the source tree and avoid
+## build/test failures when the example source is not present.
