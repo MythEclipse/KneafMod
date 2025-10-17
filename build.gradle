@@ -183,7 +183,13 @@ tasks.withType(Test).configureEach {
     testLogging {
         events "passed", "skipped", "failed"
     }
-    
+
+    // Set java.library.path for native libraries
+    systemProperty 'java.library.path', file('src/main/resources/natives').absolutePath
+
+    // Set PATH for native libraries on Windows
+    environment 'PATH', file('src/main/resources/natives').absolutePath + ';' + System.getenv('PATH')
+
     // Exclude ALL test classes that were failing
     exclude '**/LoggingIntegrationTest.class'
     exclude '**/PerformanceManagerSimpleTest.class'

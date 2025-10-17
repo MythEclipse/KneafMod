@@ -2,10 +2,12 @@
 //! Provides real entity processing optimizations using SIMD and mathematical acceleration
 
 use jni::JNIEnv;
-use jni::objects::{JClass, JString, JDoubleArray, JBooleanArray};
+use jni::objects::{JClass, JString, JDoubleArray, JBooleanArray, JFloatArray};
 use jni::sys::{jint, jboolean};
 use std::ffi::c_void;
 use serde_json;
+
+// Import vector functions from performance module
 
 // Import our performance modules
 mod performance;
@@ -129,4 +131,106 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1parallel_1a
     let results = performance::parallel_a_star(&grid, &queries);
     let results_json = serde_json::to_string(&results).expect("Failed to serialize results");
     env.new_string(results_json).expect("Couldn't create java string!")
+}
+
+/// JNI functions for RustVectorLibrary vector operations
+/// These functions provide native vector/matrix operations using nalgebra, glam, and faer
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_nalgebra_1matrix_1mul<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 16];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 16];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    let result = performance::nalgebra_matrix_mul(a_buf, b_buf);
+    let output = env.new_float_array(16).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_nalgebra_1vector_1add<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 3];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 3];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    let result = performance::nalgebra_vector_add(a_buf, b_buf);
+    let output = env.new_float_array(3).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_glam_1vector_1dot(
+    mut env: JNIEnv,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> f32 {
+    let mut a_buf = [0.0f32; 3];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 3];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    performance::glam_vector_dot(a_buf, b_buf)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_glam_1vector_1cross<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 3];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 3];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    let result = performance::glam_vector_cross(a_buf, b_buf);
+    let output = env.new_float_array(3).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_glam_1matrix_1mul<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 16];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 16];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    let result = performance::glam_matrix_mul(a_buf, b_buf);
+    let output = env.new_float_array(16).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_faer_1matrix_1mul<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 16];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 16];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    let result = performance::faer_matrix_mul(a_buf, b_buf);
+    let output = env.new_float_array(16).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
 }

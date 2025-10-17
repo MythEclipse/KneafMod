@@ -1,7 +1,5 @@
 package com.kneaf.core;
 
-import com.mojang.logging.LogUtils;
-import org.slf4j.Logger;
 
 /**
  * JNI wrapper class for dynamic exposure of Rust vector library functions.
@@ -9,17 +7,22 @@ import org.slf4j.Logger;
  * implemented in the native Rust performance library.
  */
 public final class RustVectorLibrary {
-    private static final Logger LOGGER = LogUtils.getLogger();
     private static final String LIBRARY_NAME = "rustperf";
     private static boolean isLibraryLoaded = false;
 
     static {
         try {
-            System.loadLibrary(LIBRARY_NAME);
+            System.out.println("RustVectorLibrary: java.library.path = " + System.getProperty("java.library.path"));
+            System.out.println("RustVectorLibrary: user.dir = " + System.getProperty("user.dir"));
+            // Load from absolute path for testing
+            String libPath = System.getProperty("user.dir") + "/src/main/resources/natives/rustperf.dll";
+            System.out.println("RustVectorLibrary: attempting to load from " + libPath);
+            System.load(libPath);
             isLibraryLoaded = true;
-            LOGGER.info("RustVectorLibrary: Successfully loaded native library '{}'", LIBRARY_NAME);
-        } catch (UnsatisfiedLinkError e) {
-            LOGGER.error("RustVectorLibrary: Failed to load native library '{}': {}", LIBRARY_NAME, e.getMessage());
+            System.out.println("RustVectorLibrary: Successfully loaded native library '" + LIBRARY_NAME + "'");
+        } catch (Throwable e) {
+            System.out.println("RustVectorLibrary: Exception in static initializer: " + e.getClass().getName() + ": " + e.getMessage());
+            e.printStackTrace();
             isLibraryLoaded = false;
         }
     }
@@ -52,7 +55,7 @@ public final class RustVectorLibrary {
         try {
             return nalgebra_matrix_mul(a, b);
         } catch (Exception e) {
-            LOGGER.error("JNI call failed in nalgebra_matrix_mul", e);
+            System.out.println("JNI call failed in nalgebra_matrix_mul: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
         }
     }
@@ -77,7 +80,7 @@ public final class RustVectorLibrary {
         try {
             return nalgebra_vector_add(a, b);
         } catch (Exception e) {
-            LOGGER.error("JNI call failed in nalgebra_vector_add", e);
+            System.out.println("JNI call failed in nalgebra_vector_add: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
         }
     }
@@ -102,7 +105,7 @@ public final class RustVectorLibrary {
         try {
             return glam_vector_dot(a, b);
         } catch (Exception e) {
-            LOGGER.error("JNI call failed in glam_vector_dot", e);
+            System.out.println("JNI call failed in glam_vector_dot: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
         }
     }
@@ -127,7 +130,7 @@ public final class RustVectorLibrary {
         try {
             return glam_vector_cross(a, b);
         } catch (Exception e) {
-            LOGGER.error("JNI call failed in glam_vector_cross", e);
+            System.out.println("JNI call failed in glam_vector_cross: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
         }
     }
@@ -152,7 +155,7 @@ public final class RustVectorLibrary {
         try {
             return glam_matrix_mul(a, b);
         } catch (Exception e) {
-            LOGGER.error("JNI call failed in glam_matrix_mul", e);
+            System.out.println("JNI call failed in glam_matrix_mul: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
         }
     }
@@ -177,7 +180,7 @@ public final class RustVectorLibrary {
         try {
             return faer_matrix_mul(a, b);
         } catch (Exception e) {
-            LOGGER.error("JNI call failed in faer_matrix_mul", e);
+            System.out.println("JNI call failed in faer_matrix_mul: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
         }
     }
@@ -190,7 +193,7 @@ public final class RustVectorLibrary {
      */
     public static boolean testAllFunctions() {
         if (!isLibraryLoaded) {
-            LOGGER.warn("Cannot test functions: native library not loaded");
+            System.out.println("Cannot test functions: native library not loaded");
             return false;
         }
 
@@ -210,7 +213,7 @@ public final class RustVectorLibrary {
             // Test nalgebra matrix multiplication
             float[] result = matrixMultiplyNalgebra(identityMatrix, identityMatrix);
             if (result == null || result.length != 16) {
-                LOGGER.error("nalgebra_matrix_mul test failed: invalid result length");
+                System.out.println("nalgebra_matrix_mul test failed: invalid result length");
                 return false;
             }
 
@@ -218,14 +221,14 @@ public final class RustVectorLibrary {
             result = vectorAddNalgebra(vecA, vecB);
             if (result == null || result.length != 3 ||
                 result[0] != 5.0f || result[1] != 7.0f || result[2] != 9.0f) {
-                LOGGER.error("nalgebra_vector_add test failed: expected [5.0, 7.0, 9.0], got {}", java.util.Arrays.toString(result));
+                System.out.println("nalgebra_vector_add test failed: expected [5.0, 7.0, 9.0], got " + java.util.Arrays.toString(result));
                 return false;
             }
 
             // Test glam vector dot product
             float dotResult = vectorDotGlam(vecA, vecB);
             if (dotResult != 32.0f) { // 1*4 + 2*5 + 3*6 = 32
-                LOGGER.error("glam_vector_dot test failed: expected 32.0, got {}", dotResult);
+                System.out.println("glam_vector_dot test failed: expected 32.0, got " + dotResult);
                 return false;
             }
 
@@ -233,29 +236,29 @@ public final class RustVectorLibrary {
             result = vectorCrossGlam(vecA, vecB);
             if (result == null || result.length != 3 ||
                 result[0] != -3.0f || result[1] != 6.0f || result[2] != -3.0f) {
-                LOGGER.error("glam_vector_cross test failed: expected [-3.0, 6.0, -3.0], got {}", java.util.Arrays.toString(result));
+                System.out.println("glam_vector_cross test failed: expected [-3.0, 6.0, -3.0], got " + java.util.Arrays.toString(result));
                 return false;
             }
 
             // Test glam matrix multiplication
             result = matrixMultiplyGlam(identityMatrix, identityMatrix);
             if (result == null || result.length != 16) {
-                LOGGER.error("glam_matrix_mul test failed: invalid result length");
+                System.out.println("glam_matrix_mul test failed: invalid result length");
                 return false;
             }
 
             // Test faer matrix multiplication
             result = matrixMultiplyFaer(identityMatrix, identityMatrix);
             if (result == null || result.length != 16) {
-                LOGGER.error("faer_matrix_mul test failed: invalid result length");
+                System.out.println("faer_matrix_mul test failed: invalid result length");
                 return false;
             }
 
-            LOGGER.info("All Rust vector library functions tested successfully");
+            System.out.println("All Rust vector library functions tested successfully");
             return true;
 
         } catch (Exception e) {
-            LOGGER.error("Test failed with exception", e);
+            System.out.println("Test failed with exception: " + e.getMessage());
             return false;
         }
     }

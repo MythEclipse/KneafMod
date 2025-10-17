@@ -84,8 +84,9 @@ public final class OptimizationInjector {
 
                 if (resultData != null && resultData.length == 6) {
                     // Apply results on main thread for thread safety
-                    if (entity.level().getServer() != null) {
-                        entity.level().getServer().execute(() -> {
+                    var server = entity.level().getServer();
+                    if (server != null) {
+                        server.execute(() -> {
                             entity.setPos(resultData[0], resultData[1], resultData[2]);
                             entity.setDeltaMovement(resultData[3], resultData[4], resultData[5]);
                         });
