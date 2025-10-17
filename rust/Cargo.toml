@@ -3,14 +3,6 @@ name = "rustperf"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-jni = []
-async-io = []
-circuit-breaker = []
-structured-errors = []
-jemalloc = ["jemalloc-sys", "jemallocator"]
-java-integration = []
-
 [lib]
 name = "rustperf"
 crate-type = ["cdylib", "rlib"]
