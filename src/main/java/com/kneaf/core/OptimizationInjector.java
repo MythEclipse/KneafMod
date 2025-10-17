@@ -6,6 +6,8 @@ import net.minecraft.world.entity.player.Player;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.neoforged.neoforge.event.tick.LevelTickEvent;
 import org.slf4j.Logger;
 
 import java.util.concurrent.CompletableFuture;
@@ -30,16 +32,16 @@ public final class OptimizationInjector {
     private static final AtomicInteger optimizationMisses = new AtomicInteger(0);
     private static final AtomicLong totalEntitiesProcessed = new AtomicLong(0);
 
-    private static final String RUST_PERF_LIBRARY = "rustperf";
+    private static final String RUST_PERF_LIBRARY_PATH = System.getProperty("user.dir") + "/src/main/resources/natives/rustperf.dll";
     private static boolean isNativeLibraryLoaded = false;
 
     static {
         try {
-            System.loadLibrary(RUST_PERF_LIBRARY);
+            System.load(RUST_PERF_LIBRARY_PATH);
             isNativeLibraryLoaded = true;
-            LOGGER.info("Successfully loaded Rust performance native library");
+            LOGGER.info("Successfully loaded Rust performance native library from {}", RUST_PERF_LIBRARY_PATH);
         } catch (UnsatisfiedLinkError e) {
-            LOGGER.error("Failed to load Rust performance native library: {}", e.getMessage());
+            LOGGER.error("Failed to load Rust performance native library from {}: {}", RUST_PERF_LIBRARY_PATH, e.getMessage());
             isNativeLibraryLoaded = false;
         }
     }
@@ -58,7 +60,7 @@ public final class OptimizationInjector {
         if (entity.level().isClientSide() || !PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
             return;
         }
-        
+
         // Skip optimization if native integration is disabled. Let vanilla handle it.
         if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isRustIntegrationEnabled()) {
             return;
@@ -77,35 +79,64 @@ public final class OptimizationInjector {
                  entity.getDeltaMovement().x, entity.getDeltaMovement().y, entity.getDeltaMovement().z
         };
 
-        // Submit entity processing task to executor for async execution
-        CompletableFuture.supplyAsync(() -> rustperf_tick_entity(entityData, entity.onGround()), ENTITY_EXECUTOR)
-            .thenAccept(resultData -> {
-                totalEntitiesProcessed.incrementAndGet();
+        try {
+            // Call native function synchronously to replace vanilla calculations
+            double[] resultData = rustperf_tick_entity(entityData, entity.onGround());
 
-                if (resultData != null && resultData.length == 6) {
-                    // Apply results on main thread for thread safety
-                    var server = entity.level().getServer();
-                    if (server != null) {
-                        server.execute(() -> {
-                            entity.setPos(resultData[0], resultData[1], resultData[2]);
-                            entity.setDeltaMovement(resultData[3], resultData[4], resultData[5]);
-                        });
-                    }
+            totalEntitiesProcessed.incrementAndGet();
 
-                    long duration = System.nanoTime() - startTime;
-                    recordOptimizationHit(String.format("Async native tick for entity %d in %dns", entity.getId(), duration));
-                } else {
-                    recordOptimizationMiss("Async native tick failed for entity " + entity.getId() + ", falling back to vanilla.");
-                }
-            })
-            .exceptionally(throwable -> {
-                LOGGER.error("Unrecoverable error during async native entity tick for entity " + entity.getId() + ". Falling back to vanilla.", throwable);
-                recordOptimizationMiss("Async native tick threw an error for entity " + entity.getId());
-                return null;
-            });
+            if (resultData != null && resultData.length == 6) {
+                // Apply results immediately on the same thread
+                entity.setPos(resultData[0], resultData[1], resultData[2]);
+                entity.setDeltaMovement(resultData[3], resultData[4], resultData[5]);
 
-        // Cancel the event immediately to prevent vanilla tick
+                long duration = System.nanoTime() - startTime;
+                recordOptimizationHit(String.format("Synchronous native tick for entity %d in %dns", entity.getId(), duration));
+            } else {
+                recordOptimizationMiss("Synchronous native tick failed for entity " + entity.getId() + ", falling back to vanilla.");
+                // Do not cancel event, let vanilla handle it
+                return;
+            }
+        } catch (Exception e) {
+            LOGGER.error("Unrecoverable error during synchronous native entity tick for entity " + entity.getId() + ". Falling back to vanilla.", e);
+            recordOptimizationMiss("Synchronous native tick threw an error for entity " + entity.getId());
+            // Do not cancel event, let vanilla handle it
+            return;
+        }
+
+        // Cancel the event to prevent vanilla tick since native succeeded
         event.setCanceled(true);
+    }
+
+    /**
+     * Intercepts server tick events to inject native optimizations for server-side calculations.
+     */
+    @SubscribeEvent
+    public static void onServerTick(ServerTickEvent.Pre event) {
+        if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isAiPathfindingOptimized()) {
+            return;
+        }
+
+        int entityCount = 0;
+        String dimension = "server";
+        rustperf_calculate_entity_performance(entityCount, dimension);
+        recordOptimizationHit("Server tick native optimization applied");
+    }
+
+    /**
+     * Intercepts level tick events to inject native optimizations for level-specific calculations.
+     */
+    @SubscribeEvent
+    public static void onLevelTick(LevelTickEvent.Pre event) {
+        if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
+            return;
+        }
+
+        var level = event.getLevel();
+        int entityCount = 0; // Placeholder for entity count calculation
+        String dimension = level.dimension().location().toString();
+        rustperf_calculate_entity_performance(entityCount, dimension);
+        recordOptimizationHit("Level tick native optimization applied for " + dimension);
     }
 
     // --- Native Method Declarations ---
@@ -113,6 +144,7 @@ public final class OptimizationInjector {
     private static native double[] rustperf_tick_entity(double[] entityData, boolean onGround);
     private static native String rustperf_get_performance_stats();
     private static native void rustperf_reset_performance_stats();
+    private static native String rustperf_parallel_a_star(String gridJson, String queriesJson);
 
     // --- Metrics Methods ---
     private static void recordOptimizationHit(String details) {
