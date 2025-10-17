@@ -13,12 +13,14 @@ import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.MeleeAttackGoal;
+import net.minecraft.world.entity.ai.goal.MoveTowardsTargetGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.ai.goal.RandomStrollGoal;
 import net.minecraft.world.entity.ai.goal.target.HurtByTargetGoal;
 import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.Zombie;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Arrow;
 import net.minecraft.world.item.ItemStack;
@@ -48,12 +50,14 @@ public class ShadowZombieNinja extends Zombie {
     protected void registerGoals() {
         this.goalSelector.addGoal(1, new BlinkGoal(this));
         this.goalSelector.addGoal(2, new MeleeAttackGoal(this, 1.2D, false));
-        this.goalSelector.addGoal(3, new RangedAttackGoal(this));
-        this.goalSelector.addGoal(4, new RandomStrollGoal(this, 1.0D));
-        this.goalSelector.addGoal(5, new RandomLookAroundGoal(this));
+        this.goalSelector.addGoal(3, new MoveTowardsTargetGoal(this, 1.2D, 32.0F));
+        this.goalSelector.addGoal(4, new RangedAttackGoal(this));
+        this.goalSelector.addGoal(5, new RandomStrollGoal(this, 1.0D));
+        this.goalSelector.addGoal(6, new RandomLookAroundGoal(this));
 
         this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
         this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, Player.class, true));
+        this.targetSelector.addGoal(3, new NearestAttackableTargetGoal<>(this, Villager.class, true));
     }
 
     @Override
@@ -99,7 +103,8 @@ public class ShadowZombieNinja extends Zombie {
             .add(Attributes.MOVEMENT_SPEED, 0.3D)
             .add(Attributes.ATTACK_DAMAGE, 8.0D)
             .add(Attributes.FOLLOW_RANGE, 35.0D)
-            .add(Attributes.ARMOR, 4.0D);
+            .add(Attributes.ARMOR, 4.0D)
+            .add(Attributes.SPAWN_REINFORCEMENTS_CHANCE, 0.0D);
     }
 
     private void performBlink() {
@@ -179,7 +184,7 @@ public class ShadowZombieNinja extends Zombie {
     private static class RangedAttackGoal extends Goal {
         private final ShadowZombieNinja ninja;
         private int attackTimer = 0;
-        private int attackCooldown = 60; // 3 seconds
+        private int attackCooldown = 0;
 
         public RangedAttackGoal(ShadowZombieNinja ninja) {
             this.ninja = ninja;
@@ -199,6 +204,9 @@ public class ShadowZombieNinja extends Zombie {
 
         @Override
         public void tick() {
+            if (attackCooldown > 0) {
+                attackCooldown--;
+            }
             LivingEntity target = ninja.getTarget();
             if (target != null) {
                 ninja.getLookControl().setLookAt(target, 30.0F, 30.0F);
