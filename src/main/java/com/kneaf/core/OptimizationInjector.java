@@ -10,9 +10,6 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 import org.slf4j.Logger;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -26,13 +23,11 @@ public final class OptimizationInjector {
 
     private static final PerformanceManager PERFORMANCE_MANAGER = PerformanceManager.getInstance();
 
-    private static final ExecutorService ENTITY_EXECUTOR = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-
     private static final AtomicInteger optimizationHits = new AtomicInteger(0);
     private static final AtomicInteger optimizationMisses = new AtomicInteger(0);
     private static final AtomicLong totalEntitiesProcessed = new AtomicLong(0);
 
-    private static final String RUST_PERF_LIBRARY_PATH = System.getProperty("user.dir") + "/src/main/resources/natives/rustperf.dll";
+    private static final String RUST_PERF_LIBRARY_PATH = System.getProperty("user.dir") + "/../src/main/resources/natives/rustperf.dll";
     private static boolean isNativeLibraryLoaded = false;
 
     static {
@@ -61,9 +56,9 @@ public final class OptimizationInjector {
             return;
         }
 
-        // Skip optimization if native integration is disabled. Let vanilla handle it.
+        // Skip optimization if native integration is disabled. Throw exception to force failure.
         if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isRustIntegrationEnabled()) {
-            return;
+            throw new RuntimeException("Native library not loaded or integration disabled for entity " + entity.getId());
         }
 
         // For safety, players are always ticked normally by vanilla.
@@ -79,29 +74,20 @@ public final class OptimizationInjector {
                  entity.getDeltaMovement().x, entity.getDeltaMovement().y, entity.getDeltaMovement().z
         };
 
-        try {
-            // Call native function synchronously to replace vanilla calculations
-            double[] resultData = rustperf_tick_entity(entityData, entity.onGround());
+        // Call native function synchronously to replace vanilla calculations
+        double[] resultData = rustperf_tick_entity(entityData, entity.onGround());
 
-            totalEntitiesProcessed.incrementAndGet();
+        totalEntitiesProcessed.incrementAndGet();
 
-            if (resultData != null && resultData.length == 6) {
-                // Apply results immediately on the same thread
-                entity.setPos(resultData[0], resultData[1], resultData[2]);
-                entity.setDeltaMovement(resultData[3], resultData[4], resultData[5]);
+        if (resultData != null && resultData.length == 6) {
+            // Apply results immediately on the same thread
+            entity.setPos(resultData[0], resultData[1], resultData[2]);
+            entity.setDeltaMovement(resultData[3], resultData[4], resultData[5]);
 
-                long duration = System.nanoTime() - startTime;
-                recordOptimizationHit(String.format("Synchronous native tick for entity %d in %dns", entity.getId(), duration));
-            } else {
-                recordOptimizationMiss("Synchronous native tick failed for entity " + entity.getId() + ", falling back to vanilla.");
-                // Do not cancel event, let vanilla handle it
-                return;
-            }
-        } catch (Exception e) {
-            LOGGER.error("Unrecoverable error during synchronous native entity tick for entity " + entity.getId() + ". Falling back to vanilla.", e);
-            recordOptimizationMiss("Synchronous native tick threw an error for entity " + entity.getId());
-            // Do not cancel event, let vanilla handle it
-            return;
+            long duration = System.nanoTime() - startTime;
+            recordOptimizationHit(String.format("Synchronous native tick for entity %d in %dns", entity.getId(), duration));
+        } else {
+            throw new RuntimeException("Synchronous native tick failed for entity " + entity.getId());
         }
 
         // Cancel the event to prevent vanilla tick since native succeeded
@@ -113,10 +99,6 @@ public final class OptimizationInjector {
      */
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Pre event) {
-        if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isAiPathfindingOptimized()) {
-            return;
-        }
-
         int entityCount = 0;
         String dimension = "server";
         rustperf_calculate_entity_performance(entityCount, dimension);
@@ -128,10 +110,6 @@ public final class OptimizationInjector {
      */
     @SubscribeEvent
     public static void onLevelTick(LevelTickEvent.Pre event) {
-        if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
-            return;
-        }
-
         var level = event.getLevel();
         int entityCount = 0; // Placeholder for entity count calculation
         String dimension = level.dimension().location().toString();
@@ -161,12 +139,8 @@ public final class OptimizationInjector {
     }
     private static void logPerformanceStats() {
         if (isNativeLibraryLoaded) {
-            CompletableFuture.supplyAsync(() -> rustperf_get_performance_stats(), ENTITY_EXECUTOR)
-                .thenAccept(nativeStats -> LOGGER.info("Native performance stats: {}", nativeStats))
-                .exceptionally(t -> {
-                    LOGGER.warn("Failed to retrieve async native performance stats: {}", t.getMessage());
-                    return null;
-                });
+            String nativeStats = rustperf_get_performance_stats();
+            LOGGER.info("Native performance stats: {}", nativeStats);
         }
         LOGGER.info("Java optimization metrics: {}", getOptimizationMetrics());
     }
@@ -186,5 +160,12 @@ public final class OptimizationInjector {
             rustperf_reset_performance_stats(); // Also reset stats on the native side
         }
         LOGGER.info("Optimization metrics have been reset.");
+    }
+
+    /**
+     * Method called from Rust to log messages into Minecraft's log.
+     */
+    public static void logFromRust(String message) {
+        LOGGER.info("[Rust] {}", message);
     }
 }

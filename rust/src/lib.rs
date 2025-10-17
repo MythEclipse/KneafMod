@@ -29,10 +29,22 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1calculate_1
     level_dimension: JString,
 ) -> jint {
     let dimension_str: String = env.get_string(&level_dimension).expect("Couldn't get java string!").into();
+    let _ = env.call_static_method(
+        "com/kneaf/core/OptimizationInjector",
+        "logFromRust",
+        "(Ljava/lang/String;)V",
+        &[(&env.new_string(&format!("Calculating entity performance for {} entities in {}", entity_count, dimension_str)).unwrap()).into()],
+    );
     let target_processed = calculate_optimal_entity_target(entity_count, &dimension_str);
     if let Ok(mut stats) = performance::ENTITY_PROCESSING_STATS.lock() {
         stats.record_processing(&dimension_str, target_processed as u64, 0, 0);
     }
+    let _ = env.call_static_method(
+        "com/kneaf/core/OptimizationInjector",
+        "logFromRust",
+        "(Ljava/lang/String;)V",
+        &[(&env.new_string(&format!("Calculated target processed: {}", target_processed)).unwrap()).into()],
+    );
     target_processed as jint
 }
 
@@ -48,10 +60,24 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1tick_1entit
     let mut data_buf = [0.0; 6];
     env.get_double_array_region(&entity_data, 0, &mut data_buf).expect("Couldn't get entity data region");
 
+    let _ = env.call_static_method(
+        "com/kneaf/core/OptimizationInjector",
+        "logFromRust",
+        "(Ljava/lang/String;)V",
+        &[(&env.new_string(&format!("Starting native entity tick for entity (X: {}, Y: {}, Z: {})", data_buf[0], data_buf[1], data_buf[2])).unwrap()).into()],
+    );
+
     let result_data = performance::tick_entity_physics(&data_buf, on_ground != 0);
 
     let output_array = env.new_double_array(6).expect("Couldn't create new double array");
     env.set_double_array_region(&output_array, 0, &result_data).expect("Couldn't set result array region");
+
+    let _ = env.call_static_method(
+        "com/kneaf/core/OptimizationInjector",
+        "logFromRust",
+        "(Ljava/lang/String;)V",
+        &[(&env.new_string(&format!("Entity tick results - Position: ({}, {}, {}), Velocity: ({}, {}, {})", result_data[0], result_data[1], result_data[2], result_data[3], result_data[4], result_data[5])).unwrap()).into()],
+    );
 
     let elapsed = start_time.elapsed().as_nanos() as u64;
     if let Ok(mut stats) = performance::ENTITY_PROCESSING_STATS.lock() {
@@ -59,6 +85,12 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1tick_1entit
         stats.total_calculation_time_ns += elapsed;
     }
 
+    let _ = env.call_static_method(
+        "com/kneaf/core/OptimizationInjector",
+        "logFromRust",
+        "(Ljava/lang/String;)V",
+        &[(&env.new_string(&format!("Completed native entity tick in {} ns", elapsed)).unwrap()).into()],
+    );
     output_array
 }
 
