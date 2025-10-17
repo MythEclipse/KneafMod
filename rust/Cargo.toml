@@ -28,8 +28,9 @@ sysinfo = "0.30"
 rayon = "1.8"
 bevy_reflect = "0.14"
 bevy_ecs = "0.14"
-glam = { version = "0.27", features = ["serde"] }
-nalgebra = "0.32"
+glam = { version = "0.29", features = ["serde"] }
+nalgebra = { version = "0.33", features = ["serde"] }
+faer = { version = "0.20", features = ["std", "rayon"] }
 ndarray = "0.15"
 memmap2 = "0.5"
 crossbeam = "0.8"

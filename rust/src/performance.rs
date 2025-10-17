@@ -4,6 +4,9 @@ use lazy_static::lazy_static;
 use std::sync::Mutex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use nalgebra as na;
+use glam::{Vec3, Mat4};
+use faer::Mat;
 
 const GRAVITY: f64 = 0.08;
 const AIR_DAMPING: f64 = 0.98;
@@ -260,6 +263,59 @@ pub fn batch_tick_entities(entities: &mut Vec<[f64;6]>, on_grounds: &[bool], dim
     if let Ok(mut stats) = ENTITY_PROCESSING_STATS.lock() {
         stats.record_processing(dimension, entity_count, entity_count, elapsed);
     }
+}
+
+#[no_mangle]
+pub extern "C" fn nalgebra_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
+    let ma = na::Matrix4::<f32>::from_row_slice(&a);
+    let mb = na::Matrix4::<f32>::from_row_slice(&b);
+    let res = ma * mb;
+    res.as_slice().try_into().unwrap()
+}
+
+#[no_mangle]
+pub extern "C" fn nalgebra_vector_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    let va = na::Vector3::<f32>::from_row_slice(&a);
+    let vb = na::Vector3::<f32>::from_row_slice(&b);
+    let res = va + vb;
+    res.as_slice().try_into().unwrap()
+}
+
+#[no_mangle]
+pub extern "C" fn glam_vector_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let va = Vec3::from(a);
+    let vb = Vec3::from(b);
+    va.dot(vb)
+}
+
+#[no_mangle]
+pub extern "C" fn glam_vector_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    let va = Vec3::from(a);
+    let vb = Vec3::from(b);
+    let res = va.cross(vb);
+    res.to_array()
+}
+
+#[no_mangle]
+pub extern "C" fn glam_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
+    let ma = Mat4::from_cols_array(&a);
+    let mb = Mat4::from_cols_array(&b);
+    let res = ma * mb;
+    res.to_cols_array()
+}
+
+#[no_mangle]
+pub extern "C" fn faer_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
+    let a_mat = Mat::<f32>::from_fn(4, 4, |i, j| a[i * 4 + j]);
+    let b_mat = Mat::<f32>::from_fn(4, 4, |i, j| b[i * 4 + j]);
+    let res = &a_mat * &b_mat;
+    let mut result = [0.0; 16];
+    for i in 0..4 {
+        for j in 0..4 {
+            result[i * 4 + j] = res[(i, j)];
+        }
+    }
+    result
 }
 
 pub fn parallel_a_star(grid: &Vec<Vec<bool>>, queries: &[PathQuery]) -> Vec<Option<Vec<(i32,i32)>>> {

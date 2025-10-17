@@ -105,7 +105,7 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_1tick
     let mut data_buf = vec![0.0; (entity_count * 6) as usize];
     env.get_double_array_region(&entity_data, 0, &mut data_buf).expect("Couldn't get entity data region");
     let mut entities: Vec<[f64;6]> = data_buf.chunks_exact(6).map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5]]).collect();
-    let mut on_ground_buf = vec![0i8; entity_count as usize];
+    let mut on_ground_buf = vec![0u8; entity_count as usize];
     env.get_boolean_array_region(&on_grounds, 0, &mut on_ground_buf).expect("Couldn't get on grounds region");
     let on_grounds_bool: Vec<bool> = on_ground_buf.into_iter().map(|b| b != 0).collect();
     performance::batch_tick_entities(&mut entities, &on_grounds_bool, &dimension_str);

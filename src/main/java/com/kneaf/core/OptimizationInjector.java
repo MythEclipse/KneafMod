@@ -84,10 +84,12 @@ public final class OptimizationInjector {
 
                 if (resultData != null && resultData.length == 6) {
                     // Apply results on main thread for thread safety
-                    entity.level().getServer().execute(() -> {
-                        entity.setPos(resultData[0], resultData[1], resultData[2]);
-                        entity.setDeltaMovement(resultData[3], resultData[4], resultData[5]);
-                    });
+                    if (entity.level().getServer() != null) {
+                        entity.level().getServer().execute(() -> {
+                            entity.setPos(resultData[0], resultData[1], resultData[2]);
+                            entity.setDeltaMovement(resultData[3], resultData[4], resultData[5]);
+                        });
+                    }
 
                     long duration = System.nanoTime() - startTime;
                     recordOptimizationHit(String.format("Async native tick for entity %d in %dns", entity.getId(), duration));
