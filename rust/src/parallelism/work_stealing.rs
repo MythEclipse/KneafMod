@@ -1,9 +1,9 @@
 use crate::config::performance_config::{WorkStealingConfig, PerformanceConfig, PerformanceMode};
-use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor, TaskPriority};
+use crate::parallelism::base::executor_factory::executor_factory::{ExecutorType, ParallelExecutorEnum, ParallelExecutor};
 use crossbeam_deque::{Injector, Stealer, Worker};
 use std::sync::Arc;
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Mutex, RwLock};
 use std::sync::atomic::AtomicBool;
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;
@@ -11,20 +11,6 @@ use std::time::Instant;
 use tokio::sync::Notify;
 use std::any::Any;
 
-/// Priority levels for task execution
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TaskPriority {
-    /// Lowest priority - executed only when system is idle
-    Lowest,
-    /// Low priority - non-critical background tasks
-    Low,
-    /// Normal priority - default for most tasks
-    Normal,
-    /// High priority - critical game logic tasks
-    High,
-    /// Highest priority - immediate response tasks (e.g., player input)
-    Highest,
-}
 
 /// Task wrapper with priority metadata for work-stealing scheduler
 #[derive(Debug, Clone)]
@@ -264,7 +250,7 @@ impl WorkStealingScheduler {
 
 #[async_trait]
 impl ParallelExecutor for WorkStealingScheduler {
-    fn execute_with_priority<F, R>(&self, f: F, priority: crate::parallelism::base::executor_factory::executor_factory::TaskPriority, trace_id: Option<String>) -> R
+    fn execute_with_priority<F, R>(&self, f: F, priority: TaskPriority, trace_id: Option<String>) -> R
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,

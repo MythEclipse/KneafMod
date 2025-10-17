@@ -8,6 +8,38 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::collections::{HashMap, HashSet, VecDeque};
 
+#[derive(Debug, Clone, Copy)]
+pub struct Point(f32, f32, f32);
+
+impl PartialEq for Point {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && self.1 == other.1 && self.2 == other.2
+    }
+}
+
+impl Eq for Point {}
+
+impl std::hash::Hash for Point {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        ((self.0 * 1000.0) as i32).hash(state);
+        ((self.1 * 1000.0) as i32).hash(state);
+        ((self.2 * 1000.0) as i32).hash(state);
+    }
+}
+
+impl From<(f32, f32, f32)> for Point {
+    fn from(t: (f32, f32, f32)) -> Self {
+        Point(t.0, t.1, t.2)
+    }
+}
+
+impl From<Point> for (f32, f32, f32) {
+    fn from(p: Point) -> Self {
+        (p.0, p.1, p.2)
+    }
+}
+
+
 /// Algorithm selection enum for pathfinding
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PathfindingAlgorithm {
@@ -25,7 +57,7 @@ pub type AdvancedPathfindingManager = AdvancedPathfindingContext;
 pub struct PathfindingResult {
     pub request_id: u64,
     pub villager_id: u64,
-    pub path: Option<Vec<(f32, f32, f32)>>,
+    pub path: Option<Vec<Point>>,
     pub success: bool,
     pub algorithm_used: PathfindingAlgorithm,
     pub steps_taken: usize,
@@ -38,7 +70,7 @@ pub type TerrainState = TerrainData;
 
 /// Simple trait for pathfinder implementations
 pub trait Pathfinder: Send + Sync {
-    fn find_path(&self, start: (f32, f32, f32), goal: (f32, f32, f32)) -> Option<Vec<(f32, f32, f32)>>;
+    fn find_path(&self, start: Point, goal: Point) -> Option<Vec<Point>>;
 }
 
 /// Placeholder grid and navigation mesh types used by other modules
@@ -51,7 +83,7 @@ pub struct Grid {
     pub grid_size: f32,
 }
 
-pub type NavigationMesh = Vec<(f32, f32, f32)>;
+pub type NavigationMesh = Vec<Point>;
 
 /// Basic A* implementation wrapper used by other modules
 pub struct StandardAStar {
@@ -66,7 +98,7 @@ impl StandardAStar {
 }
 
 impl Pathfinder for StandardAStar {
-    fn find_path(&self, start: (f32, f32, f32), goal: (f32, f32, f32)) -> Option<Vec<(f32, f32, f32)>> {
+    fn find_path(&self, start: Point, goal: Point) -> Option<Vec<Point>> {
         // Use a trivial straight-line path as placeholder
         Some(vec![start, goal])
     }
@@ -77,7 +109,7 @@ impl ThetaStar {
     pub fn new(_navigation_mesh: NavigationMesh, _config: AdvancedPathfindingContext) -> Self { Self {} }
 }
 impl Pathfinder for ThetaStar {
-    fn find_path(&self, start: (f32, f32, f32), goal: (f32, f32, f32)) -> Option<Vec<(f32, f32, f32)>> {
+    fn find_path(&self, start: Point, goal: Point) -> Option<Vec<Point>> {
         Some(vec![start, goal])
     }
 }
@@ -87,19 +119,19 @@ impl JumpPointSearch {
     pub fn new(_grid: Grid, _config: AdvancedPathfindingContext) -> Self { Self {} }
 }
 impl Pathfinder for JumpPointSearch {
-    fn find_path(&self, start: (f32, f32, f32), goal: (f32, f32, f32)) -> Option<Vec<(f32, f32, f32)>> {
+    fn find_path(&self, start: Point, goal: Point) -> Option<Vec<Point>> {
         Some(vec![start, goal])
     }
 }
 
 /// Simple helper: find a very basic direct path if possible
-pub fn find_basic_path(start: (f32, f32, f32), goal: (f32, f32, f32), _navigation_mesh: &NavigationMesh, _limit: usize) -> Option<Vec<(f32, f32, f32)>> {
+pub fn find_basic_path(start: Point, goal: Point, _navigation_mesh: &NavigationMesh, _limit: usize) -> Option<Vec<Point>> {
     // For now return straight line path
     Some(vec![start, goal])
 }
 
 /// Free function wrapper to call A* using a temporary context
-pub fn run_astar(start: (f32, f32, f32), goal: (f32, f32, f32), terrain: &TerrainData) -> Option<Vec<(f32, f32, f32)>> {
+pub fn run_astar(start: Point, goal: Point, terrain: &TerrainData) -> Option<Vec<Point>> {
     // Delegates to the internal simplified run_astar logic
     let ctx = AdvancedPathfindingContext::new();
     ctx.run_astar(start, goal, terrain)
@@ -116,11 +148,11 @@ static ADVANCED_PATHFINDING_LOGGER: Lazy<PerformanceLogger> =
 #[derive(Debug, Clone)]
 pub struct PathfindingContext {
     pub villager_id: u64,
-    pub start_position: (f32, f32, f32),
-    pub goal_position: (f32, f32, f32),
-    pub navigation_mesh: Vec<(f32, f32, f32)>,
+    pub start_position: Point,
+    pub goal_position: Point,
+    pub navigation_mesh: Vec<Point>,
     pub terrain_data: Option<TerrainData>,
-    pub cached_path: Option<Vec<(f32, f32, f32)>>,
+    pub cached_path: Option<Vec<Point>>,
     pub algorithm: PathfindingAlgorithm,
 }
 
@@ -166,7 +198,7 @@ pub struct AdvancedPathfindingContext {
 
 /// Thread-safe path cache with TTL-based expiration
 pub struct PathCache {
-    cache: DashMap<(u64, (f32, f32, f32), (f32, f32, f32), PathfindingAlgorithm), PathCacheEntry>,
+    cache: DashMap<(u64, Point, Point, PathfindingAlgorithm), PathCacheEntry>,
     ttl: Duration,
 }
 
@@ -182,10 +214,10 @@ impl PathCache {
     pub fn get_cached_path(
         &self,
         villager_id: u64,
-        start: (f32, f32, f32),
-        goal: (f32, f32, f32),
+        start: Point,
+        goal: Point,
         algorithm: PathfindingAlgorithm,
-    ) -> Option<Vec<(f32, f32, f32)>> {
+    ) -> Option<Vec<Point>> {
         let key = (villager_id, start, goal, algorithm);
         
         let trace_id = generate_trace_id();
@@ -225,10 +257,10 @@ impl PathCache {
     pub fn add_cached_path(
         &self,
         villager_id: u64,
-        start: (f32, f32, f32),
-        goal: (f32, f32, f32),
+        start: Point,
+        goal: Point,
         algorithm: PathfindingAlgorithm,
-        path: Vec<(f32, f32, f32)>,
+        path: Vec<Point>,
     ) {
         let key = (villager_id, start, goal, algorithm);
         let entry = PathCacheEntry {
@@ -271,6 +303,7 @@ impl PathCache {
             });
             
             if path_intersects {
+                // Store start point to remove; converting to tuple for compatibility where needed
                 keys_to_remove.push(entry.start);
             }
         }

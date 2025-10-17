@@ -1,7 +1,7 @@
 use super::state_manager::{EntityState, EntityOperationResult, StateManager, EntityStateManager};
 use crate::errors::Result;
 use crate::types::{EntityConfigTrait as EntityConfig, EntityDataTrait as EntityData, EntityTypeTrait as EntityType};
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, RwLock, Mutex, OnceLock};
 use std::collections::HashMap;
 use std::time::SystemTime;
 

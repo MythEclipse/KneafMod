@@ -156,7 +156,7 @@ impl LogEntry {
         )
     }
 
-    pub fn log(self) {
+    pub fn log(&self) {
         let json = self.to_json();
         match self.severity {
             LogSeverity::Error | LogSeverity::Critical => eprintln!("{}", json),
@@ -292,11 +292,12 @@ impl PerformanceLogger {
         self.log_entry(entry);
     }
 
-    fn log_entry(&self, entry: LogEntry) {
+    pub fn log_entry(&self, entry: LogEntry) {
         if !self.should_log(entry.severity) {
             return;
         }
 
+        // Log the entry (by reference) and write it to file.
         entry.log();
         self.write_to_file(&entry);
     }

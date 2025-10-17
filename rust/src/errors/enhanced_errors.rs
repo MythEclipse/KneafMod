@@ -11,7 +11,7 @@ pub struct EnhancedError {
     pub trace_id: String,
     pub context: Vec<(String, String)>,
     pub timestamp: u64,
-    pub cause: Option<Box<dyn Error + Send + Sync>>,
+    pub cause: Option<String>,
 }
 
 impl EnhancedError {
@@ -43,7 +43,8 @@ impl EnhancedError {
 
     /// Chain an underlying cause error
     pub fn with_cause(mut self, cause: Box<dyn Error + Send + Sync>) -> Self {
-        self.cause = Some(cause);
+        // Store the string representation of the cause to avoid cloning boxed trait objects
+        self.cause = Some(cause.to_string());
         self
     }
 
@@ -74,16 +75,16 @@ impl EnhancedError {
             "error_type": error_type,
             "error_message": error_msg,
             "trace_id": self.trace_id,
-            "timestamp": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+            "timestamp": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             "timestamp_ms": self.timestamp,
             "context": context_map,
         });
 
         if let Some(cause) = &self.cause {
-            json["cause"] = serde_json::Value::String(cause.to_string());
+            json["cause"] = serde_json::Value::String(cause.clone());
         }
 
-        json.to_string_pretty()
+        json.to_string()
     }
 
     /// Log the error with structured logging
@@ -144,7 +145,9 @@ impl fmt::Display for EnhancedError {
 
 impl Error for EnhancedError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.cause.as_deref()
+        // We store the cause as a String to avoid cloning trait objects, so there's no underlying
+        // error trait object to return here.
+        None
     }
 }
 
@@ -206,9 +209,8 @@ pub struct RetryStrategy {
 }
 
 /// Fallback strategy
-#[derive(Debug, Clone)]
 pub struct FallbackStrategy {
-    pub fallback_function: Box<dyn Fn() -> Result<()>>,
+    pub fallback_function: Box<dyn Fn() -> Result<()> + Send + Sync + 'static>,
 }
 
 /// Circuit breaker strategy

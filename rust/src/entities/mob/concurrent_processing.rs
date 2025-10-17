@@ -1,5 +1,5 @@
 use super::types::{MobData, MobInput, MobProcessResult};
-use crate::entities::entity::processing::process_entities;
+use crate::entities::entity::processing::{process_entities, EntityProcessingInput};
 use crate::types::{EntityDataTrait as EntityData, EntityTypeTrait as EntityType};
 use crate::logging::{generate_trace_id, PerformanceLogger};
 use std::hash::Hash;

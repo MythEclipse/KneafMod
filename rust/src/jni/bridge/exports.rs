@@ -529,7 +529,7 @@ pub fn process_villager_operation(data: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to deserialize villager input: {}", e))?;
     
     // Process villager AI
-    let result = crate::entities::villager::process_villager_ai(input);
+    let result = crate::entities::villager::processing::process_villagers(input);
     
     // Serialize result
     crate::binary::conversions::serialize_villager_result(&result)
@@ -583,13 +583,11 @@ pub fn process_mob_operation(data: &[u8]) -> Result<Vec<u8>, String> {
         }
     };
     
-        // Use the optimized mob processing function from mob/processing.rs
-    let result = crate::entities::mob::process_mob_ai(mob_input);
-    
-    match result {
+    // Use the optimized mob processing function from mob/concurrent_processing.rs
+    match crate::entities::mob::concurrent_processing::process_mob_input(mob_input) {
         Ok(res) => crate::binary::conversions::serialize_mob_result(&res)
             .map_err(|e| format!("Failed to serialize mob result: {}", e)),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(e),
     }
 }
 

@@ -62,6 +62,13 @@ impl std::error::Error for ExecutionError {}
 
 /// Error messages module
 pub mod messages {
+    pub const INPUT_NULL: &str = "Input is null";
+    pub const PROCESSOR_NOT_INITIALIZED: &str = "Processor not initialized";
+    pub const NULL_BUFFER_ERROR: &str = "Buffer is null";
+    pub const NULL_BUFFER_ADDRESS: &str = "Buffer address is null";
+    pub const BUFFER_ADDRESS_ERROR: &str = "Failed to get buffer address";
+    pub const PARSE_ERROR: &str = "Failed to parse input";
+    pub const ARRAY_CONVERSION_ERROR: &str = "Failed to convert array";
     pub const INVALID_CONFIGURATION: &str = "Invalid configuration provided";
     pub const PERFORMANCE_THRESHOLD_EXCEEDED: &str = "Performance threshold exceeded";
     pub const THREAD_SAFE_OPERATION_FAILED: &str = "Thread-safe operation failed";

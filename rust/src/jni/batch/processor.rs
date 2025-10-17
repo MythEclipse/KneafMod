@@ -13,6 +13,7 @@ use crate::{
 };
 use crate::jni::utils;
 use std::result::Result;
+use fastrand::shuffle;
 pub use crate::errors::Result as RustResult;
 use crate::{jni_error, check_initialized, impl_initializable};
 

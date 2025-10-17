@@ -11,6 +11,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 // Configuration for different allocation strategies
 const SMALL_OBJECT_THRESHOLD: usize = 4096; // 4KB

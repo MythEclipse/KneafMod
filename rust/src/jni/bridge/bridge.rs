@@ -4,13 +4,15 @@ use super::raii::*;
 use crate::errors::{RustError, Result};
 use crate::jni::utils::{get_jni_env, is_jni_env_attached};
 use crate::logging::{generate_trace_id, PerformanceLogger};
-use jni::objects::{JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jbyteArray, jdouble, jfloat, jint, jlong, jobject, jsize, jstring, JNI_FALSE, JNI_TRUE};
+use jni::objects::{JClass, JObject, JString, JValueGen};
+use jni::sys::{jboolean, jbyteArray, jdouble, jfloat, jint, jlong, jobject, jsize, jstring, jbyte, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+use std::str::FromStr;
+use std::convert::TryInto;
 
 static JNI_BRIDGE_LOGGER: Lazy<PerformanceLogger> =
     Lazy::new(|| PerformanceLogger::new("jni_bridge"));
@@ -140,7 +142,7 @@ impl<'a> JniBridge<'a> {
         // Get method ID from JNI
         let env = get_jni_env()?;
         let method_id = env.get_method_id(class, method_name, sig).map_err(|e| {
-            RustError::JniError(format!("Failed to get method ID for {}::{}: {}", class_name, method_name, e))
+            RustError::JniError(format!("Failed to get method ID for {}::{}: {}", class.get_name()?, method_name, err))
         })?;
 
         // Update cache if enabled
@@ -158,22 +160,22 @@ impl<'a> JniBridge<'a> {
     }
 
     /// Call a Java method with automatic type conversion and caching
-    pub fn call_java_method<T>(&self, class: &JClass, method_id: jni::sys::jmethodID, args: &[JValue]) -> Result<T>
+    pub fn call_java_method<T>(&self, class: &JClass, method_id: jni::sys::jmethodID, args: &[JValueGen<'a>]) -> Result<T>
     where
-        T: jni::Convertible,
+        T: for<'b> TryFrom<JValueGen<'b>>,
     {
         let trace_id = generate_trace_id();
         let start_time = Instant::now();
 
         let env = get_jni_env()?;
-        let result = env.call_method_unchecked(class, method_id, args).map_err(|e| {
+        let result = unsafe { env.call_method_unchecked(class, method_id, jni::signature::JavaType::from_str("V").unwrap(), args) }.map_err(|e| {
             RustError::JniError(format!("Failed to call method: {}", e))
         })?;
 
         let elapsed = start_time.elapsed().as_millis() as f64;
         self.update_stats(elapsed, true, false);
         
-        Ok(result.get())
+        result.try_into().map_err(|_| RustError::JniError("Failed to convert result".to_string()))
     }
 
     /// Efficient zero-copy byte array transfer from Rust to Java
@@ -321,9 +323,9 @@ impl<'a> JniBridge<'a> {
     }
 
     /// Execute a Java method asynchronously with timeout
-    pub async fn call_java_method_async<T>(&self, class: &JClass<'_>, method_id: jni::sys::jmethodID, args: &[JValue<'_, '_>]) -> Result<T>
+    pub async fn call_java_method_async<T>(&self, class: &JClass<'_>, method_id: jni::sys::jmethodID, args: &[JValueGen<'_, '_>]) -> Result<T>
     where
-        T: jni::Convertible,
+        T: for<'b> TryFrom<JValueGen<'b>> + Send,
     {
         let trace_id = generate_trace_id();
         
@@ -398,7 +400,9 @@ impl<'a> JniBridge<'a> {
         let trace_id = generate_trace_id();
         
         if self.is_attached() {
-            unsafe { jni::detach_current_thread() };
+            let env = get_jni_env()?;
+            let vm = env.get_java_vm()?;
+            vm.detach_current_thread();
             self.logger.log_info(
                 "thread_detached",
                 &trace_id,

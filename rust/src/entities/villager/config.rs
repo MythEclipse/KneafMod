@@ -1,7 +1,6 @@
 use super::types::*;
 use std::sync::RwLock;
-use crate::ExecutionError;
-use crate::types::EntityConfigTrait as EntityConfig;
+use crate::types::{EntityConfigTrait as EntityConfig, ExecutionError, ExecutionErrorType};
 
 lazy_static::lazy_static! {
     pub static ref VILLAGER_CONFIG: RwLock<VillagerConfig> = RwLock::new(VillagerConfig {
@@ -45,13 +44,16 @@ impl EntityConfig for VillagerConfig {
         self.simple_ai_tick_interval as u64
     }
     
-    fn execute_with_priority(&self, priority: u8) -> Result<(), crate::errors::ExecutionError> {
+    fn execute_with_priority(&self, priority: u8) -> Result<(), ExecutionError> {
         // Implement priority-based execution logic
         match priority {
             0..=2 => Ok(()), // Low priority - basic updates
             3..=5 => Ok(()), // Medium priority - standard updates
             6..=8 => Ok(()), // High priority - urgent updates
-            _ => Err(crate::errors::ExecutionError::InvalidPriority(priority)),
+            _ => Err(ExecutionError {
+                message: format!("Invalid priority: {}", priority),
+                error_type: ExecutionErrorType::InvalidConfig,
+            }),
         }
     }
     

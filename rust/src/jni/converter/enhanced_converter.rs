@@ -13,7 +13,7 @@ use crate::errors::{RustError, Result};
 use crate::jni::converter::factory::JniConverter;
 use crate::memory::zero_copy::{ZeroCopyBuffer, ZeroCopyBufferPool, GlobalBufferTracker};
 use crate::binary::zero_copy::ZeroCopyConverter;
-use crate::types::EntityDataTrait as EntityData;
+use crate::types::{EntityDataTrait as EntityData, EntityPosition};
 use crate::entities::block::types::{BlockData, BlockState};
 use crate::entities::item::types::{ItemData, ItemStack};
 use crate::entities::villager::types::{VillagerData, VillagerProfession};
