@@ -50,9 +50,12 @@ public final class OptimizationInjector {
     };
     private static boolean isNativeLibraryLoaded = false;
     private static final Object nativeLibraryLock = new Object();
+    private static boolean isTestMode = false;
 
     static {
-        loadNativeLibrary();
+        if (!isTestMode) {
+            loadNativeLibrary();
+        }
     }
 
     private static void loadNativeLibrary() {
@@ -69,7 +72,6 @@ public final class OptimizationInjector {
                         try {
                             System.load(resource.getPath());
                             isNativeLibraryLoaded = true;
-                            LOGGER.info("Successfully loaded Rust performance native library from {}", resource.getPath());
                             return;
                         } catch (UnsatisfiedLinkError e) {
                             LOGGER.warn("Failed to load library from {}: {}, trying next path", path, e.getMessage());
@@ -82,7 +84,7 @@ public final class OptimizationInjector {
                 String arch = System.getProperty("os.arch");
                 String libExtension = os.contains("win") ? "dll" :
                                     os.contains("mac") ? "dylib" : "so";
-                
+                 
                 String[] possiblePaths = new String[] {
                     "D:\\KneafMod\\src\\main\\resources\\natives\\" + RUST_PERF_LIBRARY_NAME + "." + libExtension,
                     "D:\\KneafMod\\build\\resources\\main\\natives\\" + RUST_PERF_LIBRARY_NAME + "." + libExtension,
@@ -95,7 +97,6 @@ public final class OptimizationInjector {
                         try {
                             System.load(absPath);
                             isNativeLibraryLoaded = true;
-                            LOGGER.info("Successfully loaded Rust performance native library from absolute path: {}", absPath);
                             return;
                         } catch (UnsatisfiedLinkError e) {
                             LOGGER.warn("Failed to load library from {}: {}, trying next path", absPath, e.getMessage());
@@ -156,7 +157,7 @@ public final class OptimizationInjector {
             double y = entity.getDeltaMovement().y;
             double z = entity.getDeltaMovement().z;
             boolean onGround = entity.onGround();
-    
+         
             // Validate input values before native call
             if (Double.isNaN(x) || Double.isInfinite(x) ||
                 Double.isNaN(y) || Double.isInfinite(y) ||
@@ -164,12 +165,12 @@ public final class OptimizationInjector {
                 recordOptimizationMiss("Native physics calculation skipped for entity " + entity.getId() + " - invalid input values");
                 return;
             }
-    
+         
             // ⚠️ RUST CALL: STRICTLY MATHEMATICAL PHYSICS CALCULATION ONLY ⚠️
             // Input: Raw numerical values only (no entity references, no game state)
             // Output: Optimized numerical values only (no game decisions)
             double[] resultData = null;
-            
+         
             try {
                 resultData = rustperf_calculate_physics(x, y, z, onGround);
             } catch (UnsatisfiedLinkError ule) {
@@ -181,7 +182,7 @@ public final class OptimizationInjector {
                 recordOptimizationMiss("Native physics calculation failed for entity " + entity.getId() + " - " + t.getMessage());
                 return;
             }
-   
+    
             if (resultData != null && resultData.length == 3) {
                 // Validate result values
                 boolean validResult = true;
@@ -191,7 +192,7 @@ public final class OptimizationInjector {
                         break;
                     }
                 }
-                
+                 
                 if (!validResult) {
                     recordOptimizationMiss("Native physics calculation failed for entity " + entity.getId() + " - invalid result values");
                     return;
@@ -200,8 +201,7 @@ public final class OptimizationInjector {
                 // Apply calculation result ONLY - vanilla handles ALL game logic/decisions
                 entity.setDeltaMovement(resultData[0], resultData[1], resultData[2]);
 
-                long duration = System.nanoTime() - startTime;
-                recordOptimizationHit(String.format("Native physics calculation for entity %d in %dns", entity.getId(), duration));
+                recordOptimizationHit(String.format("Native physics calculation for entity %d", entity.getId()));
             } else {
                 recordOptimizationMiss("Native physics calculation failed for entity " + entity.getId() + " - invalid result");
             }
@@ -227,7 +227,6 @@ public final class OptimizationInjector {
                 // Use fixed value for testing since entity counting is complex in NeoForge
                 int entityCount = 200;
                 rustperf_calculate_entity_performance(entityCount, "server");
-                recordOptimizationHit("Server performance calculation (Rust - STRICTLY MATHEMATICAL)");
             } catch (Throwable t) {
                 recordOptimizationMiss("Server tick native performance calculation failed: " + t.getMessage());
             }
@@ -247,7 +246,6 @@ public final class OptimizationInjector {
                 int entityCount = 100;
                 String dimension = level.dimension().location().toString();
                 rustperf_calculate_entity_performance(entityCount, dimension);
-                recordOptimizationHit("Level performance calculation for " + dimension + " (Rust - STRICTLY MATHEMATICAL)");
             } catch (Throwable t) {
                 recordOptimizationMiss("Level tick native performance calculation failed: " + t.getMessage());
             }
@@ -262,8 +260,8 @@ public final class OptimizationInjector {
     // - NO entity control or navigation
     // - NO game rules or balance modifications
     // - Pure numerical input → numerical output transformations
-    private static native int rustperf_calculate_entity_performance(int entityCount, String levelDimension);
-    
+    static native int rustperf_calculate_entity_performance(int entityCount, String levelDimension);
+      
     /**
      * ⚠️ PHYSICS CALCULATION ONLY ⚠️
      * Computes HIGH-PERFORMANCE physics from raw movement data.
@@ -271,11 +269,11 @@ public final class OptimizationInjector {
      * ✅ OUTPUT: Pure numerical values only (optimized delta movement)
      * ❌ NO game state, NO entity references, NO AI, NO decisions
      */
-    private static native double[] rustperf_calculate_physics(double x, double y, double z, boolean onGround);
-    
-    private static native String rustperf_get_performance_stats();
-    private static native void rustperf_reset_performance_stats();
-    
+    static native double[] rustperf_calculate_physics(double x, double y, double z, boolean onGround);
+      
+    static native String rustperf_get_performance_stats();
+    static native void rustperf_reset_performance_stats();
+     
     /**
      * ⚠️ PATHFINDING CALCULATION ONLY ⚠️
      * Computes optimal paths from grid data (NO entity control, NO game navigation)
@@ -285,7 +283,6 @@ public final class OptimizationInjector {
     // --- Metrics Methods ---
     private static void recordOptimizationHit(String details) {
         optimizationHits.incrementAndGet();
-        LOGGER.info("Native optimization applied: {}", details);
         if (optimizationHits.get() % 100 == 0) {
             logPerformanceStats();
         }
@@ -293,14 +290,14 @@ public final class OptimizationInjector {
 
     private static void recordOptimizationMiss(String details) {
         optimizationMisses.incrementAndGet();
-        LOGGER.info("Optimization fallback: {}", details);
+        LOGGER.warn("Optimization fallback: {}", details);
     }
     private static void logPerformanceStats() {
         if (isNativeLibraryLoaded) {
             String nativeStats = rustperf_get_performance_stats();
-            LOGGER.info("Native performance stats: {}", nativeStats);
+            LOGGER.debug("Native performance stats: {}", nativeStats);
         }
-        LOGGER.info("Java optimization metrics: {}", getOptimizationMetrics());
+        LOGGER.debug("Java optimization metrics: {}", getOptimizationMetrics());
     }
 
     public static String getOptimizationMetrics() {
@@ -310,6 +307,120 @@ public final class OptimizationInjector {
                 optimizationHits.get(), optimizationMisses.get(), totalEntitiesProcessed.get(), hitRate, isNativeLibraryLoaded);
     }
 
+    /**
+     * Test-only method to enable testing mode
+     * When enabled, native library loading is skipped
+     */
+    static void enableTestMode(boolean enabled) {
+        isTestMode = enabled;
+        if (!enabled) {
+            // Reload library if test mode is disabled
+            isNativeLibraryLoaded = false;
+            loadNativeLibrary();
+        }
+    }
+
+    /**
+     * Test-only method to get metrics
+     */
+    static OptimizationMetrics getTestMetrics() {
+        return new OptimizationMetrics(
+                optimizationHits.get(),
+                optimizationMisses.get(),
+                totalEntitiesProcessed.get(),
+                isNativeLibraryLoaded && !isTestMode
+        );
+    }
+
+    /**
+     * Test-only method for direct physics calculation testing
+     */
+    static double[] calculatePhysics(double[] position, boolean onGround) {
+        // Input validation
+        if (position == null || position.length != 3) {
+            LOGGER.error("Invalid input: position array must contain exactly 3 elements");
+            return fallbackToVanilla(position, onGround);
+        }
+
+        for (double val : position) {
+            if (Double.isNaN(val) || Double.isInfinite(val)) {
+                LOGGER.warn("Native physics calculation skipped - invalid input values (NaN/Infinite)");
+                return fallbackToVanilla(position, onGround);
+            }
+        }
+
+        // In test mode, always use fallback to vanilla (no native calls)
+        if (isTestMode) {
+            LOGGER.debug("Test mode enabled - using vanilla fallback for physics calculation");
+            return fallbackToVanilla(position, onGround);
+        }
+
+        double x = position[0];
+        double y = position[1];
+        double z = position[2];
+
+        try {
+            long startTime = System.nanoTime();
+            double[] resultData = rustperf_calculate_physics(x, y, z, onGround);
+            long elapsedNs = System.nanoTime() - startTime;
+
+            boolean validResult = true;
+            for (double res : resultData) {
+                if (Double.isNaN(res) || Double.isInfinite(res)) {
+                    validResult = false;
+                    break;
+                }
+            }
+
+            if (!validResult) {
+                LOGGER.error("Native physics calculation failed - invalid result from Rust (NaN/Infinite detected)");
+                return fallbackToVanilla(position, onGround);
+            }
+
+            return resultData;
+
+        } catch (UnsatisfiedLinkError ule) {
+            LOGGER.error("JNI link error in rustperf_calculate_physics: {}", ule.getMessage());
+            return fallbackToVanilla(position, onGround);
+        } catch (Exception e) {
+            LOGGER.error("Native physics calculation failed: {}", e.getMessage());
+            return fallbackToVanilla(position, onGround);
+        }
+    }
+
+    /**
+     * Test-only fallback method
+     */
+    static double[] fallbackToVanilla(double[] position, boolean onGround) {
+        recordOptimizationMiss("Fallback to vanilla physics");
+        return position.clone();
+    }
+
+    /**
+     * Test metrics container
+     */
+    public static class OptimizationMetrics {
+        public final int hits;
+        public final int misses;
+        public final long totalProcessed;
+        public final boolean nativeLoaded;
+
+        public OptimizationMetrics(int hits, int misses, long totalProcessed, boolean nativeLoaded) {
+            this.hits = hits;
+            this.misses = misses;
+            this.totalProcessed = totalProcessed;
+            this.nativeLoaded = nativeLoaded;
+        }
+
+        public int getNativeHits() {
+            return hits;
+        }
+
+        public int getNativeMisses() {
+            return misses;
+        }
+    }
+
     public static void resetMetrics() {
         optimizationHits.set(0);
         optimizationMisses.set(0);
@@ -317,7 +428,6 @@ public final class OptimizationInjector {
         if(isNativeLibraryLoaded) {
             rustperf_reset_performance_stats(); // Also reset stats on the native side
         }
-        LOGGER.info("Optimization metrics have been reset.");
     }
 
     /**

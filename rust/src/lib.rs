@@ -59,12 +59,8 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1calculate_1
 ) -> JDoubleArray<'a> {
     let start_time = std::time::Instant::now();
 
-    let _ = env.call_static_method(
-        "com/kneaf/core/OptimizationInjector",
-        "logFromRust",
-        "(Ljava/lang/String;)V",
-        &[(&env.new_string(&format!("Starting native physics calculation (X: {}, Y: {}, Z: {}, OnGround: {})", x, y, z, on_ground != 0)).unwrap()).into()],
-    );
+    // Starting log removed to avoid noisy logs on successful native calculations.
+    // Only completion/failure will be logged from Rust to Java.
 
     // Create input buffer with position data (using 6-element array matching existing patterns)
     let mut input_buf = [x, y, z, 0.0, 0.0, 0.0];
@@ -100,12 +96,7 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1tick_1entit
     let mut data_buf = [0.0; 6];
     env.get_double_array_region(&entity_data, 0, &mut data_buf).expect("Couldn't get entity data region");
 
-    let _ = env.call_static_method(
-        "com/kneaf/core/OptimizationInjector",
-        "logFromRust",
-        "(Ljava/lang/String;)V",
-        &[(&env.new_string(&format!("Starting native entity tick for entity (X: {}, Y: {}, Z: {})", data_buf[0], data_buf[1], data_buf[2])).unwrap()).into()],
-    );
+    // Starting entity tick log removed to reduce log spam when native tick succeeds.
 
     let result_data = performance::tick_entity_physics(&data_buf, on_ground != 0);
 
