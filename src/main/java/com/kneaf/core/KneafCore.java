@@ -16,12 +16,12 @@ import net.neoforged.neoforge.event.entity.EntityAttributeCreationEvent;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.common.DeferredSpawnEggItem;
+import org.slf4j.Logger;
+import java.util.stream.IntStream;
 import org.joml.Vector3f;
 import org.joml.Quaternionf;
-import org.slf4j.Logger;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.IntStream;
 
 /**
  * Main mod class for KneafCore. Refactored to use modular architecture with clear separation of concerns.

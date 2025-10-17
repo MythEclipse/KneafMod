@@ -28,6 +28,7 @@ public final class PerformanceManager {
     private final AtomicBoolean isAiPathfindingOptimized = new AtomicBoolean(false);
     private final AtomicBoolean isRenderingMathOptimized = new AtomicBoolean(false);
     private final AtomicBoolean isRustIntegrationEnabled = new AtomicBoolean(false);
+    private final AtomicBoolean isHorizontalPhysicsOnly = new AtomicBoolean(false);
     
     // Configuration file path
     private static final String CONFIG_PATH = "config/kneaf-performance.properties";
@@ -75,6 +76,7 @@ public final class PerformanceManager {
             isAiPathfindingOptimized.set(parseBooleanProperty(properties, "aiPathfindingOptimized", true));
             isRenderingMathOptimized.set(parseBooleanProperty(properties, "renderingMathOptimized", true));
             isRustIntegrationEnabled.set(parseBooleanProperty(properties, "rustIntegrationEnabled", false));
+            isHorizontalPhysicsOnly.set(parseBooleanProperty(properties, "horizontalPhysicsOnly", false));
             
         } catch (IOException e) {
             LOGGER.error("Failed to load performance configuration", e);
@@ -91,6 +93,7 @@ public final class PerformanceManager {
         isAiPathfindingOptimized.set(true);
         isRenderingMathOptimized.set(true);
         isRustIntegrationEnabled.set(false);
+        isHorizontalPhysicsOnly.set(false);
         LOGGER.info("PerformanceManager reset to default configuration");
     }
     
@@ -162,6 +165,14 @@ public final class PerformanceManager {
     public boolean isRustIntegrationEnabled() {
         return isRustIntegrationEnabled.get();
     }
+
+    /**
+     * Check if horizontal-only physics is enabled.
+     * @return true if horizontal-only physics is enabled, false otherwise
+     */
+    public boolean isHorizontalPhysicsOnly() {
+        return isHorizontalPhysicsOnly.get();
+    }
     
     // ------------------------------ Setter Methods (Thread-Safe) ------------------------------
     
@@ -195,6 +206,14 @@ public final class PerformanceManager {
      */
     public void setRustIntegrationEnabled(boolean enabled) {
         isRustIntegrationEnabled.set(enabled);
+    }
+
+    /**
+     * Set horizontal-only physics state.
+     * @param enabled true to enable horizontal-only physics, false to disable
+     */
+    public void setHorizontalPhysicsOnly(boolean enabled) {
+        isHorizontalPhysicsOnly.set(enabled);
     }
     
     /**

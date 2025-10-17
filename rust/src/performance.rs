@@ -77,6 +77,24 @@ pub fn tick_entity_physics(data: &[f64; 6], on_ground: bool) -> [f64; 6] {
     [pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]]
 }
 
+/// Horizontal-only physics calculation (x/z axes only)
+/// For use cases where vertical (y-axis) calculations should remain in Java
+pub fn tick_entity_physics_horizontal(data: &[f64; 6], on_ground: bool) -> [f64; 6] {
+    let mut pos = [data[0], data[1], data[2]];
+    let mut vel = [data[3], data[4], data[5]];
+
+    // Only apply horizontal (x/z) damping - vertical (y) remains unchanged
+    vel[0] *= AIR_DAMPING;
+    vel[2] *= AIR_DAMPING;
+
+    // Only update horizontal (x/z) positions - vertical (y) remains unchanged
+    pos[0] += vel[0];
+    pos[2] += vel[2];
+
+    // Return original y-position and y-velocity (unchanged)
+    [pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]]
+}
+
 
 #[derive(Clone, Copy, Debug)]
 pub struct Matrix4(pub [f32; 16]);
