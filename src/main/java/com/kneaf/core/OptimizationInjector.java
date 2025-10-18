@@ -350,7 +350,7 @@ public final class OptimizationInjector {
      * Specialized for: 2-block jump height + block bypassing
      */
     static native double[] rustperf_calculate_physics_combined(double x, double y, double z, boolean onGround);
-      
+       
     static native String rustperf_get_performance_stats();
     static native void rustperf_reset_performance_stats();
      
@@ -438,60 +438,6 @@ public final class OptimizationInjector {
                 totalEntitiesProcessed.get(),
                 isNativeLibraryLoaded && !isTestMode
         );
-    }
-
-    /**
-     * Test-only method for direct physics calculation testing
-     */
-    static double[] calculatePhysics(double[] position, boolean onGround) {
-        // Input validation
-        if (position == null || position.length != 3) {
-            LOGGER.error("Invalid input: position array must contain exactly 3 elements");
-            return fallbackToVanilla(position, onGround);
-        }
-
-        for (double val : position) {
-            if (Double.isNaN(val) || Double.isInfinite(val)) {
-                LOGGER.warn("Native physics calculation skipped - invalid input values (NaN/Infinite)");
-                return fallbackToVanilla(position, onGround);
-            }
-        }
-
-        // In test mode, always use fallback to vanilla (no native calls)
-        if (isTestMode) {
-            LOGGER.debug("Test mode enabled - using vanilla fallback for physics calculation");
-            return fallbackToVanilla(position, onGround);
-        }
-
-        double x = position[0];
-        double y = position[1];
-        double z = position[2];
-
-        try {
-            System.nanoTime();
-            double[] resultData = rustperf_calculate_physics(x, y, z, onGround);
-            boolean validResult = true;
-            for (double res : resultData) {
-                if (Double.isNaN(res) || Double.isInfinite(res)) {
-                    validResult = false;
-                    break;
-                }
-            }
-
-            if (!validResult) {
-                LOGGER.error("Native physics calculation failed - invalid result from Rust (NaN/Infinite detected)");
-                return fallbackToVanilla(position, onGround);
-            }
-
-            return resultData;
-
-        } catch (UnsatisfiedLinkError ule) {
-            LOGGER.error("JNI link error in rustperf_calculate_physics: {}", ule.getMessage());
-            return fallbackToVanilla(position, onGround);
-        } catch (Exception e) {
-            LOGGER.error("Native physics calculation failed: {}", e.getMessage());
-            return fallbackToVanilla(position, onGround);
-        }
     }
 
     /**

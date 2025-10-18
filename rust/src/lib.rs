@@ -85,38 +85,6 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1calculate_1
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1calculate_1physics_1horizontal<'a>(
-    mut env: JNIEnv<'a>,
-    _class: JClass,
-    x: f64,
-    z: f64,
-    y_velocity: f64,
-    on_ground: jboolean,
-) -> JDoubleArray<'a> {
-    let start_time = std::time::Instant::now();
-
-    // Call optimized horizontal physics - now properly handles jump velocity preservation
-    let result_data = performance::tick_entity_physics_horizontal(x, z, y_velocity, on_ground != 0);
-
-    let output_array = env.new_double_array(3).expect("Couldn't create new double array");
-    env.set_double_array_region(&output_array, 0, &result_data).expect("Couldn't set result array region");
-
-    let elapsed = start_time.elapsed().as_nanos() as u64;
-    if let Ok(mut stats) = performance::ENTITY_PROCESSING_STATS.lock() {
-        stats.native_optimizations_applied += 1;
-        stats.total_calculation_time_ns += elapsed;
-    }
-
-    let _ = env.call_static_method(
-        "com/kneaf/core/OptimizationInjector",
-        "logFromRust",
-        "(Ljava/lang/String;)V",
-        &[(&env.new_string(&format!("Completed native horizontal physics calculation in {} ns", elapsed)).unwrap()).into()],
-    );
-    output_array
-}
-
-#[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1tick_1entity<'a>(
     mut env: JNIEnv<'a>,
     _class: JClass,
