@@ -165,8 +165,17 @@ public final class OptimizationInjector {
             double[] resultData = null;
           
             try {
-                // Use ONLY general vector operations from Rust (NO physics decision making)
-                resultData = rustperf_vector_damp(x, y, z, 0.98);
+                // 1. Java handles GAME LOGIC: Get entity-specific damping factor
+                double dampingFactor = calculateEntitySpecificDamping(entity);
+                
+                // 2. Rust handles MATH: Pure vector calculation (no game state access)
+                resultData = rustperf_vector_damp(x, y, z, dampingFactor);
+                
+                // 3. Java validates RESULTS: Preserve natural game physics
+                if (resultData == null || resultData.length != 3 || !isNaturalMovement(resultData, x, y, z)) {
+                    recordOptimizationMiss("Unnatural movement from Rust calculation for entity " + entity.getId() + " - using original");
+                    resultData = null; // Force fallback to original movement
+                }
             } catch (UnsatisfiedLinkError ule) {
                 LOGGER.error("JNI link error in rustperf_vector_damp for entity {}: {}", entity.getId(), ule.getMessage());
                 recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - JNI link error");
@@ -294,6 +303,83 @@ public final class OptimizationInjector {
         if (optimizationHits.get() % 100 == 0) {
             logPerformanceStats();
         }
+    }
+
+    /**
+     * Calculates entity-specific damping factor to preserve natural movement patterns
+     * @param entity The entity to calculate damping for
+     * @return Damping factor between 0.95 and 0.995
+     */
+    /**
+     * Calculates entity-specific damping factor to preserve natural movement patterns
+     * @param entity The entity to calculate damping for
+     * @return Damping factor between 0.95 and 0.995
+     */
+    static double calculateEntitySpecificDamping(Entity entity) {
+        // Use entity type to determine appropriate damping factor
+        // This maintains natural movement patterns while still using Rust for calculations
+        String entityType = entity.getType().toString();
+        
+        // More natural damping factors for different entity types
+        if (entityType.contains("Player")) {
+            return 0.985; // Players need more stable movement
+        } else if (entityType.contains("Zombie") || entityType.contains("Skeleton") || entityType.contains("Slime")) {
+            return 0.975; // Hostile mobs need more responsive movement
+        } else if (entityType.contains("Cow") || entityType.contains("Sheep") || entityType.contains("Pig")) {
+            return 0.992; // Passive mobs need more stable movement
+        } else if (entityType.contains("Villager")) {
+            return 0.988; // Villagers need natural wandering movement
+        } else {
+            // Default damping factor for unknown entity types
+            return 0.980;
+        }
+    }
+
+    /**
+     * Validates that the calculated movement is natural and preserves game physics
+     * @param result Calculated movement vector
+     * @param originalX Original X movement
+     * @param originalY Original Y movement
+     * @param originalZ Original Z movement
+     * @return True if movement is natural, false otherwise
+     */
+    /**
+     * Validates that the calculated movement is natural and preserves game physics
+     * @param result Calculated movement vector
+     * @param originalX Original X movement
+     * @param originalY Original Y movement
+     * @param originalZ Original Z movement
+     * @return True if movement is natural, false otherwise
+     */
+    static boolean isNaturalMovement(double[] result, double originalX, double originalY, double originalZ) {
+        if (result == null || result.length != 3) {
+            return false;
+        }
+
+        // Check for extreme value changes that would break natural movement
+        final double MAX_CHANGE_FACTOR = 1.5;
+        boolean xChangeTooLarge = Math.abs(result[0]) > Math.abs(originalX) * MAX_CHANGE_FACTOR;
+        boolean yChangeTooLarge = Math.abs(result[1]) > Math.abs(originalY) * MAX_CHANGE_FACTOR;
+        boolean zChangeTooLarge = Math.abs(result[2]) > Math.abs(originalZ) * MAX_CHANGE_FACTOR;
+
+        if (xChangeTooLarge || yChangeTooLarge || zChangeTooLarge) {
+            return false;
+        }
+
+        // Check for unrealistic values that would break game physics
+        final double MAX_VELOCITY = 10.0; // Minecraft's natural max velocity
+        if (Math.abs(result[0]) > MAX_VELOCITY || Math.abs(result[1]) > MAX_VELOCITY || Math.abs(result[2]) > MAX_VELOCITY) {
+            return false;
+        }
+
+        // Check for NaN/Infinite values
+        for (double val : result) {
+            if (Double.isNaN(val) || Double.isInfinite(val)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static void recordOptimizationMiss(String details) {

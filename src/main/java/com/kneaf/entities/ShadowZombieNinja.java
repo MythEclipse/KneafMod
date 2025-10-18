@@ -140,7 +140,8 @@ public class ShadowZombieNinja extends Zombie {
         double d2 = target.getZ() - this.getZ();
         double d3 = Math.sqrt(d0 * d0 + d2 * d2);
 
-        Arrow arrow = new Arrow(this.level(), this, new ItemStack(Items.ARROW), ItemStack.EMPTY);
+        // Use proper weapon for arrow firing (required by Minecraft's Arrow constructor)
+        Arrow arrow = new Arrow(this.level(), this, new ItemStack(Items.BOW), new ItemStack(Items.ARROW));
         arrow.setPos(this.getX(), this.getEyeY() - 0.1D, this.getZ());
         arrow.shoot(d0, d1 + d3 * 0.2D, d2, 1.6F, 14 - this.level().getDifficulty().getId() * 4);
         arrow.setBaseDamage(6.0D);
