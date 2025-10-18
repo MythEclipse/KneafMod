@@ -77,7 +77,6 @@ public class KneafCore {
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::registerEntityAttributes);
         modEventBus.addListener(this::buildCreativeTabContents);
-        modEventBus.addListener(this::registerCommands);
         
         // Register configuration
 
@@ -101,6 +100,9 @@ public class KneafCore {
             
             // Register OptimizationInjector event listeners
             LOGGER.info("Registering OptimizationInjector event listeners");
+            
+            // Register commands on the game bus
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(this::registerCommands);
             
             // Delegate initialization to SystemManager
             
