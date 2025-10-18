@@ -1,6 +1,5 @@
 package com.kneaf.core;
 
-
 /**
  * JNI wrapper class for dynamic exposure of Rust vector library functions.
  * Provides type-safe access to nalgebra, glam, and faer vector/matrix operations
@@ -34,6 +33,11 @@ public final class RustVectorLibrary {
     private static native float[] glam_vector_cross(float[] a, float[] b);
     private static native float[] glam_matrix_mul(float[] a, float[] b);
     private static native float[] faer_matrix_mul(float[] a, float[] b);
+
+    // Rustperf native methods (direct from OptimizationInjector)
+    public static native double[] rustperf_vector_multiply(double x, double y, double z, double scalar);
+    public static native double[] rustperf_vector_add(double x1, double y1, double z1, double x2, double y2, double z2);
+    public static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
 
     /**
      * Multiplies two 4x4 matrices using nalgebra.
