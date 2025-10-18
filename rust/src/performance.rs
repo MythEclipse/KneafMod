@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use nalgebra as na;
 use glam::{Vec3, Mat4};
 use faer::Mat;
+use libc::c_double;
 
 const GRAVITY: f64 = 0.08;
 const AIR_DAMPING: f64 = 0.98;
@@ -79,20 +80,20 @@ pub fn tick_entity_physics(data: &[f64; 6], on_ground: bool) -> [f64; 6] {
 
 /// Horizontal-only physics calculation (x/z axes only)
 /// For use cases where vertical (y-axis) calculations should remain in Java
-pub fn tick_entity_physics_horizontal(data: &[f64; 6], on_ground: bool) -> [f64; 6] {
-    let mut pos = [data[0], data[1], data[2]];
-    let mut vel = [data[3], data[4], data[5]];
+/// Now properly preserves jump velocity while maintaining horizontal optimizations
+pub fn tick_entity_physics_horizontal(x: f64, z: f64, y_velocity: f64, on_ground: bool) -> [f64; 3] {
+    let mut vel = [x, y_velocity, z];
 
-    // Only apply horizontal (x/z) damping - vertical (y) remains unchanged
-    vel[0] *= AIR_DAMPING;
-    vel[2] *= AIR_DAMPING;
+    // Apply horizontal damping based on ground state:
+    // - On ground: No damping (allow immediate movement input response)
+    // - In air: Standard air damping (preserve natural movement feel)
+    let damping = if on_ground { 1.0 } else { AIR_DAMPING };
+    vel[0] *= damping;
+    vel[2] *= damping;
 
-    // Only update horizontal (x/z) positions - vertical (y) remains unchanged
-    pos[0] += vel[0];
-    pos[2] += vel[2];
-
-    // Return original y-position and y-velocity (unchanged)
-    [pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]]
+    // Return: optimized x, preserved y velocity, optimized z
+    // Position updates remain in Java to maintain game state separation
+    [vel[0], vel[1], vel[2]]
 }
 
 
@@ -111,6 +112,25 @@ impl Matrix4 {
         }
         Matrix4(result)
     }
+}
+
+#[no_mangle]
+pub extern "C" fn rustperf_calculate_physics_combined(x: f64, y: f64, z: f64, on_ground: bool) -> *mut c_double {
+    // Combined optimization for both horizontal (block bypass) and vertical (2-block jump) physics
+    // Horizontal: Slightly reduced damping (0.99/0.98) to preserve momentum for block bypassing
+    // Vertical: Minimal damping (1.0/0.98) to preserve full 2-block jump height while maintaining natural feel
+    let horizontal_damping = if on_ground { 0.99 } else { 0.98 };
+    let vertical_damping = if on_ground { 1.0 } else { 0.98 }; // Preserve 100% initial jump velocity when grounded
+    
+    let new_x = x * horizontal_damping;
+    let new_y = y * vertical_damping; // Critical: Full jump impulse preservation for 2-block height
+    let new_z = z * horizontal_damping;
+    
+    // Return combined optimized results for all 3 axes (x/y/z)
+    let vec_result = vec![new_x, new_y, new_z];
+    let ptr = vec_result.as_ptr();
+    std::mem::forget(vec_result); // Prevent premature cleanup
+    ptr as *mut c_double
 }
 
 #[derive(Clone, Copy, Debug)]

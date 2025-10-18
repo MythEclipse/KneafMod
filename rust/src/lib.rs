@@ -89,18 +89,17 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1calculate_1
     mut env: JNIEnv<'a>,
     _class: JClass,
     x: f64,
-    y: f64,
     z: f64,
+    y_velocity: f64,
     on_ground: jboolean,
 ) -> JDoubleArray<'a> {
     let start_time = std::time::Instant::now();
 
-    // Create input buffer with position data (using 6-element array matching existing patterns)
-    let mut input_buf = [x, y, z, 0.0, 0.0, 0.0];
-    let result_data = performance::tick_entity_physics_horizontal(&input_buf, on_ground != 0);
+    // Call optimized horizontal physics - now properly handles jump velocity preservation
+    let result_data = performance::tick_entity_physics_horizontal(x, z, y_velocity, on_ground != 0);
 
     let output_array = env.new_double_array(3).expect("Couldn't create new double array");
-    env.set_double_array_region(&output_array, 0, &result_data[0..3]).expect("Couldn't set result array region");
+    env.set_double_array_region(&output_array, 0, &result_data).expect("Couldn't set result array region");
 
     let elapsed = start_time.elapsed().as_nanos() as u64;
     if let Ok(mut stats) = performance::ENTITY_PROCESSING_STATS.lock() {

@@ -35,8 +35,8 @@ public final class OptimizationInjector {
     private static final PerformanceManager PERFORMANCE_MANAGER = PerformanceManager.getInstance();
 
     private static final AtomicInteger optimizationHits = new AtomicInteger(0);
-    private static final AtomicInteger horizontalOptimizationHits = new AtomicInteger(0);
-    private static final AtomicInteger horizontalOptimizationMisses = new AtomicInteger(0);
+    private static final AtomicInteger combinedOptimizationHits = new AtomicInteger(0);
+    private static final AtomicInteger combinedOptimizationMisses = new AtomicInteger(0);
     private static final AtomicInteger optimizationMisses = new AtomicInteger(0);
     private static final AtomicLong totalEntitiesProcessed = new AtomicLong(0);
 
@@ -145,7 +145,7 @@ public final class OptimizationInjector {
         // Use horizontal-only path when enabled (preserves y-axis in Java)
         if (PERFORMANCE_MANAGER.isHorizontalPhysicsOnly()) {
             double originalY = entity.getDeltaMovement().y;
-            processHorizontalPhysicsOnly(entity, originalY);
+            processCombinedPhysics(entity, originalY, event);
             return;
         }
 
@@ -217,67 +217,72 @@ public final class OptimizationInjector {
     }
 
     /**
-     * Alternative horizontal-only physics calculation path
-     * Processes ONLY x/z axes in Rust, preserves y-axis in Java completely
+     * Combined physics calculation path (optimized for both horizontal and vertical movement)
+     * Processes ALL axes (x/y/z) in Rust with specialized damping for:
+     * - Horizontal: Momentum preservation for block bypassing
+     * - Vertical: Full jump impulse retention for 2-block height
      * Maintains strict separation of concerns: Rust = calculations only, Java = game state
      */
-    private static void processHorizontalPhysicsOnly(Entity entity, double originalY) {
-        try {
-            // Extract ONLY x/z data (NO game state access)
-            double x = entity.getDeltaMovement().x;
-            double z = entity.getDeltaMovement().z;
-            boolean onGround = entity.onGround();
-
-            // Validate inputs before Rust call
-            if (Double.isNaN(x) || Double.isInfinite(x) || Double.isNaN(z) || Double.isInfinite(z)) {
-                recordHorizontalOptimizationMiss("Invalid input for entity " + entity.getId());
-                return;
-            }
-
-            // Call Rust for horizontal calculation ONLY (no y-axis input/output)
-            double[] resultData = null;
+    private static void processCombinedPhysics(Entity entity, double originalY, EntityTickEvent.Pre event) {
+            event.setCanceled(true); // Critical: Prevent vanilla physics from running after Rust calculation
             
             try {
-                resultData = rustperf_calculate_physics_horizontal(x, z, onGround);
-            } catch (UnsatisfiedLinkError ule) {
-                LOGGER.error("JNI link error in rustperf_calculate_physics_horizontal for entity {}: {}", entity.getId(), ule.getMessage());
-                recordHorizontalOptimizationMiss("Native horizontal physics calculation failed for entity " + entity.getId() + " - JNI link error");
-                return;
+                  // Extract ONLY x/z data (NO game state access)
+                  double x = entity.getDeltaMovement().x;
+                  double z = entity.getDeltaMovement().z;
+                  boolean onGround = entity.onGround();
+    
+                  // Validate inputs before Rust call
+                  if (Double.isNaN(x) || Double.isInfinite(x) || Double.isNaN(z) || Double.isInfinite(z)) {
+                      recordCombinedOptimizationMiss("Invalid input for entity " + entity.getId());
+                      return;
+                  }
+    
+                  // Call Rust for COMBINED horizontal+vertical calculation (full 3-axis optimization)
+                  double[] resultData = null;
+                  
+                  try {
+                      resultData = rustperf_calculate_physics_combined(x, entity.getDeltaMovement().y, z, onGround);
+                  } catch (UnsatisfiedLinkError ule) {
+                      LOGGER.error("JNI link error in rustperf_calculate_physics_combined for entity {}: {}", entity.getId(), ule.getMessage());
+                      recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - JNI link error");
+                      return;
+                  } catch (Throwable t) {
+                      LOGGER.error("Error in rustperf_calculate_physics_combined for entity {}: {}", entity.getId(), t.getMessage());
+                      recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - " + t.getMessage());
+                      return;
+                  }
+    
+                  if (resultData != null && resultData.length == 3) {
+                      // Validate result values (all axes - x/y/z)
+                      boolean validResult = true;
+                      for (int i = 0; i < resultData.length; i++) {
+                          if (Double.isNaN(resultData[i]) || Double.isInfinite(resultData[i])) {
+                              validResult = false;
+                              break;
+                          }
+                      }
+    
+                      if (!validResult) {
+                          recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - invalid result values");
+                          return;
+                      }
+    
+                      // Apply Rust results while preserving optimized jump velocity (y-axis)
+                      // Result format: [optimized_x, optimized_y, optimized_z] - all axes now properly calculated
+                      entity.setDeltaMovement(resultData[0], resultData[1], resultData[2]);
+    
+                      recordCombinedOptimizationHit(String.format("Native combined physics calculation for entity %d", entity.getId()));
+                  } else {
+                      recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - invalid result");
+                  }
             } catch (Throwable t) {
-                LOGGER.error("Error in rustperf_calculate_physics_horizontal for entity {}: {}", entity.getId(), t.getMessage());
-                recordHorizontalOptimizationMiss("Native horizontal physics calculation failed for entity " + entity.getId() + " - " + t.getMessage());
-                return;
+                  LOGGER.error("Error during native combined physics calculation for entity {}: {}", entity.getId(), t.getMessage());
+                  recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - " + t.getMessage());
+            } finally {
+                  totalEntitiesProcessed.incrementAndGet();
             }
-
-            if (resultData != null && resultData.length == 2) {
-                // Validate result values (only x/z, no y)
-                boolean validResult = true;
-                for (int i = 0; i < resultData.length; i++) {
-                    if (Double.isNaN(resultData[i]) || Double.isInfinite(resultData[i])) {
-                        validResult = false;
-                        break;
-                    }
-                }
-
-                if (!validResult) {
-                    recordHorizontalOptimizationMiss("Native horizontal physics calculation failed for entity " + entity.getId() + " - invalid result values");
-                    return;
-                }
-
-                // Apply calculation result ONLY - preserve original y-axis (Java manages vertical physics)
-                entity.setDeltaMovement(resultData[0], originalY, resultData[1]);
-
-                recordHorizontalOptimizationHit(String.format("Native horizontal physics calculation for entity %d", entity.getId()));
-            } else {
-                recordHorizontalOptimizationMiss("Native horizontal physics calculation failed for entity " + entity.getId() + " - invalid result");
-            }
-        } catch (Throwable t) {
-            LOGGER.error("Error during native horizontal physics calculation for entity {}: {}", entity.getId(), t.getMessage());
-            recordHorizontalOptimizationMiss("Native horizontal physics calculation failed for entity " + entity.getId() + " - " + t.getMessage());
-        } finally {
-            totalEntitiesProcessed.incrementAndGet();
-        }
-    }
+     }
 
     /**
      * Intercepts server tick events to inject native optimizations for server-side calculations.
@@ -335,15 +340,16 @@ public final class OptimizationInjector {
      */
     static native double[] rustperf_calculate_physics(double x, double y, double z, boolean onGround);
       
+       
     /**
-     * ⚠️ HORIZONTAL-ONLY PHYSICS CALCULATION ⚠️
-     * Computes HIGH-PERFORMANCE physics for HORIZONTAL AXES ONLY (x/z).
-     * ✅ INPUT: Pure numerical values only (x/z delta, onGround) - NO y-axis input
-     * ✅ OUTPUT: Pure numerical values only (optimized x/z delta movement) - NO y-axis output
+     * ⚠️ COMBINED PHYSICS CALCULATION ⚠️
+     * Computes HIGH-PERFORMANCE physics for ALL AXES (x/y/z) with optimized damping.
+     * ✅ INPUT: Pure numerical values only (x/y/z delta, onGround)
+     * ✅ OUTPUT: Pure numerical values only (optimized delta movement)
      * ❌ NO game state, NO entity references, NO AI, NO decisions
-     * ❌ NO vertical (y-axis) calculations - y-axis remains unchanged in Java
+     * Specialized for: 2-block jump height + block bypassing
      */
-    static native double[] rustperf_calculate_physics_horizontal(double x, double z, boolean onGround);
+    static native double[] rustperf_calculate_physics_combined(double x, double y, double z, boolean onGround);
       
     static native String rustperf_get_performance_stats();
     static native void rustperf_reset_performance_stats();
@@ -367,31 +373,31 @@ public final class OptimizationInjector {
         LOGGER.warn("Optimization fallback: {}", details);
     }
 
-    private static void recordHorizontalOptimizationHit(String details) {
-        horizontalOptimizationHits.incrementAndGet();
-        if (horizontalOptimizationHits.get() % 100 == 0) {
-            logHorizontalPerformanceStats();
+    private static void recordCombinedOptimizationHit(String details) {
+        combinedOptimizationHits.incrementAndGet();
+        if (combinedOptimizationHits.get() % 100 == 0) {
+            logCombinedPerformanceStats();
         }
     }
 
-    private static void recordHorizontalOptimizationMiss(String details) {
-        horizontalOptimizationMisses.incrementAndGet();
-        LOGGER.warn("Horizontal optimization fallback: {}", details);
+    private static void recordCombinedOptimizationMiss(String details) {
+        combinedOptimizationMisses.incrementAndGet();
+        LOGGER.warn("Combined optimization fallback: {}", details);
     }
 
-    private static void logHorizontalPerformanceStats() {
+    private static void logCombinedPerformanceStats() {
         if (isNativeLibraryLoaded) {
             String nativeStats = rustperf_get_performance_stats();
             LOGGER.debug("Native performance stats: {}", nativeStats);
         }
-        LOGGER.debug("Java horizontal optimization metrics: {}", getHorizontalOptimizationMetrics());
+        LOGGER.debug("Java combined optimization metrics: {}", getCombinedOptimizationMetrics());
     }
 
-    public static String getHorizontalOptimizationMetrics() {
-        long totalOps = horizontalOptimizationHits.get() + horizontalOptimizationMisses.get();
-        double hitRate = totalOps > 0 ? (double) horizontalOptimizationHits.get() / totalOps * 100 : 0.0;
-        return String.format("HorizontalOptimizationMetrics{hits=%d, misses=%d, totalProcessed=%d, hitRate=%.2f%%, nativeLoaded=%b}",
-                horizontalOptimizationHits.get(), horizontalOptimizationMisses.get(), totalEntitiesProcessed.get(), hitRate, isNativeLibraryLoaded);
+    public static String getCombinedOptimizationMetrics() {
+        long totalOps = combinedOptimizationHits.get() + combinedOptimizationMisses.get();
+        double hitRate = totalOps > 0 ? (double) combinedOptimizationHits.get() / totalOps * 100 : 0.0;
+        return String.format("CombinedOptimizationMetrics{hits=%d, misses=%d, totalProcessed=%d, hitRate=%.2f%%, nativeLoaded=%b}",
+                combinedOptimizationHits.get(), combinedOptimizationMisses.get(), totalEntitiesProcessed.get(), hitRate, isNativeLibraryLoaded);
     }
 
     private static void logPerformanceStats() {
@@ -524,6 +530,8 @@ public final class OptimizationInjector {
     public static void resetMetrics() {
         optimizationHits.set(0);
         optimizationMisses.set(0);
+        combinedOptimizationHits.set(0);
+        combinedOptimizationMisses.set(0);
         totalEntitiesProcessed.set(0);
         if(isNativeLibraryLoaded) {
             rustperf_reset_performance_stats(); // Also reset stats on the native side
