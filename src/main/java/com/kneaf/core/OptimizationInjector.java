@@ -238,20 +238,21 @@ public final class OptimizationInjector {
                       return;
                   }
     
-                  // Call Rust for COMBINED horizontal+vertical calculation (full 3-axis optimization)
-                  double[] resultData = null;
-                  
-                  try {
-                      resultData = rustperf_calculate_physics_combined(x, entity.getDeltaMovement().y, z, onGround);
-                  } catch (UnsatisfiedLinkError ule) {
-                      LOGGER.error("JNI link error in rustperf_calculate_physics_combined for entity {}: {}", entity.getId(), ule.getMessage());
-                      recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - JNI link error");
-                      return;
-                  } catch (Throwable t) {
-                      LOGGER.error("Error in rustperf_calculate_physics_combined for entity {}: {}", entity.getId(), t.getMessage());
-                      recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - " + t.getMessage());
-                      return;
-                  }
+                  // Use general vector damping in Rust (micro-optimization only - game logic remains in Java)
+                 double[] resultData = null;
+                 double dampingFactor = onGround ? 0.99 : 0.98; // Game-specific logic stays in Java
+                 
+                 try {
+                     resultData = rustperf_vector_damp(x, entity.getDeltaMovement().y, z, dampingFactor);
+                 } catch (UnsatisfiedLinkError ule) {
+                     LOGGER.error("JNI link error in rustperf_vector_damp for entity {}: {}", entity.getId(), ule.getMessage());
+                     recordCombinedOptimizationMiss("Native vector optimization failed for entity " + entity.getId() + " - JNI link error");
+                     return;
+                 } catch (Throwable t) {
+                     LOGGER.error("Error in rustperf_vector_damp for entity {}: {}", entity.getId(), t.getMessage());
+                     recordCombinedOptimizationMiss("Native vector optimization failed for entity " + entity.getId() + " - " + t.getMessage());
+                     return;
+                 }
     
                   if (resultData != null && resultData.length == 3) {
                       // Validate result values (all axes - x/y/z)
@@ -342,14 +343,25 @@ public final class OptimizationInjector {
       
        
     /**
-     * ⚠️ COMBINED PHYSICS CALCULATION ⚠️
-     * Computes HIGH-PERFORMANCE physics for ALL AXES (x/y/z) with optimized damping.
-     * ✅ INPUT: Pure numerical values only (x/y/z delta, onGround)
-     * ✅ OUTPUT: Pure numerical values only (optimized delta movement)
+     * ⚠️ GENERAL VECTOR OPERATIONS ⚠️
+     * Pure mathematical vector operations - NO game-specific logic
+     * ✅ INPUT: Pure numerical values only
+     * ✅ OUTPUT: Pure numerical values only
      * ❌ NO game state, NO entity references, NO AI, NO decisions
-     * Specialized for: 2-block jump height + block bypassing
      */
-    static native double[] rustperf_calculate_physics_combined(double x, double y, double z, boolean onGround);
+    static native double[] rustperf_vector_multiply(double x, double y, double z, double scalar);
+    
+    /**
+     * ⚠️ GENERAL VECTOR OPERATIONS ⚠️
+     * Pure mathematical vector addition - NO game-specific logic
+     */
+    static native double[] rustperf_vector_add(double x1, double y1, double z1, double x2, double y2, double z2);
+    
+    /**
+     * ⚠️ GENERAL VECTOR OPERATIONS ⚠️
+     * Pure mathematical vector damping - NO game-specific logic
+     */
+    static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
        
     static native String rustperf_get_performance_stats();
     static native void rustperf_reset_performance_stats();

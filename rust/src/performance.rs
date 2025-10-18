@@ -97,19 +97,30 @@ impl Matrix4 {
 }
 
 #[no_mangle]
-pub extern "C" fn rustperf_calculate_physics_combined(x: f64, y: f64, z: f64, on_ground: bool) -> *mut c_double {
-    // Combined optimization for both horizontal (block bypass) and vertical (2-block jump) physics
-    // Horizontal: Slightly reduced damping (0.99/0.98) to preserve momentum for block bypassing
-    // Vertical: Minimal damping (1.0/0.98) to preserve full 2-block jump height while maintaining natural feel
-    let horizontal_damping = if on_ground { 0.99 } else { 0.98 };
-    let vertical_damping = if on_ground { 1.0 } else { 0.99 }; // Preserve full initial jump velocity when grounded
-    
-    let new_x = x * horizontal_damping;
-    let new_y = y * vertical_damping; // Critical: Full jump impulse preservation for 2-block height
-    let new_z = z * horizontal_damping;
-    
-    // Return combined optimized results for all 3 axes (x/y/z)
-    let vec_result = vec![new_x, new_y, new_z];
+pub extern "C" fn rustperf_vector_multiply(x: f64, y: f64, z: f64, scalar: f64) -> *mut c_double {
+    // General vector multiplication (x * scalar, y * scalar, z * scalar)
+    // Pure mathematical operation - no game-specific logic
+    let vec_result = vec![x * scalar, y * scalar, z * scalar];
+    let ptr = vec_result.as_ptr();
+    std::mem::forget(vec_result); // Prevent premature cleanup
+    ptr as *mut c_double
+}
+
+#[no_mangle]
+pub extern "C" fn rustperf_vector_add(x1: f64, y1: f64, z1: f64, x2: f64, y2: f64, z2: f64) -> *mut c_double {
+    // General vector addition (x1+x2, y1+y2, z1+z2)
+    // Pure mathematical operation - no game-specific logic
+    let vec_result = vec![x1 + x2, y1 + y2, z1 + z2];
+    let ptr = vec_result.as_ptr();
+    std::mem::forget(vec_result); // Prevent premature cleanup
+    ptr as *mut c_double
+}
+
+#[no_mangle]
+pub extern "C" fn rustperf_vector_damp(x: f64, y: f64, z: f64, damping: f64) -> *mut c_double {
+    // General vector damping (x * damping, y * damping, z * damping)
+    // Pure mathematical operation - no game-specific logic
+    let vec_result = vec![x * damping, y * damping, z * damping];
     let ptr = vec_result.as_ptr();
     std::mem::forget(vec_result); // Prevent premature cleanup
     ptr as *mut c_double
