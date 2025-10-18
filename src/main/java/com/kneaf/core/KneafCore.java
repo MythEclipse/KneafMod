@@ -12,6 +12,7 @@ import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.entity.EntityAttributeCreationEvent;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import net.neoforged.neoforge.registries.DeferredItem;
@@ -76,6 +77,7 @@ public class KneafCore {
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::registerEntityAttributes);
         modEventBus.addListener(this::buildCreativeTabContents);
+        modEventBus.addListener(this::registerCommands);
         
         // Register configuration
 
@@ -364,6 +366,15 @@ public class KneafCore {
         if (event.getTabKey() == CreativeModeTabs.SPAWN_EGGS) {
             event.accept(SHADOW_ZOMBIE_NINJA_SPAWN_EGG);
         }
+    }
+
+    /**
+     * Registers commands for the mod.
+     *
+     * @param event The register commands event
+     */
+    private void registerCommands(RegisterCommandsEvent event) {
+        com.kneaf.commands.MetricsCommand.register(event.getDispatcher());
     }
 
     // Client setup events - kept as static nested class for NeoForge compatibility

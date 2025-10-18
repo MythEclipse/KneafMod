@@ -225,10 +225,10 @@ public final class OptimizationInjector {
             double originalZ = z;
             double[] resultData = null;
             boolean useNativeResult = false;
-            double dampingFactor = 0.0;
+            double dampingFactor = 0.980; // Default to "other" entity damping factor
 
             try {
-                dampingFactor = calculateEntitySpecificDamping(entity);
+                dampingFactor = calculateEntitySpecificDamping(entity); // Override with entity-specific value
                 resultData = rustperf_vector_damp(x, y, z, dampingFactor);
                 
                 if (resultData != null && resultData.length == 3 && isNaturalMovement(resultData, originalX, originalY, originalZ)) {
@@ -263,9 +263,16 @@ public final class OptimizationInjector {
                 }
             }
 
-            if (useNativeResult) entity.setDeltaMovement(resultData[0], resultData[1], resultData[2]);
-            
             if (useNativeResult) {
+                // Preserve original gravity (y component) - critical for normal fall speed
+                double preservedY = entity.getDeltaMovement().y;
+                // Use reasonable horizontal damping (prevents unnatural movement)
+                double horizontalDamping = 0.015; // Matches Minecraft's default entity drag
+                entity.setDeltaMovement(
+                    resultData[0] * (1 - horizontalDamping), // Dampen horizontal X
+                    preservedY,                           // Keep original gravity (fixes slow fall)
+                    resultData[2] * (1 - horizontalDamping)  // Dampen horizontal Z
+                );
                 recordOptimizationHit(String.format("Native vector calculation applied for entity %d", entity.getId()));
             } else {
                 recordOptimizationMiss(String.format("Using original movement for entity %d (native fallback)", entity.getId()));
@@ -310,8 +317,12 @@ public final class OptimizationInjector {
     
     static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
 
-    private static double[] java_vector_damp(double x, double y, double z, double damping) {
-        return new double[] { x * damping, y * damping, z * damping };
+    private static double[] java_vector_damp(double x, double y, double z, double horizontalDamping) {
+        return new double[] {
+            x * horizontalDamping,  // Dampen horizontal X
+            y,                      // Preserve gravity (y)
+            z * horizontalDamping   // Dampen horizontal Z
+        };
     }
     
     private static double[] java_vector_multiply(double x, double y, double z, double scalar) {
@@ -324,7 +335,6 @@ public final class OptimizationInjector {
 
     private static void recordOptimizationHit(String details) {
         optimizationHits.incrementAndGet();
-        if (optimizationHits.get() % 100 == 0) logPerformanceStats();
     }
 
     static double calculateEntitySpecificDamping(Entity entity) {
@@ -338,7 +348,14 @@ public final class OptimizationInjector {
 
     static boolean isNaturalMovement(double[] result, double originalX, double originalY, double originalZ) {
         if (result == null || result.length != 3) return false;
+        // Check for invalid values (NaN/Infinite)
         for (double val : result) { if (Double.isNaN(val) || Double.isInfinite(val)) return false; }
+        // Prevent extreme value changes (±50% variance from original)
+        final double HORIZONTAL_THRESHOLD = 1.5; // Limit horizontal movement changes
+        final double VERTICAL_THRESHOLD = 2.0;   // More lenient for gravity (but still reasonable)
+        if (Math.abs(result[0]) > Math.abs(originalX) * HORIZONTAL_THRESHOLD) return false;
+        if (Math.abs(result[2]) > Math.abs(originalZ) * HORIZONTAL_THRESHOLD) return false;
+        if (Math.abs(result[1]) > Math.abs(originalY) * VERTICAL_THRESHOLD) return false;
         return true;
     }
 
