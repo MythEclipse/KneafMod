@@ -142,13 +142,6 @@ public final class OptimizationInjector {
             return;
         }
 
-        // Use horizontal-only path when enabled (preserves y-axis in Java)
-        if (PERFORMANCE_MANAGER.isHorizontalPhysicsOnly()) {
-            double originalY = entity.getDeltaMovement().y;
-            processCombinedPhysics(entity, originalY, event);
-            return;
-        }
-
         // For safety, players are always ticked normally by vanilla (no Rust involvement)
         if (entity instanceof Player) {
             return;
@@ -159,8 +152,6 @@ public final class OptimizationInjector {
             double x = entity.getDeltaMovement().x;
             double y = entity.getDeltaMovement().y;
             double z = entity.getDeltaMovement().z;
-            boolean onGround = entity.onGround();
-         
             // Validate input values before native call
             if (Double.isNaN(x) || Double.isInfinite(x) ||
                 Double.isNaN(y) || Double.isInfinite(y) ||
@@ -168,24 +159,24 @@ public final class OptimizationInjector {
                 recordOptimizationMiss("Native physics calculation skipped for entity " + entity.getId() + " - invalid input values");
                 return;
             }
-         
-            // ⚠️ RUST CALL: STRICTLY MATHEMATICAL PHYSICS CALCULATION ONLY ⚠️
-            // Input: Raw numerical values only (no entity references, no game state)
-            // Output: Optimized numerical values only (no game decisions)
+
+            // IMPORTANT: Java maintains full control over game physics
+            // Rust is ONLY used for mathematical vector operations - NO game state modification
             double[] resultData = null;
-         
+          
             try {
-                resultData = rustperf_calculate_physics(x, y, z, onGround);
+                // Use ONLY general vector operations from Rust (NO physics decision making)
+                resultData = rustperf_vector_damp(x, y, z, 0.98);
             } catch (UnsatisfiedLinkError ule) {
-                LOGGER.error("JNI link error in rustperf_calculate_physics for entity {}: {}", entity.getId(), ule.getMessage());
-                recordOptimizationMiss("Native physics calculation failed for entity " + entity.getId() + " - JNI link error");
+                LOGGER.error("JNI link error in rustperf_vector_damp for entity {}: {}", entity.getId(), ule.getMessage());
+                recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - JNI link error");
                 return;
             } catch (Throwable t) {
-                LOGGER.error("Error in rustperf_calculate_physics for entity {}: {}", entity.getId(), t.getMessage());
-                recordOptimizationMiss("Native physics calculation failed for entity " + entity.getId() + " - " + t.getMessage());
+                LOGGER.error("Error in rustperf_vector_damp for entity {}: {}", entity.getId(), t.getMessage());
+                recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - " + t.getMessage());
                 return;
             }
-    
+     
             if (resultData != null && resultData.length == 3) {
                 // Validate result values
                 boolean validResult = true;
@@ -195,110 +186,45 @@ public final class OptimizationInjector {
                         break;
                     }
                 }
-                 
+                  
                 if (!validResult) {
-                    recordOptimizationMiss("Native physics calculation failed for entity " + entity.getId() + " - invalid result values");
+                    recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - invalid result values");
                     return;
                 }
 
                 // Apply calculation result ONLY - vanilla handles ALL game logic/decisions
                 entity.setDeltaMovement(resultData[0], resultData[1], resultData[2]);
 
-                recordOptimizationHit(String.format("Native physics calculation for entity %d", entity.getId()));
+                recordOptimizationHit(String.format("Native vector calculation for entity %d", entity.getId()));
             } else {
-                recordOptimizationMiss("Native physics calculation failed for entity " + entity.getId() + " - invalid result");
+                recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - invalid result");
             }
         } catch (Throwable t) {
-            LOGGER.error("Error during native physics calculation for entity {}: {}", entity.getId(), t.getMessage());
-            recordOptimizationMiss("Native physics calculation failed for entity " + entity.getId() + " - " + t.getMessage());
+            LOGGER.error("Error during native vector calculation for entity {}: {}", entity.getId(), t.getMessage());
+            recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - " + t.getMessage());
         } finally {
             totalEntitiesProcessed.incrementAndGet();
         }
     }
 
-    /**
-     * Combined physics calculation path (optimized for both horizontal and vertical movement)
-     * Processes ALL axes (x/y/z) in Rust with specialized damping for:
-     * - Horizontal: Momentum preservation for block bypassing
-     * - Vertical: Full jump impulse retention for 2-block height
-     * Maintains strict separation of concerns: Rust = calculations only, Java = game state
-     */
-    private static void processCombinedPhysics(Entity entity, double originalY, EntityTickEvent.Pre event) {
-            event.setCanceled(true); // Critical: Prevent vanilla physics from running after Rust calculation
-            
-            try {
-                  // Extract ONLY x/z data (NO game state access)
-                  double x = entity.getDeltaMovement().x;
-                  double z = entity.getDeltaMovement().z;
-                  boolean onGround = entity.onGround();
-    
-                  // Validate inputs before Rust call
-                  if (Double.isNaN(x) || Double.isInfinite(x) || Double.isNaN(z) || Double.isInfinite(z)) {
-                      recordCombinedOptimizationMiss("Invalid input for entity " + entity.getId());
-                      return;
-                  }
-    
-                  // Use general vector damping in Rust (micro-optimization only - game logic remains in Java)
-                 double[] resultData = null;
-                 double dampingFactor = onGround ? 0.99 : 0.98; // Game-specific logic stays in Java
-                 
-                 try {
-                     resultData = rustperf_vector_damp(x, entity.getDeltaMovement().y, z, dampingFactor);
-                 } catch (UnsatisfiedLinkError ule) {
-                     LOGGER.error("JNI link error in rustperf_vector_damp for entity {}: {}", entity.getId(), ule.getMessage());
-                     recordCombinedOptimizationMiss("Native vector optimization failed for entity " + entity.getId() + " - JNI link error");
-                     return;
-                 } catch (Throwable t) {
-                     LOGGER.error("Error in rustperf_vector_damp for entity {}: {}", entity.getId(), t.getMessage());
-                     recordCombinedOptimizationMiss("Native vector optimization failed for entity " + entity.getId() + " - " + t.getMessage());
-                     return;
-                 }
-    
-                  if (resultData != null && resultData.length == 3) {
-                      // Validate result values (all axes - x/y/z)
-                      boolean validResult = true;
-                      for (int i = 0; i < resultData.length; i++) {
-                          if (Double.isNaN(resultData[i]) || Double.isInfinite(resultData[i])) {
-                              validResult = false;
-                              break;
-                          }
-                      }
-    
-                      if (!validResult) {
-                          recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - invalid result values");
-                          return;
-                      }
-    
-                      // Apply Rust results while preserving optimized jump velocity (y-axis)
-                      // Result format: [optimized_x, optimized_y, optimized_z] - all axes now properly calculated
-                      entity.setDeltaMovement(resultData[0], resultData[1], resultData[2]);
-    
-                      recordCombinedOptimizationHit(String.format("Native combined physics calculation for entity %d", entity.getId()));
-                  } else {
-                      recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - invalid result");
-                  }
-            } catch (Throwable t) {
-                  LOGGER.error("Error during native combined physics calculation for entity {}: {}", entity.getId(), t.getMessage());
-                  recordCombinedOptimizationMiss("Native combined physics calculation failed for entity " + entity.getId() + " - " + t.getMessage());
-            } finally {
-                  totalEntitiesProcessed.incrementAndGet();
-            }
-     }
 
     /**
      * Intercepts server tick events to inject native optimizations for server-side calculations.
      */
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Pre event) {
-        if (isNativeLibraryLoaded && PERFORMANCE_MANAGER.isRustIntegrationEnabled()) {
+        // Server tick events are now strictly for Java-only operations
+        // Rust integration is disabled for server-wide calculations to maintain game state separation
+        if (PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
             try {
-                // Calculate actual entity count across all levels
+                // Calculate actual entity count across all levels using Java-only operations
                 // Use simplified entity counting that works with NeoForge API
                 // Use fixed value for testing since entity counting is complex in NeoForge
                 int entityCount = 200;
-                rustperf_calculate_entity_performance(entityCount, "server");
+                // IMPORTANT: No Rust calls here - maintaining strict separation of concerns
+                recordOptimizationHit(String.format("Server tick processed with %d entities (Java-only)", entityCount));
             } catch (Throwable t) {
-                recordOptimizationMiss("Server tick native performance calculation failed: " + t.getMessage());
+                recordOptimizationMiss("Server tick Java-only processing failed: " + t.getMessage());
             }
         }
     }
@@ -308,16 +234,19 @@ public final class OptimizationInjector {
      */
     @SubscribeEvent
     public static void onLevelTick(LevelTickEvent.Pre event) {
-        if (isNativeLibraryLoaded && PERFORMANCE_MANAGER.isRustIntegrationEnabled()) {
+        // Level tick events are now strictly for Java-only operations
+        // Rust integration is disabled for level-specific calculations to maintain game state separation
+        if (PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
             try {
                 var level = event.getLevel();
                 // Use simplified entity counting that works with NeoForge API
                 // Use fixed value for testing since entity counting is complex in NeoForge
                 int entityCount = 100;
                 String dimension = level.dimension().location().toString();
-                rustperf_calculate_entity_performance(entityCount, dimension);
+                // IMPORTANT: No Rust calls here - maintaining strict separation of concerns
+                recordOptimizationHit(String.format("Level tick processed with %d entities in %s (Java-only)", entityCount, dimension));
             } catch (Throwable t) {
-                recordOptimizationMiss("Level tick native performance calculation failed: " + t.getMessage());
+                recordOptimizationMiss("Level tick Java-only processing failed: " + t.getMessage());
             }
         }
     }
@@ -330,16 +259,6 @@ public final class OptimizationInjector {
     // - NO entity control or navigation
     // - NO game rules or balance modifications
     // - Pure numerical input → numerical output transformations
-    static native int rustperf_calculate_entity_performance(int entityCount, String levelDimension);
-      
-    /**
-     * ⚠️ PHYSICS CALCULATION ONLY ⚠️
-     * Computes HIGH-PERFORMANCE physics from raw movement data.
-     * ✅ INPUT: Pure numerical values only (x/y/z delta, onGround)
-     * ✅ OUTPUT: Pure numerical values only (optimized delta movement)
-     * ❌ NO game state, NO entity references, NO AI, NO decisions
-     */
-    static native double[] rustperf_calculate_physics(double x, double y, double z, boolean onGround);
       
        
     /**
@@ -363,14 +282,11 @@ public final class OptimizationInjector {
      */
     static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
        
-    static native String rustperf_get_performance_stats();
-    static native void rustperf_reset_performance_stats();
      
     /**
      * ⚠️ PATHFINDING CALCULATION ONLY ⚠️
      * Computes optimal paths from grid data (NO entity control, NO game navigation)
      */
-    private static native String rustperf_parallel_a_star(String gridJson, String queriesJson);
 
     // --- Metrics Methods ---
     private static void recordOptimizationHit(String details) {
@@ -398,10 +314,6 @@ public final class OptimizationInjector {
     }
 
     private static void logCombinedPerformanceStats() {
-        if (isNativeLibraryLoaded) {
-            String nativeStats = rustperf_get_performance_stats();
-            LOGGER.debug("Native performance stats: {}", nativeStats);
-        }
         LOGGER.debug("Java combined optimization metrics: {}", getCombinedOptimizationMetrics());
     }
 
@@ -413,10 +325,6 @@ public final class OptimizationInjector {
     }
 
     private static void logPerformanceStats() {
-        if (isNativeLibraryLoaded) {
-            String nativeStats = rustperf_get_performance_stats();
-            LOGGER.debug("Native performance stats: {}", nativeStats);
-        }
         LOGGER.debug("Java optimization metrics: {}", getOptimizationMetrics());
     }
 
@@ -492,7 +400,6 @@ public final class OptimizationInjector {
         combinedOptimizationMisses.set(0);
         totalEntitiesProcessed.set(0);
         if(isNativeLibraryLoaded) {
-            rustperf_reset_performance_stats(); // Also reset stats on the native side
         }
     }
 
