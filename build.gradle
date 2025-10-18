@@ -180,24 +180,34 @@ dependencies {
     testRuntimeOnly files('src/main/resources/natives/librustperf.dylib')
 }
 
-// Tests enabled for compatibility testing
+// Tests enabled for compatibility testing - SHOWS CLEAR PASS/FAIL COUNTS
 tasks.withType(Test).configureEach {
     enabled = true
     useJUnitPlatform()
+    
+    // Configure TEST LOGGING to SHOW ALL RESULTS (critical for user visibility)
     testLogging {
-        events "passed", "skipped", "failed"
+        // Show every test event (start, pass, fail, skip)
+        events "started", "passed", "skipped", "failed"
+        // Show standard output/error from tests
+        showStandardStreams = true
+        // Show individual test results (not just failures)
+        displayGranularity = 0
+        // Use only valid Gradle properties that work across versions
+        exceptionFormat = 'full'
     }
-
+    
+    
     // Set java.library.path for native libraries
     systemProperty 'java.library.path', file('src/main/resources/natives').absolutePath
-
+    
     // Set PATH for native libraries on Windows
     environment 'PATH', file('src/main/resources/natives').absolutePath + ';' + System.getenv('PATH')
-
-    // Start with an empty set and only include the specific test we want
-    include '**/*'
-    exclude '**/*Test.class'
+    
+    // Only run our Rust vector library tests (simplified pattern)
+    include '**/RustVectorLibraryTest.class'
     include '**/VectorOperationsTest.class'
+    include '**/ShowTestCounts.class'  // Add our clear results test class
     
     // Exclude problematic test classes that were failing
     exclude '**/EntityMovementTest.class'
@@ -431,7 +441,10 @@ task copyRustToSrc(type: Copy) {
 
 // Ensure compile and resource processing use the fresh natives in src/main/resources
 tasks.named('compileJava').configure { dependsOn(copyRustToSrc) }
-tasks.named('processResources').configure { dependsOn(copyRustToSrc) }
+tasks.named('processResources').configure {
+    dependsOn(copyRustToSrc)
+    dependsOn(generateModMetadata) // Explicit dependency to resolve Gradle validation issue
+}
 
 // Ensure run tasks pick up fresh natives before launching the game in a dev environment
 // Use string-based dependsOn to remain configuration-cache friendly.
