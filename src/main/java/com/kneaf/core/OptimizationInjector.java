@@ -45,11 +45,52 @@ public final class OptimizationInjector {
         "natives/rustperf.dll",
         "rustperf.dll",
         "src/main/resources/natives/rustperf.dll",
-        "build/resources/main/natives/rustperf.dll"
+        "build/resources/main/natives/rustperf.dll",
+        "run/natives/rustperf.dll",
+        "target/natives/rustperf.dll",
+        "target/debug/rustperf.dll",
+        "target/release/rustperf.dll",
+        "%USERPROFILE%/.minecraft/mods/natives/rustperf.dll",
+        "%APPDATA%/.minecraft/mods/natives/rustperf.dll"
     };
     private static boolean isNativeLibraryLoaded = false;
     private static final Object nativeLibraryLock = new Object();
     private static boolean isTestMode = false;
+
+    /**
+     * Get OS-specific error messages for native library loading issues
+     */
+    private static String getOSErrorMessage(Throwable t) {
+        String os = System.getProperty("os.name").toLowerCase();
+        StringBuilder errorDetails = new StringBuilder();
+        
+        // Add OS-specific context
+        errorDetails.append(String.format("OS: %s (%s)", os, System.getProperty("os.arch")));
+        
+        // Add architecture info
+        errorDetails.append(String.format(", Architecture: %s", System.getProperty("os.arch")));
+        
+        // Add Java version info
+        errorDetails.append(String.format(", Java: %s (%s)",
+            System.getProperty("java.version"),
+            System.getProperty("java.vm.name")));
+        
+        // Add more specific error context for common native loading issues
+        String errorMsg = t.getMessage();
+        if (errorMsg != null) {
+            if (errorMsg.contains("Can't find dependent libraries")) {
+                errorDetails.append(", Possible cause: Missing DLL dependencies");
+            } else if (errorMsg.contains("Access is denied")) {
+                errorDetails.append(", Possible cause: File permissions issue");
+            } else if (errorMsg.contains("The specified module could not be found")) {
+                errorDetails.append(", Possible cause: Library not found in path");
+            } else if (errorMsg.contains("Bad image format")) {
+                errorDetails.append(", Possible cause: Wrong architecture (32-bit vs 64-bit)");
+            }
+        }
+        
+        return errorDetails.toString();
+    }
 
     static {
         if (!isTestMode) {
@@ -64,53 +105,208 @@ public final class OptimizationInjector {
             }
 
             try {
-                // First try system classloader path
-                for (String path : RUST_PERF_LIBRARY_PATHS) {
-                    URL resource = ClassLoader.getSystemClassLoader().getResource(path);
-                    if (resource != null) {
-                        try {
-                            System.load(resource.getPath());
-                            isNativeLibraryLoaded = true;
-                            return;
-                        } catch (UnsatisfiedLinkError e) {
-                            LOGGER.warn("Failed to load library from {}: {}, trying next path", path, e.getMessage());
-                        }
-                    }
-                }
-
-                // Try absolute path as fallback
                 String os = System.getProperty("os.name").toLowerCase();
                 String libExtension = os.contains("win") ? "dll" :
                                     os.contains("mac") ? "dylib" : "so";
-                 
-                String[] possiblePaths = new String[] {
-                    "D:\\KneafMod\\src\\main\\resources\\natives\\" + RUST_PERF_LIBRARY_NAME + "." + libExtension,
-                    "D:\\KneafMod\\build\\resources\\main\\natives\\" + RUST_PERF_LIBRARY_NAME + "." + libExtension,
-                    "D:\\KneafMod\\run\\natives\\" + RUST_PERF_LIBRARY_NAME + "." + libExtension,
-                    System.getProperty("user.dir") + "\\src\\main\\resources\\natives\\" + RUST_PERF_LIBRARY_NAME + "." + libExtension
+                String libName = RUST_PERF_LIBRARY_NAME + "." + libExtension;
+                String userDir = System.getProperty("user.dir");
+
+                // ------------------------------
+                // Phase 1: Classpath Search (Most Reliable)
+                // ------------------------------
+                LOGGER.info("Starting native library search (OS: {}, Arch: {}, Java: {})",
+                    os, System.getProperty("os.arch"), System.getProperty("java.version"));
+
+                // Try classloader paths first (handles JAR-internal resources)
+                String[] classpathPaths = {
+                    "natives/" + libName,
+                    libName,
+                    "src/main/resources/natives/" + libName,
+                    "build/resources/main/natives/" + libName,
+                    "run/natives/" + libName,
+                    "target/natives/" + libName,
+                    "target/debug/" + libName,
+                    "target/release/" + libName
                 };
 
-                for (String absPath : possiblePaths) {
-                    if (new java.io.File(absPath).exists()) {
-                        try {
-                            System.load(absPath);
-                            isNativeLibraryLoaded = true;
-                            return;
-                        } catch (UnsatisfiedLinkError e) {
-                            LOGGER.warn("Failed to load library from {}: {}, trying next path", absPath, e.getMessage());
-                        }
+                for (String path : classpathPaths) {
+                    if (tryLoadFromClasspath(path)) {
+                        return; // Success - exit early
                     }
                 }
 
-                LOGGER.error("Rust performance native library not found in any of the search paths: {}",
-                    java.util.Arrays.toString(RUST_PERF_LIBRARY_PATHS));
+                // ------------------------------
+                // Phase 2: Absolute Path Search (Development Environments)
+                // ------------------------------
+                String[] absolutePaths = new String[] {
+                    // Project directories
+                    userDir + "\\src\\main\\resources\\natives\\" + libName,
+                    userDir + "\\build\\resources\\main\\natives\\" + libName,
+                    userDir + "\\run\\natives\\" + libName,
+                    userDir + "\\target\\natives\\" + libName,
+                    userDir + "\\target\\debug\\" + libName,
+                    userDir + "\\target\\release\\" + libName,
+                    userDir + "\\" + libName,
+                    
+                    // Fixed workspace paths
+                    "D:\\KneafMod\\src\\main\\resources\\natives\\" + libName,
+                    "D:\\KneafMod\\build\\resources\\main\\natives\\" + libName,
+                    "D:\\KneafMod\\run\\natives\\" + libName,
+                    "D:\\KneafMod\\target\\debug\\" + libName,
+                    "D:\\KneafMod\\target\\release\\" + libName,
+                    "D:\\KneafMod\\" + libName,
+                    
+                    // Minecraft standard paths
+                    getUserProfilePath() + "\\.minecraft\\mods\\natives\\" + libName,
+                    getUserProfilePath() + "\\.minecraft\\" + libName,
+                    getAppDataPath() + "\\.minecraft\\mods\\natives\\" + libName,
+                    getAppDataPath() + "\\.minecraft\\" + libName
+                };
+
+                for (String absPath : absolutePaths) {
+                    if (tryLoadFromAbsolutePath(absPath)) {
+                        return; // Success - exit early
+                    }
+                }
+
+                // ------------------------------
+                // Phase 3: java.library.path Search (System-wide Libraries)
+                // ------------------------------
+                if (tryLoadFromJavaLibraryPath(libName)) {
+                    return; // Success - exit early
+                }
+
+                // ------------------------------
+                // Phase 4: Final Failure Handling
+                // ------------------------------
+                logLibraryNotFoundError(classpathPaths, absolutePaths);
                 isNativeLibraryLoaded = false;
 
             } catch (Throwable t) {
-                LOGGER.error("Unexpected error loading Rust native library: {}", t.getMessage(), t);
+                LOGGER.error("Critical error in native library loading system: {} ({})",
+                    t.getMessage(), getDetailedErrorMessage(t), t);
                 isNativeLibraryLoaded = false;
             }
         }
+    }
+
+    /**
+     * Helper method to load library from classpath with proper error handling
+     */
+    private static boolean tryLoadFromClasspath(String path) {
+        URL resource = ClassLoader.getSystemClassLoader().getResource(path);
+        if (resource != null) {
+            try {
+                System.load(resource.getPath());
+                LOGGER.info("✅ SUCCESS: Loaded native library from classpath: {}", path);
+                isNativeLibraryLoaded = true;
+                return true;
+            } catch (UnsatisfiedLinkError e) {
+                LOGGER.warn("❌ Classpath load failed for {}: {} ({})", path, e.getMessage(), getOSErrorMessage(e));
+            }
+        } else {
+            LOGGER.debug("ℹ️ Classpath resource not found: {}", path);
+        }
+        return false;
+    }
+
+    /**
+     * Helper method to load library from absolute path with proper error handling
+     */
+    private static boolean tryLoadFromAbsolutePath(String absPath) {
+        java.io.File libFile = new java.io.File(absPath);
+        if (libFile.exists()) {
+            try {
+                System.load(absPath);
+                LOGGER.info("✅ SUCCESS: Loaded native library from absolute path: {}", absPath);
+                isNativeLibraryLoaded = true;
+                return true;
+            } catch (UnsatisfiedLinkError e) {
+                LOGGER.warn("❌ Absolute path load failed for {}: {} ({})", absPath, e.getMessage(), getOSErrorMessage(e));
+            } catch (SecurityException e) {
+                LOGGER.warn("❌ Security restriction prevented loading from {}: {}", absPath, e.getMessage());
+            }
+        } else {
+            LOGGER.trace("ℹ️ File not found (ignored): {}", absPath); // Trace level to reduce noise
+        }
+        return false;
+    }
+
+    /**
+     * Helper method to load library from java.library.path with proper error handling
+     */
+    private static boolean tryLoadFromJavaLibraryPath(String libName) {
+        String javaLibPath = System.getProperty("java.library.path");
+        LOGGER.debug("java.library.path: {}", javaLibPath);
+
+        for (String path : javaLibPath.split(java.io.File.pathSeparator)) {
+            java.io.File libFile = new java.io.File(path, libName);
+            if (libFile.exists()) {
+                try {
+                    System.load(libFile.getAbsolutePath());
+                    LOGGER.info("✅ SUCCESS: Loaded native library from java.library.path: {}", libFile.getAbsolutePath());
+                    isNativeLibraryLoaded = true;
+                    return true;
+                } catch (UnsatisfiedLinkError e) {
+                    LOGGER.warn("❌ java.library.path load failed for {}: {} ({})", libFile.getAbsolutePath(), e.getMessage(), getOSErrorMessage(e));
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Log comprehensive error when library can't be found anywhere
+     */
+    private static void logLibraryNotFoundError(String[] classpathPaths, String[] absolutePaths) {
+        LOGGER.error("❌ CRITICAL: Rust performance native library NOT FOUND in any search path");
+        LOGGER.error("   - OS: {} ({})", System.getProperty("os.name"), System.getProperty("os.arch"));
+        LOGGER.error("   - Java: {} ({})", System.getProperty("java.version"), System.getProperty("java.vm.name"));
+        LOGGER.error("   - Classpath paths searched: {}", java.util.Arrays.toString(classpathPaths));
+        LOGGER.error("   - Absolute paths searched: {}", java.util.Arrays.toString(absolutePaths));
+        
+        // Provide actionable troubleshooting steps
+        LOGGER.error("   - TROUBLESHOOTING:");
+        LOGGER.error("     1. Ensure rustperf.dll exists in one of the searched paths");
+        LOGGER.error("     2. Check that all DLL dependencies are available");
+        LOGGER.error("     3. Verify 32-bit/64-bit architecture matches Java runtime");
+        LOGGER.error("     4. For development: Run 'cargo build --release' in rust/ directory");
+        LOGGER.error("     5. For production: Place rustperf.dll in .minecraft/mods/natives/");
+        
+        isNativeLibraryLoaded = false;
+    }
+
+    /**
+     * Get user profile path with fallback for missing environment variables
+     */
+    private static String getUserProfilePath() {
+        String userProfile = System.getenv("USERPROFILE");
+        return userProfile != null ? userProfile : "C:\\Users\\Default";
+    }
+
+    /**
+     * Get app data path with fallback for missing environment variables
+     */
+    private static String getAppDataPath() {
+        String appData = System.getenv("APPDATA");
+        return appData != null ? appData : "C:\\Users\\Default\\AppData\\Roaming";
+    }
+
+    /**
+     * Get detailed error message with OS and environment context
+     */
+    private static String getDetailedErrorMessage(Throwable t) {
+        return String.format("%s | %s", getOSErrorMessage(t), getLoadFailureContext());
+    }
+
+    /**
+     * Get additional context for load failures
+     */
+    private static String getLoadFailureContext() {
+        return String.format("JavaLibraryPath=%s | Architecture=%s | JavaVersion=%s",
+            System.getProperty("java.library.path"),
+            System.getProperty("os.arch"),
+            System.getProperty("java.version"));
     }
 
     /**
@@ -160,53 +356,71 @@ public final class OptimizationInjector {
                 return;
             }
 
+            // Store original movement for fallback comparison
+            double originalX = x;
+            double originalY = y;
+            double originalZ = z;
+            
             // IMPORTANT: Java maintains full control over game physics
             // Rust is ONLY used for mathematical vector operations - NO game state modification
             double[] resultData = null;
-          
-            try {
-                // 1. Java handles GAME LOGIC: Get entity-specific damping factor
-                double dampingFactor = calculateEntitySpecificDamping(entity);
-                
-                // 2. Rust handles MATH: Pure vector calculation (no game state access)
-                resultData = rustperf_vector_damp(x, y, z, dampingFactor);
-                
-                // 3. Java validates RESULTS: Preserve natural game physics
-                if (resultData == null || resultData.length != 3 || !isNaturalMovement(resultData, x, y, z)) {
-                    recordOptimizationMiss("Unnatural movement from Rust calculation for entity " + entity.getId() + " - using original");
-                    resultData = null; // Force fallback to original movement
-                }
-            } catch (UnsatisfiedLinkError ule) {
-                LOGGER.error("JNI link error in rustperf_vector_damp for entity {}: {}", entity.getId(), ule.getMessage());
-                recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - JNI link error");
-                return;
-            } catch (Throwable t) {
-                LOGGER.error("Error in rustperf_vector_damp for entity {}: {}", entity.getId(), t.getMessage());
-                recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - " + t.getMessage());
-                return;
-            }
-     
-            if (resultData != null && resultData.length == 3) {
-                // Validate result values
-                boolean validResult = true;
-                for (int i = 0; i < resultData.length; i++) {
-                    if (Double.isNaN(resultData[i]) || Double.isInfinite(resultData[i])) {
-                        validResult = false;
-                        break;
-                    }
-                }
-                  
-                if (!validResult) {
-                    recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - invalid result values");
-                    return;
-                }
-
-                // Apply calculation result ONLY - vanilla handles ALL game logic/decisions
+           boolean useNativeResult = false;
+           double dampingFactor = 0.0; // Declare dampingFactor in outer scope
+           
+           try {
+               // 1. Java handles GAME LOGIC: Get entity-specific damping factor
+               dampingFactor = calculateEntitySpecificDamping(entity);
+               
+               // 2. Rust handles MATH: Pure vector calculation (no game state access)
+               resultData = rustperf_vector_damp(x, y, z, dampingFactor);
+               
+               // 3. Java validates RESULTS: Preserve natural game physics
+               if (resultData != null && resultData.length == 3 && isNaturalMovement(resultData, originalX, originalY, originalZ)) {
+                   useNativeResult = true;
+                   recordOptimizationHit(String.format("Native vector calculation succeeded for entity %d", entity.getId()));
+               } else {
+                   // Use Java fallback when Rust result is invalid but native library is loaded
+                   resultData = java_vector_damp(x, y, z, dampingFactor);
+                   if (isNaturalMovement(resultData, originalX, originalY, originalZ)) {
+                       useNativeResult = true;
+                       recordOptimizationHit(String.format("Java fallback vector calculation succeeded for entity %d", entity.getId()));
+                   } else {
+                       recordOptimizationMiss("Both Rust and Java fallback failed for entity " + entity.getId() + " - using original");
+                   }
+               }
+           } catch (UnsatisfiedLinkError ule) {
+               LOGGER.error("JNI link error in rustperf_vector_damp for entity {}: {}", entity.getId(), ule.getMessage());
+               // Use Java fallback when native library loading fails
+               resultData = java_vector_damp(x, y, z, dampingFactor);
+               if (isNaturalMovement(resultData, originalX, originalY, originalZ)) {
+                   useNativeResult = true;
+                   recordOptimizationHit(String.format("Java fallback used due to JNI error for entity %d", entity.getId()));
+               } else {
+                   recordOptimizationMiss("Native library JNI error and Java fallback failed for entity " + entity.getId());
+               }
+           } catch (Throwable t) {
+               LOGGER.error("Error in rustperf_vector_damp for entity {}: {}", entity.getId(), t.getMessage());
+               // Use Java fallback when any error occurs in native calculation
+               resultData = java_vector_damp(x, y, z, dampingFactor);
+               if (isNaturalMovement(resultData, originalX, originalY, originalZ)) {
+                   useNativeResult = true;
+                   recordOptimizationHit(String.format("Java fallback used due to error for entity %d", entity.getId()));
+               } else {
+                   recordOptimizationMiss("Native calculation error and Java fallback failed for entity " + entity.getId() + " - " + t.getMessage());
+               }
+           }
+      
+            // Apply calculation result ONLY if valid - vanilla handles ALL game logic/decisions
+            if (useNativeResult) {
                 entity.setDeltaMovement(resultData[0], resultData[1], resultData[2]);
-
-                recordOptimizationHit(String.format("Native vector calculation for entity %d", entity.getId()));
+            }
+            // Otherwise, keep original movement (safe fallback)
+            
+            // Always record successful processing
+            if (useNativeResult) {
+                recordOptimizationHit(String.format("Native vector calculation applied for entity %d", entity.getId()));
             } else {
-                recordOptimizationMiss("Native vector calculation failed for entity " + entity.getId() + " - invalid result");
+                recordOptimizationMiss(String.format("Using original movement for entity %d (native fallback)", entity.getId()));
             }
         } catch (Throwable t) {
             LOGGER.error("Error during native vector calculation for entity {}: {}", entity.getId(), t.getMessage());
@@ -268,8 +482,8 @@ public final class OptimizationInjector {
     // - NO entity control or navigation
     // - NO game rules or balance modifications
     // - Pure numerical input → numerical output transformations
-      
        
+    
     /**
      * ⚠️ GENERAL VECTOR OPERATIONS ⚠️
      * Pure mathematical vector operations - NO game-specific logic
@@ -278,18 +492,59 @@ public final class OptimizationInjector {
      * ❌ NO game state, NO entity references, NO AI, NO decisions
      */
     static native double[] rustperf_vector_multiply(double x, double y, double z, double scalar);
-    
+     
     /**
      * ⚠️ GENERAL VECTOR OPERATIONS ⚠️
      * Pure mathematical vector addition - NO game-specific logic
      */
     static native double[] rustperf_vector_add(double x1, double y1, double z1, double x2, double y2, double z2);
-    
+     
     /**
      * ⚠️ GENERAL VECTOR OPERATIONS ⚠️
      * Pure mathematical vector damping - NO game-specific logic
      */
     static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
+
+    // --- JAVA FALLBACK METHODS (PURE JAVA IMPLEMENTATIONS) ---
+    // These provide safe alternatives when native Rust calculations fail
+    // or when native library loading is not available
+    
+    /**
+     * Java implementation of vector damping for fallback scenarios
+     * Provides identical mathematical behavior to rustperf_vector_damp
+     * but implemented entirely in Java without native dependencies
+     */
+    private static double[] java_vector_damp(double x, double y, double z, double damping) {
+        // Exact same mathematical implementation as Rust version
+        // This ensures consistent behavior regardless of which implementation is used
+        return new double[] {
+            x * damping,
+            y * damping,
+            z * damping
+        };
+    }
+    
+    /**
+     * Java implementation of vector multiplication for fallback scenarios
+     */
+    private static double[] java_vector_multiply(double x, double y, double z, double scalar) {
+        return new double[] {
+            x * scalar,
+            y * scalar,
+            z * scalar
+        };
+    }
+    
+    /**
+     * Java implementation of vector addition for fallback scenarios
+     */
+    private static double[] java_vector_add(double x1, double y1, double z1, double x2, double y2, double z2) {
+        return new double[] {
+            x1 + x2,
+            y1 + y2,
+            z1 + z2
+        };
+    }
        
      
     /**
@@ -356,31 +611,17 @@ public final class OptimizationInjector {
             return false;
         }
 
-        // Check for extreme value changes that would break natural movement
-        final double MAX_CHANGE_FACTOR = 1.5;
-        boolean xChangeTooLarge = Math.abs(result[0]) > Math.abs(originalX) * MAX_CHANGE_FACTOR;
-        boolean yChangeTooLarge = Math.abs(result[1]) > Math.abs(originalY) * MAX_CHANGE_FACTOR;
-        boolean zChangeTooLarge = Math.abs(result[2]) > Math.abs(originalZ) * MAX_CHANGE_FACTOR;
-
-        if (xChangeTooLarge || yChangeTooLarge || zChangeTooLarge) {
-            return false;
-        }
-
-        // Check for unrealistic values that would break game physics
-        final double MAX_VELOCITY = 10.0; // Minecraft's natural max velocity
-        if (Math.abs(result[0]) > MAX_VELOCITY || Math.abs(result[1]) > MAX_VELOCITY || Math.abs(result[2]) > MAX_VELOCITY) {
-            return false;
-        }
-
-        // Check for NaN/Infinite values
+        // Check for NaN/Infinite values FIRST (critical safety check - keep for stability)
         for (double val : result) {
             if (Double.isNaN(val) || Double.isInfinite(val)) {
                 return false;
             }
         }
 
+        // REMOVED: All threshold validation per user request - fixes "mob movement shifted to x+1" issue
+        // Always allow Rust calculations that pass basic safety checks to restore natural gameplay
         return true;
-    }
+   }
 
     private static void recordOptimizationMiss(String details) {
         optimizationMisses.incrementAndGet();
