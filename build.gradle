@@ -319,16 +319,17 @@ tasks.register('buildRustNative', Exec) {
     inputs.file file('rust/Cargo.toml')
     outputs.dir file('rust/target/release')
     commandLine = ['cargo', 'build', '--release']
-    
+
     // Set environment variables for cross-compilation if needed
     environment = System.getenv()
-    
+
+    // Define file paths outside closure for configuration cache compatibility
+    def rustLibFile = file('rust/target/release/librustperf.so')
+    def rustDllFile = file('rust/target/release/rustperf.dll')
+    def rustDylibFile = file('rust/target/release/librustperf.dylib')
+
     // Error handling for Rust compilation failures
     doLast {
-        def rustLibFile = file('rust/target/release/librustperf.so')
-        def rustDllFile = file('rust/target/release/rustperf.dll')
-        def rustDylibFile = file('rust/target/release/librustperf.dylib')
-        
         if (!rustLibFile.exists() && !rustDllFile.exists() && !rustDylibFile.exists()) {
             logger.warn("Rust library compilation may have failed. Expected output files not found.")
         } else {

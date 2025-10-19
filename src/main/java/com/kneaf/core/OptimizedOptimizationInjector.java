@@ -47,8 +47,7 @@ public final class OptimizedOptimizationInjector {
     private static final AtomicLong totalEntitiesProcessedAsync = new AtomicLong(0);
     private static final AtomicLong totalProcessingTimeNs = new AtomicLong(0);
     
-    // Library loading state
-    private static volatile boolean isNativeLibraryLoaded = false;
+    // Library loading state - uses OptimizationInjector's loading status
     private static volatile boolean isLibraryLoading = false;
     private static CompletableFuture<ParallelLibraryLoader.LibraryLoadResult> libraryLoadFuture;
     
@@ -69,28 +68,9 @@ public final class OptimizedOptimizationInjector {
     private static void initializeAsyncLibraryLoading() {
         isLibraryLoading = true;
         
-        libraryLoadFuture = libraryLoader.loadLibraryAsync("rustperf")
-            .thenApply(result -> {
-                isNativeLibraryLoaded = result.success;
-                isLibraryLoading = false;
-                
-                if (result.success) {
-                    LOGGER.info("✅ Async library loading completed in {}ms from {}", 
-                        result.loadTimeMs, result.loadedPath);
-                } else {
-                    LOGGER.error("❌ Async library loading failed: {}", result.errorMessage);
-                }
-                
-                return result;
-            })
-            .exceptionally(throwable -> {
-                isNativeLibraryLoaded = false;
-                isLibraryLoading = false;
-                LOGGER.error("💥 Critical error during async library loading: {}", throwable.getMessage(), throwable);
-                return new ParallelLibraryLoader.LibraryLoadResult(
-                    "rustperf", false, null, 0, throwable.getMessage()
-                );
-            });
+        // Use OptimizationInjector's synchronous loading status
+        isLibraryLoading = false; // Not actually loading async anymore
+        LOGGER.info("Using OptimizationInjector's native library loading status");
     }
     
     /**
@@ -111,8 +91,8 @@ public final class OptimizedOptimizationInjector {
                 return;
             }
             
-            // Check if library is ready (don't wait for loading)
-            if (!isNativeLibraryLoaded && !isLibraryLoading) {
+            // Check if library is ready using OptimizationInjector's status
+            if (!OptimizationInjector.isNativeLibraryLoaded()) {
                 recordAsyncOptimizationMiss("Native library not loaded for entity " + entity.getId());
                 return;
             }
@@ -370,14 +350,14 @@ public final class OptimizedOptimizationInjector {
         double avgProcessingTime = totalEntitiesProcessedAsync.get() > 0 ? 
             (double) totalProcessingTimeNs.get() / totalEntitiesProcessedAsync.get() / 1_000_000.0 : 0.0;
         
-        LOGGER.info("Async Optimization Metrics - Hits: {}, Misses: {}, Errors: {}, Total: {}, HitRate: {:.2f}%, AvgTime: {:.2f}ms, LibraryLoaded: {}", 
+        LOGGER.info("Async Optimization Metrics - Hits: {}, Misses: {}, Errors: {}, Total: {}, HitRate: {:.2f}%, AvgTime: {:.2f}ms, LibraryLoaded: {}",
             asyncOptimizationHits.get(),
             asyncOptimizationMisses.get(),
             asyncOptimizationErrors.get(),
             totalEntitiesProcessedAsync.get(),
             hitRate,
             avgProcessingTime,
-            isNativeLibraryLoaded
+            OptimizationInjector.isNativeLibraryLoaded()
         );
     }
     
@@ -398,7 +378,7 @@ public final class OptimizedOptimizationInjector {
             totalEntitiesProcessedAsync.get(),
             hitRate,
             avgProcessingTime,
-            isNativeLibraryLoaded,
+            OptimizationInjector.isNativeLibraryLoaded(),
             isLibraryLoading
         );
     }
@@ -408,12 +388,12 @@ public final class OptimizedOptimizationInjector {
      */
     public static boolean waitForLibraryLoading(long timeoutMs) {
         if (libraryLoadFuture == null) {
-            return isNativeLibraryLoaded;
+            return OptimizationInjector.isNativeLibraryLoaded();
         }
-        
+
         try {
             libraryLoadFuture.get(timeoutMs, TimeUnit.MILLISECONDS);
-            return isNativeLibraryLoaded;
+            return OptimizationInjector.isNativeLibraryLoaded();
         } catch (Exception e) {
             LOGGER.warn("Library loading wait timeout or error: {}", e.getMessage());
             return false;
@@ -424,15 +404,14 @@ public final class OptimizedOptimizationInjector {
      * Reload native library asynchronously
      */
     public static synchronized void reloadNativeLibraryAsync() {
-        isNativeLibraryLoaded = false;
         isLibraryLoading = false;
-        
+
         // Shutdown existing services
         entityProcessingService.shutdown();
-        
+
         // Re-initialize async library loading
         initializeAsyncLibraryLoading();
-        
+
         LOGGER.info("Async native library reload initiated");
     }
     
@@ -489,7 +468,7 @@ public final class OptimizedOptimizationInjector {
             asyncOptimizationMisses.get(),
             asyncOptimizationErrors.get(),
             totalEntitiesProcessedAsync.get(),
-            isNativeLibraryLoaded && !isTestMode
+            OptimizationInjector.isNativeLibraryLoaded() && !isTestMode
         );
     }
     

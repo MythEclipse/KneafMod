@@ -35,7 +35,7 @@ public final class EntityProcessingService {
     private final AtomicBoolean isRunning = new AtomicBoolean(true);
     
     // Configuration
-    private static final int MAX_THREAD_POOL_SIZE = Math.min(8, Runtime.getRuntime().availableProcessors() * 2);
+    private static final int MAX_THREAD_POOL_SIZE = 4; // Fixed safe value to avoid IllegalArgumentException
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final int PROCESSING_TIMEOUT_MS = 50; // 50ms timeout for entity processing
     

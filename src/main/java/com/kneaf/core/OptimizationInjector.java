@@ -199,6 +199,10 @@ public final class OptimizationInjector {
         loadNativeLibrary();
     }
 
+    public static boolean isNativeLibraryLoaded() {
+        return isNativeLibraryLoaded;
+    }
+
     private OptimizationInjector() {}
 
     @SubscribeEvent
