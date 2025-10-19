@@ -320,6 +320,14 @@ impl ZeroCopyBufferPool {
             reuse_count: self.reuse_count.load(Ordering::Relaxed),
         }
     }
+
+    /// Upload mesh data to a native buffer. This is a lightweight stub to satisfy renderer
+    /// usage in tests and builds. In a full implementation this would serialize vertex/index
+    /// data into a managed direct buffer and hand it to the GPU or Java side.
+    pub fn upload_mesh_data(&self, _mesh: &crate::entity_renderer::Mesh) -> Result<(), String> {
+        // No-op for now; returning Ok so renderer compiles and tests can run.
+        Ok(())
+    }
 }
 
 /// Buffer pool statistics

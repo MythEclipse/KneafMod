@@ -268,13 +268,23 @@ public final class OptimizationInjector {
             }
 
             if (useNativeResult) {
-                // Preserve original gravity (y component) - critical for normal fall speed
+                // Enhanced gravity preservation with external system validation
                 double preservedY = entity.getDeltaMovement().y;
+                
+                // Validate gravity modifications from external systems (potions, enchantments)
+                // Check for significant gravity changes that might indicate external effects
+                if (Math.abs(resultData[1] - preservedY) > 0.1) {
+                    // Significant gravity change detected - likely from potion/enchantment
+                    // Preserve the modified gravity instead of overriding it
+                    preservedY = resultData[1];
+                    recordOptimizationHit(String.format("Gravity modification preserved for entity %d (potion/enchantment effect)", entity.getId()));
+                }
+                
                 // Use reasonable horizontal damping (prevents unnatural movement)
                 double horizontalDamping = 0.015; // Matches Minecraft's default entity drag
                 entity.setDeltaMovement(
                     resultData[0] * (1 - horizontalDamping), // Dampen horizontal X
-                    preservedY,                           // Keep original gravity (fixes slow fall)
+                    preservedY,                           // Enhanced gravity preservation
                     resultData[2] * (1 - horizontalDamping)  // Dampen horizontal Z
                 );
                 recordOptimizationHit(String.format("Native vector calculation applied for entity %d", entity.getId()));
@@ -342,24 +352,36 @@ public final class OptimizationInjector {
     }
 
     static double calculateEntitySpecificDamping(Entity entity) {
-        String entityType = entity.getType().toString();
-        if (entityType.contains("Player")) return 0.985;
-        else if (entityType.contains("Zombie") || entityType.contains("Skeleton") || entityType.contains("Slime")) return 0.975;
-        else if (entityType.contains("Cow") || entityType.contains("Sheep") || entityType.contains("Pig")) return 0.992;
-        else if (entityType.contains("Villager")) return 0.988;
-        else return 0.980;
+        // Use EntityTypeEnum for consistent damping factor calculation
+        // This aligns hash-based lookup with string-based fallback
+        return EntityTypeEnum.calculateDampingFactor(entity);
     }
 
     static boolean isNaturalMovement(double[] result, double originalX, double originalY, double originalZ) {
         if (result == null || result.length != 3) return false;
         // Check for invalid values (NaN/Infinite)
         for (double val : result) { if (Double.isNaN(val) || Double.isInfinite(val)) return false; }
-        // Prevent extreme value changes (±50% variance from original)
-        final double HORIZONTAL_THRESHOLD = 1.5; // Limit horizontal movement changes
-        final double VERTICAL_THRESHOLD = 2.0;   // More lenient for gravity (but still reasonable)
-        if (Math.abs(result[0]) > Math.abs(originalX) * HORIZONTAL_THRESHOLD) return false;
-        if (Math.abs(result[2]) > Math.abs(originalZ) * HORIZONTAL_THRESHOLD) return false;
+        
+        // Enhanced validation for direction changes and external forces
+        // Allow for 180° direction changes and external forces (explosions, water, knockback)
+        
+        // Check for direction reversals (180° turns) - natural for entities changing direction
+        boolean xDirectionReversed = (originalX > 0 && result[0] < 0) || (originalX < 0 && result[0] > 0);
+        boolean zDirectionReversed = (originalZ > 0 && result[2] < 0) || (originalZ < 0 && result[2] > 0);
+        
+        // If direction is reversed, use more lenient thresholds
+        final double HORIZONTAL_THRESHOLD_NORMAL = 3.0;  // For normal movements
+        final double HORIZONTAL_THRESHOLD_REVERSED = 8.0; // For direction reversals (180° turns)
+        final double VERTICAL_THRESHOLD = 5.0;           // For falling and jumping
+        
+        double horizontalThreshold = (xDirectionReversed || zDirectionReversed) ?
+            HORIZONTAL_THRESHOLD_REVERSED : HORIZONTAL_THRESHOLD_NORMAL;
+        
+        // Apply thresholds with direction change consideration
+        if (Math.abs(result[0]) > Math.abs(originalX) * horizontalThreshold) return false;
+        if (Math.abs(result[2]) > Math.abs(originalZ) * horizontalThreshold) return false;
         if (Math.abs(result[1]) > Math.abs(originalY) * VERTICAL_THRESHOLD) return false;
+        
         return true;
     }
 

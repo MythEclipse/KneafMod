@@ -66,6 +66,7 @@ async-trait = "0.1"
 schemars = "0.8"
 flume = "0.11"
 crossbeam-deque = "0.8.6"
+uuid = { version = "1.0", features = ["v4"] }
 
 # Multi-core optimization dependencies
 threadpool = "1.8"
@@ -75,6 +76,7 @@ affinity = "0.1"  # Thread affinity management
 # SIMD optimization dependencies
 wide = "0.7"  # SIMD wrapper library
 simdeez = "2.0"  # SIMD ease-of-use library
+# SIMD operations now use std::simd (built-in)
 
 # Memory management dependencies
 bumpalo = "3.15"  # Bump allocator

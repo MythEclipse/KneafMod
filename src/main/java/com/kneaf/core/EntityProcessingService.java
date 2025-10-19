@@ -164,11 +164,20 @@ public final class EntityProcessingService {
             );
             
             if (result != null && result.length == 3 && isValidPhysicsResult(result, data)) {
-                // Apply horizontal damping while preserving gravity
-                double horizontalDamping = 0.015;
+                // Enhanced gravity preservation with external system validation
+                double preservedY = data.motionY;
+                
+                // Check for significant gravity changes indicating external effects (potions, enchantments)
+                if (Math.abs(result[1] - data.motionY) > 0.1) {
+                    // External gravity modification detected - preserve it
+                    preservedY = result[1];
+                }
+                
+                // Apply consistent horizontal damping across all processing paths
+                double horizontalDamping = 0.015; // Standard value used by all injectors
                 EntityPhysicsData processedData = new EntityPhysicsData(
                     result[0] * (1 - horizontalDamping),
-                    data.motionY, // Preserve original gravity
+                    preservedY, // Enhanced gravity preservation with external system validation
                     result[2] * (1 - horizontalDamping)
                 );
                 
@@ -198,7 +207,7 @@ public final class EntityProcessingService {
     }
     
     /**
-     * Validate physics calculation result
+     * Validate physics calculation result with enhanced direction change support
      */
     private boolean isValidPhysicsResult(double[] result, EntityPhysicsData original) {
         if (result == null || result.length != 3) return false;
@@ -208,12 +217,26 @@ public final class EntityProcessingService {
             if (Double.isNaN(val) || Double.isInfinite(val)) return false;
         }
         
-        // Prevent extreme value changes
-        final double HORIZONTAL_THRESHOLD = 1.5;
-        final double VERTICAL_THRESHOLD = 2.0;
+        // Enhanced validation for direction changes and external forces
+        // Allow for 180° direction changes and external forces (explosions, water, knockback)
         
-        if (Math.abs(result[0]) > Math.abs(original.motionX) * HORIZONTAL_THRESHOLD) return false;
-        if (Math.abs(result[2]) > Math.abs(original.motionZ) * HORIZONTAL_THRESHOLD) return false;
+        // Check for direction reversals (180° turns)
+        boolean xDirectionReversed = (original.motionX > 0 && result[0] < 0) ||
+                                     (original.motionX < 0 && result[0] > 0);
+        boolean zDirectionReversed = (original.motionZ > 0 && result[2] < 0) ||
+                                     (original.motionZ < 0 && result[2] > 0);
+        
+        // Use different thresholds for direction reversals vs normal movement
+        final double HORIZONTAL_THRESHOLD_NORMAL = 3.0;   // For normal movements
+        final double HORIZONTAL_THRESHOLD_REVERSED = 8.0; // For direction reversals (180° turns)
+        final double VERTICAL_THRESHOLD = 5.0;            // For falling and jumping
+        
+        double horizontalThreshold = (xDirectionReversed || zDirectionReversed) ?
+            HORIZONTAL_THRESHOLD_REVERSED : HORIZONTAL_THRESHOLD_NORMAL;
+        
+        // Apply enhanced thresholds with direction change consideration
+        if (Math.abs(result[0]) > Math.abs(original.motionX) * horizontalThreshold) return false;
+        if (Math.abs(result[2]) > Math.abs(original.motionZ) * horizontalThreshold) return false;
         if (Math.abs(result[1]) > Math.abs(original.motionY) * VERTICAL_THRESHOLD) return false;
         
         return true;

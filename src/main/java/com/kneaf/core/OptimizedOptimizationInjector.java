@@ -8,6 +8,7 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
+import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
 import org.slf4j.Logger;
 
 import java.util.Map;
@@ -29,6 +30,7 @@ import com.kneaf.core.performance.PerformanceMonitoringSystem;
  * - Optimized entity type checking using enum-based hash lookup
  * - Thread-safe entity processing queue
  * - Non-blocking main thread integration
+ * - Knockback protection to preserve damage-induced movement
  */
 @EventBusSubscriber(modid = KneafCore.MODID, bus = EventBusSubscriber.Bus.GAME)
 public final class OptimizedOptimizationInjector {
@@ -52,8 +54,13 @@ public final class OptimizedOptimizationInjector {
     private static CompletableFuture<ParallelLibraryLoader.LibraryLoadResult> libraryLoadFuture;
     
     // Configuration
-    private static final int ASYNC_TIMEOUT_MS = 50; // 50ms timeout for async processing
+    private static final int BASE_ASYNC_TIMEOUT_MS = 50; // Base timeout for async processing
     private static final int MAX_CONCURRENT_ENTITIES = 1000;
+    private static final int MIN_ASYNC_TIMEOUT_MS = 25;   // Minimum timeout for critical entities
+    private static final int MAX_ASYNC_TIMEOUT_MS = 200;  // Maximum timeout for complex entities
+    // Knockback protection - track entities that recently took damage
+    private static final Map<Integer, Integer> recentlyDamagedEntities = new HashMap<>();
+    private static final int KNOCKBACK_PROTECTION_TICKS = 10; // 0.5 seconds at 20 TPS
     private static boolean isTestMode = false;
     
     static {
@@ -74,6 +81,20 @@ public final class OptimizedOptimizationInjector {
     }
     
     /**
+     * Track entities that recently took damage to preserve knockback
+     */
+    @SubscribeEvent
+    public static void onLivingDamage(LivingDamageEvent.Pre event) {
+        if (event.getEntity().level().isClientSide()) return;
+        
+        // Mark entity as recently damaged to skip optimization temporarily
+        recentlyDamagedEntities.put(event.getEntity().getId(), KNOCKBACK_PROTECTION_TICKS);
+        
+        LOGGER.debug("Entity {} marked for knockback protection after taking damage",
+            event.getEntity().getId());
+    }
+    
+    /**
      * Async entity tick handler - non-blocking main thread integration
      */
     @SubscribeEvent
@@ -87,7 +108,29 @@ public final class OptimizedOptimizationInjector {
                 return;
             }
             
+            // Entity-specific throttling - exempt performance-critical entities
             if (entity instanceof Player) {
+                return; // Players are always exempt from throttling
+            }
+            
+            // Check for boss entities and other performance-critical entities
+            if (isPerformanceCriticalEntity(entity)) {
+                recordAsyncOptimizationMiss("Performance-critical entity " + entity.getId() + " exempt from throttling");
+                return;
+            }
+            
+            // Check if entity is under knockback protection
+            Integer protectionTicks = recentlyDamagedEntities.get(entity.getId());
+            if (protectionTicks != null && protectionTicks > 0) {
+                // Skip optimization for entities under knockback protection
+                recordAsyncOptimizationMiss("Entity " + entity.getId() + " under knockback protection (" + protectionTicks + " ticks)");
+                
+                // Decrement protection ticks
+                recentlyDamagedEntities.put(entity.getId(), protectionTicks - 1);
+                if (protectionTicks - 1 <= 0) {
+                    recentlyDamagedEntities.remove(entity.getId());
+                }
+                
                 return;
             }
             
@@ -104,7 +147,10 @@ public final class OptimizedOptimizationInjector {
                 return;
             }
             
-            // Submit for async processing
+            // Calculate adaptive timeout based on entity type and server performance
+            int adaptiveTimeoutMs = calculateAdaptiveTimeout(entity);
+            
+            // Submit for async processing with adaptive timeout
             CompletableFuture<EntityProcessingService.EntityProcessingResult> future =
                 entityProcessingService.processEntityAsync(entity, physicsData);
             
@@ -154,10 +200,11 @@ public final class OptimizedOptimizationInjector {
                 return null;
             });
             
-            // Timeout handling - fallback to synchronous if async takes too long
-            future.orTimeout(ASYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS).exceptionally(throwable -> {
+            // Timeout handling with adaptive timeout - fallback to synchronous if async takes too long
+            future.orTimeout(adaptiveTimeoutMs, TimeUnit.MILLISECONDS).exceptionally(throwable -> {
                 // Fallback to synchronous processing for timeout
                 performSynchronousFallback(entity, physicsData);
+                recordAsyncOptimizationMiss("Adaptive timeout (" + adaptiveTimeoutMs + "ms) exceeded for entity " + entity.getId());
                 return null;
             });
             
@@ -229,8 +276,9 @@ public final class OptimizedOptimizationInjector {
             EntityTypeEnum entityType = EntityTypeEnum.fromEntity(entity);
             double dampingFactor = entityType.getDampingFactor();
             
-            // Simple Java-based damping calculation
-            double horizontalDamping = 0.015;
+            // Use consistent horizontal damping value across all processing paths
+            // Matches EntityProcessingService and OptimizationInjector for consistency
+            double horizontalDamping = 0.015; // Standard horizontal damping value
             entity.setDeltaMovement(
                 physicsData.motionX * (1 - horizontalDamping) * dampingFactor,
                 physicsData.motionY,
@@ -448,6 +496,91 @@ public final class OptimizedOptimizationInjector {
         entityProcessingService.shutdown();
         libraryLoader.shutdown();
         LOGGER.info("Async optimization services shutdown completed");
+    }
+    
+    /**
+     * Check if entity is performance-critical and should be exempt from throttling
+     */
+    private static boolean isPerformanceCriticalEntity(Entity entity) {
+        String entityType = entity.getType().toString().toLowerCase();
+        
+        // Boss entities - critical for gameplay and should not be throttled
+        if (entityType.contains("boss") ||
+            entityType.contains("dragon") ||
+            entityType.contains("wither") ||
+            entityType.contains("warden") ||
+            entityType.contains("elder_guardian")) {
+            return true;
+        }
+        
+        // Named entities (likely important for gameplay)
+        if (entity.hasCustomName()) {
+            return true;
+        }
+        
+        // Entities with special AI or behavior flags
+        if (entityType.contains("villager") && entityType.contains("trader")) {
+            return true; // Trading villagers are important for gameplay
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Calculate adaptive timeout based on entity type and server performance
+     */
+    private static int calculateAdaptiveTimeout(Entity entity) {
+        int baseTimeout = BASE_ASYNC_TIMEOUT_MS;
+        
+        // Adjust timeout based on entity type complexity
+        String entityType = entity.getType().toString().toLowerCase();
+        
+        // Complex entities get more time
+        if (entityType.contains("boss") ||
+            entityType.contains("dragon") ||
+            entityType.contains("wither") ||
+            entityType.contains("warden")) {
+            baseTimeout = Math.min(baseTimeout * 3, MAX_ASYNC_TIMEOUT_MS); // Boss entities: 150ms max
+        }
+        // Player entities get moderate timeout
+        else if (entity instanceof Player) {
+            baseTimeout = Math.min(baseTimeout * 2, MAX_ASYNC_TIMEOUT_MS); // Players: 100ms max
+        }
+        // Simple entities get standard timeout
+        else if (entityType.contains("zombie") ||
+                 entityType.contains("skeleton") ||
+                 entityType.contains("cow") ||
+                 entityType.contains("sheep")) {
+            baseTimeout = baseTimeout; // Standard: 50ms
+        }
+        // Very simple entities get reduced timeout
+        else {
+            baseTimeout = Math.max(baseTimeout / 2, MIN_ASYNC_TIMEOUT_MS); // Simple: 25ms min
+        }
+        
+        // Adjust based on server performance (CPU load)
+        double cpuLoad = getCurrentCpuLoad();
+        if (cpuLoad > 0.8) {
+            // High CPU load - reduce timeout to prevent overload
+            baseTimeout = Math.max(baseTimeout / 2, MIN_ASYNC_TIMEOUT_MS);
+        } else if (cpuLoad < 0.3) {
+            // Low CPU load - can afford longer timeouts
+            baseTimeout = Math.min(baseTimeout * 2, MAX_ASYNC_TIMEOUT_MS);
+        }
+        
+        return baseTimeout;
+    }
+    
+    /**
+     * Get current CPU load estimate
+     */
+    private static double getCurrentCpuLoad() {
+        // Simple CPU load estimation based on available processors and active thread count
+        int availableProcessors = Runtime.getRuntime().availableProcessors();
+        int activeThreadCount = Thread.activeCount();
+        
+        // Estimate load as ratio of active threads to available processors
+        return Math.min(1.0, (double) activeThreadCount / availableProcessors);
     }
     
     /**

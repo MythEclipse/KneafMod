@@ -138,11 +138,8 @@ dependencies {
     // NeoForge dependency
     implementation 'net.neoforged:neoforge:21.0.167'
     // j4rs for Rust FFI
-    implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'io.github.astonbitecode:j4rs:0.17.0'
-    // Use a different LZ4 version that is more likely to be available
-    implementation 'org.lz4:lz4-java:1.8.0'
-    // SLF4J logging dependencies for runtime
+    // SLF4J logging dependencies for runtime (maintained for backward compatibility during transition)
     implementation 'org.slf4j:slf4j-api:2.0.7'
     implementation 'org.slf4j:slf4j-simple:2.0.7'
     // Binary protocol implemented manually using ByteBuffer - no FlatBuffers Java dependency required
@@ -171,8 +168,9 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
     testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
     testImplementation 'org.junit.platform:junit-platform-console:1.10.0'
+    // SLF4J logging dependencies for tests (maintained for backward compatibility during transition)
     testImplementation 'org.slf4j:slf4j-api:2.0.7'
-    testImplementation 'org.slf4j:slf4j-simple:2.0.7' // Add simple implementation for tests
+    testImplementation 'org.slf4j:slf4j-simple:2.0.7'
     testImplementation 'org.mockito:mockito-core:5.6.0' // Add Mockito for testing
     testImplementation 'org.mockito:mockito-junit-jupiter:5.6.0' // Add Mockito JUnit 5 integration
     

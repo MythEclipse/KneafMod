@@ -2482,6 +2482,7 @@ dependencies = [
  "threadpool",
  "tokio",
  "tokio-util",
+ "uuid",
  "wide",
  "winapi 0.3.9",
  "ws2_32-sys",
