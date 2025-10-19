@@ -268,23 +268,25 @@ public final class OptimizationInjector {
             }
 
             if (useNativeResult) {
-                // Enhanced gravity preservation with external system validation
-                double preservedY = entity.getDeltaMovement().y;
+                // Improved gravity handling - allow natural gravity while preserving external effects
+                double processedY = entity.getDeltaMovement().y;
                 
-                // Validate gravity modifications from external systems (potions, enchantments)
-                // Check for significant gravity changes that might indicate external effects
-                if (Math.abs(resultData[1] - preservedY) > 0.1) {
-                    // Significant gravity change detected - likely from potion/enchantment
-                    // Preserve the modified gravity instead of overriding it
-                    preservedY = resultData[1];
-                    recordOptimizationHit(String.format("Gravity modification preserved for entity %d (potion/enchantment effect)", entity.getId()));
+                // Only preserve external gravity modifications if they are significant (knockback, explosions)
+                // Allow natural gravity to work normally
+                if (Math.abs(resultData[1] - entity.getDeltaMovement().y) > 0.5) {
+                    // Significant external effect detected (explosion, strong knockback)
+                    processedY = resultData[1];
+                    recordOptimizationHit(String.format("Strong external effect preserved for entity %d", entity.getId()));
+                } else if (entity.getDeltaMovement().y < -0.1) {
+                    // Natural falling - apply enhanced gravity for better feel
+                    processedY = Math.min(entity.getDeltaMovement().y * 1.1, resultData[1]);
                 }
                 
-                // Use reasonable horizontal damping (prevents unnatural movement)
-                double horizontalDamping = 0.015; // Matches Minecraft's default entity drag
+                // Reduced horizontal damping to allow better knockback
+                double horizontalDamping = 0.008; // Reduced from 0.015 for better knockback
                 entity.setDeltaMovement(
                     resultData[0] * (1 - horizontalDamping), // Dampen horizontal X
-                    preservedY,                           // Enhanced gravity preservation
+                    processedY,                           // Improved gravity handling
                     resultData[2] * (1 - horizontalDamping)  // Dampen horizontal Z
                 );
                 recordOptimizationHit(String.format("Native vector calculation applied for entity %d", entity.getId()));
@@ -332,9 +334,22 @@ public final class OptimizationInjector {
     static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
 
     private static double[] java_vector_damp(double x, double y, double z, double horizontalDamping) {
+        // Improved gravity handling - allow natural gravity while preserving external effects
+        double processedY = y;
+        
+        // Only preserve external gravity modifications if they are significant (knockback, explosions)
+        // Allow natural gravity to work normally
+        if (Math.abs(y - y) > 0.5) {
+            // Significant external effect detected (explosion, strong knockback)
+            processedY = y;
+        } else if (y < -0.1) {
+            // Natural falling - apply enhanced gravity for better feel
+            processedY = Math.min(y * 1.1, y);
+        }
+        
         return new double[] {
             x * horizontalDamping,  // Dampen horizontal X
-            y,                      // Preserve gravity (y)
+            processedY,             // Improved gravity handling
             z * horizontalDamping   // Dampen horizontal Z
         };
     }

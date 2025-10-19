@@ -164,20 +164,24 @@ public final class EntityProcessingService {
             );
             
             if (result != null && result.length == 3 && isValidPhysicsResult(result, data)) {
-                // Enhanced gravity preservation with external system validation
-                double preservedY = data.motionY;
+                // Improved gravity handling - allow natural gravity while preserving external effects
+                double processedY = data.motionY;
                 
-                // Check for significant gravity changes indicating external effects (potions, enchantments)
-                if (Math.abs(result[1] - data.motionY) > 0.1) {
-                    // External gravity modification detected - preserve it
-                    preservedY = result[1];
+                // Only preserve external gravity modifications if they are significant (knockback, explosions)
+                // Allow natural gravity to work normally
+                if (Math.abs(result[1] - data.motionY) > 0.5) {
+                    // Significant external effect detected (explosion, strong knockback)
+                    processedY = result[1];
+                } else if (data.motionY < -0.1) {
+                    // Natural falling - apply enhanced gravity for better feel
+                    processedY = Math.min(data.motionY * 1.1, result[1]);
                 }
                 
-                // Apply consistent horizontal damping across all processing paths
-                double horizontalDamping = 0.015; // Standard value used by all injectors
+                // Reduced horizontal damping to allow better knockback
+                double horizontalDamping = 0.008; // Reduced from 0.015 for better knockback
                 EntityPhysicsData processedData = new EntityPhysicsData(
                     result[0] * (1 - horizontalDamping),
-                    preservedY, // Enhanced gravity preservation with external system validation
+                    processedY, // Improved gravity handling
                     result[2] * (1 - horizontalDamping)
                 );
                 

@@ -20,15 +20,15 @@ import java.util.function.Function;
  */
 public enum EntityTypeEnum {
     PLAYER(0.985, "Player"),
-    ZOMBIE(0.985, "Zombie"), // Increased from 0.975 for better knockback
-    SKELETON(0.985, "Skeleton"), // Increased from 0.975 for better knockback
-    SLIME(0.985, "Slime"), // Increased from 0.975 for better knockback
-    COW(0.992, "Cow"),
-    SHEEP(0.992, "Sheep"),
-    PIG(0.992, "Pig"),
-    VILLAGER(0.988, "Villager"),
-    SHADOW_ZOMBIE_NINJA(0.985, "ShadowZombieNinja"), // Increased from 0.975 for better knockback
-    DEFAULT(0.980, "Default");
+    ZOMBIE(0.990, "Zombie"), // Increased from 0.985 for better knockback preservation
+    SKELETON(0.990, "Skeleton"), // Increased from 0.985 for better knockback preservation
+    SLIME(0.990, "Slime"), // Increased from 0.985 for better knockback preservation
+    COW(0.995, "Cow"), // Increased from 0.992 for better knockback
+    SHEEP(0.995, "Sheep"), // Increased from 0.992 for better knockback
+    PIG(0.995, "Pig"), // Increased from 0.992 for better knockback
+    VILLAGER(0.992, "Villager"), // Increased from 0.988 for better knockback
+    SHADOW_ZOMBIE_NINJA(0.990, "ShadowZombieNinja"), // Increased from 0.985 for better knockback preservation
+    DEFAULT(0.985, "Default"); // Increased from 0.980 for better knockback
     
     private final double dampingFactor;
     private final String entityName;

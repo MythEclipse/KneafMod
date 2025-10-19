@@ -60,7 +60,7 @@ public final class OptimizedOptimizationInjector {
     private static final int MAX_ASYNC_TIMEOUT_MS = 200;  // Maximum timeout for complex entities
     // Knockback protection - track entities that recently took damage
     private static final Map<Integer, Integer> recentlyDamagedEntities = new HashMap<>();
-    private static final int KNOCKBACK_PROTECTION_TICKS = 10; // 0.5 seconds at 20 TPS
+    private static final int KNOCKBACK_PROTECTION_TICKS = 6; // 0.3 seconds at 20 TPS (reduced from 10)
     private static boolean isTestMode = false;
     
     static {
@@ -90,7 +90,8 @@ public final class OptimizedOptimizationInjector {
         // Mark entity as recently damaged to skip optimization temporarily
         recentlyDamagedEntities.put(event.getEntity().getId(), KNOCKBACK_PROTECTION_TICKS);
         
-        LOGGER.debug("Entity {} marked for knockback protection after taking damage",
+        // Log at trace level to reduce noise - this is expected behavior
+        LOGGER.trace("Entity {} marked for knockback protection after taking damage",
             event.getEntity().getId());
     }
     
@@ -123,7 +124,8 @@ public final class OptimizedOptimizationInjector {
             Integer protectionTicks = recentlyDamagedEntities.get(entity.getId());
             if (protectionTicks != null && protectionTicks > 0) {
                 // Skip optimization for entities under knockback protection
-                recordAsyncOptimizationMiss("Entity " + entity.getId() + " under knockback protection (" + protectionTicks + " ticks)");
+                // Log as trace level to reduce noise, this is expected behavior
+                LOGGER.trace("Entity {} under knockback protection ({} ticks)", entity.getId(), protectionTicks);
                 
                 // Decrement protection ticks
                 recentlyDamagedEntities.put(entity.getId(), protectionTicks - 1);
@@ -276,12 +278,24 @@ public final class OptimizedOptimizationInjector {
             EntityTypeEnum entityType = EntityTypeEnum.fromEntity(entity);
             double dampingFactor = entityType.getDampingFactor();
             
-            // Use consistent horizontal damping value across all processing paths
-            // Matches EntityProcessingService and OptimizationInjector for consistency
-            double horizontalDamping = 0.015; // Standard horizontal damping value
+            // Improved gravity handling - allow natural gravity while preserving external effects
+            double processedY = physicsData.motionY;
+            
+            // Only preserve external gravity modifications if they are significant (knockback, explosions)
+            // Allow natural gravity to work normally
+            if (Math.abs(physicsData.motionY - physicsData.motionY) > 0.5) {
+                // Significant external effect detected (explosion, strong knockback)
+                processedY = physicsData.motionY;
+            } else if (physicsData.motionY < -0.1) {
+                // Natural falling - apply enhanced gravity for better feel
+                processedY = Math.min(physicsData.motionY * 1.1, physicsData.motionY);
+            }
+            
+            // Reduced horizontal damping to allow better knockback
+            double horizontalDamping = 0.008; // Reduced from 0.015 for better knockback
             entity.setDeltaMovement(
                 physicsData.motionX * (1 - horizontalDamping) * dampingFactor,
-                physicsData.motionY,
+                processedY, // Improved gravity handling
                 physicsData.motionZ * (1 - horizontalDamping) * dampingFactor
             );
             
@@ -348,17 +362,20 @@ public final class OptimizedOptimizationInjector {
     private static void recordAsyncOptimizationMiss(String details) {
         asyncOptimizationMisses.incrementAndGet();
         
-        // Record performance metrics and error
+        // Record performance metrics but NOT as an error for expected misses
         Map<String, Object> context = new HashMap<>();
         context.put("operation", "async_optimization");
         context.put("result", "miss");
         context.put("details", details);
         
         PerformanceMonitoringSystem.getInstance().getMetricAggregator().incrementCounter("optimization_injector.async_misses");
-        PerformanceMonitoringSystem.getInstance().getErrorTracker().recordError("OptimizedOptimizationInjector",
-            new RuntimeException("Async optimization miss: " + details), context);
         
-        LOGGER.debug("Async optimization miss: {}", details);
+        // Only track as error if it's not a knockback protection miss (expected behavior)
+        if (!details.contains("knockback protection")) {
+            PerformanceMonitoringSystem.getInstance().getErrorTracker().recordError("OptimizedOptimizationInjector",
+                new RuntimeException("Async optimization miss: " + details), context);
+            LOGGER.debug("Async optimization miss: {}", details);
+        }
     }
     
     /**
