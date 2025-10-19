@@ -180,7 +180,7 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1add
 pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1damp<'a>(
     env: JNIEnv<'a>,
     _class: JClass,
-    _x: jdouble,
+    x: jdouble,
     y: jdouble,
     z: jdouble,
     damping: jdouble,
@@ -189,13 +189,13 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1dam
     let x_calc = omega * 1.0; // Fixed time step for damping calculation
     let _exp = (-x_calc).exp();
     let cutoff = 1.0 / (1.0 + x_calc + 0.48 * x_calc * x_calc + 0.235 * x_calc * x_calc * x_calc);
-    
+
     let result = [
-        x_calc * cutoff,
+        x * cutoff,
         y * cutoff,
         z * cutoff
     ];
-    
+
     let output = env.new_double_array(3).expect("Failed to create output array");
     env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
     output

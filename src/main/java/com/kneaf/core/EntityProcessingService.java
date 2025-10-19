@@ -36,7 +36,7 @@ public final class EntityProcessingService {
     
     // Configuration
     private static final int MAX_QUEUE_SIZE = 10000;
-    private static final int PROCESSING_TIMEOUT_MS = 50; // 50ms timeout for entity processing
+    private static final int PROCESSING_TIMEOUT_MS = 1000; // 50ms timeout for entity processing
 
     /**
      * Get dynamic thread pool size based on available processors
