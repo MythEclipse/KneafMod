@@ -282,12 +282,14 @@ public final class OptimizationInjector {
                     processedY = Math.min(entity.getDeltaMovement().y * 1.1, resultData[1]);
                 }
                 
-                // Reduced horizontal damping to allow better knockback
-                double horizontalDamping = 0.008; // Reduced from 0.015 for better knockback
+                // TRUE vanilla knockback - NO damping for horizontal movement
+                // Only apply damping to vertical (gravity) for stability
+                double verticalDamping = 0.015;   // Standard damping for vertical movement only
+                
                 entity.setDeltaMovement(
-                    resultData[0] * (1 - horizontalDamping), // Dampen horizontal X
-                    processedY,                           // Improved gravity handling
-                    resultData[2] * (1 - horizontalDamping)  // Dampen horizontal Z
+                    resultData[0], // NO damping for horizontal X - pure vanilla knockback
+                    processedY * (1 - verticalDamping), // Apply damping only to gravity (Y)
+                    resultData[2]  // NO damping for horizontal Z - pure vanilla knockback
                 );
                 recordOptimizationHit(String.format("Native vector calculation applied for entity %d", entity.getId()));
             } else {
@@ -333,7 +335,11 @@ public final class OptimizationInjector {
     
     static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
 
-    private static double[] java_vector_damp(double x, double y, double z, double horizontalDamping) {
+    private static double[] java_vector_damp(double x, double y, double z, double dampingFactor) {
+        // TRUE vanilla knockback - NO damping for horizontal movement
+        // Only apply damping to vertical (gravity) for stability
+        double verticalDamping = 0.015;   // Standard damping for vertical movement only
+        
         // Improved gravity handling - allow natural gravity while preserving external effects
         double processedY = y;
         
@@ -348,9 +354,9 @@ public final class OptimizationInjector {
         }
         
         return new double[] {
-            x * horizontalDamping,  // Dampen horizontal X
-            processedY,             // Improved gravity handling
-            z * horizontalDamping   // Dampen horizontal Z
+            x * dampingFactor,           // NO damping for horizontal X - pure vanilla knockback
+            processedY * (1 - verticalDamping), // Apply damping only to gravity (Y)
+            z * dampingFactor            // NO damping for horizontal Z - pure vanilla knockback
         };
     }
     
@@ -385,9 +391,9 @@ public final class OptimizationInjector {
         boolean zDirectionReversed = (originalZ > 0 && result[2] < 0) || (originalZ < 0 && result[2] > 0);
         
         // If direction is reversed, use more lenient thresholds
-        final double HORIZONTAL_THRESHOLD_NORMAL = 3.0;  // For normal movements
-        final double HORIZONTAL_THRESHOLD_REVERSED = 8.0; // For direction reversals (180° turns)
-        final double VERTICAL_THRESHOLD = 5.0;           // For falling and jumping
+        final double HORIZONTAL_THRESHOLD_NORMAL = 5.0;   // For normal movements (increased from 3.0)
+        final double HORIZONTAL_THRESHOLD_REVERSED = 12.0; // For direction reversals (180° turns) (increased from 8.0)
+        final double VERTICAL_THRESHOLD = 8.0;            // For falling and jumping (increased from 5.0)
         
         double horizontalThreshold = (xDirectionReversed || zDirectionReversed) ?
             HORIZONTAL_THRESHOLD_REVERSED : HORIZONTAL_THRESHOLD_NORMAL;

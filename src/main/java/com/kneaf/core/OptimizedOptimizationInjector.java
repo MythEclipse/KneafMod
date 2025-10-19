@@ -278,6 +278,10 @@ public final class OptimizedOptimizationInjector {
             EntityTypeEnum entityType = EntityTypeEnum.fromEntity(entity);
             double dampingFactor = entityType.getDampingFactor();
             
+            // TRUE vanilla knockback - NO damping for horizontal movement
+            // Only apply damping to vertical (gravity) for stability
+            double verticalDamping = 0.015;   // Standard damping for vertical movement only
+            
             // Improved gravity handling - allow natural gravity while preserving external effects
             double processedY = physicsData.motionY;
             
@@ -291,12 +295,10 @@ public final class OptimizedOptimizationInjector {
                 processedY = Math.min(physicsData.motionY * 1.1, physicsData.motionY);
             }
             
-            // Reduced horizontal damping to allow better knockback
-            double horizontalDamping = 0.008; // Reduced from 0.015 for better knockback
             entity.setDeltaMovement(
-                physicsData.motionX * (1 - horizontalDamping) * dampingFactor,
-                processedY, // Improved gravity handling
-                physicsData.motionZ * (1 - horizontalDamping) * dampingFactor
+                physicsData.motionX * dampingFactor,           // NO damping for horizontal X - pure vanilla knockback
+                processedY * (1 - verticalDamping),           // Apply damping only to gravity (Y)
+                physicsData.motionZ * dampingFactor            // NO damping for horizontal Z - pure vanilla knockback
             );
             
             recordAsyncOptimizationHit("Synchronous fallback for entity " + entity.getId());

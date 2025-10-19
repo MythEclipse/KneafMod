@@ -177,12 +177,14 @@ public final class EntityProcessingService {
                     processedY = Math.min(data.motionY * 1.1, result[1]);
                 }
                 
-                // Reduced horizontal damping to allow better knockback
-                double horizontalDamping = 0.008; // Reduced from 0.015 for better knockback
+                // TRUE vanilla knockback - NO damping for horizontal movement
+                // Only apply damping to vertical (gravity) for stability
+                double verticalDamping = 0.015;   // Standard damping for vertical movement only
+                
                 EntityPhysicsData processedData = new EntityPhysicsData(
-                    result[0] * (1 - horizontalDamping),
-                    processedY, // Improved gravity handling
-                    result[2] * (1 - horizontalDamping)
+                    result[0], // NO damping for horizontal X - pure vanilla knockback
+                    processedY * (1 - verticalDamping), // Apply damping only to gravity (Y)
+                    result[2]  // NO damping for horizontal Z - pure vanilla knockback
                 );
                 
                 return new EntityProcessingResult(true, "Physics calculation successful", processedData);
@@ -231,9 +233,9 @@ public final class EntityProcessingService {
                                      (original.motionZ < 0 && result[2] > 0);
         
         // Use different thresholds for direction reversals vs normal movement
-        final double HORIZONTAL_THRESHOLD_NORMAL = 3.0;   // For normal movements
-        final double HORIZONTAL_THRESHOLD_REVERSED = 8.0; // For direction reversals (180° turns)
-        final double VERTICAL_THRESHOLD = 5.0;            // For falling and jumping
+        final double HORIZONTAL_THRESHOLD_NORMAL = 5.0;   // For normal movements (increased from 3.0)
+        final double HORIZONTAL_THRESHOLD_REVERSED = 12.0; // For direction reversals (180° turns) (increased from 8.0)
+        final double VERTICAL_THRESHOLD = 8.0;            // For falling and jumping (increased from 5.0)
         
         double horizontalThreshold = (xDirectionReversed || zDirectionReversed) ?
             HORIZONTAL_THRESHOLD_REVERSED : HORIZONTAL_THRESHOLD_NORMAL;
