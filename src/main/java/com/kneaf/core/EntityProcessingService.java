@@ -35,14 +35,23 @@ public final class EntityProcessingService {
     private final AtomicBoolean isRunning = new AtomicBoolean(true);
     
     // Configuration
-    private static final int MAX_THREAD_POOL_SIZE = 4; // Fixed safe value to avoid IllegalArgumentException
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final int PROCESSING_TIMEOUT_MS = 50; // 50ms timeout for entity processing
+
+    /**
+     * Get dynamic thread pool size based on available processors
+     */
+    private static int getMaxThreadPoolSize() {
+        int availableProcessors = Runtime.getRuntime().availableProcessors();
+        // Use available processors but cap at reasonable maximum to avoid excessive resource usage
+        return Math.max(2, Math.min(availableProcessors, 8));
+    }
     
     private EntityProcessingService() {
+        int maxThreadPoolSize = getMaxThreadPoolSize();
         this.entityProcessor = new ThreadPoolExecutor(
-            MAX_THREAD_POOL_SIZE / 2,
-            MAX_THREAD_POOL_SIZE,
+            maxThreadPoolSize / 2,
+            maxThreadPoolSize,
             60L, TimeUnit.SECONDS,
             new LinkedBlockingQueue<>(MAX_QUEUE_SIZE),
             new ThreadFactory() {
@@ -57,7 +66,7 @@ public final class EntityProcessingService {
             new ThreadPoolExecutor.CallerRunsPolicy()
         );
         
-        this.forkJoinPool = new ForkJoinPool(MAX_THREAD_POOL_SIZE);
+        this.forkJoinPool = new ForkJoinPool(maxThreadPoolSize);
         this.maintenanceExecutor = Executors.newSingleThreadScheduledExecutor();
         this.processingQueue = new ConcurrentLinkedQueue<>();
         this.activeFutures = new ConcurrentHashMap<>();
@@ -65,7 +74,7 @@ public final class EntityProcessingService {
         // Start maintenance task
         startMaintenanceTask();
         
-        LOGGER.info("EntityProcessingService initialized with {} max threads", MAX_THREAD_POOL_SIZE);
+        LOGGER.info("EntityProcessingService initialized with {} max threads", maxThreadPoolSize);
     }
     
     public static EntityProcessingService getInstance() {

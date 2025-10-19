@@ -251,14 +251,9 @@ public final class OptimizedOptimizationInjector {
     public static void onServerTick(ServerTickEvent.Pre event) {
         if (performanceManager.isEntityThrottlingEnabled()) {
             try {
-                // Log async processing statistics periodically
-                if (totalEntitiesProcessedAsync.get() % 1000 == 0) {
-                    logAsyncPerformanceStats();
-                }
-                
                 int entityCount = 200; // Approximate entity count
                 recordAsyncOptimizationHit(String.format("Server tick processed with %d entities (async)", entityCount));
-                
+
             } catch (Exception e) {
                 recordAsyncOptimizationError("Server tick async processing failed: " + e.getMessage());
             }
@@ -290,17 +285,13 @@ public final class OptimizedOptimizationInjector {
      */
     private static void recordAsyncOptimizationHit(String details) {
         asyncOptimizationHits.incrementAndGet();
-        
+
         // Record performance metrics
         Map<String, Object> context = new HashMap<>();
         context.put("operation", "async_optimization");
         context.put("result", "hit");
         context.put("details", details);
         PerformanceMonitoringSystem.getInstance().getMetricAggregator().incrementCounter("optimization_injector.async_hits");
-        
-        if (asyncOptimizationHits.get() % 100 == 0) {
-            logAsyncPerformanceStats();
-        }
     }
     
     /**
