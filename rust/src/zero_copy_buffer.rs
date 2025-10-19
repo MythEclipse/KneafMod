@@ -2,13 +2,13 @@
 //! Provides DirectByteBuffer-based memory sharing, reference counting, lifecycle management,
 //! and integration with performance monitoring system
 
-use std::sync::{Arc, RwLock, Mutex, atomic::{AtomicU64, AtomicBool, AtomicUsize, Ordering}};
+use std::sync::{Arc, RwLock, atomic::{AtomicU64, AtomicBool, AtomicUsize, Ordering}};
 use std::collections::{HashMap, VecDeque};
 use std::time::{Instant, Duration};
 use std::ptr::NonNull;
 use std::slice;
 use std::mem;
-use jni::{JNIEnv, objects::{JObject, JByteBuffer, JClass}};
+use jni::{JNIEnv, objects::{JObject, JClass}};
 use jni::sys::{jlong, jint, jboolean};
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
@@ -16,6 +16,7 @@ use serde::{Serialize, Deserialize};
 use parking_lot::{RwLock as ParkingRwLock, Mutex as ParkingMutex};
 
 /// Buffer metadata for tracking buffer lifecycle
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferMetadata {
     pub buffer_id: u64,
@@ -28,6 +29,7 @@ pub struct BufferMetadata {
     pub is_valid: bool,
 }
 
+#[allow(dead_code)]
 impl BufferMetadata {
     pub fn new(buffer_id: u64, size: usize, creator_thread: String, creator_component: String) -> Self {
         let now = std::time::SystemTime::now()
@@ -74,6 +76,7 @@ impl BufferMetadata {
 }
 
 /// Managed direct buffer with reference counting
+#[allow(dead_code)]
 pub struct ManagedDirectBuffer {
     buffer_id: u64,
     address: jlong,
@@ -84,6 +87,7 @@ pub struct ManagedDirectBuffer {
     cleanup_callback: Option<Arc<dyn Fn(u64) + Send + Sync>>,
 }
 
+#[allow(dead_code)]
 impl ManagedDirectBuffer {
     pub fn new(buffer_id: u64, address: jlong, size: usize, creator_thread: String, creator_component: String) -> Self {
         Self {
@@ -143,9 +147,7 @@ impl ManagedDirectBuffer {
         }
         
         // Safety: We assume the address points to valid memory
-        unsafe {
-            Ok(NonNull::new(self.address as *mut f32).unwrap())
-        }
+        Ok(NonNull::new(self.address as *mut f32).unwrap())
     }
     
     pub fn get_data_slice(&self, offset: usize, length: usize) -> Result<&[f32], &'static str> {
@@ -244,6 +246,7 @@ impl ManagedDirectBuffer {
 }
 
 /// Zero-copy buffer pool for efficient buffer reuse
+#[allow(dead_code)]
 pub struct ZeroCopyBufferPool {
     buffers: Arc<ParkingMutex<VecDeque<ManagedDirectBuffer>>>,
     max_buffers: usize,
@@ -252,6 +255,7 @@ pub struct ZeroCopyBufferPool {
     reuse_count: Arc<AtomicUsize>,
 }
 
+#[allow(dead_code)]
 impl ZeroCopyBufferPool {
     pub fn new(buffer_size: usize, max_buffers: usize) -> Self {
         Self {
@@ -329,6 +333,7 @@ pub struct BufferPoolStats {
 }
 
 /// Zero-copy operation types
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ZeroCopyOperationType {
     MatrixMultiply,
@@ -355,6 +360,7 @@ impl std::fmt::Display for ZeroCopyOperationType {
 }
 
 /// Zero-copy operation result
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ZeroCopyOperationResult {
     pub success: bool,
@@ -365,6 +371,7 @@ pub struct ZeroCopyOperationResult {
 }
 
 /// Zero-copy operation for Java integration
+#[allow(dead_code)]
 pub struct ZeroCopyOperation {
     pub operation_type: ZeroCopyOperationType,
     pub source_buffer_id: u64,
@@ -373,6 +380,7 @@ pub struct ZeroCopyOperation {
     pub data_offset: usize,
 }
 
+#[allow(dead_code)]
 impl ZeroCopyOperation {
     pub fn new(operation_type: ZeroCopyOperationType, source_buffer_id: u64, 
                target_buffer_id: Option<u64>, data_length: usize, data_offset: usize) -> Self {
@@ -387,6 +395,7 @@ impl ZeroCopyOperation {
 }
 
 /// Main zero-copy buffer manager
+#[allow(dead_code)]
 pub struct ZeroCopyBufferManager {
     active_buffers: Arc<ParkingRwLock<HashMap<u64, Arc<ManagedDirectBuffer>>>>,
     buffer_pools: Arc<ParkingRwLock<HashMap<usize, ZeroCopyBufferPool>>>,
@@ -403,6 +412,7 @@ pub struct ZeroCopyBufferManager {
     operation_stats: Arc<ParkingRwLock<HashMap<String, OperationStats>>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OperationStats {
     pub operation_count: u64,
@@ -412,6 +422,7 @@ pub struct OperationStats {
     pub failure_count: u64,
 }
 
+#[allow(dead_code)]
 impl OperationStats {
     pub fn new() -> Self {
         Self {
@@ -463,6 +474,7 @@ lazy_static! {
     pub static ref ZERO_COPY_MANAGER: Arc<ZeroCopyBufferManager> = Arc::new(ZeroCopyBufferManager::new());
 }
 
+#[allow(dead_code)]
 impl ZeroCopyBufferManager {
     pub fn new() -> Self {
         Self {
@@ -778,7 +790,7 @@ impl ZeroCopyBufferManager {
     /// Cleanup unused buffers
     pub fn cleanup_unused_buffers(&self) -> usize {
         let mut cleaned_count = 0;
-        let now = Instant::now();
+        let _now = Instant::now();
         
         let buffers = self.active_buffers.read();
         let mut to_cleanup = Vec::new();
@@ -830,6 +842,7 @@ pub struct ZeroCopyStatistics {
     pub pool_stats: Vec<BufferPoolStats>,
 }
 
+#[allow(dead_code)]
 impl ZeroCopyStatistics {
     pub fn get_reuse_rate(&self) -> f64 {
         if self.total_allocations == 0 {
@@ -860,6 +873,7 @@ impl ZeroCopyStatistics {
 }
 
 /// Detailed buffer information
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferInfo {
     pub buffer_id: u64,
@@ -871,8 +885,8 @@ pub struct BufferInfo {
 
 /// JNI wrapper functions for Java integration
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeAllocateBuffer(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeAllocateBuffer(
     mut env: JNIEnv,
     _class: JClass,
     size: jint,
@@ -895,8 +909,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeAllocateBuffer
     }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeAcquireBuffer(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeAcquireBuffer(
     _env: JNIEnv,
     _class: JClass,
     buffer_id: jlong,
@@ -907,8 +921,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeAcquireBuffer(
     }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeReleaseBuffer(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeReleaseBuffer(
     _env: JNIEnv,
     _class: JClass,
     buffer_id: jlong,
@@ -919,8 +933,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeReleaseBuffer(
     }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferSize(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferSize(
     _env: JNIEnv,
     _class: JClass,
     buffer_id: jlong,
@@ -935,8 +949,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferSize(
     }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferAddress(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferAddress(
     _env: JNIEnv,
     _class: JClass,
     buffer_id: jlong,
@@ -951,8 +965,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferAddre
     }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferReferenceCount(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferReferenceCount(
     _env: JNIEnv,
     _class: JClass,
     buffer_id: jlong,
@@ -967,8 +981,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferRefer
     }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetStatistics<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetStatistics<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
@@ -977,8 +991,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetStatistics<
     env.new_string(&stats_json).unwrap_or_else(|_| env.new_string("{}").unwrap())
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferInfo<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferInfo<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
@@ -987,16 +1001,16 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetBufferInfo<
     env.new_string(&info_json).unwrap_or_else(|_| env.new_string("[]").unwrap())
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeCleanupUnusedBuffers(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeCleanupUnusedBuffers(
     _env: JNIEnv,
     _class: JClass,
 ) -> jint {
     ZERO_COPY_MANAGER.cleanup_unused_buffers() as jint
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeShutdown(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeShutdown(
     _env: JNIEnv,
     _class: JClass,
 ) {
@@ -1005,8 +1019,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeShutdown(
 
 /// Direct ByteBuffer access functions for zero-copy operations
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetDirectBufferAddress<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetDirectBufferAddress<'a>(
     mut env: jni::JNIEnv<'a>,
     _class: JClass,
     buffer: JObject,
@@ -1020,8 +1034,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetDirectBuffe
     }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetDirectBufferCapacity<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetDirectBufferCapacity<'a>(
     mut env: jni::JNIEnv<'a>,
     _class: JClass,
     buffer: JObject,
@@ -1037,8 +1051,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetDirectBuffe
 
 /// Zero-copy data transfer functions
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeCopyDataZeroCopy(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeCopyDataZeroCopy(
     _env: JNIEnv,
     _class: JClass,
     source_buffer_id: jlong,
@@ -1060,8 +1074,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeCopyDataZeroCo
     }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeMatrixMultiplyZeroCopy<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeMatrixMultiplyZeroCopy<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
     buffer_id: jlong,
@@ -1089,8 +1103,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeMatrixMultiply
     }
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeVectorAddZeroCopy<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeVectorAddZeroCopy<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
     buffer_id: jlong,
@@ -1120,8 +1134,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeVectorAddZeroC
 
 /// Performance monitoring integration
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeRecordZeroCopyOperation<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeRecordZeroCopyOperation<'a>(
     mut env: jni::JNIEnv<'a>,
     _class: JClass,
     operation_type: jni::objects::JString,
@@ -1144,8 +1158,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeRecordZeroCopy
 
 /// Thread-safe shared buffer management
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeCreateSharedBuffer<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeCreateSharedBuffer<'a>(
     mut env: jni::JNIEnv<'a>,
     _class: JClass,
     size: jint,
@@ -1171,8 +1185,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeCreateSharedBu
 
 /// Memory leak prevention and automatic cleanup
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeEnableAutoCleanup(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeEnableAutoCleanup(
     _env: JNIEnv,
     _class: JClass,
     _buffer_id: jlong,
@@ -1183,8 +1197,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeEnableAutoClea
     1
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetMemoryUsage(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetMemoryUsage(
     _env: JNIEnv,
     _class: JClass,
 ) -> jlong {
@@ -1192,8 +1206,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetMemoryUsage
     (stats.total_bytes_transferred + stats.total_reused_bytes) as jlong
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetLeakDetectionStatus<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetLeakDetectionStatus<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
@@ -1216,8 +1230,8 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetLeakDetecti
 
 /// Cross-component event bus integration
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativePublishBufferEvent<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ZeroCopyBufferManager_nativePublishBufferEvent<'a>(
     mut env: jni::JNIEnv<'a>,
     _class: JClass,
     event_type: jni::objects::JString,
@@ -1249,6 +1263,7 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativePublishBufferE
 /// Safe bounds checking for buffer access
 
 #[no_mangle]
+#[allow(non_snake_case)]
 pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeValidateBufferAccess(
     _env: JNIEnv,
     _class: JClass,
@@ -1274,6 +1289,7 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeValidateBuffer
 /// Performance metrics for zero-copy operations
 
 #[no_mangle]
+#[allow(non_snake_case)]
 pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetPerformanceMetrics<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
@@ -1291,6 +1307,7 @@ pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeGetPerformance
 }
 
 #[no_mangle]
+#[allow(non_snake_case)]
 pub extern "C" fn Java_com_kneaf_core_ZeroCopyBufferManager_nativeResetStatistics(
     _env: JNIEnv,
     _class: JClass,

@@ -7,7 +7,7 @@ use std::time::{Instant, Duration};
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
 
-/// Global performance metrics collector
+// Global performance metrics collector
 lazy_static! {
     pub static ref PERFORMANCE_MONITOR: Arc<Mutex<PerformanceMonitor>> = Arc::new(Mutex::new(PerformanceMonitor::new()));
 }
@@ -278,7 +278,7 @@ impl PerformanceMonitorUtils {
 }
 
 /// JNI wrapper functions for Java integration
-pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_getRustPerformanceStats<'a>(
+pub fn Java_com_kneaf_core_performance_DistributedTracer_getRustPerformanceStats<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
@@ -287,7 +287,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_getRustPerfo
 }
 
 
-pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_recordRustOperation(
+pub fn Java_com_kneaf_core_performance_DistributedTracer_recordRustOperation(
     mut env: jni::JNIEnv,
     _class: jni::objects::JClass,
     component: jni::objects::JString,
@@ -301,7 +301,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_recordRustOp
     PerformanceMonitorUtils::record_parallel_operation(&component_str, duration_ns as u64, success);
 }
 
-pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_getRustMetricsJson<'a>(
+pub fn Java_com_kneaf_core_performance_DistributedTracer_getRustMetricsJson<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
@@ -309,7 +309,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_getRustMetri
     env.new_string(json).unwrap_or_else(|_| env.new_string("{}").unwrap())
 }
 
-pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_recordRustError(
+pub fn Java_com_kneaf_core_performance_DistributedTracer_recordRustError(
     mut env: jni::JNIEnv,
     _class: jni::objects::JClass,
     component: jni::objects::JString,

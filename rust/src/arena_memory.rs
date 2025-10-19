@@ -1,20 +1,17 @@
 //! Arena-based memory management for hot loops with zero-copy operations
 //! Provides high-performance memory allocation with minimal overhead and cache-friendly access patterns
 
-use std::sync::{Arc, Mutex, RwLock};
-use std::cell::UnsafeCell;
+use std::sync::{Arc, Mutex};
 use std::ptr::NonNull;
-use std::alloc::{Layout, alloc, dealloc};
 use std::mem;
 use std::slice;
-use parking_lot::{Mutex as ParkingMutex, RwLock as ParkingRwLock};
-use crossbeam::epoch::{self, Atomic, Owned, Shared};
-use crossbeam::utils::CachePadded;
+use parking_lot::Mutex as ParkingMutex;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::collections::VecDeque;
 use std::arch::x86_64::*;
 
 /// Memory arena for fast allocation in hot loops
+#[allow(dead_code)]
 pub struct MemoryArena {
     chunks: Arc<Mutex<Vec<Vec<u8>>>>,
     current_chunk: AtomicUsize,
@@ -23,6 +20,7 @@ pub struct MemoryArena {
     alignment: usize,
 }
 
+#[allow(dead_code)]
 impl MemoryArena {
     pub fn new(chunk_size: usize, alignment: usize) -> Self {
         Self {
@@ -82,11 +80,13 @@ impl MemoryArena {
 }
 
 /// Thread-local arena for each worker thread
+#[allow(dead_code)]
 pub struct ThreadLocalArena {
     arenas: Vec<Arc<MemoryArena>>,
     thread_count: usize,
 }
 
+#[allow(dead_code)]
 impl ThreadLocalArena {
     pub fn new(thread_count: usize, chunk_size: usize, alignment: usize) -> Self {
         let arenas = (0..thread_count)
@@ -111,12 +111,14 @@ impl ThreadLocalArena {
 }
 
 /// Zero-copy buffer pool for JNI operations
+#[allow(dead_code)]
 pub struct ZeroCopyBufferPool {
     buffers: Arc<ParkingMutex<VecDeque<Vec<u8>>>>,
     buffer_size: usize,
     max_buffers: usize,
 }
 
+#[allow(dead_code)]
 impl ZeroCopyBufferPool {
     pub fn new(buffer_size: usize, max_buffers: usize) -> Self {
         let mut buffers = VecDeque::new();
@@ -156,12 +158,14 @@ impl ZeroCopyBufferPool {
 }
 
 /// Memory pool for frequently allocated objects
+#[allow(dead_code)]
 pub struct ObjectPool<T> {
     objects: Arc<ParkingMutex<VecDeque<T>>>,
     max_objects: usize,
     factory: Box<dyn Fn() -> T + Send + Sync>,
 }
 
+#[allow(dead_code)]
 impl<T> ObjectPool<T> {
     pub fn new(max_objects: usize, factory: Box<dyn Fn() -> T + Send + Sync>) -> Self {
         let mut objects = VecDeque::new();
@@ -192,6 +196,7 @@ impl<T> ObjectPool<T> {
 }
 
 /// Cache-friendly memory layout for matrix operations
+#[allow(dead_code)]
 pub struct CacheFriendlyMatrix {
     data: Vec<f32>,
     rows: usize,
@@ -199,6 +204,7 @@ pub struct CacheFriendlyMatrix {
     row_major: bool,
 }
 
+#[allow(dead_code)]
 impl CacheFriendlyMatrix {
     pub fn new(rows: usize, cols: usize, row_major: bool) -> Self {
         Self {
@@ -271,6 +277,7 @@ impl CacheFriendlyMatrix {
 }
 
 /// Memory-mapped matrix for large datasets
+#[allow(dead_code)]
 pub struct MemoryMappedMatrix {
     path: String,
     rows: usize,
@@ -278,6 +285,7 @@ pub struct MemoryMappedMatrix {
     mmap: Option<memmap2::Mmap>,
 }
 
+#[allow(dead_code)]
 impl MemoryMappedMatrix {
     pub fn new(path: String, rows: usize, cols: usize) -> Self {
         Self {
@@ -330,12 +338,14 @@ impl MemoryMappedMatrix {
 }
 
 /// Hot loop memory allocator with zero-copy semantics
+#[allow(dead_code)]
 pub struct HotLoopAllocator {
     arenas: Vec<Arc<Mutex<MemoryArena>>>,
     current_arena: AtomicUsize,
     thread_local_arenas: Arc<ThreadLocalArena>,
 }
 
+#[allow(dead_code)]
 impl HotLoopAllocator {
     pub fn new(num_threads: usize, chunk_size: usize) -> Self {
         let arenas = (0..num_threads)
@@ -385,6 +395,7 @@ impl HotLoopAllocator {
 }
 
 /// Memory statistics for hot loops
+#[allow(dead_code)]
 pub struct MemoryStats {
     pub total_allocations: AtomicU64,
     pub total_bytes_allocated: AtomicU64,
@@ -394,6 +405,7 @@ pub struct MemoryStats {
     pub cache_misses: AtomicU64,
 }
 
+#[allow(dead_code)]
 impl MemoryStats {
     pub fn new() -> Self {
         Self {
@@ -434,7 +446,7 @@ lazy_static::lazy_static! {
     pub static ref MEMORY_STATS: MemoryStats = MemoryStats::new();
 }
 
-/// Global hot loop allocator
+// Global hot loop allocator
 lazy_static::lazy_static! {
     pub static ref HOT_LOOP_ALLOCATOR: HotLoopAllocator = HotLoopAllocator::new(
         num_cpus::get(),
@@ -443,6 +455,7 @@ lazy_static::lazy_static! {
 }
 
 /// Zero-copy matrix multiplication using arena allocation
+#[allow(dead_code)]
 pub fn arena_matrix_multiply(
     a: &[f32],
     b: &[f32],
@@ -507,6 +520,7 @@ pub fn arena_matrix_multiply(
 }
 
 /// JNI interface for zero-copy operations
+#[allow(dead_code)]
 pub fn arena_matrix_multiply_jni<'a>(
     env: &mut jni::JNIEnv<'a>,
     a: &jni::objects::JFloatArray<'a>,
@@ -533,8 +547,8 @@ pub fn arena_matrix_multiply_jni<'a>(
     output
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getMemoryStats<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getMemoryStats<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
@@ -542,7 +556,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getMemoryStats
     env.new_string(&stats).unwrap()
 }
 
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_resetMemoryArena(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_resetMemoryArena(
     _env: jni::JNIEnv,
     _class: jni::objects::JClass,
 ) {

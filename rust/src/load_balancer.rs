@@ -8,6 +8,7 @@ use crossbeam::deque::Injector;
 use jni::objects::{JString, JFloatArray, JClass};
 
 /// Task priority levels
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TaskPriority {
     Critical = 0,
@@ -18,6 +19,7 @@ pub enum TaskPriority {
 }
 
 /// Task type for work-stealing scheduler
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Task {
     pub id: u64,
@@ -27,6 +29,7 @@ pub struct Task {
     pub estimated_duration: Duration,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub enum Workload {
     MatrixMultiply { a: Vec<f32>, b: Vec<f32>, rows: usize, cols: usize },
@@ -55,6 +58,7 @@ impl std::fmt::Debug for Workload {
 }
 
 /// Worker thread state
+#[allow(dead_code)]
 pub struct WorkerState {
     pub id: usize,
     pub queue: Arc<Injector<Task>>,
@@ -66,6 +70,7 @@ pub struct WorkerState {
     pub is_active: AtomicBool,
 }
 
+#[allow(dead_code)]
 impl WorkerState {
     pub fn new(id: usize) -> Self {
         let injector = Arc::new(Injector::new());
@@ -108,6 +113,7 @@ impl WorkerState {
 }
 
 /// Adaptive load balancer with work-stealing
+#[allow(dead_code)]
 pub struct AdaptiveLoadBalancer {
     workers: Vec<Arc<WorkerState>>,
     global_queue: Arc<Injector<Task>>,
@@ -118,6 +124,7 @@ pub struct AdaptiveLoadBalancer {
     shutdown: Arc<AtomicBool>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct LoadBalancerMetrics {
     pub total_tasks: AtomicUsize,
@@ -157,6 +164,7 @@ impl LoadBalancerMetrics {
     }
 }
 
+#[allow(dead_code)]
 impl AdaptiveLoadBalancer {
     pub fn new(num_threads: usize, max_queue_size: usize) -> Self {
         let mut workers = Vec::new();
@@ -409,6 +417,7 @@ impl AdaptiveLoadBalancer {
 }
 
 /// Work-stealing task scheduler with priority support
+#[allow(dead_code)]
 pub struct PriorityWorkStealingScheduler {
     priority_queues: Vec<Arc<Injector<Task>>>,
     workers: Vec<Arc<WorkerState>>,
@@ -416,6 +425,7 @@ pub struct PriorityWorkStealingScheduler {
     metrics: Arc<SchedulerMetrics>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct SchedulerMetrics {
     pub tasks_by_priority: Vec<AtomicUsize>,
@@ -425,6 +435,7 @@ pub struct SchedulerMetrics {
     pub priority_inversions: AtomicUsize,
 }
 
+#[allow(dead_code)]
 impl SchedulerMetrics {
     pub fn new(num_priorities: usize) -> Self {
         let tasks_by_priority = (0..num_priorities)
@@ -456,6 +467,7 @@ impl SchedulerMetrics {
     }
 }
 
+#[allow(dead_code)]
 impl PriorityWorkStealingScheduler {
     pub fn new(num_threads: usize) -> Self {
         let mut priority_queues = Vec::new();
@@ -539,6 +551,7 @@ impl PriorityWorkStealingScheduler {
 }
 
 /// A* pathfinding function (simplified for load balancer)
+#[allow(dead_code)]
 fn a_star_pathfind(_grid: &Vec<Vec<bool>>, start: (i32, i32), goal: (i32, i32)) -> Option<Vec<(i32, i32)>> {
     // Simplified implementation - return dummy result
     if start == goal {
@@ -548,6 +561,7 @@ fn a_star_pathfind(_grid: &Vec<Vec<bool>>, start: (i32, i32), goal: (i32, i32)) 
 }
 
 /// Parallel matrix multiplication (simplified for load balancer)
+#[allow(dead_code)]
 fn parallel_matrix_multiply(a: &[f32], b: &[f32], rows: usize, cols: usize, inner: usize) -> Vec<f32> {
     let mut result = vec![0.0; rows * cols];
     
@@ -565,8 +579,8 @@ fn parallel_matrix_multiply(a: &[f32], b: &[f32], rows: usize, cols: usize, inne
 }
 
 /// JNI interface for load balancer
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_createLoadBalancerEnhanced(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_createLoadBalancerEnhanced(
     _env: jni::JNIEnv,
     _class: JClass,
     num_threads: i32,
@@ -577,7 +591,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_createLoadBala
     ptr
 }
 
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_submitTask<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_submitTask<'a>(
     mut env: jni::JNIEnv<'a>,
     _class: JClass,
     balancer_ptr: jni::sys::jlong,
@@ -628,8 +643,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_submitTask<'a>
     balancer.submit_task(task).unwrap();
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getLoadBalancerMetrics<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getLoadBalancerMetrics<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
     balancer_ptr: jni::sys::jlong,
@@ -641,7 +656,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getLoadBalance
     env.new_string(&summary).unwrap()
 }
 
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_shutdownLoadBalancer(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_shutdownLoadBalancer(
     _env: jni::JNIEnv,
     _class: JClass,
     balancer_ptr: jni::sys::jlong,

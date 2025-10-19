@@ -2,16 +2,9 @@
 //! Tests all new components: parallel A*, matrix operations, arena memory, SIMD, load balancing
 
 use std::time::{Duration, Instant};
-use std::sync::Arc;
-use std::thread;
 // use criterion::{black_box, criterion_group, criterion_main, Criterion}; // Removed for now
 
 // Import all modules for testing
-use crate::parallel_astar::*;
-use crate::parallel_matrix::*;
-use crate::arena_memory::*;
-use crate::simd_runtime::*;
-use crate::load_balancer::*;
 
 /// Test utilities
 pub mod test_utils {

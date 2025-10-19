@@ -4,8 +4,6 @@
 use std::arch::x86_64::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Once;
-use std::mem;
-use std::slice;
 
 /// SIMD instruction set detection
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -769,7 +767,7 @@ lazy_static::lazy_static! {
 }
 
 /// JNI interface for runtime SIMD operations
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrixMultiply<'a>(
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrixMultiply<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
     a: jni::objects::JFloatArray<'a>,
@@ -795,7 +793,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrixM
     output
 }
 
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorDotProduct(
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorDotProduct(
     env: jni::JNIEnv,
     _class: jni::objects::JClass,
     a: jni::objects::JFloatArray,
@@ -812,7 +810,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorD
     runtime_vector_dot_product(&a_data, &b_data)
 }
 
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorAdd<'a>(
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorAdd<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
     a: jni::objects::JFloatArray<'a>,
@@ -834,7 +832,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorA
     output
 }
 
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrix4x4Multiply<'a>(
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrix4x4Multiply<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
     a: jni::objects::JFloatArray<'a>,
@@ -854,8 +852,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrix4
     output
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getSimdCapabilities<'a>(
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getSimdCapabilities<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
@@ -877,8 +874,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getSimdCapabil
     env.new_string(level_str).unwrap()
 }
 
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getSimdStats<'a>(
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getSimdStats<'a>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {

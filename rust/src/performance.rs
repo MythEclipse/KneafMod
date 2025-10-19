@@ -4,18 +4,20 @@ use lazy_static::lazy_static;
 use std::sync::Mutex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use nalgebra as na;
-use glam::{Vec3, Mat4};
+use glam::Mat4;
 use faer::Mat;
 use libc::c_double;
 
+#[allow(dead_code)]
 const GRAVITY: f64 = 0.01; // Matches vanilla Minecraft gravity strength
+#[allow(dead_code)]
 const AIR_DAMPING: f64 = 0.98;
 
 lazy_static! {
     pub static ref ENTITY_PROCESSING_STATS: Mutex<EntityProcessingStats> = Mutex::new(EntityProcessingStats::default());
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct EntityProcessingStats {
     pub total_entities_processed: u64,
@@ -24,6 +26,7 @@ pub struct EntityProcessingStats {
     pub dimension_stats: std::collections::HashMap<String, u64>,
 }
 
+#[allow(dead_code)]
 impl EntityProcessingStats {
     pub fn record_processing(&mut self, dimension: &str, entities_processed: u64, optimizations_applied: u64, calculation_time_ns: u64) {
         self.total_entities_processed += entities_processed;
@@ -56,6 +59,7 @@ impl EntityProcessingStats {
     }
 }
 
+#[allow(dead_code)]
 pub fn tick_entity_physics(data: &[f64; 6], on_ground: bool) -> [f64; 6] {
     let mut pos = [data[0], data[1], data[2]];
     let mut vel = [data[3], data[4], data[5]];
@@ -79,9 +83,11 @@ pub fn tick_entity_physics(data: &[f64; 6], on_ground: bool) -> [f64; 6] {
 }
 
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct Matrix4(pub [f32; 16]);
 
+#[allow(dead_code)]
 impl Matrix4 {
     pub fn mul(&self, other: &Matrix4) -> Matrix4 {
         let mut result = [0.0; 16];
@@ -126,9 +132,11 @@ pub extern "C" fn rustperf_vector_damp(x: f64, y: f64, z: f64, damping: f64) -> 
     ptr as *mut c_double
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct Vector3(pub [f32; 3]);
 
+#[allow(dead_code)]
 impl Vector3 {
     pub fn dot(&self, other: &Vector3) -> f32 {
         self.0[0] * other.0[0] + self.0[1] * other.0[1] + self.0[2] * other.0[2]
@@ -171,9 +179,11 @@ impl Vector3 {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct Quaternion(pub [f32; 4]);
 
+#[allow(dead_code)]
 impl Quaternion {
     pub fn rotate_vector(&self, v: &Vector3) -> Vector3 {
         let q = self.0;
@@ -185,6 +195,7 @@ impl Quaternion {
     }
 }
 
+#[allow(dead_code)]
 fn mul_quaternion(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     [
         a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
@@ -194,6 +205,7 @@ fn mul_quaternion(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     ]
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Eq, PartialEq)]
 struct Node {
     position: (i32, i32),
@@ -213,6 +225,7 @@ impl PartialOrd for Node {
     }
 }
 
+#[allow(dead_code)]
 pub fn a_star_pathfind(grid: &Vec<Vec<bool>>, start: (i32, i32), goal: (i32, i32)) -> Option<Vec<(i32, i32)>> {
     let rows = grid.len() as i32;
     let cols = grid[0].len() as i32;
@@ -250,10 +263,12 @@ pub fn a_star_pathfind(grid: &Vec<Vec<bool>>, start: (i32, i32), goal: (i32, i32
     None
 }
 
+#[allow(dead_code)]
 fn manhattan(a: (i32, i32), b: (i32, i32)) -> i32 {
     (a.0 - b.0).abs() + (a.1 - b.1).abs()
 }
 
+#[allow(dead_code)]
 fn get_neighbors(pos: (i32, i32), rows: i32, cols: i32) -> Vec<(i32, i32)> {
     let mut neighbors = Vec::new();
     let dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)];
@@ -267,6 +282,7 @@ fn get_neighbors(pos: (i32, i32), rows: i32, cols: i32) -> Vec<(i32, i32)> {
     neighbors
 }
 
+#[allow(dead_code)]
 fn reconstruct_path(came_from: &std::collections::HashMap<(i32, i32), (i32, i32)>, current: (i32, i32)) -> Vec<(i32, i32)> {
     let mut path = vec![current];
     let mut current = current;
@@ -278,12 +294,14 @@ fn reconstruct_path(came_from: &std::collections::HashMap<(i32, i32), (i32, i32)
     path
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone)]
 pub struct PathQuery {
     pub start: (i32, i32),
     pub goal: (i32, i32),
 }
 
+#[allow(dead_code)]
 pub fn batch_tick_entities(entities: &mut Vec<[f64;6]>, on_grounds: &[bool], dimension: &str) {
     let start_time = std::time::Instant::now();
     entities.par_iter_mut().zip(on_grounds.par_iter()).for_each(|(entity, &on_ground)| {
@@ -300,16 +318,15 @@ pub fn batch_tick_entities(entities: &mut Vec<[f64;6]>, on_grounds: &[bool], dim
 
 
 
-#[no_mangle]
-pub extern "C" fn glam_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
+// Internal helper - not an FFI entrypoint. Use Rust ABI for fixed-size arrays.
+pub fn glam_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
     let ma = Mat4::from_cols_array(&a);
     let mb = Mat4::from_cols_array(&b);
     let res = ma * mb;
     res.to_cols_array()
 }
 
-#[no_mangle]
-pub extern "C" fn faer_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
+pub fn faer_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
     let a_mat = Mat::<f32>::from_fn(4, 4, |i, j| a[i * 4 + j]);
     let b_mat = Mat::<f32>::from_fn(4, 4, |i, j| b[i * 4 + j]);
     let res = &a_mat * &b_mat;
@@ -323,6 +340,7 @@ pub extern "C" fn faer_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
 }
 
 
+#[allow(dead_code)]
 pub fn parallel_a_star(grid: &Vec<Vec<bool>>, queries: &[PathQuery]) -> Vec<Option<Vec<(i32,i32)>>> {
     queries.par_iter().map(|query| a_star_pathfind(grid, query.start, query.goal)).collect()
 }

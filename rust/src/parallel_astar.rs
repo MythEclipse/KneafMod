@@ -12,11 +12,13 @@ use parking_lot::RwLock as ParkingRwLock;
 use jni::objects::{JObjectArray, JByteArray, JIntArray, JClass, JObject, JString};
 
 /// Custom AtomicF64 implementation using AtomicU64 bit conversions
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AtomicF64 {
     inner: AtomicU64,
 }
 
+#[allow(dead_code)]
 impl AtomicF64 {
     pub const fn new(value: f64) -> Self {
         Self {
@@ -62,6 +64,7 @@ impl AtomicF64 {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Position {
     pub x: i32,
@@ -69,6 +72,7 @@ pub struct Position {
     pub z: i32,
 }
 
+#[allow(dead_code)]
 impl Position {
     pub fn new(x: i32, y: i32, z: i32) -> Self {
         Self { x, y, z }
@@ -86,6 +90,7 @@ impl Position {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct PathNode {
     pub position: Position,
@@ -96,6 +101,7 @@ pub struct PathNode {
     pub depth: u32,
 }
 
+#[allow(dead_code)]
 impl PathNode {
     pub fn new(position: Position, g_cost: f32, h_cost: f32, parent: Option<Position>) -> Self {
         Self {
@@ -133,6 +139,7 @@ impl PartialEq for PathNode {
 }
 
 /// Thread-safe grid representation for pathfinding
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct ThreadSafeGrid {
     data: Arc<ParkingRwLock<Vec<Vec<Vec<bool>>>>>,
@@ -141,6 +148,7 @@ pub struct ThreadSafeGrid {
     depth: usize,
 }
 
+#[allow(dead_code)]
 impl ThreadSafeGrid {
     pub fn new(width: usize, height: usize, depth: usize, default_walkable: bool) -> Self {
         let data = vec![vec![vec![default_walkable; depth]; height]; width];
@@ -174,6 +182,7 @@ impl ThreadSafeGrid {
 }
 
 /// Enhanced work-stealing task queue for parallel pathfinding with dynamic load balancing
+#[allow(dead_code)]
 pub struct EnhancedWorkStealingQueue {
     injector: Arc<Injector<PathNode>>,
     stealers: Vec<Arc<Stealer<PathNode>>>,
@@ -186,10 +195,11 @@ pub struct EnhancedWorkStealingQueue {
     successful_steals: AtomicUsize,
 }
 
+#[allow(dead_code)]
 impl EnhancedWorkStealingQueue {
     pub fn new(num_threads: usize) -> Self {
         let injector = Arc::new(Injector::new());
-        let mut stealers = Vec::new();
+        let stealers = Vec::new();
         let mut worker_queues = Vec::new();
         
         for _ in 0..num_threads {
@@ -311,6 +321,7 @@ impl EnhancedWorkStealingQueue {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct WorkStealingStats {
     pub active_workers: usize,
@@ -322,6 +333,7 @@ pub struct WorkStealingStats {
 }
 
 /// Enhanced parallel A* pathfinding engine with dynamic load balancing
+#[allow(dead_code)]
 pub struct EnhancedParallelAStar {
     grid: ThreadSafeGrid,
     queue: Arc<EnhancedWorkStealingQueue>,
@@ -335,6 +347,7 @@ pub struct EnhancedParallelAStar {
     hierarchical_levels: usize,
 }
 
+#[allow(dead_code)]
 impl EnhancedParallelAStar {
     pub fn new(grid: ThreadSafeGrid, num_threads: usize) -> Self {
         let queue = Arc::new(EnhancedWorkStealingQueue::new(num_threads));
@@ -726,6 +739,7 @@ impl EnhancedParallelAStar {
 }
 
 /// Batch pathfinding for multiple queries
+#[allow(dead_code)]
 pub fn batch_parallel_astar(
     grid: &ThreadSafeGrid,
     queries: Vec<(Position, Position)>,
@@ -744,6 +758,7 @@ pub fn batch_parallel_astar(
 pub mod simd_heuristics {
     use std::arch::x86_64::*;
     
+    #[allow(dead_code)]
     pub fn batch_manhattan_distance(positions: &[(i32, i32, i32)], goal: (i32, i32, i32)) -> Vec<f32> {
         if !is_x86_feature_detected!("avx") {
             // Fallback to scalar implementation if AVX is not available
@@ -806,6 +821,7 @@ pub mod simd_heuristics {
 }
 
 /// Enhanced performance metrics for pathfinding operations with detailed analytics
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct EnhancedPathfindingMetrics {
     pub total_nodes_explored: AtomicUsize,
@@ -822,6 +838,7 @@ pub struct EnhancedPathfindingMetrics {
     pub hierarchical_search_levels: AtomicUsize,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct WorkerEfficiency {
     pub worker_id: usize,
@@ -832,6 +849,7 @@ pub struct WorkerEfficiency {
     pub efficiency_score: f64,
 }
 
+#[allow(dead_code)]
 impl EnhancedPathfindingMetrics {
     pub fn new() -> Self {
         Self {
@@ -959,6 +977,7 @@ impl EnhancedPathfindingMetrics {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PerformanceReport {
     pub total_operations: usize,
@@ -974,7 +993,8 @@ lazy_static::lazy_static! {
 }
 
 /// Enhanced JNI interface for parallel A* pathfinding with comprehensive metrics
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>(
     mut env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
     grid_data: JByteArray<'a>,
@@ -1052,8 +1072,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarP
 }
 
 /// JNI interface for getting comprehensive pathfinding metrics
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getPathfindingMetrics<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getPathfindingMetrics<'a>(
     env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
 ) -> JString<'a> {
@@ -1062,8 +1082,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getPathfinding
 }
 
 /// JNI interface for getting pathfinding performance report
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getPathfindingPerformanceReport<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getPathfindingPerformanceReport<'a>(
     env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
 ) -> JString<'a> {
@@ -1081,8 +1101,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getPathfinding
 }
 
 /// JNI interface for batch pathfinding operations
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchParallelAStarPathfind<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchParallelAStarPathfind<'a>(
     mut env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
     grid_data: JByteArray<'a>,
@@ -1128,7 +1148,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchParallelA
     }
     
     // Perform batch parallel A* pathfinding
-    let engine = Arc::new(EnhancedParallelAStar::new(grid.clone(), num_threads as usize));
+    let _engine = Arc::new(EnhancedParallelAStar::new(grid.clone(), num_threads as usize));
     
     let results: Vec<Option<Vec<Position>>> = pathfinding_queries
     .into_par_iter()

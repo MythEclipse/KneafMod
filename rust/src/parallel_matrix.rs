@@ -11,16 +11,19 @@ use std::arch::x86_64::*;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::time::{Instant, Duration};
 use std::collections::HashMap;
-use jni::objects::{JFloatArray, JObjectArray, JClass, JObject, JString};
+use jni::objects::{JFloatArray, JObjectArray, JClass, JString};
 
 /// Enhanced block sizes for cache-friendly matrix decomposition with adaptive sizing
+#[allow(dead_code)]
 const BASE_BLOCK_SIZE: usize = 64;
 const SIMD_BLOCK_SIZE: usize = 8; // 256-bit SIMD can process 8 floats at once
 const AVX512_BLOCK_SIZE: usize = 16; // 512-bit SIMD can process 16 floats at once
 const L1_CACHE_SIZE: usize = 32768; // 32KB L1 cache
+#[allow(dead_code)]
 const L2_CACHE_SIZE: usize = 262144; // 256KB L2 cache
 
 /// Enhanced matrix block for parallel processing with performance tracking
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct EnhancedMatrixBlock {
     pub data: Vec<f32>,
@@ -34,6 +37,7 @@ pub struct EnhancedMatrixBlock {
     pub cache_misses: Arc<AtomicUsize>,
 }
 
+#[allow(dead_code)]
 impl EnhancedMatrixBlock {
     pub fn new(data: Vec<f32>, row_start: usize, col_start: usize, rows: usize, cols: usize, block_id: usize) -> Self {
         Self {
@@ -119,6 +123,7 @@ impl DynamicBlockSizer {
 }
 
 /// SIMD-accelerated matrix operations
+#[allow(dead_code)]
 pub trait SimdMatrixOps {
     fn simd_matrix_multiply(&self, other: &Self) -> Self;
     fn simd_matrix_add(&self, other: &Self) -> Self;
@@ -401,6 +406,7 @@ pub fn enhanced_simd_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 1
 }
 
 /// Parallel matrix operations using nalgebra
+#[allow(dead_code)]
 pub fn parallel_nalgebra_matrix_multiply(
     matrices_a: Vec<[f32; 16]>,
     matrices_b: Vec<[f32; 16]>,
@@ -418,6 +424,7 @@ pub fn parallel_nalgebra_matrix_multiply(
 }
 
 /// Parallel matrix operations using glam
+#[allow(dead_code)]
 pub fn parallel_glam_matrix_multiply(
     matrices_a: Vec<[f32; 16]>,
     matrices_b: Vec<[f32; 16]>,
@@ -435,6 +442,7 @@ pub fn parallel_glam_matrix_multiply(
 }
 
 /// Parallel matrix operations using faer
+#[allow(dead_code)]
 pub fn parallel_faer_matrix_multiply(
     matrices_a: Vec<[f32; 16]>,
     matrices_b: Vec<[f32; 16]>,
@@ -458,11 +466,13 @@ pub fn parallel_faer_matrix_multiply(
 }
 
 /// Block-based matrix multiplication with cache optimization
+#[allow(dead_code)]
 pub struct BlockMatrixMultiplier {
     block_size: usize,
     num_threads: usize,
 }
 
+#[allow(dead_code)]
 impl BlockMatrixMultiplier {
     pub fn new(block_size: usize, num_threads: usize) -> Self {
         Self {
@@ -544,6 +554,7 @@ impl BlockMatrixMultiplier {
 }
 
 /// SIMD-accelerated vector operations
+#[allow(dead_code)]
 pub mod simd_vector_ops {
     use super::*;
     
@@ -634,6 +645,7 @@ pub mod simd_vector_ops {
 }
 
 /// Parallel matrix factorization using LU decomposition
+#[allow(dead_code)]
 pub fn parallel_lu_decomposition(matrix: &[f32], n: usize) -> (Vec<f32>, Vec<f32>) {
     let mut l = vec![0.0; n * n];
     let mut u = vec![0.0; n * n];
@@ -770,6 +782,7 @@ fn combine_matrices(c11: &[f32], c12: &[f32], c21: &[f32], c22: &[f32], n: usize
 }
 
 /// Enhanced matrix cache with LRU eviction and performance tracking
+#[allow(dead_code)]
 pub struct EnhancedMatrixCache {
     cache: Arc<Mutex<HashMap<String, (Vec<f32>, Instant)>>>,
     max_size: usize,
@@ -778,6 +791,7 @@ pub struct EnhancedMatrixCache {
     evictions: AtomicUsize,
 }
 
+#[allow(dead_code)]
 impl EnhancedMatrixCache {
     pub fn new(max_size: usize) -> Self {
         Self {
@@ -862,6 +876,7 @@ pub struct MatrixCacheStats {
 }
 
 /// Comprehensive matrix performance metrics
+#[allow(dead_code)]
 pub struct MatrixPerformanceMetrics {
     pub multiplications: AtomicUsize,
     pub total_operations: AtomicU64,
@@ -873,6 +888,7 @@ pub struct MatrixPerformanceMetrics {
     pub block_processing_times: Arc<Mutex<Vec<Duration>>>,
 }
 
+#[allow(dead_code)]
 impl MatrixPerformanceMetrics {
     pub fn new() -> Self {
         Self {
@@ -942,6 +958,7 @@ impl MatrixPerformanceMetrics {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MatrixPerformanceReport {
     pub total_multiplications: usize,
@@ -959,7 +976,8 @@ lazy_static::lazy_static! {
 }
 
 /// Enhanced JNI interface for parallel matrix operations with performance metrics
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelMatrixMultiplyBlock<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelMatrixMultiplyBlock<'a>(
     env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
     a: JFloatArray<'a>,
@@ -992,7 +1010,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelMatrix
     output
 }
 
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelStrassenMultiply<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelStrassenMultiply<'a>(
     env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
     a: JFloatArray<'a>,
@@ -1022,8 +1041,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelStrass
 }
 
 /// JNI interface for enhanced SIMD 4x4 matrix multiplication
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_enhancedSimdMatrix4x4Multiply<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_enhancedSimdMatrix4x4Multiply<'a>(
     env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
     a: JFloatArray<'a>,
@@ -1044,8 +1063,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_enhancedSimdMa
 }
 
 /// JNI interface for getting matrix cache statistics
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getMatrixCacheStats<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getMatrixCacheStats<'a>(
     env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
 ) -> JString<'a> {
@@ -1055,8 +1074,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getMatrixCache
 }
 
 /// JNI interface for getting matrix performance metrics
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getMatrixPerformanceMetrics<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getMatrixPerformanceMetrics<'a>(
     env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
 ) -> JString<'a> {
@@ -1066,8 +1085,8 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_getMatrixPerfo
 }
 
 /// JNI interface for enhanced batch matrix operations with caching
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchMatrixMultiplyEnhanced<'a>(
+#[allow(non_snake_case)]
+pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchMatrixMultiplyEnhanced<'a>(
     mut env: jni::JNIEnv<'a>,
     _class: JClass<'a>,
     matrices_a: JObjectArray<'a>,

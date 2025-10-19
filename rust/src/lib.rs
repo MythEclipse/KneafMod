@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+#![allow(dead_code)]
 //! JNI implementation for KneafCore performance optimizations
 //! Provides real entity processing optimizations using SIMD and mathematical acceleration
 
@@ -22,14 +24,6 @@ mod zero_copy_buffer;
 mod tests;
 
 // Import functions from modules
-use parallel_processing::*;
-use parallel_astar::*;
-use parallel_matrix::*;
-use arena_memory::*;
-use simd_runtime::*;
-use load_balancer::*;
-use performance_monitoring::*;
-use zero_copy_buffer::*;
 
 /// JNI_OnLoad - return the JNI version.
 #[no_mangle]
@@ -522,31 +516,29 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_copyFromNative
 }
 
 /// Original performance functions (unchanged)
-#[no_mangle]
-pub extern "C" fn nalgebra_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
+// These are internal helpers and are not FFI entry points. Use Rust ABI to avoid
+// improper_ctypes warnings when passing fixed-size arrays.
+pub fn nalgebra_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
     let ma = nalgebra::Matrix4::<f32>::from_row_slice(&a);
     let mb = nalgebra::Matrix4::<f32>::from_row_slice(&b);
     let res = ma * mb;
     res.as_slice().try_into().unwrap()
 }
 
-#[no_mangle]
-pub extern "C" fn nalgebra_vector_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+pub fn nalgebra_vector_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     let va = nalgebra::Vector3::<f32>::from_row_slice(&a);
     let vb = nalgebra::Vector3::<f32>::from_row_slice(&b);
     let res = va + vb;
     res.as_slice().try_into().unwrap()
 }
 
-#[no_mangle]
-pub extern "C" fn glam_vector_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+pub fn glam_vector_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     let va = glam::Vec3::from(a);
     let vb = glam::Vec3::from(b);
     va.dot(vb)
 }
 
-#[no_mangle]
-pub extern "C" fn glam_vector_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+pub fn glam_vector_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     let va = glam::Vec3::from(a);
     let vb = glam::Vec3::from(b);
     let res = va.cross(vb);
