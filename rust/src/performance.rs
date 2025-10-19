@@ -10,8 +10,6 @@ use libc::c_double;
 
 #[allow(dead_code)]
 const GRAVITY: f64 = 0.01; // Matches vanilla Minecraft gravity strength
-#[allow(dead_code)]
-const AIR_DAMPING: f64 = 0.98;
 
 lazy_static! {
     pub static ref ENTITY_PROCESSING_STATS: Mutex<EntityProcessingStats> = Mutex::new(EntityProcessingStats::default());
@@ -69,11 +67,6 @@ pub fn tick_entity_physics(data: &[f64; 6], on_ground: bool) -> [f64; 6] {
         vel[1] -= GRAVITY;
     }
 
-    // Apply air damping
-    vel[0] *= AIR_DAMPING;
-    vel[1] *= AIR_DAMPING;
-    vel[2] *= AIR_DAMPING;
-
     // Update position
     pos[0] += vel[0];
     pos[1] += vel[1];
@@ -123,10 +116,10 @@ pub extern "C" fn rustperf_vector_add(x1: f64, y1: f64, z1: f64, x2: f64, y2: f6
 }
 
 #[no_mangle]
-pub extern "C" fn rustperf_vector_damp(x: f64, y: f64, z: f64, damping: f64) -> *mut c_double {
-    // General vector damping (x * damping, y * damping, z * damping)
+pub extern "C" fn rustperf_vector_damp(x: f64, y: f64, z: f64, _damping: f64) -> *mut c_double {
+    // Vanilla pass-through - return input values unchanged (no damping applied)
     // Pure mathematical operation - no game-specific logic
-    let vec_result = vec![x * damping, y * damping, z * damping];
+    let vec_result = vec![x, y, z];
     let ptr = vec_result.as_ptr();
     std::mem::forget(vec_result); // Prevent premature cleanup
     ptr as *mut c_double

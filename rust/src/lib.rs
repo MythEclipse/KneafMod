@@ -196,18 +196,10 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1dam
     x: jdouble,
     y: jdouble,
     z: jdouble,
-    damping: jdouble,
+    _damping: jdouble,
 ) -> JDoubleArray<'a> {
-    let omega = 2.0 / damping.max(0.001);
-    let x_calc = omega * 1.0; // Fixed time step for damping calculation
-    let _exp = (-x_calc).exp();
-    let cutoff = 1.0 / (1.0 + x_calc + 0.48 * x_calc * x_calc + 0.235 * x_calc * x_calc * x_calc);
-
-    let result = [
-        x * cutoff,
-        y * cutoff,
-        z * cutoff
-    ];
+    // Vanilla pass-through - return input values unchanged (no damping applied)
+    let result = [x, y, z];
 
     let output = env.new_double_array(3).expect("Failed to create output array");
     env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
