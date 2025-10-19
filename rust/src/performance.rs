@@ -296,36 +296,9 @@ pub fn batch_tick_entities(entities: &mut Vec<[f64;6]>, on_grounds: &[bool], dim
     }
 }
 
-#[no_mangle]
-pub extern "C" fn nalgebra_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
-    let ma = na::Matrix4::<f32>::from_row_slice(&a);
-    let mb = na::Matrix4::<f32>::from_row_slice(&b);
-    let res = ma * mb;
-    res.as_slice().try_into().unwrap()
-}
 
-#[no_mangle]
-pub extern "C" fn nalgebra_vector_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    let va = na::Vector3::<f32>::from_row_slice(&a);
-    let vb = na::Vector3::<f32>::from_row_slice(&b);
-    let res = va + vb;
-    res.as_slice().try_into().unwrap()
-}
 
-#[no_mangle]
-pub extern "C" fn glam_vector_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let va = Vec3::from(a);
-    let vb = Vec3::from(b);
-    va.dot(vb)
-}
 
-#[no_mangle]
-pub extern "C" fn glam_vector_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    let va = Vec3::from(a);
-    let vb = Vec3::from(b);
-    let res = va.cross(vb);
-    res.to_array()
-}
 
 #[no_mangle]
 pub extern "C" fn glam_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
@@ -348,6 +321,7 @@ pub extern "C" fn faer_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
     }
     result
 }
+
 
 pub fn parallel_a_star(grid: &Vec<Vec<bool>>, queries: &[PathQuery]) -> Vec<Option<Vec<(i32,i32)>>> {
     queries.par_iter().map(|query| a_star_pathfind(grid, query.start, query.goal)).collect()

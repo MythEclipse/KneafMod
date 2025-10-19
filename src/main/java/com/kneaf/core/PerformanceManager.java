@@ -14,6 +14,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.kneaf.core.performance.PerformanceMonitoringSystem;
+
 /**
  * Singleton class that manages performance optimizations for KneafMod.
  * Handles configuration loading, optimization state management, and provides
@@ -181,7 +183,22 @@ public final class PerformanceManager {
      * @param enabled true to enable entity throttling, false to disable
      */
     public void setEntityThrottlingEnabled(boolean enabled) {
+        boolean oldValue = isEntityThrottlingEnabled.get();
         isEntityThrottlingEnabled.set(enabled);
+        
+        // Record configuration change in monitoring system
+        PerformanceMonitoringSystem.getInstance().getMetricAggregator().recordMetric(
+            "performance_manager.entity_throttling_enabled", enabled ? 1.0 : 0.0);
+        
+        if (oldValue != enabled) {
+            PerformanceMonitoringSystem.getInstance().getEventBus().publishEvent(
+                new com.kneaf.core.performance.CrossComponentEvent(
+                    "PerformanceManager", "entity_throttling_config_changed",
+                    java.time.Instant.now(), 0,
+                    java.util.Map.of("old_value", oldValue, "new_value", enabled)
+                )
+            );
+        }
     }
     
     /**
@@ -189,7 +206,22 @@ public final class PerformanceManager {
      * @param optimized true to enable AI pathfinding optimization, false to disable
      */
     public void setAiPathfindingOptimized(boolean optimized) {
+        boolean oldValue = isAiPathfindingOptimized.get();
         isAiPathfindingOptimized.set(optimized);
+        
+        // Record configuration change in monitoring system
+        PerformanceMonitoringSystem.getInstance().getMetricAggregator().recordMetric(
+            "performance_manager.ai_pathfinding_optimized", optimized ? 1.0 : 0.0);
+        
+        if (oldValue != optimized) {
+            PerformanceMonitoringSystem.getInstance().getEventBus().publishEvent(
+                new com.kneaf.core.performance.CrossComponentEvent(
+                    "PerformanceManager", "ai_pathfinding_config_changed",
+                    java.time.Instant.now(), 0,
+                    java.util.Map.of("old_value", oldValue, "new_value", optimized)
+                )
+            );
+        }
     }
     
     /**

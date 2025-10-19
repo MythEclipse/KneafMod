@@ -2,12 +2,12 @@
 name = "rustperf"
 version = "0.1.0"
 edition = "2021"
-description = "High-performance Rust library for JNI integration with Minecraft mods"
+description = "High-performance Rust library for JNI integration with Minecraft mods - Multi-core optimized"
 homepage = "https://github.com/kneafmod/rustperf"
 repository = "https://github.com/kneafmod/rustperf"
 license = "MIT OR Apache-2.0"
-keywords = ["rust", "jni", "minecraft", "performance", "native"]
-categories = ["external-ffi-bindings", "game-development", "multimedia::graphics"]
+keywords = ["rust", "jni", "minecraft", "performance", "native", "parallel", "simd", "multicore"]
+categories = ["external-ffi-bindings", "game-development", "multimedia::graphics", "concurrency", "algorithms"]
 
 [lib]
 name = "rustperf"
@@ -18,6 +18,7 @@ crate-type = ["cdylib", "rlib"]
 # have been removed to keep the build clean.
 
 [dependencies]
+# Core dependencies
 j4rs = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 once_cell = "1.19"
@@ -35,6 +36,7 @@ ndarray = "0.15"
 memmap2 = "0.5"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
+crossbeam-epoch = "0.9"
 dashmap = "5.5"
 blake3 = "1.3"
 log = "0.4"
@@ -55,7 +57,6 @@ flate2 = "1.0"
 lz4_flex = "0.11"
 crc32fast = "1.3"
 parking_lot = "0.12"
-crossbeam-epoch = "0.9"
 crossbeam-queue = "0.3"
 jemalloc-sys = { version = "0.5", optional = true }
 jemallocator = { version = "0.5", optional = true }
@@ -65,6 +66,26 @@ async-trait = "0.1"
 schemars = "0.8"
 flume = "0.11"
 crossbeam-deque = "0.8.6"
+
+# Multi-core optimization dependencies
+threadpool = "1.8"
+cpu-monitor = "0.1"  # CPU usage monitoring
+affinity = "0.1"  # Thread affinity management
+
+# SIMD optimization dependencies
+wide = "0.7"  # SIMD wrapper library
+simdeez = "2.0"  # SIMD ease-of-use library
+
+# Memory management dependencies
+bumpalo = "3.15"  # Bump allocator
+
+# High-performance data structures
+im = "15.1"  # Immutable data structures
+rpds = "0.13"  # Persistent data structures
+sucds = "0.8"  # Succinct data structures
+
+# Cache optimization dependencies
+cache-size = "0.2"  # Cache size detection
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows-specific dependencies for JNI and native performance
@@ -80,6 +101,9 @@ jemallocator = { version = "0.5", optional = true }
 [dev-dependencies]
 criterion = "0.5"
 rand = "0.8"
+proptest = "1.4"  # Property-based testing
+quickcheck = "1.0"  # QuickCheck testing
+mockall = "0.12"  # Mocking framework
 
 [profile.release]
 lto = true

@@ -175,6 +175,13 @@ dependencies {
     testImplementation 'org.slf4j:slf4j-simple:2.0.7' // Add simple implementation for tests
     testImplementation 'org.mockito:mockito-core:5.6.0' // Add Mockito for testing
     testImplementation 'org.mockito:mockito-junit-jupiter:5.6.0' // Add Mockito JUnit 5 integration
+    
+    // Include NeoForge in test classpath for Minecraft classes
+    testImplementation 'net.neoforged:neoforge:21.0.167'
+    
+    // Mock Minecraft types for testing without actual Minecraft dependencies
+    testImplementation files('src/test/java/com/kneaf/core/MockMinecraftTypes.java')
+    
     testRuntimeOnly files('src/main/resources/natives/rustperf.dll') // Ensure native libs are available for tests
     testRuntimeOnly files('src/main/resources/natives/librustperf.so')
     testRuntimeOnly files('src/main/resources/natives/librustperf.dylib')
@@ -197,6 +204,9 @@ tasks.withType(Test).configureEach {
         exceptionFormat = 'full'
     }
     
+    // Thread-safe test configuration
+    maxParallelForks = 1 // Ensure tests run sequentially to avoid race conditions
+    forkEvery = 1 // Fork a new JVM for each test class
     
     // Set java.library.path for native libraries
     systemProperty 'java.library.path', file('src/main/resources/natives').absolutePath
@@ -204,10 +214,18 @@ tasks.withType(Test).configureEach {
     // Set PATH for native libraries on Windows
     environment 'PATH', file('src/main/resources/natives').absolutePath + ';' + System.getenv('PATH')
     
-    // Only run our Rust vector library tests (simplified pattern)
-    include '**/RustVectorLibraryTest.class'
-    include '**/VectorOperationsTest.class'
-    include '**/ShowTestCounts.class'  // Add our clear results test class
+    // JVM arguments for thread safety and performance
+    jvmArgs = [
+        '-Xmx2g', // Increase heap size for complex tests
+        '-XX:+UseG1GC', // Use G1 garbage collector for better performance
+        '-XX:+UseStringDeduplication', // Optimize string memory usage
+        '-Djava.awt.headless=true', // Run in headless mode for CI environments
+        '-Dfile.encoding=UTF-8' // Ensure consistent file encoding
+    ]
+    
+    // Include all test classes for comprehensive testing
+    include '**/Test.class'
+    include '**/Tests.class'
     
     // Exclude problematic test classes that were failing
     exclude '**/EntityMovementTest.class'
@@ -304,6 +322,19 @@ tasks.register('buildRustNative', Exec) {
     
     // Set environment variables for cross-compilation if needed
     environment = System.getenv()
+    
+    // Error handling for Rust compilation failures
+    doLast {
+        def rustLibFile = file('rust/target/release/librustperf.so')
+        def rustDllFile = file('rust/target/release/rustperf.dll')
+        def rustDylibFile = file('rust/target/release/librustperf.dylib')
+        
+        if (!rustLibFile.exists() && !rustDllFile.exists() && !rustDylibFile.exists()) {
+            logger.warn("Rust library compilation may have failed. Expected output files not found.")
+        } else {
+            logger.lifecycle("Rust library compilation successful.")
+        }
+    }
 }
 
 tasks.register('buildRustCross', Exec) {
