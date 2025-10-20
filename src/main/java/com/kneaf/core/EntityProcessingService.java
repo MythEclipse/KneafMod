@@ -10,6 +10,114 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+
+/**
+ * Entity priority levels for CPU resource allocation
+ */
+enum EntityPriority {
+    CRITICAL(0), HIGH(1), MEDIUM(2), LOW(3);
+    
+    private final int level;
+    
+    EntityPriority(int level) {
+        this.level = level;
+    }
+    
+    public int getLevel() {
+        return level;
+    }
+}
+
+/**
+ * Spatial grid for efficient collision detection and entity queries
+ */
+class SpatialGrid {
+    private final double cellSize;
+    final Map<String, Set<Long>> grid;
+    private final Map<Long, String> entityCells;
+    
+    public SpatialGrid(double cellSize) {
+        this.cellSize = cellSize;
+        this.grid = new ConcurrentHashMap<>();
+        this.entityCells = new ConcurrentHashMap<>();
+    }
+    
+    public void updateEntity(long entityId, double x, double y, double z) {
+        String newCell = getCellKey(x, y, z);
+        
+        // Remove from old cell if exists
+        String oldCell = entityCells.remove(entityId);
+        if (oldCell != null && !oldCell.equals(newCell)) {
+            Set<Long> entities = grid.get(oldCell);
+            if (entities != null) {
+                entities.remove(entityId);
+                if (entities.isEmpty()) {
+                    grid.remove(oldCell);
+                }
+            }
+        }
+        
+        // Add to new cell
+        if (!newCell.equals(oldCell)) {
+            entityCells.put(entityId, newCell);
+            grid.computeIfAbsent(newCell, k -> new HashSet<>()).add(entityId);
+        }
+    }
+    
+    public void removeEntity(long entityId) {
+        String cell = entityCells.remove(entityId);
+        if (cell != null) {
+            Set<Long> entities = grid.get(cell);
+            if (entities != null) {
+                entities.remove(entityId);
+                if (entities.isEmpty()) {
+                    grid.remove(cell);
+                }
+            }
+        }
+    }
+    
+    public Set<Long> getNearbyEntities(double x, double y, double z, double radius) {
+        String centerCell = getCellKey(x, y, z);
+        int radiusCells = (int) (radius / cellSize) + 1;
+        Set<Long> nearby = new HashSet<>();
+        
+        // Parse center cell coordinates
+        String[] parts = centerCell.split(",");
+        int cx = Integer.parseInt(parts[0]);
+        int cy = Integer.parseInt(parts[1]);
+        int cz = Integer.parseInt(parts[2]);
+        
+        // Check surrounding cells
+        for (int dx = -radiusCells; dx <= radiusCells; dx++) {
+            for (int dy = -radiusCells; dy <= radiusCells; dy++) {
+                for (int dz = -radiusCells; dz <= radiusCells; dz++) {
+                    String cell = (cx + dx) + "," + (cy + dy) + "," + (cz + dz);
+                    Set<Long> entities = grid.get(cell);
+                    if (entities != null) {
+                        nearby.addAll(entities);
+                    }
+                }
+            }
+        }
+        
+        return nearby;
+    }
+    
+    private String getCellKey(double x, double y, double z) {
+        int cellX = (int) (x / cellSize);
+        int cellY = (int) (y / cellSize);
+        int cellZ = (int) (z / cellSize);
+        return cellX + "," + cellY + "," + cellZ;
+    }
+    
+    public void clear() {
+        grid.clear();
+        entityCells.clear();
+    }
+}
+
 
 /**
  * Async entity processing service with thread-safe queue and parallel processing capabilities.
@@ -28,6 +136,15 @@ public final class EntityProcessingService {
     private final ConcurrentLinkedQueue<EntityProcessingTask> processingQueue;
     private final ConcurrentHashMap<Long, CompletableFuture<EntityProcessingResult>> activeFutures;
     
+    // Spatial grid for efficient collision detection
+    private final SpatialGrid spatialGrid;
+    
+    // Entity priority tracking
+    private final ConcurrentHashMap<Long, EntityPriority> entityPriorities;
+    
+    // Object pool for entity physics data
+    private final Queue<EntityPhysicsData> physicsDataPool;
+    
     // Performance metrics
     private final AtomicLong processedEntities = new AtomicLong(0);
     private final AtomicLong queuedEntities = new AtomicLong(0);
@@ -37,6 +154,8 @@ public final class EntityProcessingService {
     // Configuration
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final int PROCESSING_TIMEOUT_MS = 1000; // 50ms timeout for entity processing
+    private static final int MAX_PHYSICS_DATA_POOL_SIZE = 1000;
+    private static final double SPATIAL_GRID_CELL_SIZE = 16.0;
 
     /**
      * Get dynamic thread pool size based on available processors
@@ -70,6 +189,14 @@ public final class EntityProcessingService {
         this.maintenanceExecutor = Executors.newSingleThreadScheduledExecutor();
         this.processingQueue = new ConcurrentLinkedQueue<>();
         this.activeFutures = new ConcurrentHashMap<>();
+        this.spatialGrid = new SpatialGrid(SPATIAL_GRID_CELL_SIZE);
+        this.entityPriorities = new ConcurrentHashMap<>();
+        this.physicsDataPool = new ConcurrentLinkedQueue<>();
+        
+        // Pre-populate physics data pool
+        for (int i = 0; i < MAX_PHYSICS_DATA_POOL_SIZE / 2; i++) {
+            physicsDataPool.offer(new EntityPhysicsData(0.0, 0.0, 0.0));
+        }
         
         // Start maintenance task
         startMaintenanceTask();
@@ -82,9 +209,16 @@ public final class EntityProcessingService {
     }
     
     /**
-     * Submit entity for async processing
+     * Submit entity for async processing with priority
      */
     public CompletableFuture<EntityProcessingResult> processEntityAsync(Entity entity, EntityPhysicsData physicsData) {
+        return processEntityAsync(entity, physicsData, EntityPriority.MEDIUM);
+    }
+    
+    /**
+     * Submit entity for async processing with custom priority
+     */
+    public CompletableFuture<EntityProcessingResult> processEntityAsync(Entity entity, EntityPhysicsData physicsData, EntityPriority priority) {
         if (!isRunning.get()) {
             return CompletableFuture.completedFuture(
                 new EntityProcessingResult(false, "Service is shutdown", physicsData)
@@ -97,7 +231,19 @@ public final class EntityProcessingService {
             );
         }
         
-        EntityProcessingTask task = new EntityProcessingTask(entity, physicsData);
+        // Update spatial grid
+        spatialGrid.updateEntity(entity.getId(), entity.getX(), entity.getY(), entity.getZ());
+        
+        // Store entity priority
+        entityPriorities.put((long) entity.getId(), priority);
+        
+        // Try to get physics data from pool
+        EntityPhysicsData pooledData = physicsDataPool.poll();
+        EntityPhysicsData finalData = pooledData != null ?
+            new EntityPhysicsData(physicsData.motionX, physicsData.motionY, physicsData.motionZ) :
+            physicsData;
+        
+        EntityProcessingTask task = new EntityProcessingTask(entity, finalData, priority);
         queuedEntities.incrementAndGet();
         
         CompletableFuture<EntityProcessingResult> future = new CompletableFuture<>();
@@ -107,6 +253,84 @@ public final class EntityProcessingService {
         entityProcessor.submit(() -> processEntityTask(task, future));
         
         return future;
+    }
+    
+    /**
+     * Process entities in batches by priority for better performance
+     */
+    public List<CompletableFuture<EntityProcessingResult>> processEntityBatch(List<Entity> entities, List<EntityPhysicsData> physicsDataList) {
+        if (!isRunning.get() || entities.size() != physicsDataList.size()) {
+            return Collections.emptyList();
+        }
+        
+        // Group entities by priority
+        Map<EntityPriority, List<EntityProcessingTask>> priorityGroups = new HashMap<>();
+        
+        for (int i = 0; i < entities.size(); i++) {
+            Entity entity = entities.get(i);
+            EntityPhysicsData data = physicsDataList.get(i);
+            
+            if (entity == null || entity.level().isClientSide() || entity instanceof Player) {
+                continue;
+            }
+            
+            // Update spatial grid
+            spatialGrid.updateEntity(entity.getId(), entity.getX(), entity.getY(), entity.getZ());
+            
+            // Default to medium priority
+            EntityPriority priority = entityPriorities.getOrDefault((long) entity.getId(), EntityPriority.MEDIUM);
+            
+            // Try to get physics data from pool
+            EntityPhysicsData pooledData = physicsDataPool.poll();
+            EntityPhysicsData finalData = pooledData != null ?
+                new EntityPhysicsData(data.motionX, data.motionY, data.motionZ) :
+                data;
+            
+            EntityProcessingTask task = new EntityProcessingTask(entity, finalData, priority);
+            priorityGroups.computeIfAbsent(priority, k -> new ArrayList<>()).add(task);
+        }
+        
+        // Process batches in priority order
+        List<CompletableFuture<EntityProcessingResult>> futures = new ArrayList<>();
+        
+        // Process CRITICAL priority first
+        processPriorityBatch(priorityGroups.get(EntityPriority.CRITICAL), futures);
+        
+        // Process HIGH priority
+        processPriorityBatch(priorityGroups.get(EntityPriority.HIGH), futures);
+        
+        // Process MEDIUM priority
+        processPriorityBatch(priorityGroups.get(EntityPriority.MEDIUM), futures);
+        
+        // Process LOW priority last
+        processPriorityBatch(priorityGroups.get(EntityPriority.LOW), futures);
+        
+        return futures;
+    }
+    
+    /**
+     * Process a batch of entities with the same priority
+     */
+    private void processPriorityBatch(List<EntityProcessingTask> tasks, List<CompletableFuture<EntityProcessingResult>> futures) {
+        if (tasks == null || tasks.isEmpty()) {
+            return;
+        }
+        
+        // Create batches of 32 entities for efficient processing
+        for (int i = 0; i < tasks.size(); i += 32) {
+            List<EntityProcessingTask> batch = tasks.subList(i, Math.min(i + 32, tasks.size()));
+            
+            for (EntityProcessingTask task : batch) {
+                queuedEntities.incrementAndGet();
+                
+                CompletableFuture<EntityProcessingResult> future = new CompletableFuture<>();
+                activeFutures.put((long) task.entity.getId(), future);
+                futures.add(future);
+                
+                // Submit batch processing
+                entityProcessor.submit(() -> processEntityTask(task, future));
+            }
+        }
     }
     
     /**
@@ -122,7 +346,7 @@ public final class EntityProcessingService {
             
             long processingTime = System.nanoTime() - startTime;
             if (processingTime > PROCESSING_TIMEOUT_MS * 1_000_000L) {
-                LOGGER.warn("Entity processing took {}ms for entity {}", 
+                LOGGER.warn("Entity processing took {}ms for entity {}",
                     processingTime / 1_000_000L, task.entity.getId());
             }
             
@@ -136,6 +360,13 @@ public final class EntityProcessingService {
             activeProcessors.decrementAndGet();
             queuedEntities.decrementAndGet();
             activeFutures.remove((long) task.entity.getId());
+            
+            // Return physics data to pool if it's not the original data
+            if (task.physicsData != null) {
+                // Reset data before returning to pool
+                task.physicsData.reset();
+                physicsDataPool.offer(task.physicsData);
+            }
         }
     }
     
@@ -271,12 +502,36 @@ public final class EntityProcessingService {
      * Log performance metrics
      */
     private void logPerformanceMetrics() {
-        LOGGER.info("EntityProcessingService Metrics - Processed: {}, Queued: {}, Active: {}, QueueSize: {}", 
-            processedEntities.get(), 
-            queuedEntities.get(), 
-            activeProcessors.get(),
-            processingQueue.size()
+        EntityProcessingStatistics stats = getStatistics();
+        LOGGER.info("EntityProcessingService Metrics - Processed: {}, Queued: {}, Active: {}, QueueSize: {}, GridCells: {}, PoolSize: {}",
+            stats.processedEntities,
+            stats.queuedEntities,
+            stats.activeProcessors,
+            stats.queueSize,
+            stats.spatialGridCells,
+            stats.physicsDataPoolSize
         );
+    }
+    
+    /**
+     * Set entity priority for CPU resource allocation
+     */
+    public void setEntityPriority(long entityId, EntityPriority priority) {
+        entityPriorities.put(entityId, priority);
+    }
+    
+    /**
+     * Get entity priority
+     */
+    public EntityPriority getEntityPriority(long entityId) {
+        return entityPriorities.getOrDefault(entityId, EntityPriority.MEDIUM);
+    }
+    
+    /**
+     * Get nearby entities using spatial grid
+     */
+    public Set<Long> getNearbyEntities(double x, double y, double z, double radius) {
+        return spatialGrid.getNearbyEntities(x, y, z, radius);
     }
     
     /**
@@ -289,7 +544,9 @@ public final class EntityProcessingService {
             activeProcessors.get(),
             processingQueue.size(),
             activeFutures.size(),
-            isRunning.get()
+            isRunning.get(),
+            spatialGrid.grid.size(),
+            physicsDataPool.size()
         );
     }
     
@@ -300,9 +557,18 @@ public final class EntityProcessingService {
         isRunning.set(false);
         
         // Cancel all pending operations
-        activeFutures.values().forEach(future -> 
+        activeFutures.values().forEach(future ->
             future.complete(new EntityProcessingResult(false, "Service shutdown", null))
         );
+        
+        // Clear spatial grid
+        spatialGrid.clear();
+        
+        // Clear entity priorities
+        entityPriorities.clear();
+        
+        // Clear physics data pool
+        physicsDataPool.clear();
         
         // Shutdown executors
         entityProcessor.shutdown();
@@ -335,10 +601,39 @@ public final class EntityProcessingService {
     public static class EntityProcessingTask {
         public final Entity entity;
         public final EntityPhysicsData physicsData;
+        public final EntityPriority priority;
         
         public EntityProcessingTask(Entity entity, EntityPhysicsData physicsData) {
             this.entity = entity;
             this.physicsData = physicsData;
+            this.priority = EntityPriority.MEDIUM; // Default priority
+        }
+        
+        public EntityProcessingTask(Entity entity, EntityPhysicsData physicsData, EntityPriority priority) {
+            this.entity = entity;
+            this.physicsData = physicsData;
+            this.priority = priority;
+        }
+    }
+
+    /**
+     * Entity batch for efficient bulk processing
+     */
+    class EntityBatch {
+        private final List<EntityProcessingTask> tasks;
+        private final EntityPriority priority;
+        
+        public EntityBatch(List<EntityProcessingTask> tasks, EntityPriority priority) {
+            this.tasks = tasks;
+            this.priority = priority;
+        }
+        
+        public List<EntityProcessingTask> getTasks() {
+            return tasks;
+        }
+        
+        public EntityPriority getPriority() {
+            return priority;
         }
     }
     
@@ -346,14 +641,20 @@ public final class EntityProcessingService {
      * Entity physics data
      */
     public static class EntityPhysicsData {
-        public final double motionX;
-        public final double motionY;
-        public final double motionZ;
+        public double motionX;
+        public double motionY;
+        public double motionZ;
         
         public EntityPhysicsData(double motionX, double motionY, double motionZ) {
             this.motionX = motionX;
             this.motionY = motionY;
             this.motionZ = motionZ;
+        }
+        
+        public void reset() {
+            this.motionX = 0.0;
+            this.motionY = 0.0;
+            this.motionZ = 0.0;
         }
     }
     
@@ -382,15 +683,19 @@ public final class EntityProcessingService {
         public final int queueSize;
         public final int activeFutures;
         public final boolean isRunning;
+        public final int spatialGridCells;
+        public final int physicsDataPoolSize;
         
         public EntityProcessingStatistics(long processedEntities, long queuedEntities, int activeProcessors,
-                                        int queueSize, int activeFutures, boolean isRunning) {
+                                        int queueSize, int activeFutures, boolean isRunning, int spatialGridCells, int physicsDataPoolSize) {
             this.processedEntities = processedEntities;
             this.queuedEntities = queuedEntities;
             this.activeProcessors = activeProcessors;
             this.queueSize = queueSize;
             this.activeFutures = activeFutures;
             this.isRunning = isRunning;
+            this.spatialGridCells = spatialGridCells;
+            this.physicsDataPoolSize = physicsDataPoolSize;
         }
     }
 }

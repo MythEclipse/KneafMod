@@ -18,21 +18,110 @@ pub struct MemoryArena {
     current_offset: AtomicUsize,
     chunk_size: usize,
     alignment: usize,
+    /// Memory pool for pre-allocated chunks
+    chunk_pool: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    /// Memory compaction threshold
+    compaction_threshold: usize,
+    /// Memory-mapped file support
+    mmap_file: Option<memmap2::Mmap>,
+    mmap_path: Option<String>,
 }
 
 #[allow(dead_code)]
 impl MemoryArena {
     pub fn new(chunk_size: usize, alignment: usize) -> Self {
-        Self {
+        let mut arena = Self {
             chunks: Arc::new(Mutex::new(Vec::new())),
             current_chunk: AtomicUsize::new(0),
             current_offset: AtomicUsize::new(0),
             chunk_size,
             alignment,
+            chunk_pool: Arc::new(Mutex::new(VecDeque::new())),
+            compaction_threshold: chunk_size / 4, // 25% fragmentation threshold
+            mmap_file: None,
+            mmap_path: None,
+        };
+        
+        // Pre-allocate chunks for better performance
+        arena.preallocate_chunks(4);
+        arena
+    }
+    
+    /// Pre-allocate memory chunks to reduce allocation overhead
+    fn preallocate_chunks(&mut self, count: usize) {
+        let mut pool = self.chunk_pool.lock().unwrap();
+        for _ in 0..count {
+            pool.push_back(vec![0u8; self.chunk_size]);
         }
     }
     
-    /// Allocate memory from the arena
+    /// Get a chunk from the pool or allocate new one
+    fn get_chunk_from_pool(&self) -> Vec<u8> {
+        let mut pool = self.chunk_pool.lock().unwrap();
+        if let Some(chunk) = pool.pop_front() {
+            chunk
+        } else {
+            vec![0u8; self.chunk_size]
+        }
+    }
+    
+    /// Return chunk to pool for reuse
+    fn return_chunk_to_pool(&self, chunk: Vec<u8>) {
+        let mut pool = self.chunk_pool.lock().unwrap();
+        if pool.len() < 10 { // Limit pool size
+            pool.push_back(chunk);
+        }
+    }
+    
+    /// Perform memory compaction to reduce fragmentation
+    pub fn compact_memory(&mut self) -> usize {
+        let mut chunks = self.chunks.lock().unwrap();
+        let mut freed_chunks = 0;
+        
+        // Find fragmented chunks (less than 25% used)
+        let mut fragmented_indices: Vec<usize> = Vec::new();
+        for (i, chunk) in chunks.iter().enumerate() {
+            if chunk.len() < self.compaction_threshold {
+                fragmented_indices.push(i);
+            }
+        }
+        
+        // Compact fragmented chunks
+        if fragmented_indices.len() > 1 {
+            // Create new consolidated chunk
+            let mut consolidated = Vec::with_capacity(self.chunk_size);
+            
+            for &index in fragmented_indices.iter().rev() {
+                let chunk = chunks.remove(index);
+                consolidated.extend_from_slice(&chunk);
+                freed_chunks += 1;
+            }
+            
+            // Add consolidated chunk back
+            chunks.push(consolidated);
+        }
+        
+        freed_chunks
+    }
+    
+    /// Enable memory-mapped file support
+    pub fn enable_memory_mapped_file(&mut self, path: String, size: usize) -> std::io::Result<()> {
+        use std::fs::File;
+        use std::io::Write;
+        
+        // Create file if it doesn't exist
+        let mut file = File::create(&path)?;
+        file.write_all(&vec![0u8; size])?;
+        
+        // Memory map the file
+        let mmap = unsafe { memmap2::Mmap::map(&file)? };
+        self.mmap_file = Some(mmap);
+        self.mmap_path = Some(path);
+        
+        Ok(())
+    }
+    
+    /// Allocate memory from the arena with memory pooling
     pub fn allocate<T>(&mut self, count: usize) -> NonNull<T> {
         let size = count * mem::size_of::<T>();
         let aligned_size = (size + self.alignment - 1) & !(self.alignment - 1);
@@ -42,8 +131,9 @@ impl MemoryArena {
         let mut offset = self.current_offset.fetch_add(aligned_size, Ordering::Relaxed);
         
         if offset + aligned_size > self.chunk_size {
-            // Need new chunk
-            chunks.push(vec![0u8; self.chunk_size]);
+            // Need new chunk - use pooled allocation
+            let new_chunk = self.get_chunk_from_pool();
+            chunks.push(new_chunk);
             let new_chunk_idx = chunks.len() - 1;
             self.current_chunk.store(new_chunk_idx, Ordering::Release);
             self.current_offset.store(aligned_size, Ordering::Release);
@@ -54,6 +144,10 @@ impl MemoryArena {
         
         let chunk = &chunks[chunk_idx];
         let ptr = unsafe { NonNull::new(chunk.as_ptr().add(offset) as *mut T).unwrap() };
+        
+        // Record allocation statistics
+        MEMORY_STATS.record_allocation(aligned_size, true);
+        
         ptr
     }
     
@@ -64,50 +158,111 @@ impl MemoryArena {
         NonNull::slice_from_raw_parts(slice_ptr.cast::<T>(), count)
     }
     
-    /// Reset the arena (frees all allocations but keeps chunks)
+    /// Reset the arena with memory pooling support
     pub fn reset(&mut self) {
+        let mut chunks = self.chunks.lock().unwrap();
+        
+        // Return chunks to pool instead of dropping them
+        for chunk in chunks.iter_mut() {
+            if chunk.len() == self.chunk_size {
+                self.return_chunk_to_pool(chunk.clone());
+            }
+        }
+        
         self.current_chunk.store(0, Ordering::Release);
         self.current_offset.store(0, Ordering::Release);
     }
     
-    /// Clear the arena (removes all chunks)
+    /// Clear the arena with memory pooling
     pub fn clear(&mut self) {
         let mut chunks = self.chunks.lock().unwrap();
+        
+        // Return all full-sized chunks to pool
+        for chunk in chunks.iter() {
+            if chunk.len() == self.chunk_size {
+                self.return_chunk_to_pool(chunk.clone());
+            }
+        }
+        
         chunks.clear();
         self.current_chunk.store(0, Ordering::Release);
         self.current_offset.store(0, Ordering::Release);
     }
 }
 
-/// Thread-local arena for each worker thread
+/// Thread-local arena for each worker thread with memory pooling
 #[allow(dead_code)]
 pub struct ThreadLocalArena {
-    arenas: Vec<Arc<MemoryArena>>,
+    arenas: Vec<Arc<Mutex<MemoryArena>>>,
     thread_count: usize,
+    /// Memory compaction threshold
+    compaction_threshold: usize,
 }
 
 #[allow(dead_code)]
 impl ThreadLocalArena {
     pub fn new(thread_count: usize, chunk_size: usize, alignment: usize) -> Self {
         let arenas = (0..thread_count)
-            .map(|_| Arc::new(MemoryArena::new(chunk_size, alignment)))
+            .map(|_| Arc::new(Mutex::new(MemoryArena::new(chunk_size, alignment))))
             .collect();
         
         Self {
             arenas,
             thread_count,
+            compaction_threshold: 10, // Compact after 10 allocations
         }
     }
     
-    pub fn get_arena(&self, thread_id: usize) -> Arc<MemoryArena> {
+    pub fn get_arena(&self, thread_id: usize) -> Arc<Mutex<MemoryArena>> {
         self.arenas[thread_id % self.thread_count].clone()
     }
     
     pub fn reset_all(&self) {
-        for _arena in &self.arenas {
-            // arena.reset(); // Cannot borrow Arc as mutable
+        for arena in &self.arenas {
+            if let Ok(mut arena_guard) = arena.lock() {
+                arena_guard.reset();
+            }
         }
     }
+    
+    /// Perform memory compaction on all arenas
+    pub fn compact_all(&self) -> usize {
+        let mut total_freed = 0;
+        for arena in &self.arenas {
+            if let Ok(mut arena_guard) = arena.lock() {
+                total_freed += arena_guard.compact_memory();
+            }
+        }
+        total_freed
+    }
+    
+    /// Get memory usage statistics
+    pub fn get_memory_stats(&self) -> ThreadLocalArenaStats {
+        let mut total_chunks = 0;
+        let mut total_used_memory = 0;
+        
+        for arena in &self.arenas {
+            if let Ok(arena_guard) = arena.lock() {
+                let chunks = arena_guard.chunks.lock().unwrap();
+                total_chunks += chunks.len();
+                total_used_memory += chunks.iter().map(|c| c.len()).sum::<usize>();
+            }
+        }
+        
+        ThreadLocalArenaStats {
+            total_chunks,
+            total_used_memory,
+            thread_count: self.thread_count,
+        }
+    }
+}
+
+/// Statistics for thread-local arena
+#[allow(dead_code)]
+pub struct ThreadLocalArenaStats {
+    pub total_chunks: usize,
+    pub total_used_memory: usize,
+    pub thread_count: usize,
 }
 
 /// Zero-copy buffer pool for JNI operations

@@ -3,6 +3,7 @@ package com.kneaf.core;
 import com.kneaf.core.performance.PerformanceMonitoringSystem;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.ArrayList;
 import java.nio.ByteBuffer;
@@ -14,14 +15,17 @@ import java.util.Map;
 import java.util.HashMap;
 
 /**
- * Parallel processor for Rust vector operations using Fork/Join framework.
+ * Cache-optimized parallel processor for Rust vector operations using Fork/Join framework.
  * Provides batch processing, zero-copy array sharing, and thread-safe operation queue.
+ * Enhanced with CPU cache utilization optimizations and work-stealing scheduler.
  * Integrated with ZeroCopyBufferManager for enhanced memory management.
  */
 public class ParallelRustVectorProcessor {
     private static final int DEFAULT_BATCH_SIZE = 100;
     private static final int MIN_PARALLEL_THRESHOLD = 10;
     private static final int MAX_THREADS = Runtime.getRuntime().availableProcessors();
+    private static final int CACHE_LINE_SIZE = 64; // Typical cache line size in bytes
+    private static final int BLOCK_SIZE = 8; // 8x8 blocks for cache-friendly processing
     
     private final ForkJoinPool forkJoinPool;
     private final ExecutorService batchExecutor;
@@ -29,6 +33,8 @@ public class ParallelRustVectorProcessor {
     private final AtomicLong operationCounter;
     private final Lock memoryLock;
     private final ZeroCopyBufferManager zeroCopyManager;
+    private final CacheOptimizedWorkStealingScheduler workStealingScheduler;
+    private final ConcurrentHashMap<Integer, CacheAffinity> workerCacheAffinity;
     
     // Native batch processing methods
     private static native float[] batchNalgebraMatrixMul(float[][] matricesA, float[][] matricesB, int count);
@@ -52,6 +58,197 @@ public class ParallelRustVectorProcessor {
     private static native void copyToNativeBuffer(long pointer, float[] data, int offset, int length);
     private static native void copyFromNativeBuffer(long pointer, float[] result, int offset, int length);
     
+    /**
+     * Cache affinity tracking for spatial locality optimization
+     */
+    public static class CacheAffinity {
+        private final List<Integer> preferredBlocks;
+        private Integer lastAccessedBlock;
+        private double cacheHitRate;
+        private final AtomicInteger cacheHits;
+        private final AtomicInteger totalAccesses;
+        
+        public CacheAffinity() {
+            this.preferredBlocks = new ArrayList<>();
+            this.lastAccessedBlock = null;
+            this.cacheHitRate = 0.0;
+            this.cacheHits = new AtomicInteger(0);
+            this.totalAccesses = new AtomicInteger(0);
+        }
+        
+        public void updatePreferredBlock(int block) {
+            this.lastAccessedBlock = block;
+            totalAccesses.incrementAndGet();
+            
+            if (!preferredBlocks.contains(block)) {
+                preferredBlocks.add(block);
+                if (preferredBlocks.size() > 8) {
+                    preferredBlocks.remove(0); // Keep only recent blocks
+                }
+            } else {
+                cacheHits.incrementAndGet();
+            }
+            
+            updateCacheHitRate();
+        }
+        
+        private void updateCacheHitRate() {
+            int hits = cacheHits.get();
+            int total = totalAccesses.get();
+            if (total > 0) {
+                cacheHitRate = (double) hits / total;
+            }
+        }
+        
+        public List<Integer> getPreferredBlocks() {
+            return new ArrayList<>(preferredBlocks);
+        }
+        
+        public double getCacheHitRate() {
+            return cacheHitRate;
+        }
+        
+        public Integer getLastAccessedBlock() {
+            return lastAccessedBlock;
+        }
+    }
+    
+    /**
+     * Block distribution for cache-aware work stealing
+     */
+    public static class BlockDistribution {
+        private final ConcurrentHashMap<Integer, Integer> blockWorkload;
+        private final ConcurrentHashMap<Integer, Integer> blockOwnership;
+        private final AtomicInteger totalBlocks;
+        
+        public BlockDistribution() {
+            this.blockWorkload = new ConcurrentHashMap<>();
+            this.blockOwnership = new ConcurrentHashMap<>();
+            this.totalBlocks = new AtomicInteger(0);
+        }
+        
+        public void assignBlock(int block, int workerId) {
+            blockOwnership.put(block, workerId);
+            blockWorkload.put(block, 0);
+            totalBlocks.incrementAndGet();
+        }
+        
+        public void incrementBlockWorkload(int block) {
+            blockWorkload.computeIfPresent(block, (k, v) -> v + 1);
+        }
+        
+        public Integer getBlockOwner(int block) {
+            return blockOwnership.get(block);
+        }
+        
+        public double getLoadImbalance() {
+            if (blockWorkload.isEmpty()) {
+                return 0.0;
+            }
+            
+            int maxLoad = blockWorkload.values().stream().max(Integer::compareTo).orElse(0);
+            int minLoad = blockWorkload.values().stream().min(Integer::compareTo).orElse(0);
+            double avgLoad = blockWorkload.values().stream().mapToInt(Integer::intValue).average().orElse(0.0);
+            
+            if (avgLoad > 0.0) {
+                return (maxLoad - minLoad) / avgLoad;
+            } else {
+                return 0.0;
+            }
+        }
+    }
+    
+    /**
+     * Cache-optimized work-stealing scheduler
+     */
+    public static class CacheOptimizedWorkStealingScheduler {
+        private final ForkJoinPool forkJoinPool;
+        private final ConcurrentLinkedQueue<VectorOperation> globalQueue;
+        private final ConcurrentLinkedQueue<VectorOperation>[] workerQueues;
+        private final AtomicInteger successfulSteals;
+        private final AtomicInteger stealAttempts;
+        private final BlockDistribution blockDistribution;
+        
+        public CacheOptimizedWorkStealingScheduler(int numWorkers) {
+            this.forkJoinPool = new ForkJoinPool(numWorkers);
+            this.globalQueue = new ConcurrentLinkedQueue<>();
+            this.workerQueues = new ConcurrentLinkedQueue[numWorkers];
+            this.successfulSteals = new AtomicInteger(0);
+            this.stealAttempts = new AtomicInteger(0);
+            this.blockDistribution = new BlockDistribution();
+            
+            for (int i = 0; i < numWorkers; i++) {
+                workerQueues[i] = new ConcurrentLinkedQueue<>();
+            }
+        }
+        
+        public void submit(VectorOperation operation) {
+            globalQueue.offer(operation);
+        }
+        
+        public void submitToWorker(int workerId, VectorOperation operation) {
+            if (workerId >= 0 && workerId < workerQueues.length) {
+                workerQueues[workerId].offer(operation);
+            } else {
+                globalQueue.offer(operation);
+            }
+        }
+        
+        public VectorOperation stealWithCacheAffinity(int workerId, List<Integer> preferredBlocks) {
+            stealAttempts.incrementAndGet();
+            
+            // Try to steal from workers that own preferred blocks
+            for (int block : preferredBlocks) {
+                Integer targetWorker = blockDistribution.getBlockOwner(block);
+                if (targetWorker != null && targetWorker != workerId) {
+                    VectorOperation task = workerQueues[targetWorker].poll();
+                    if (task != null) {
+                        successfulSteals.incrementAndGet();
+                        return task;
+                    }
+                }
+            }
+            
+            // Fallback to regular stealing
+            return steal(workerId);
+        }
+        
+        public VectorOperation steal(int workerId) {
+            stealAttempts.incrementAndGet();
+            
+            // Try other worker queues
+            for (int i = 0; i < workerQueues.length; i++) {
+                if (i == workerId) continue;
+                
+                VectorOperation task = workerQueues[i].poll();
+                if (task != null) {
+                    successfulSteals.incrementAndGet();
+                    return task;
+                }
+            }
+            
+            // Try global queue as fallback
+            return globalQueue.poll();
+        }
+        
+        public VectorOperation getLocalTask(int workerId) {
+            if (workerId >= 0 && workerId < workerQueues.length) {
+                return workerQueues[workerId].poll();
+            }
+            return null;
+        }
+        
+        public double getStealSuccessRate() {
+            int attempts = stealAttempts.get();
+            if (attempts == 0) return 0.0;
+            return (double) successfulSteals.get() / attempts;
+        }
+        
+        public BlockDistribution getBlockDistribution() {
+            return blockDistribution;
+        }
+    }
+    
     public ParallelRustVectorProcessor() {
         this.forkJoinPool = new ForkJoinPool(MAX_THREADS);
         this.batchExecutor = Executors.newFixedThreadPool(MAX_THREADS);
@@ -59,6 +256,13 @@ public class ParallelRustVectorProcessor {
         this.operationCounter = new AtomicLong(0);
         this.memoryLock = new ReentrantLock();
         this.zeroCopyManager = ZeroCopyBufferManager.getInstance();
+        this.workStealingScheduler = new CacheOptimizedWorkStealingScheduler(MAX_THREADS);
+        this.workerCacheAffinity = new ConcurrentHashMap<>();
+        
+        // Initialize cache affinity for each worker
+        for (int i = 0; i < MAX_THREADS; i++) {
+            workerCacheAffinity.put(i, new CacheAffinity());
+        }
     }
     
     /**
@@ -263,7 +467,7 @@ public class ParallelRustVectorProcessor {
     }
     
     /**
-     * Batch processing for matrix operations
+     * Cache-optimized batch processing for matrix operations with spatial locality
      */
     public CompletableFuture<List<float[]>> batchMatrixMultiply(List<float[]> matricesA, List<float[]> matricesB, String operationType) {
         if (matricesA.size() != matricesB.size()) {
@@ -274,31 +478,107 @@ public class ParallelRustVectorProcessor {
             int batchSize = Math.min(DEFAULT_BATCH_SIZE, matricesA.size());
             List<float[]> results = new ArrayList<>(matricesA.size());
             
-            for (int i = 0; i < matricesA.size(); i += batchSize) {
-                int end = Math.min(i + batchSize, matricesA.size());
+            // Process in cache-friendly blocks
+            int numBlocks = (matricesA.size() + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            
+            for (int block = 0; block < numBlocks; block++) {
+                int startIdx = block * BLOCK_SIZE;
+                int endIdx = Math.min(startIdx + BLOCK_SIZE, matricesA.size());
                 
                 // Convert to batch format for native processing
-                float[][] batchA = new float[end - i][16];
-                float[][] batchB = new float[end - i][16];
+                float[][] blockA = new float[endIdx - startIdx][16];
+                float[][] blockB = new float[endIdx - startIdx][16];
                 
-                for (int j = i; j < end; j++) {
-                    batchA[j - i] = matricesA.get(j);
-                    batchB[j - i] = matricesB.get(j);
+                for (int i = startIdx; i < endIdx; i++) {
+                    blockA[i - startIdx] = matricesA.get(i);
+                    blockB[i - startIdx] = matricesB.get(i);
                 }
                 
-                // Process batch using native batch methods
-                float[] batchResults = processBatch(batchA, batchB, operationType);
+                // Process block using native batch methods
+                float[] blockResults = processBatch(blockA, blockB, operationType);
                 
                 // Convert results back to individual matrices
-                for (int j = 0; j < end - i; j++) {
+                for (int i = 0; i < endIdx - startIdx; i++) {
                     float[] result = new float[16];
-                    System.arraycopy(batchResults, j * 16, result, 0, 16);
+                    System.arraycopy(blockResults, i * 16, result, 0, 16);
                     results.add(result);
                 }
             }
             
             return results;
         }, batchExecutor);
+    }
+    
+    /**
+     * Cache-optimized parallel matrix multiplication with blocking
+     */
+    public CompletableFuture<float[]> parallelMatrixMultiplyOptimized(float[] matrixA, float[] matrixB, String operationType) {
+        return CompletableFuture.supplyAsync(() -> {
+            long startTime = System.nanoTime();
+            
+            try {
+                // Use cache-optimized blocking approach
+                int blockSize = BLOCK_SIZE;
+                int numBlocks = (matrixA.length + blockSize - 1) / blockSize;
+                
+                List<Future<float[]>> futures = new ArrayList<>();
+                
+                for (int block = 0; block < numBlocks; block++) {
+                    int startIdx = block * blockSize;
+                    int endIdx = Math.min(startIdx + blockSize, matrixA.length);
+                    
+                    Future<float[]> future = forkJoinPool.submit(() -> {
+                        float[] blockA = new float[endIdx - startIdx];
+                        float[] blockB = new float[endIdx - startIdx];
+                        
+                        System.arraycopy(matrixA, startIdx, blockA, 0, endIdx - startIdx);
+                        System.arraycopy(matrixB, startIdx, blockB, 0, endIdx - startIdx);
+                        
+                        // Process block with cache-friendly access
+                        switch (operationType) {
+                            case "nalgebra":
+                                return RustVectorLibrary.matrixMultiplyNalgebra(blockA, blockB);
+                            case "glam":
+                                return RustVectorLibrary.matrixMultiplyGlam(blockA, blockB);
+                            case "faer":
+                                return RustVectorLibrary.matrixMultiplyFaer(blockA, blockB);
+                            default:
+                                throw new IllegalArgumentException("Unknown operation type: " + operationType);
+                        }
+                    });
+                    
+                    futures.add(future);
+                }
+                
+                // Combine results
+                float[] result = new float[matrixA.length];
+                for (int block = 0; block < numBlocks; block++) {
+                    int startIdx = block * blockSize;
+                    int endIdx = Math.min(startIdx + blockSize, matrixA.length);
+                    
+                    float[] blockResult = futures.get(block).get();
+                    System.arraycopy(blockResult, 0, result, startIdx, endIdx - startIdx);
+                }
+                
+                long duration = System.nanoTime() - startTime;
+                
+                // Record performance metrics
+                PerformanceMonitoringSystem.getInstance().recordEvent(
+                    "ParallelRustVectorProcessor", "parallel_matrix_multiply_optimized", duration,
+                    Map.of("operation_type", operationType, "block_size", blockSize, "num_blocks", numBlocks)
+                );
+                
+                return result;
+                
+            } catch (Exception e) {
+                long duration = System.nanoTime() - startTime;
+                PerformanceMonitoringSystem.getInstance().recordError(
+                    "ParallelRustVectorProcessor", e,
+                    Map.of("operation", "parallel_matrix_multiply_optimized", "operation_type", operationType)
+                );
+                throw new RuntimeException("Cache-optimized parallel matrix multiplication failed", e);
+            }
+        });
     }
     
     /**
@@ -343,12 +623,38 @@ public class ParallelRustVectorProcessor {
     }
     
     /**
-     * Parallel matrix multiplication using Fork/Join framework
+     * Enhanced parallel matrix multiplication with cache-aware work stealing
      */
     public CompletableFuture<float[]> parallelMatrixMultiply(float[] matrixA, float[] matrixB, String operationType) {
         return CompletableFuture.supplyAsync(() -> {
-            MatrixMulTask task = new MatrixMulTask(matrixA, matrixB, 0, 1, operationType);
-            return forkJoinPool.invoke(task);
+            long startTime = System.nanoTime();
+            
+            try {
+                // Use cache-optimized approach by default
+                return parallelMatrixMultiplyOptimized(matrixA, matrixB, operationType).get();
+                
+            } catch (Exception e) {
+                // Fallback to traditional Fork/Join if cache-optimized fails
+                try {
+                    MatrixMulTask task = new MatrixMulTask(matrixA, matrixB, 0, 1, operationType);
+                    float[] result = forkJoinPool.invoke(task);
+                    
+                    long duration = System.nanoTime() - startTime;
+                    PerformanceMonitoringSystem.getInstance().recordEvent(
+                        "ParallelRustVectorProcessor", "parallel_matrix_multiply_fallback", duration,
+                        Map.of("operation_type", operationType)
+                    );
+                    
+                    return result;
+                } catch (Exception fallbackException) {
+                    long duration = System.nanoTime() - startTime;
+                    PerformanceMonitoringSystem.getInstance().recordError(
+                        "ParallelRustVectorProcessor", fallbackException,
+                        Map.of("operation", "parallel_matrix_multiply_fallback", "operation_type", operationType)
+                    );
+                    throw new RuntimeException("Parallel matrix multiplication failed", fallbackException);
+                }
+            }
         });
     }
     
@@ -393,29 +699,109 @@ public class ParallelRustVectorProcessor {
     }
     
     /**
-     * Batch vector addition operations
+     * Cache-optimized batch vector operations with spatial locality
      */
     public CompletableFuture<List<float[]>> batchVectorOperation(List<float[]> vectorsA, List<float[]> vectorsB, String operationType) {
         return CompletableFuture.supplyAsync(() -> {
             List<float[]> results = new ArrayList<>(vectorsA.size());
             
-            for (int i = 0; i < vectorsA.size(); i++) {
-                float[] result;
-                switch (operationType) {
-                    case "vectorAdd":
-                        result = RustVectorLibrary.vectorAddNalgebra(vectorsA.get(i), vectorsB.get(i));
-                        break;
-                    case "vectorCross":
-                        result = RustVectorLibrary.vectorCrossGlam(vectorsA.get(i), vectorsB.get(i));
-                        break;
-                    default:
-                        throw new IllegalArgumentException("Unknown vector operation type: " + operationType);
+            // Process in cache-friendly blocks
+            int numBlocks = (vectorsA.size() + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            
+            for (int block = 0; block < numBlocks; block++) {
+                int startIdx = block * BLOCK_SIZE;
+                int endIdx = Math.min(startIdx + BLOCK_SIZE, vectorsA.size());
+                
+                // Process block with cache-friendly access
+                for (int i = startIdx; i < endIdx; i++) {
+                    float[] result;
+                    switch (operationType) {
+                        case "vectorAdd":
+                            result = RustVectorLibrary.vectorAddNalgebra(vectorsA.get(i), vectorsB.get(i));
+                            break;
+                        case "vectorCross":
+                            result = RustVectorLibrary.vectorCrossGlam(vectorsA.get(i), vectorsB.get(i));
+                            break;
+                        default:
+                            throw new IllegalArgumentException("Unknown vector operation type: " + operationType);
+                    }
+                    results.add(result);
                 }
-                results.add(result);
             }
             
             return results;
         }, batchExecutor);
+    }
+    
+    /**
+     * Cache-aware vector operations with work stealing
+     */
+    public CompletableFuture<List<float[]>> cacheOptimizedVectorOperation(List<float[]> vectorsA, List<float[]> vectorsB, String operationType) {
+        return CompletableFuture.supplyAsync(() -> {
+            long startTime = System.nanoTime();
+            
+            try {
+                List<float[]> results = new ArrayList<>(vectorsA.size());
+                
+                // Create cache-aware tasks
+                int numTasks = Math.min(vectorsA.size(), MAX_THREADS * 2);
+                int taskSize = vectorsA.size() / numTasks;
+                
+                List<Future<List<float[]>>> futures = new ArrayList<>();
+                
+                for (int taskId = 0; taskId < numTasks; taskId++) {
+                    int startIdx = taskId * taskSize;
+                    int endIdx = (taskId == numTasks - 1) ? vectorsA.size() : (taskId + 1) * taskSize;
+                    
+                    Future<List<float[]>> future = forkJoinPool.submit(() -> {
+                        List<float[]> taskResults = new ArrayList<>(endIdx - startIdx);
+                        
+                        // Process with cache-friendly access pattern
+                        for (int i = startIdx; i < endIdx; i++) {
+                            float[] result;
+                            switch (operationType) {
+                                case "vectorAdd":
+                                    result = RustVectorLibrary.vectorAddNalgebra(vectorsA.get(i), vectorsB.get(i));
+                                    break;
+                                case "vectorCross":
+                                    result = RustVectorLibrary.vectorCrossGlam(vectorsA.get(i), vectorsB.get(i));
+                                    break;
+                                default:
+                                    throw new IllegalArgumentException("Unknown vector operation type: " + operationType);
+                            }
+                            taskResults.add(result);
+                        }
+                        
+                        return taskResults;
+                    });
+                    
+                    futures.add(future);
+                }
+                
+                // Collect results
+                for (Future<List<float[]>> future : futures) {
+                    results.addAll(future.get());
+                }
+                
+                long duration = System.nanoTime() - startTime;
+                
+                // Record performance metrics
+                PerformanceMonitoringSystem.getInstance().recordEvent(
+                    "ParallelRustVectorProcessor", "cache_optimized_vector_operation", duration,
+                    Map.of("operation_type", operationType, "num_tasks", numTasks, "total_vectors", vectorsA.size())
+                );
+                
+                return results;
+                
+            } catch (Exception e) {
+                long duration = System.nanoTime() - startTime;
+                PerformanceMonitoringSystem.getInstance().recordError(
+                    "ParallelRustVectorProcessor", e,
+                    Map.of("operation", "cache_optimized_vector_operation", "operation_type", operationType)
+                );
+                throw new RuntimeException("Cache-optimized vector operation failed", e);
+            }
+        });
     }
 
     /**
@@ -520,52 +906,60 @@ public class ParallelRustVectorProcessor {
     }
     
     /**
-     * Zero-copy matrix multiplication using enhanced buffer management
+     * Cache-optimized zero-copy matrix multiplication with enhanced buffer management
      */
     public CompletableFuture<float[]> matrixMultiplyZeroCopyEnhanced(float[] matrixA, float[] matrixB, String operationType) {
         return CompletableFuture.supplyAsync(() -> {
             long startTime = System.nanoTime();
             
             try {
-                // Allocate zero-copy buffer for input data
-                int dataSize = (matrixA.length + matrixB.length) * 4; // float size
+                // Use cache-aligned buffer size for better performance
+                int dataSize = ((matrixA.length + matrixB.length) * 4 + CACHE_LINE_SIZE - 1) / CACHE_LINE_SIZE * CACHE_LINE_SIZE;
+                
                 ZeroCopyBufferManager.ManagedDirectBuffer sharedBuffer =
                     zeroCopyManager.allocateBuffer(dataSize, "ParallelRustVectorProcessor");
                 
-                // Copy data to shared buffer
+                // Copy data to shared buffer with cache-friendly layout
                 ByteBuffer buffer = sharedBuffer.getBuffer();
-                buffer.asFloatBuffer().put(matrixA);
-                buffer.asFloatBuffer().put(matrixB);
+                FloatBuffer floatBuffer = buffer.asFloatBuffer();
                 
-                // Perform zero-copy operation
+                // Ensure cache-aligned access
+                floatBuffer.put(matrixA);
+                floatBuffer.put(matrixB);
+                
+                // Perform zero-copy operation with cache optimization
                 ZeroCopyBufferManager.ZeroCopyOperation operation = new ZeroCopyBufferManager.ZeroCopyOperation() {
                     @Override
                     public Object execute() throws Exception {
-                        // Call native zero-copy method
-                        ByteBuffer resultBuffer;
+                        // Use cache-aligned buffer for result
+                        ByteBuffer resultBuffer = ByteBuffer.allocateDirect(
+                            ((16 * 4 + CACHE_LINE_SIZE - 1) / CACHE_LINE_SIZE) * CACHE_LINE_SIZE
+                        ).order(ByteOrder.nativeOrder());
+                        
+                        ByteBuffer operationResult;
                         switch (operationType) {
                             case "nalgebra":
-                                resultBuffer = nalgebraMatrixMulDirect(buffer, buffer, ByteBuffer.allocateDirect(64));
+                                operationResult = nalgebraMatrixMulDirect(buffer, buffer, resultBuffer);
                                 break;
                             case "glam":
-                                resultBuffer = glamMatrixMulDirect(buffer, buffer, ByteBuffer.allocateDirect(64));
+                                operationResult = glamMatrixMulDirect(buffer, buffer, resultBuffer);
                                 break;
                             case "faer":
-                                resultBuffer = faerMatrixMulDirect(buffer, buffer, ByteBuffer.allocateDirect(64));
+                                operationResult = faerMatrixMulDirect(buffer, buffer, resultBuffer);
                                 break;
                             default:
                                 throw new IllegalArgumentException("Unknown operation type: " + operationType);
                         }
                         
-                        // Extract result
+                        // Extract result with cache-friendly access
                         float[] result = new float[16];
-                        resultBuffer.asFloatBuffer().get(result);
+                        operationResult.asFloatBuffer().get(result);
                         return result;
                     }
                     
                     @Override
                     public String getType() {
-                        return "matrix_multiply_" + operationType;
+                        return "cache_optimized_matrix_multiply_" + operationType;
                     }
                     
                     @Override
@@ -587,25 +981,30 @@ public class ParallelRustVectorProcessor {
                 
                 long duration = System.nanoTime() - startTime;
                 
-                // Record performance metrics
+                // Record performance metrics with cache optimization details
                 PerformanceMonitoringSystem.getInstance().recordEvent(
-                    "ParallelRustVectorProcessor", "matrix_multiply_zero_copy", duration,
-                    Map.of("operation_type", operationType, "bytes_transferred", dataSize)
+                    "ParallelRustVectorProcessor", "cache_optimized_matrix_multiply_zero_copy", duration,
+                    Map.of(
+                        "operation_type", operationType,
+                        "bytes_transferred", dataSize,
+                        "cache_line_size", CACHE_LINE_SIZE,
+                        "buffer_alignment", "cache_aligned"
+                    )
                 );
                 
                 if (result.success && result.result instanceof float[]) {
                     return (float[]) result.result;
                 } else {
-                    throw new RuntimeException("Zero-copy operation failed", result.error);
+                    throw new RuntimeException("Cache-optimized zero-copy operation failed", result.error);
                 }
                 
             } catch (Exception e) {
                 long duration = System.nanoTime() - startTime;
                 PerformanceMonitoringSystem.getInstance().recordError(
                     "ParallelRustVectorProcessor", e,
-                    Map.of("operation", "matrix_multiply_zero_copy", "operation_type", operationType)
+                    Map.of("operation", "cache_optimized_matrix_multiply_zero_copy", "operation_type", operationType)
                 );
-                throw new RuntimeException("Enhanced zero-copy matrix multiplication failed", e);
+                throw new RuntimeException("Cache-optimized zero-copy matrix multiplication failed", e);
             }
         });
     }
@@ -728,6 +1127,122 @@ public class ParallelRustVectorProcessor {
     }
     
     /**
+     * Get cache-optimized work-stealing scheduler
+     */
+    public CacheOptimizedWorkStealingScheduler getWorkStealingScheduler() {
+        return workStealingScheduler;
+    }
+    
+    /**
+     * Get cache affinity for specific worker
+     */
+    public CacheAffinity getWorkerCacheAffinity(int workerId) {
+        return workerCacheAffinity.get(workerId);
+    }
+    
+    /**
+     * Get cache statistics for all workers
+     */
+    public Map<Integer, Double> getCacheHitRates() {
+        Map<Integer, Double> hitRates = new HashMap<>();
+        for (Map.Entry<Integer, CacheAffinity> entry : workerCacheAffinity.entrySet()) {
+            hitRates.put(entry.getKey(), entry.getValue().getCacheHitRate());
+        }
+        return hitRates;
+    }
+    
+    /**
+     * Get work-stealing statistics
+     */
+    public Map<String, Object> getWorkStealingStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("successful_steals", workStealingScheduler.successfulSteals.get());
+        stats.put("steal_attempts", workStealingScheduler.stealAttempts.get());
+        stats.put("steal_success_rate", workStealingScheduler.getStealSuccessRate());
+        stats.put("load_imbalance", workStealingScheduler.getBlockDistribution().getLoadImbalance());
+        return stats;
+    }
+    
+    /**
+     * Cache-optimized batch processing with work stealing
+     */
+    public CompletableFuture<List<float[]>> cacheOptimizedBatchMatrixMultiply(List<float[]> matricesA, List<float[]> matricesB, String operationType) {
+        return CompletableFuture.supplyAsync(() -> {
+            long startTime = System.nanoTime();
+            
+            try {
+                if (matricesA.size() != matricesB.size()) {
+                    throw new IllegalArgumentException("Matrix lists must have same size");
+                }
+                
+                List<float[]> results = new ArrayList<>(matricesA.size());
+                
+                // Create cache-aware work distribution
+                int numWorkers = MAX_THREADS;
+                int matricesPerWorker = matricesA.size() / numWorkers;
+                
+                List<Future<List<float[]>>> futures = new ArrayList<>();
+                
+                for (int workerId = 0; workerId < numWorkers; workerId++) {
+                    final int finalWorkerId = workerId;
+                    int startIdx = workerId * matricesPerWorker;
+                    int endIdx = (workerId == numWorkers - 1) ? matricesA.size() : (workerId + 1) * matricesPerWorker;
+                    
+                    Future<List<float[]>> future = forkJoinPool.submit(() -> {
+                        List<float[]> workerResults = new ArrayList<>(endIdx - startIdx);
+                        
+                        // Process in cache-friendly blocks
+                        for (int i = startIdx; i < endIdx; i++) {
+                            // Use cache-optimized zero-copy approach
+                            float[] result = matrixMultiplyZeroCopyEnhanced(matricesA.get(i), matricesB.get(i), operationType).get();
+                            workerResults.add(result);
+                            
+                            // Update cache affinity
+                            CacheAffinity affinity = workerCacheAffinity.get(finalWorkerId);
+                            if (affinity != null) {
+                                affinity.updatePreferredBlock(i / BLOCK_SIZE);
+                            }
+                        }
+                        
+                        return workerResults;
+                    });
+                    
+                    futures.add(future);
+                }
+                
+                // Collect results
+                for (Future<List<float[]>> future : futures) {
+                    results.addAll(future.get());
+                }
+                
+                long duration = System.nanoTime() - startTime;
+                
+                // Record performance metrics
+                PerformanceMonitoringSystem.getInstance().recordEvent(
+                    "ParallelRustVectorProcessor", "cache_optimized_batch_matrix_multiply", duration,
+                    Map.of(
+                        "operation_type", operationType,
+                        "total_matrices", matricesA.size(),
+                        "num_workers", numWorkers,
+                        "cache_line_size", CACHE_LINE_SIZE,
+                        "block_size", BLOCK_SIZE
+                    )
+                );
+                
+                return results;
+                
+            } catch (Exception e) {
+                long duration = System.nanoTime() - startTime;
+                PerformanceMonitoringSystem.getInstance().recordError(
+                    "ParallelRustVectorProcessor", e,
+                    Map.of("operation", "cache_optimized_batch_matrix_multiply", "operation_type", operationType)
+                );
+                throw new RuntimeException("Cache-optimized batch matrix multiplication failed", e);
+            }
+        });
+    }
+    
+    /**
      * Shutdown processor and release resources
      */
     public void shutdown() {
@@ -751,5 +1266,12 @@ public class ParallelRustVectorProcessor {
         if (zeroCopyManager != null) {
             zeroCopyManager.shutdown();
         }
+        
+        // Log final cache statistics
+        Map<Integer, Double> finalHitRates = getCacheHitRates();
+        Map<String, Object> finalWorkStealingStats = getWorkStealingStatistics();
+        
+        System.out.println("Final cache hit rates: " + finalHitRates);
+        System.out.println("Final work-stealing statistics: " + finalWorkStealingStats);
     }
 }

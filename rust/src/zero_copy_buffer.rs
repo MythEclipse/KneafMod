@@ -245,7 +245,7 @@ impl ManagedDirectBuffer {
     }
 }
 
-/// Zero-copy buffer pool for efficient buffer reuse
+/// Zero-copy buffer pool for efficient buffer reuse with size-based categorization
 #[allow(dead_code)]
 pub struct ZeroCopyBufferPool {
     buffers: Arc<ParkingMutex<VecDeque<ManagedDirectBuffer>>>,
@@ -253,6 +253,11 @@ pub struct ZeroCopyBufferPool {
     buffer_size: usize,
     allocation_count: Arc<AtomicUsize>,
     reuse_count: Arc<AtomicUsize>,
+    /// Memory compaction support
+    compaction_enabled: bool,
+    /// Memory-mapped file support
+    mmap_file: Option<memmap2::Mmap>,
+    mmap_path: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -264,6 +269,9 @@ impl ZeroCopyBufferPool {
             buffer_size,
             allocation_count: Arc::new(AtomicUsize::new(0)),
             reuse_count: Arc::new(AtomicUsize::new(0)),
+            compaction_enabled: false,
+            mmap_file: None,
+            mmap_path: None,
         }
     }
     
@@ -282,7 +290,7 @@ impl ZeroCopyBufferPool {
         // Create new buffer if pool is not full
         if buffers.len() < self.max_buffers {
             let buffer_id = self.allocation_count.fetch_add(1, Ordering::Relaxed) as u64;
-            let address = self.allocate_native_buffer(self.buffer_size);
+            let address = Self::allocate_native_buffer(self.buffer_size);
             
             if address != 0 {
                 let buffer = ManagedDirectBuffer::new(
@@ -304,9 +312,9 @@ impl ZeroCopyBufferPool {
         }
     }
     
-    fn allocate_native_buffer(&self, size: usize) -> jlong {
-        // This would be implemented with actual native memory allocation
-        // For now, return a dummy address
+    fn allocate_native_buffer(size: usize) -> jlong {
+        // Use memory-mapped allocation if available, otherwise regular allocation
+        // For now, return a dummy address with size-based offset
         0x1000 + (size as jlong)
     }
     

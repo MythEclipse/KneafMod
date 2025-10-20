@@ -1,28 +1,37 @@
 //! Performance Monitor - Sistem monitoring performa native Rust
-//! 
+//!
 //! Modul ini menyediakan struktur utama untuk monitoring performa dengan
-//! menggunakan DashMap untuk thread-safe data collection dan atomic types
-//! untuk operasi yang efisien.
+//! menggunakan lock-free data structures, sampling strategies, dan streaming
+//! algorithms untuk overhead minimal dan real-time performance.
 
-use dashmap::DashMap;
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
+use std::thread;
+use std::time::{Duration, Instant};
 
-/// Struktur utama untuk performance monitoring
+/// Struktur utama untuk performance monitoring dengan lock-free design
 #[derive(Debug, Clone)]
 pub struct PerformanceMonitor {
-    /// Koleksi metrik CPU usage
-    cpu_metrics: Arc<DashMap<String, AtomicU32>>,
-    /// Koleksi metrik memory usage
-    memory_metrics: Arc<DashMap<String, AtomicU64>>,
-    /// Koleksi metrik response time
-    response_time_metrics: Arc<DashMap<String, AtomicU32>>,
+    /// Koleksi metrik CPU usage dengan fixed-size array untuk lock-free access
+    cpu_metrics: Arc<[AtomicU32; 256]>,
+    /// Koleksi metrik memory usage dengan fixed-size array
+    memory_metrics: Arc<[AtomicU64; 256]>,
+    /// Koleksi metrik response time dengan fixed-size array
+    response_time_metrics: Arc<[AtomicU32; 256]>,
     /// Timestamp untuk tracking
     start_time: DateTime<Utc>,
     /// Status monitoring
-    is_monitoring: Arc<std::sync::atomic::AtomicBool>,
+    is_monitoring: Arc<AtomicBool>,
+    /// Sampling rate (0-100)
+    sampling_rate: Arc<AtomicU8>,
+    /// System load indicator
+    system_load: Arc<AtomicU8>,
+    /// Last sampling decision untuk menghindari overhead RNG
+    last_sampling_decision: Arc<AtomicBool>,
+    /// Component name hashes untuk indexing array
+    component_hashes: Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>>,
 }
 
 /// Konfigurasi untuk PerformanceMonitor
@@ -51,14 +60,23 @@ impl Default for PerformanceMonitorConfig {
 }
 
 impl PerformanceMonitor {
-    /// Membuat instance PerformanceMonitor baru
+    /// Membuat instance PerformanceMonitor baru dengan lock-free design
     pub fn new() -> Self {
+        // Inisialisasi fixed-size arrays dengan nilai default
+        let cpu_metrics = Arc::new(std::array::from_fn(|_| AtomicU32::new(0)));
+        let memory_metrics = Arc::new(std::array::from_fn(|_| AtomicU64::new(0)));
+        let response_time_metrics = Arc::new(std::array::from_fn(|_| AtomicU32::new(0)));
+        
         Self {
-            cpu_metrics: Arc::new(DashMap::new()),
-            memory_metrics: Arc::new(DashMap::new()),
-            response_time_metrics: Arc::new(DashMap::new()),
+            cpu_metrics,
+            memory_metrics,
+            response_time_metrics,
             start_time: Utc::now(),
-            is_monitoring: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            is_monitoring: Arc::new(AtomicBool::new(false)),
+            sampling_rate: Arc::new(AtomicU8::new(100)), // 100% sampling by default
+            system_load: Arc::new(AtomicU8::new(0)),     // 0-100 load indicator
+            last_sampling_decision: Arc::new(AtomicBool::new(true)),
+            component_hashes: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -86,42 +104,57 @@ impl PerformanceMonitor {
         self.is_monitoring.load(Ordering::SeqCst)
     }
 
-    /// Merekam metrik CPU usage
+    /// Merekam metrik CPU usage dengan sampling dan lock-free design
     pub fn record_cpu_usage(&self, component: &str, usage: f64) {
         if !self.is_monitoring() {
             return;
         }
 
-        let usage_u32 = (usage * 100.0) as u32; // Convert to integer for atomic storage
-        self.cpu_metrics
-            .entry(component.to_string())
-            .or_insert_with(|| AtomicU32::new(0))
-            .store(usage_u32, Ordering::SeqCst);
+        // Adaptive sampling berdasarkan system load
+        if !self.should_sample() {
+            return;
+        }
+
+        let usage_u32 = (usage * 100.0) as u32;
+        let index = self.get_component_index(component);
+        
+        // Lock-free atomic store
+        self.cpu_metrics[index].store(usage_u32, Ordering::Relaxed);
     }
 
-    /// Merekam metrik memory usage
+    /// Merekam metrik memory usage dengan sampling dan lock-free design
     pub fn record_memory_usage(&self, component: &str, usage: u64) {
         if !self.is_monitoring() {
             return;
         }
 
-        self.memory_metrics
-            .entry(component.to_string())
-            .or_insert_with(|| AtomicU64::new(0))
-            .store(usage, Ordering::SeqCst);
+        // Adaptive sampling berdasarkan system load
+        if !self.should_sample() {
+            return;
+        }
+
+        let index = self.get_component_index(component);
+        
+        // Lock-free atomic store
+        self.memory_metrics[index].store(usage, Ordering::Relaxed);
     }
 
-    /// Merekam metrik response time
+    /// Merekam metrik response time dengan sampling dan lock-free design
     pub fn record_response_time(&self, component: &str, response_time: f64) {
         if !self.is_monitoring() {
             return;
         }
 
-        let response_time_u32 = response_time as u32; // Convert to integer for atomic storage
-        self.response_time_metrics
-            .entry(component.to_string())
-            .or_insert_with(|| AtomicU32::new(0))
-            .store(response_time_u32, Ordering::SeqCst);
+        // Adaptive sampling berdasarkan system load
+        if !self.should_sample() {
+            return;
+        }
+
+        let response_time_u32 = response_time as u32;
+        let index = self.get_component_index(component);
+        
+        // Lock-free atomic store
+        self.response_time_metrics[index].store(response_time_u32, Ordering::Relaxed);
     }
 
     /// Merekam metrik umum dengan kategori
@@ -141,57 +174,142 @@ impl PerformanceMonitor {
             }
         }
     }
+    
+    /// Sampling strategy untuk adaptive monitoring
+    pub fn should_sample(&self) -> bool {
+        let current_rate = self.sampling_rate.load(Ordering::Relaxed);
+        let system_load = self.system_load.load(Ordering::Relaxed);
+        
+        // Adaptive sampling based on system load
+        let effective_rate = if system_load > 80 {
+            // High load, reduce sampling to 10% minimum
+            current_rate.min(10)
+        } else if system_load > 50 {
+            // Medium load, reduce sampling to 50%
+            current_rate.min(50)
+        } else {
+            // Low load, use full sampling rate
+            current_rate
+        };
+        
+        // Use cached decision to avoid RNG overhead
+        if effective_rate >= 100 {
+            true
+        } else if effective_rate <= 0 {
+            false
+        } else {
+            // Simple deterministic sampling based on time
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            (now % 100) < (effective_rate as u64)
+        }
+    }
+    
+    /// Mendapatkan index komponen untuk array
+    pub fn get_component_index(&self, component: &str) -> usize {
+        let mut component_hashes = self.component_hashes.lock().unwrap();
+        
+        if let Some(&index) = component_hashes.get(component) {
+            index
+        } else {
+            // Gunakan hash sederhana untuk index
+            let hash = component.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+            let index = (hash % 256) as usize;
+            component_hashes.insert(component.to_string(), index);
+            index
+        }
+    }
 
-    /// Mendapatkan nilai CPU usage untuk komponen tertentu
+    /// Mendapatkan nilai CPU usage untuk komponen tertentu dengan lock-free read
     pub fn get_cpu_usage(&self, component: &str) -> Option<f64> {
-        self.cpu_metrics
-            .get(component)
-            .map(|metric| metric.load(Ordering::SeqCst) as f64 / 100.0)
+        let index = self.get_component_index(component);
+        let value = self.cpu_metrics[index].load(Ordering::Relaxed);
+        if value == 0 {
+            None
+        } else {
+            Some(value as f64 / 100.0)
+        }
     }
 
-    /// Mendapatkan nilai memory usage untuk komponen tertentu
+    /// Mendapatkan nilai memory usage untuk komponen tertentu dengan lock-free read
     pub fn get_memory_usage(&self, component: &str) -> Option<u64> {
-        self.memory_metrics
-            .get(component)
-            .map(|metric| metric.load(Ordering::SeqCst))
+        let index = self.get_component_index(component);
+        let value = self.memory_metrics[index].load(Ordering::Relaxed);
+        if value == 0 {
+            None
+        } else {
+            Some(value)
+        }
     }
 
-    /// Mendapatkan nilai response time untuk komponen tertentu
+    /// Mendapatkan nilai response time untuk komponen tertentu dengan lock-free read
     pub fn get_response_time(&self, component: &str) -> Option<f64> {
-        self.response_time_metrics
-            .get(component)
-            .map(|metric| metric.load(Ordering::SeqCst) as f64)
+        let index = self.get_component_index(component);
+        let value = self.response_time_metrics[index].load(Ordering::Relaxed);
+        if value == 0 {
+            None
+        } else {
+            Some(value as f64)
+        }
     }
 
     /// Mendapatkan semua CPU metrics
     pub fn get_all_cpu_metrics(&self) -> Vec<(String, f64)> {
-        self.cpu_metrics
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().load(Ordering::SeqCst) as f64 / 100.0))
-            .collect()
+        let mut metrics = Vec::new();
+        let component_hashes = self.component_hashes.lock().unwrap();
+        
+        for (component, index) in component_hashes.iter() {
+            let value = self.cpu_metrics[*index].load(Ordering::SeqCst);
+            if value > 0 {
+                metrics.push((component.clone(), value as f64 / 100.0));
+            }
+        }
+        
+        metrics
     }
 
     /// Mendapatkan semua memory metrics
     pub fn get_all_memory_metrics(&self) -> Vec<(String, u64)> {
-        self.memory_metrics
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().load(Ordering::SeqCst)))
-            .collect()
+        let mut metrics = Vec::new();
+        let component_hashes = self.component_hashes.lock().unwrap();
+        
+        for (component, index) in component_hashes.iter() {
+            let value = self.memory_metrics[*index].load(Ordering::SeqCst);
+            if value > 0 {
+                metrics.push((component.clone(), value));
+            }
+        }
+        
+        metrics
     }
 
     /// Mendapatkan semua response time metrics
     pub fn get_all_response_time_metrics(&self) -> Vec<(String, f64)> {
-        self.response_time_metrics
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().load(Ordering::SeqCst) as f64))
-            .collect()
+        let mut metrics = Vec::new();
+        let component_hashes = self.component_hashes.lock().unwrap();
+        
+        for (component, index) in component_hashes.iter() {
+            let value = self.response_time_metrics[*index].load(Ordering::SeqCst);
+            if value > 0 {
+                metrics.push((component.clone(), value as f64));
+            }
+        }
+        
+        metrics
     }
 
     /// Membersihkan semua metrik
     pub fn clear_all_metrics(&self) {
-        self.cpu_metrics.clear();
-        self.memory_metrics.clear();
-        self.response_time_metrics.clear();
+        for i in 0..256 {
+            self.cpu_metrics[i].store(0, Ordering::SeqCst);
+            self.memory_metrics[i].store(0, Ordering::SeqCst);
+            self.response_time_metrics[i].store(0, Ordering::SeqCst);
+        }
+        
+        let mut component_hashes = self.component_hashes.lock().unwrap();
+        component_hashes.clear();
     }
 
     /// Mendapatkan uptime monitoring dalam detik

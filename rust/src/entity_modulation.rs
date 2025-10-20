@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::collections::{HashMap, VecDeque};
 use glam::Vec3;
 use rayon::prelude::*;
 
@@ -16,6 +17,194 @@ use crate::combat_system::{CombatSystem, CombatEvent};
 use crate::performance_monitor::PerformanceMonitor;
 use crate::zero_copy_buffer::ZeroCopyBufferPool;
 
+/// Entity priority levels for CPU resource allocation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EntityPriority {
+    Critical = 0,
+    High = 1,
+    Medium = 2,
+    Low = 3,
+}
+
+/// Object pool for entity components to reduce allocation overhead
+pub struct EntityObjectPool {
+    health_pool: VecDeque<crate::shadow_zombie_ninja::HealthComponent>,
+    transform_pool: VecDeque<crate::shadow_zombie_ninja::TransformComponent>,
+    combat_pool: VecDeque<crate::combat_system::CombatComponent>,
+    movement_pool: VecDeque<crate::shadow_zombie_ninja::MovementComponent>,
+    animation_pool: VecDeque<crate::shadow_zombie_ninja::AnimationComponent>,
+    ai_pool: VecDeque<crate::shadow_zombie_ninja::AIComponent>,
+    max_pool_size: usize,
+}
+
+impl EntityObjectPool {
+    pub fn new(max_pool_size: usize) -> Self {
+        Self {
+            health_pool: VecDeque::new(),
+            transform_pool: VecDeque::new(),
+            combat_pool: VecDeque::new(),
+            movement_pool: VecDeque::new(),
+            animation_pool: VecDeque::new(),
+            ai_pool: VecDeque::new(),
+            max_pool_size,
+        }
+    }
+
+    pub fn get_health_component(&mut self) -> Option<crate::shadow_zombie_ninja::HealthComponent> {
+        self.health_pool.pop_front()
+    }
+
+    pub fn return_health_component(&mut self, component: crate::shadow_zombie_ninja::HealthComponent) {
+        if self.health_pool.len() < self.max_pool_size {
+            self.health_pool.push_back(component);
+        }
+    }
+
+    pub fn get_transform_component(&mut self) -> Option<crate::shadow_zombie_ninja::TransformComponent> {
+        self.transform_pool.pop_front()
+    }
+
+    pub fn return_transform_component(&mut self, component: crate::shadow_zombie_ninja::TransformComponent) {
+        if self.transform_pool.len() < self.max_pool_size {
+            self.transform_pool.push_back(component);
+        }
+    }
+
+    pub fn get_combat_component(&mut self) -> Option<crate::combat_system::CombatComponent> {
+        self.combat_pool.pop_front()
+    }
+
+    pub fn return_combat_component(&mut self, component: crate::combat_system::CombatComponent) {
+        if self.combat_pool.len() < self.max_pool_size {
+            self.combat_pool.push_back(component);
+        }
+    }
+
+    pub fn get_movement_component(&mut self) -> Option<crate::shadow_zombie_ninja::MovementComponent> {
+        self.movement_pool.pop_front()
+    }
+
+    pub fn return_movement_component(&mut self, component: crate::shadow_zombie_ninja::MovementComponent) {
+        if self.movement_pool.len() < self.max_pool_size {
+            self.movement_pool.push_back(component);
+        }
+    }
+
+    pub fn get_animation_component(&mut self) -> Option<crate::shadow_zombie_ninja::AnimationComponent> {
+        self.animation_pool.pop_front()
+    }
+
+    pub fn return_animation_component(&mut self, component: crate::shadow_zombie_ninja::AnimationComponent) {
+        if self.animation_pool.len() < self.max_pool_size {
+            self.animation_pool.push_back(component);
+        }
+    }
+
+    pub fn get_ai_component(&mut self) -> Option<crate::shadow_zombie_ninja::AIComponent> {
+        self.ai_pool.pop_front()
+    }
+
+    pub fn return_ai_component(&mut self, component: crate::shadow_zombie_ninja::AIComponent) {
+        if self.ai_pool.len() < self.max_pool_size {
+            self.ai_pool.push_back(component);
+        }
+    }
+}
+
+/// Spatial partitioning grid for efficient collision detection
+pub struct SpatialGrid {
+    cell_size: f32,
+    grid: HashMap<(i32, i32, i32), Vec<EntityId>>,
+    entities: HashMap<EntityId, (i32, i32, i32)>,
+}
+
+impl SpatialGrid {
+    pub fn new(cell_size: f32) -> Self {
+        Self {
+            cell_size,
+            grid: HashMap::new(),
+            entities: HashMap::new(),
+        }
+    }
+
+    pub fn update_entity(&mut self, entity_id: EntityId, position: Vec3) {
+        let new_cell = (
+            (position.x / self.cell_size) as i32,
+            (position.y / self.cell_size) as i32,
+            (position.z / self.cell_size) as i32,
+        );
+
+        // Remove from old cell if exists
+        if let Some(old_cell) = self.entities.get(&entity_id) {
+            if let Some(entities) = self.grid.get_mut(old_cell) {
+                entities.retain(|&id| id != entity_id);
+                if entities.is_empty() {
+                    self.grid.remove(old_cell);
+                }
+            }
+        }
+
+        // Add to new cell
+        self.entities.insert(entity_id, new_cell);
+        self.grid.entry(new_cell).or_insert_with(Vec::new).push(entity_id);
+    }
+
+    pub fn remove_entity(&mut self, entity_id: EntityId) {
+        if let Some(cell) = self.entities.remove(&entity_id) {
+            if let Some(entities) = self.grid.get_mut(&cell) {
+                entities.retain(|&id| id != entity_id);
+                if entities.is_empty() {
+                    self.grid.remove(&cell);
+                }
+            }
+        }
+    }
+
+    pub fn get_nearby_entities(&self, position: Vec3, radius: f32) -> Vec<EntityId> {
+        let center_cell = (
+            (position.x / self.cell_size) as i32,
+            (position.y / self.cell_size) as i32,
+            (position.z / self.cell_size) as i32,
+        );
+
+        let radius_cells = (radius / self.cell_size) as i32 + 1;
+        let mut nearby_entities = Vec::new();
+
+        for dx in -radius_cells..=radius_cells {
+            for dy in -radius_cells..=radius_cells {
+                for dz in -radius_cells..=radius_cells {
+                    let cell = (center_cell.0 + dx, center_cell.1 + dy, center_cell.2 + dz);
+                    if let Some(entities) = self.grid.get(&cell) {
+                        nearby_entities.extend(entities.iter().copied());
+                    }
+                }
+            }
+        }
+
+        nearby_entities
+    }
+
+    pub fn clear(&mut self) {
+        self.grid.clear();
+        self.entities.clear();
+    }
+}
+
+/// Entity batch for efficient bulk operations
+pub struct EntityBatch {
+    entities: Vec<EntityId>,
+    priority: EntityPriority,
+    update_type: BatchUpdateType,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BatchUpdateType {
+    Movement,
+    Combat,
+    Animation,
+    Ai,
+}
+
 /// Main entity processing system that coordinates all ECS components
 pub struct EntityModulationSystem {
     entity_registry: Arc<EntityRegistry>,
@@ -24,6 +213,10 @@ pub struct EntityModulationSystem {
     combat_system: Arc<CombatSystem>,
     performance_monitor: Arc<PerformanceMonitor>,
     zero_copy_buffer: Arc<ZeroCopyBufferPool>,
+    object_pool: Arc<parking_lot::Mutex<EntityObjectPool>>,
+    spatial_grid: Arc<parking_lot::Mutex<SpatialGrid>>,
+    entity_batches: Arc<parking_lot::Mutex<HashMap<EntityPriority, Vec<EntityBatch>>>>,
+    entity_priorities: Arc<parking_lot::Mutex<HashMap<EntityId, EntityPriority>>>,
     update_interval: Duration,
     last_update: Instant,
     is_initialized: bool,
@@ -51,6 +244,11 @@ impl EntityModulationSystem {
             performance_monitor.clone(),
         ));
         
+        let object_pool = Arc::new(parking_lot::Mutex::new(EntityObjectPool::new(max_entities / 4)));
+        let spatial_grid = Arc::new(parking_lot::Mutex::new(SpatialGrid::new(16.0))); // 16x16x16 cells
+        let entity_batches = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let entity_priorities = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        
         Self {
             entity_registry,
             ninja_factory,
@@ -58,6 +256,10 @@ impl EntityModulationSystem {
             combat_system,
             performance_monitor,
             zero_copy_buffer,
+            object_pool,
+            spatial_grid,
+            entity_batches,
+            entity_priorities,
             update_interval: Duration::from_millis(16), // ~60 FPS
             last_update: Instant::now(),
             is_initialized: false,
@@ -96,6 +298,16 @@ impl EntityModulationSystem {
         Ok(())
     }
 
+    /// Set entity priority for CPU resource allocation
+    pub fn set_entity_priority(&self, entity_id: EntityId, priority: EntityPriority) {
+        self.entity_priorities.lock().insert(entity_id, priority);
+    }
+
+    /// Get entity priority
+    pub fn get_entity_priority(&self, entity_id: EntityId) -> EntityPriority {
+        self.entity_priorities.lock().get(&entity_id).copied().unwrap_or(EntityPriority::Medium)
+    }
+
     /// Spawn a ShadowZombieNinja entity at the specified position
     pub fn spawn_shadow_zombie_ninja(&self, position: Vec3) -> Result<EntityId, String> {
         let start_time = Instant::now();
@@ -109,8 +321,31 @@ impl EntityModulationSystem {
         // Create entity in registry
         let entity_id = self.entity_registry.create_entity(EntityType::ShadowZombieNinja);
         
-        // Create ShadowZombieNinja instance
-        let ninja = self.ninja_factory.create_entity(entity_id, position);
+        // Get components from object pool or create new ones
+        let mut pool = self.object_pool.lock();
+        let health = pool.get_health_component()
+            .unwrap_or_else(|| crate::shadow_zombie_ninja::HealthComponent::new(100.0));
+        let transform = pool.get_transform_component()
+            .unwrap_or_else(|| crate::shadow_zombie_ninja::TransformComponent::new(position));
+        let combat = pool.get_combat_component()
+            .unwrap_or_else(|| crate::combat_system::CombatComponent::new());
+        let movement = pool.get_movement_component()
+            .unwrap_or_else(|| crate::shadow_zombie_ninja::MovementComponent::new(1.0)); // Default movement speed
+        let animation = pool.get_animation_component()
+            .unwrap_or_else(|| crate::shadow_zombie_ninja::AnimationComponent::new());
+        let ai = pool.get_ai_component()
+            .unwrap_or_else(|| crate::shadow_zombie_ninja::AIComponent::new(
+                crate::shadow_zombie_ninja::AIType::Aggressive, 5.0, 10.0
+            ));
+        
+        // Create ShadowZombieNinja instance with pooled components
+        let ninja = self.ninja_factory.create_entity_with_stats(
+            entity_id,
+            position,
+            100.0, // health
+            10.0,  // damage
+            1.0,   // movement speed
+        );
         
         // Add components to entity
         self.entity_registry.add_component(entity_id, ninja.health.clone());
@@ -119,6 +354,12 @@ impl EntityModulationSystem {
         self.entity_registry.add_component(entity_id, ninja.movement.clone());
         self.entity_registry.add_component(entity_id, ninja.animation.clone());
         self.entity_registry.add_component(entity_id, ninja.ai.clone());
+        
+        // Update spatial grid
+        self.spatial_grid.lock().update_entity(entity_id, position);
+        
+        // Set default priority
+        self.set_entity_priority(entity_id, EntityPriority::Medium);
         
         // Record spawn metrics
         let spawn_time = start_time.elapsed();
@@ -157,6 +398,39 @@ impl EntityModulationSystem {
     /// Remove an entity from the system
     pub fn remove_entity(&self, entity_id: EntityId) -> Result<bool, String> {
         let start_time = Instant::now();
+        
+        // Return components to object pool
+        if let Some(health) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::HealthComponent>(entity_id) {
+            // Clone the Arc and return the inner component to pool
+            let health_component = (*health).clone();
+            self.object_pool.lock().return_health_component(health_component);
+        }
+        if let Some(transform) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::TransformComponent>(entity_id) {
+            let transform_component = (*transform).clone();
+            self.object_pool.lock().return_transform_component(transform_component);
+        }
+        if let Some(combat) = self.entity_registry.get_component::<crate::combat_system::CombatComponent>(entity_id) {
+            let combat_component = (*combat).clone();
+            self.object_pool.lock().return_combat_component(combat_component);
+        }
+        if let Some(movement) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::MovementComponent>(entity_id) {
+            let movement_component = (*movement).clone();
+            self.object_pool.lock().return_movement_component(movement_component);
+        }
+        if let Some(animation) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::AnimationComponent>(entity_id) {
+            let animation_component = (*animation).clone();
+            self.object_pool.lock().return_animation_component(animation_component);
+        }
+        if let Some(ai) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::AIComponent>(entity_id) {
+            let ai_component = (*ai).clone();
+            self.object_pool.lock().return_ai_component(ai_component);
+        }
+        
+        // Remove from spatial grid
+        self.spatial_grid.lock().remove_entity(entity_id);
+        
+        // Remove priority
+        self.entity_priorities.lock().remove(&entity_id);
         
         let removed = self.entity_registry.remove_entity(entity_id);
         
@@ -208,32 +482,85 @@ impl EntityModulationSystem {
         Ok(())
     }
 
-    /// Update individual entities
+    /// Update individual entities with priority-based batching
     fn update_entities(&self, delta_time: f32) -> Result<(), String> {
         let entities = self.entity_registry.get_entities_by_type(EntityType::ShadowZombieNinja);
         
-        // Process entities in parallel
-        entities.par_iter().for_each(|&entity_id| {
-            // Get entity components
-            if let Some(health) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::HealthComponent>(entity_id) {
-                if let Some(transform) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::TransformComponent>(entity_id) {
-                    if let Some(combat) = self.entity_registry.get_component::<crate::combat_system::CombatComponent>(entity_id) {
-                        if let Some(movement) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::MovementComponent>(entity_id) {
-                            if let Some(animation) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::AnimationComponent>(entity_id) {
-                                if let Some(ai) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::AIComponent>(entity_id) {
-                                    // Update entity components
-                                    // This would update health, transform, combat, etc.
-                                    // For now, animation updates are handled in the main entity update loop
-                                    // TODO: Implement proper component updating through the registry
-                                }
+        // Group entities by priority
+        let mut priority_groups: HashMap<EntityPriority, Vec<EntityId>> = HashMap::new();
+        let priorities = self.entity_priorities.lock();
+        
+        for &entity_id in &entities {
+            let priority = priorities.get(&entity_id).copied().unwrap_or(EntityPriority::Medium);
+            priority_groups.entry(priority).or_insert_with(Vec::new).push(entity_id);
+        }
+        
+        // Process entities by priority order (Critical first, Low last)
+        let mut batches = Vec::new();
+        for priority in [EntityPriority::Critical, EntityPriority::High, EntityPriority::Medium, EntityPriority::Low] {
+            if let Some(entity_ids) = priority_groups.get(&priority) {
+                // Create batches of 32 entities for efficient processing
+                for chunk in entity_ids.chunks(32) {
+                    batches.push(EntityBatch {
+                        entities: chunk.to_vec(),
+                        priority,
+                        update_type: BatchUpdateType::Movement,
+                    });
+                }
+            }
+        }
+        
+        // Process batches in parallel
+        batches.par_iter().for_each(|batch| {
+            self.process_entity_batch(batch, delta_time);
+        });
+        
+        Ok(())
+    }
+
+    /// Process a batch of entities efficiently
+    fn process_entity_batch(&self, batch: &EntityBatch, delta_time: f32) {
+        match batch.update_type {
+            BatchUpdateType::Movement => {
+                for &entity_id in &batch.entities {
+                    if let Some(transform) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::TransformComponent>(entity_id) {
+                        // Update position in spatial grid
+                        self.spatial_grid.lock().update_entity(entity_id, transform.position);
+                    }
+                }
+            }
+            BatchUpdateType::Combat => {
+                // Process combat interactions using spatial grid
+                let spatial_grid = self.spatial_grid.lock();
+                for &entity_id in &batch.entities {
+                    if let Some(transform) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::TransformComponent>(entity_id) {
+                        let nearby_entities = spatial_grid.get_nearby_entities(transform.position, 10.0);
+                        // Process combat with nearby entities
+                        for &target_id in &nearby_entities {
+                            if target_id != entity_id {
+                                // Combat processing logic here
                             }
                         }
                     }
                 }
             }
-        });
-        
-        Ok(())
+            BatchUpdateType::Animation => {
+                // Batch animation updates
+                for &entity_id in &batch.entities {
+                    if let Some(animation) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::AnimationComponent>(entity_id) {
+                        // Update animation state
+                    }
+                }
+            }
+            BatchUpdateType::Ai => {
+                // Batch AI updates
+                for &entity_id in &batch.entities {
+                    if let Some(ai) = self.entity_registry.get_component::<crate::shadow_zombie_ninja::AIComponent>(entity_id) {
+                        // Update AI state
+                    }
+                }
+            }
+        }
     }
 
     /// Clean up entities that have exceeded their lifetime

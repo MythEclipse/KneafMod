@@ -1,5 +1,6 @@
 //! Enhanced work-stealing parallel A* pathfinding implementation
 //! Provides thread-safe data structures and efficient multi-core pathfinding with dynamic load balancing
+//! Optimized for CPU cache utilization with blocking/striping techniques
 
 use std::collections::HashMap;
 use std::cmp::Ordering;
@@ -138,25 +139,38 @@ impl PartialEq for PathNode {
     }
 }
 
-/// Thread-safe grid representation for pathfinding
+/// Cache-optimized grid representation using blocking for better spatial locality
 #[allow(dead_code)]
 #[derive(Clone)]
-pub struct ThreadSafeGrid {
+pub struct CacheOptimizedGrid {
     data: Arc<ParkingRwLock<Vec<Vec<Vec<bool>>>>>,
     width: usize,
     height: usize,
     depth: usize,
+    block_size: usize,
+    blocks_x: usize,
+    blocks_y: usize,
+    blocks_z: usize,
 }
 
 #[allow(dead_code)]
-impl ThreadSafeGrid {
+impl CacheOptimizedGrid {
     pub fn new(width: usize, height: usize, depth: usize, default_walkable: bool) -> Self {
+        let block_size = 8; // 8x8x8 blocks for optimal cache line utilization
+        let blocks_x = (width + block_size - 1) / block_size;
+        let blocks_y = (height + block_size - 1) / block_size;
+        let blocks_z = (depth + block_size - 1) / block_size;
+        
         let data = vec![vec![vec![default_walkable; depth]; height]; width];
         Self {
             data: Arc::new(ParkingRwLock::new(data)),
             width,
             height,
             depth,
+            block_size,
+            blocks_x,
+            blocks_y,
+            blocks_z,
         }
     }
     
@@ -168,7 +182,7 @@ impl ThreadSafeGrid {
     }
     
     pub fn is_walkable(&self, x: i32, y: i32, z: i32) -> bool {
-        if x < 0 || y < 0 || z < 0 || 
+        if x < 0 || y < 0 || z < 0 ||
            x as usize >= self.width || y as usize >= self.height || z as usize >= self.depth {
             return false;
         }
@@ -179,11 +193,39 @@ impl ThreadSafeGrid {
     pub fn get_dimensions(&self) -> (usize, usize, usize) {
         (self.width, self.height, self.depth)
     }
+    
+    /// Get block coordinates for cache-optimized processing
+    pub fn get_block_coords(&self, x: usize, y: usize, z: usize) -> (usize, usize, usize) {
+        (x / self.block_size, y / self.block_size, z / self.block_size)
+    }
+    
+    /// Process a block of cells with better cache locality
+    pub fn process_block<F>(&self, block_x: usize, block_y: usize, block_z: usize, mut processor: F)
+    where F: FnMut(usize, usize, usize, bool) {
+        let start_x = block_x * self.block_size;
+        let start_y = block_y * self.block_size;
+        let start_z = block_z * self.block_size;
+        let end_x = (start_x + self.block_size).min(self.width);
+        let end_y = (start_y + self.block_size).min(self.height);
+        let end_z = (start_z + self.block_size).min(self.depth);
+        
+        let grid = self.data.read();
+        for x in start_x..end_x {
+            for y in start_y..end_y {
+                for z in start_z..end_z {
+                    processor(x, y, z, grid[x][y][z]);
+                }
+            }
+        }
+    }
 }
 
-/// Enhanced work-stealing task queue for parallel pathfinding with dynamic load balancing
+/// Legacy alias for backward compatibility
+pub type ThreadSafeGrid = CacheOptimizedGrid;
+
+/// Cache-optimized work-stealing queue with blocking for better CPU utilization
 #[allow(dead_code)]
-pub struct EnhancedWorkStealingQueue {
+pub struct CacheOptimizedWorkStealingQueue {
     injector: Arc<Injector<PathNode>>,
     stealers: Vec<Arc<Stealer<PathNode>>>,
     worker_queues: Vec<Arc<Injector<PathNode>>>, // Use Injector instead of Worker for thread safety
@@ -193,19 +235,114 @@ pub struct EnhancedWorkStealingQueue {
     load_imbalance: Arc<Mutex<f64>>,
     steal_attempts: AtomicUsize,
     successful_steals: AtomicUsize,
+    // Cache affinity tracking
+    worker_cache_affinity: Vec<Arc<Mutex<CacheAffinity>>>,
+    block_distribution: Arc<Mutex<BlockDistribution>>,
 }
 
 #[allow(dead_code)]
-impl EnhancedWorkStealingQueue {
+#[derive(Debug, Clone)]
+pub struct CacheAffinity {
+    preferred_blocks: Vec<(usize, usize, usize)>, // (block_x, block_y, block_z)
+    last_accessed_block: Option<(usize, usize, usize)>,
+    cache_hit_rate: f64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct BlockDistribution {
+    block_workload: HashMap<(usize, usize, usize), usize>, // Block -> workload count
+    block_ownership: HashMap<(usize, usize, usize), usize>, // Block -> worker_id
+    total_blocks: usize,
+}
+
+#[allow(dead_code)]
+impl CacheAffinity {
+    pub fn new() -> Self {
+        Self {
+            preferred_blocks: Vec::new(),
+            last_accessed_block: None,
+            cache_hit_rate: 0.0,
+        }
+    }
+    
+    pub fn update_preferred_blocks(&mut self, block: (usize, usize, usize)) {
+        self.last_accessed_block = Some(block);
+        
+        // Keep track of recently accessed blocks for cache affinity
+        if !self.preferred_blocks.contains(&block) {
+            self.preferred_blocks.push(block);
+            if self.preferred_blocks.len() > 8 { // Limit to 8 blocks for cache efficiency
+                self.preferred_blocks.remove(0);
+            }
+        }
+    }
+    
+    pub fn get_preferred_blocks(&self) -> &[(usize, usize, usize)] {
+        &self.preferred_blocks
+    }
+}
+
+#[allow(dead_code)]
+impl BlockDistribution {
+    pub fn new() -> Self {
+        Self {
+            block_workload: HashMap::new(),
+            block_ownership: HashMap::new(),
+            total_blocks: 0,
+        }
+    }
+    
+    pub fn assign_block(&mut self, block: (usize, usize, usize), worker_id: usize) {
+        self.block_ownership.insert(block, worker_id);
+        self.block_workload.insert(block, 0);
+        self.total_blocks += 1;
+    }
+    
+    pub fn increment_block_workload(&mut self, block: (usize, usize, usize)) {
+        if let Some(count) = self.block_workload.get_mut(&block) {
+            *count += 1;
+        }
+    }
+    
+    pub fn get_block_owner(&self, block: (usize, usize, usize)) -> Option<usize> {
+        self.block_ownership.get(&block).copied()
+    }
+    
+    pub fn get_load_imbalance(&self) -> f64 {
+        if self.block_workload.is_empty() {
+            return 0.0;
+        }
+        
+        let max_load = self.block_workload.values().max().unwrap_or(&0);
+        let min_load = self.block_workload.values().min().unwrap_or(&0);
+        let avg_load = self.block_workload.values().sum::<usize>() as f64 / self.block_workload.len() as f64;
+        
+        if avg_load > 0.0 {
+            (*max_load as f64 - *min_load as f64) / avg_load
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Enhanced work-stealing task queue for parallel pathfinding with dynamic load balancing (legacy alias)
+#[allow(dead_code)]
+pub type EnhancedWorkStealingQueue = CacheOptimizedWorkStealingQueue;
+
+
+#[allow(dead_code)]
+impl CacheOptimizedWorkStealingQueue {
     pub fn new(num_threads: usize) -> Self {
         let injector = Arc::new(Injector::new());
         let stealers = Vec::new();
         let mut worker_queues = Vec::new();
+        let mut worker_cache_affinity = Vec::new();
         
         for _ in 0..num_threads {
             let worker_queue = Arc::new(Injector::new());
-            // Use the worker_queue directly for stealing, no stealer() method
             worker_queues.push(worker_queue);
+            worker_cache_affinity.push(Arc::new(Mutex::new(CacheAffinity::new())));
         }
         
         Self {
@@ -218,6 +355,8 @@ impl EnhancedWorkStealingQueue {
             load_imbalance: Arc::new(Mutex::new(0.0)),
             steal_attempts: AtomicUsize::new(0),
             successful_steals: AtomicUsize::new(0),
+            worker_cache_affinity,
+            block_distribution: Arc::new(Mutex::new(BlockDistribution::new())),
         }
     }
     
@@ -230,6 +369,45 @@ impl EnhancedWorkStealingQueue {
         if worker_id < self.worker_queues.len() {
             self.worker_queues[worker_id].push(task);
             self.total_tasks.fetch_add(1, AtomicOrdering::SeqCst);
+        }
+    }
+    
+    /// Cache-aware work stealing with spatial locality optimization
+    pub fn steal_with_cache_affinity(&self, worker_id: usize, preferred_blocks: &[(usize, usize, usize)]) -> Option<PathNode> {
+        self.steal_attempts.fetch_add(1, AtomicOrdering::SeqCst);
+        
+        // Try to steal tasks that match cache affinity first
+        if !preferred_blocks.is_empty() {
+            for block in preferred_blocks {
+                // Find workers that own this block
+                if let Some(target_worker) = self.get_block_owner(*block) {
+                    if target_worker != worker_id {
+                        // Try to steal from this worker's queue
+                        loop {
+                            match self.worker_queues[target_worker].steal() {
+                                crossbeam::deque::Steal::Success(task) => {
+                                    self.successful_steals.fetch_add(1, AtomicOrdering::SeqCst);
+                                    return Some(task);
+                                }
+                                crossbeam::deque::Steal::Empty => break,
+                                crossbeam::deque::Steal::Retry => continue,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fallback to regular stealing strategy
+        self.steal(worker_id)
+    }
+    
+    /// Get the worker ID that owns a specific block
+    fn get_block_owner(&self, block: (usize, usize, usize)) -> Option<usize> {
+        if let Ok(distribution) = self.block_distribution.lock() {
+            distribution.get_block_owner(block)
+        } else {
+            None
         }
     }
     
@@ -332,11 +510,11 @@ pub struct WorkStealingStats {
     pub successful_steals: usize,
 }
 
-/// Enhanced parallel A* pathfinding engine with dynamic load balancing
+/// Enhanced parallel A* pathfinding engine with dynamic load balancing and cache optimization
 #[allow(dead_code)]
 pub struct EnhancedParallelAStar {
-    grid: ThreadSafeGrid,
-    queue: Arc<EnhancedWorkStealingQueue>,
+    grid: CacheOptimizedGrid,
+    queue: Arc<CacheOptimizedWorkStealingQueue>,
     num_threads: usize,
     max_search_distance: f32,
     diagonal_movement: bool,
@@ -349,7 +527,7 @@ pub struct EnhancedParallelAStar {
 
 #[allow(dead_code)]
 impl EnhancedParallelAStar {
-    pub fn new(grid: ThreadSafeGrid, num_threads: usize) -> Self {
+    pub fn new(grid: CacheOptimizedGrid, num_threads: usize) -> Self {
         let queue = Arc::new(EnhancedWorkStealingQueue::new(num_threads));
         
         Self {
@@ -383,7 +561,7 @@ impl EnhancedParallelAStar {
         self.hierarchical_levels = levels;
     }
     
-    /// Find path from start to goal using enhanced parallel A*
+    /// Find path from start to goal using enhanced parallel A* with cache optimization
     pub fn find_path(self: Arc<Self>, start: Position, goal: Position) -> Option<Vec<Position>> {
         if !self.grid.is_walkable(start.x, start.y, start.z) ||
            !self.grid.is_walkable(goal.x, goal.y, goal.z) {
@@ -484,12 +662,12 @@ impl EnhancedParallelAStar {
         }
     }
     
-    /// Enhanced worker thread with better load balancing and early termination
+    /// Cache-optimized worker thread with spatial locality awareness
     fn enhanced_worker_thread(
         &self,
         worker_id: usize,
-        queue: Arc<EnhancedWorkStealingQueue>,
-        grid: ThreadSafeGrid,
+        queue: Arc<CacheOptimizedWorkStealingQueue>,
+        grid: CacheOptimizedGrid,
         open_set: Arc<ParkingRwLock<HashMap<Position, f32>>>,
         closed_set: Arc<ParkingRwLock<HashMap<Position, f32>>>,
         came_from: Arc<ParkingRwLock<HashMap<Position, Position>>>,
@@ -501,17 +679,25 @@ impl EnhancedParallelAStar {
         queue.increment_active_workers();
         let mut local_nodes_processed = 0;
         let local_start_time = Instant::now();
+        let mut cache_affinity = CacheAffinity::new();
         
         while !goal_found.load(AtomicOrdering::SeqCst) {
-            // Try to get task from local queue first
+            // Try to get task from local queue first with cache affinity
             let current = queue.get_local_task(worker_id)
-                .or_else(|| queue.steal(worker_id));
+                .or_else(|| {
+                    // Try cache-aware stealing with spatial locality
+                    let preferred_blocks = cache_affinity.get_preferred_blocks();
+                    queue.steal_with_cache_affinity(worker_id, preferred_blocks)
+                });
             
             if current.is_none() {
                 // No work available, check if we should terminate
                 if queue.get_stats().active_workers <= 1 {
                     thread::sleep(Duration::from_micros(100));
-                    if queue.get_local_task(worker_id).is_none() && queue.steal(worker_id).is_none() {
+                    let current = queue.get_local_task(worker_id)
+                        .or_else(|| queue.steal_with_cache_affinity(worker_id, cache_affinity.get_preferred_blocks()));
+                    
+                    if current.is_none() {
                         break; // No work left, terminate
                     }
                 }
@@ -521,6 +707,15 @@ impl EnhancedParallelAStar {
             let current = current.unwrap();
             let current_pos = current.position;
             local_nodes_processed += 1;
+            
+            // Update cache affinity based on current position
+            let current_block = grid.get_block_coords(current_pos.x as usize, current_pos.y as usize, current_pos.z as usize);
+            cache_affinity.update_preferred_blocks(current_block);
+            
+            // Update block distribution metrics
+            if let Ok(mut distribution) = queue.block_distribution.lock() {
+                distribution.increment_block_workload(current_block);
+            }
             
             // Early termination check
             if self.early_termination && goal_found.load(AtomicOrdering::SeqCst) {
@@ -557,8 +752,8 @@ impl EnhancedParallelAStar {
                 continue;
             }
             
-            // Expand neighbors with enhanced neighbor selection
-            let neighbors = self.get_enhanced_neighbors(&current_pos, &grid);
+            // Expand neighbors using cache-optimized method
+            let neighbors = self.get_cache_optimized_neighbors(&current_pos, &grid);
             
             for neighbor_pos in neighbors {
                 // Skip if goal already found
@@ -593,19 +788,32 @@ impl EnhancedParallelAStar {
                     came_from_map.insert(neighbor_pos, current_pos);
                 }
                 
-                // Create new node and add to queue with load balancing
+                // Create new node and add to queue with cache-aware distribution
                 let new_node = PathNode::new(neighbor_pos, g_cost, h_cost, Some(current_pos));
                 
-                // Distribute work based on current load
-                let target_worker = (worker_id + local_nodes_processed) % self.num_threads;
+                // Determine target worker based on cache affinity
+                let neighbor_block = grid.get_block_coords(neighbor_pos.x as usize, neighbor_pos.y as usize, neighbor_pos.z as usize);
+                let target_worker = if let Ok(distribution) = queue.block_distribution.lock() {
+                    distribution.get_block_owner(neighbor_block).unwrap_or(
+                        (worker_id + local_nodes_processed) % self.num_threads
+                    )
+                } else {
+                    (worker_id + local_nodes_processed) % self.num_threads
+                };
+                
                 queue.push_to_worker(target_worker, new_node);
             }
             
             queue.increment_completed_tasks();
             
-            // Periodic load balancing update
-            if local_nodes_processed % 100 == 0 {
+            // Periodic load balancing and cache affinity update
+            if local_nodes_processed % 50 == 0 {
                 queue.update_load_imbalance();
+                
+                // Update worker cache affinity
+                if let Ok(mut affinity) = queue.worker_cache_affinity[worker_id].lock() {
+                    affinity.update_preferred_blocks(current_block);
+                }
             }
         }
         
@@ -613,9 +821,9 @@ impl EnhancedParallelAStar {
         metrics.record_worker_efficiency(worker_id, local_nodes_processed, local_start_time.elapsed());
     }
     
-    /// Load balancing monitor for dynamic work distribution
+    /// Load balancing monitor for dynamic work distribution with cache optimization
     fn load_balancing_monitor(
-        queue: Arc<EnhancedWorkStealingQueue>,
+        queue: Arc<CacheOptimizedWorkStealingQueue>,
         goal_found: Arc<AtomicBool>,
         metrics: Arc<EnhancedPathfindingMetrics>,
     ) {
@@ -647,33 +855,120 @@ impl EnhancedParallelAStar {
     }
     
     
-    /// Enhanced neighbor selection with adaptive direction ordering
-    fn get_enhanced_neighbors(&self, pos: &Position, grid: &ThreadSafeGrid) -> Vec<Position> {
-        let mut neighbors = Vec::new();
+    /// Cache-optimized neighbor selection with spatial locality awareness
+    fn get_cache_optimized_neighbors(&self, pos: &Position, grid: &CacheOptimizedGrid) -> Vec<Position> {
+        let mut neighbors = Vec::with_capacity(26); // Max 26 neighbors in 3D
         
-        // Adaptive direction ordering based on goal direction (if available)
-        let directions = if self.diagonal_movement {
-            self.get_adaptive_directions(pos)
-        } else {
-            vec![
-                (-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1),
-            ]
-        };
+        // Process neighbors in cache-friendly order (locality-based)
+        let current_block = grid.get_block_coords(pos.x as usize, pos.y as usize, pos.z as usize);
         
-        // Pre-allocate capacity for better performance
-        neighbors.reserve(directions.len());
+        // First check same block neighbors (best cache locality)
+        self.process_block_neighbors(pos, grid, current_block, &mut neighbors);
         
-        for (dx, dy, dz) in directions {
-            let new_x = pos.x + dx;
-            let new_y = pos.y + dy;
-            let new_z = pos.z + dz;
-            
-            if grid.is_walkable(new_x, new_y, new_z) {
-                neighbors.push(Position::new(new_x, new_y, new_z));
+        // Then check adjacent blocks
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                for dz in -1i32..=1 {
+                    if dx == 0 && dy == 0 && dz == 0 { continue; }
+                    
+                    let block_x = (current_block.0 as i32 + dx) as usize;
+                    let block_y = (current_block.1 as i32 + dy) as usize;
+                    let block_z = (current_block.2 as i32 + dz) as usize;
+                    
+                    if block_x < grid.blocks_x && block_y < grid.blocks_y && block_z < grid.blocks_z {
+                        self.process_block_neighbors(pos, grid, (block_x, block_y, block_z), &mut neighbors);
+                    }
+                }
             }
         }
         
         neighbors
+    }
+    
+    /// Process neighbors within a specific block for cache efficiency
+    fn process_block_neighbors(&self, pos: &Position, grid: &CacheOptimizedGrid, block: (usize, usize, usize), neighbors: &mut Vec<Position>) {
+        let start_x = block.0 * grid.block_size;
+        let start_y = block.1 * grid.block_size;
+        let start_z = block.2 * grid.block_size;
+        let end_x = (start_x + grid.block_size).min(grid.width);
+        let end_y = (start_y + grid.block_size).min(grid.height);
+        let end_z = (start_z + grid.block_size).min(grid.depth);
+        
+        // Check if position is within this block
+        if (pos.x as usize >= start_x) && ((pos.x as usize) < end_x) &&
+           (pos.y as usize >= start_y) && ((pos.y as usize) < end_y) &&
+           (pos.z as usize >= start_z) && ((pos.z as usize) < end_z) {
+            
+            // Process neighbors in spatial order for cache efficiency
+            let directions = if self.diagonal_movement {
+                self.get_cache_friendly_directions(pos, block)
+            } else {
+                vec![
+                    (-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1),
+                ]
+            };
+            
+            for (dx, dy, dz) in directions {
+                let new_x = pos.x + dx;
+                let new_y = pos.y + dy;
+                let new_z = pos.z + dz;
+                
+                if (new_x as usize >= start_x) && ((new_x as usize) < end_x) &&
+                   (new_y as usize >= start_y) && ((new_y as usize) < end_y) &&
+                   (new_z as usize >= start_z) && ((new_z as usize) < end_z) {
+                    
+                    if grid.is_walkable(new_x, new_y, new_z) {
+                        neighbors.push(Position::new(new_x, new_y, new_z));
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Get cache-friendly direction ordering based on spatial locality
+    fn get_cache_friendly_directions(&self, pos: &Position, current_block: (usize, usize, usize)) -> Vec<(i32, i32, i32)> {
+        let mut directions = Vec::with_capacity(26);
+        
+        // Cardinal directions first (most likely to be in same cache line)
+        directions.push((-1, 0, 0));
+        directions.push((1, 0, 0));
+        directions.push((0, -1, 0));
+        directions.push((0, 1, 0));
+        directions.push((0, 0, -1));
+        directions.push((0, 0, 1));
+        
+        // 2D diagonals (still likely in same cache block)
+        directions.push((-1, -1, 0));
+        directions.push((-1, 1, 0));
+        directions.push((1, -1, 0));
+        directions.push((1, 1, 0));
+        
+        // 3D face diagonals
+        directions.push((-1, 0, -1));
+        directions.push((-1, 0, 1));
+        directions.push((1, 0, -1));
+        directions.push((1, 0, 1));
+        directions.push((0, -1, -1));
+        directions.push((0, -1, 1));
+        directions.push((0, 1, -1));
+        directions.push((0, 1, 1));
+        
+        // 3D corner diagonals (least cache friendly)
+        directions.push((-1, -1, -1));
+        directions.push((-1, -1, 1));
+        directions.push((-1, 1, -1));
+        directions.push((-1, 1, 1));
+        directions.push((1, -1, -1));
+        directions.push((1, -1, 1));
+        directions.push((1, 1, -1));
+        directions.push((1, 1, 1));
+        
+        directions
+    }
+    
+    /// Legacy method for backward compatibility
+    fn get_enhanced_neighbors(&self, pos: &Position, grid: &ThreadSafeGrid) -> Vec<Position> {
+        self.get_cache_optimized_neighbors(pos, grid)
     }
     
     /// Adaptive direction ordering based on heuristic
@@ -738,10 +1033,10 @@ impl EnhancedParallelAStar {
     }
 }
 
-/// Batch pathfinding for multiple queries
+/// Batch pathfinding for multiple queries with cache optimization
 #[allow(dead_code)]
 pub fn batch_parallel_astar(
-    grid: &ThreadSafeGrid,
+    grid: &CacheOptimizedGrid,
     queries: Vec<(Position, Position)>,
     num_threads: usize,
 ) -> Vec<Option<Vec<Position>>> {
@@ -992,7 +1287,7 @@ lazy_static::lazy_static! {
     pub static ref PATHFINDING_METRICS: EnhancedPathfindingMetrics = EnhancedPathfindingMetrics::new();
 }
 
-/// Enhanced JNI interface for parallel A* pathfinding with comprehensive metrics
+/// Enhanced JNI interface for parallel A* pathfinding with cache optimization
 #[allow(non_snake_case)]
 pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>(
     mut env: jni::JNIEnv<'a>,
@@ -1014,8 +1309,8 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>
     let mut grid_bytes = vec![0i8; grid_size];
     env.get_byte_array_region(&grid_data, 0, &mut grid_bytes).unwrap();
     
-    // Create enhanced thread-safe grid
-    let grid = ThreadSafeGrid::new(width as usize, height as usize, depth as usize, true);
+    // Create cache-optimized thread-safe grid
+    let grid = CacheOptimizedGrid::new(width as usize, height as usize, depth as usize, true);
     
     // Set walkable cells based on byte array (0 = walkable, 1 = blocked)
     for x in 0..width {
@@ -1100,7 +1395,7 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getPathfindingPerformance
     env.new_string(&report_json).unwrap()
 }
 
-/// JNI interface for batch pathfinding operations
+/// JNI interface for batch pathfinding operations with cache optimization
 #[allow(non_snake_case)]
 pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchParallelAStarPathfind<'a>(
     mut env: jni::JNIEnv<'a>,
@@ -1117,8 +1412,8 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchParallelAStarPathfin
     let mut grid_bytes = vec![0i8; grid_size];
     env.get_byte_array_region(&grid_data, 0, &mut grid_bytes).unwrap();
     
-    // Create enhanced thread-safe grid
-    let grid = ThreadSafeGrid::new(width as usize, height as usize, depth as usize, true);
+    // Create cache-optimized thread-safe grid
+    let grid = CacheOptimizedGrid::new(width as usize, height as usize, depth as usize, true);
     
     // Set walkable cells based on byte array
     for x in 0..width {

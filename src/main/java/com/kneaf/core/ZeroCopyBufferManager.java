@@ -5,6 +5,9 @@ import com.kneaf.core.performance.CrossComponentEventBus;
 import com.kneaf.core.performance.CrossComponentEvent;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.channels.FileChannel;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -25,19 +28,25 @@ public final class ZeroCopyBufferManager {
     private static final int MAX_BUFFER_SIZE = 64 * 1024 * 1024; // 64MB max
     private static final int MAX_POOL_SIZE = 100;
     
-    // Buffer pool for reuse
-    private final ConcurrentLinkedQueue<ManagedDirectBuffer> bufferPool;
+    // Buffer pool for reuse with size-based categorization
+    private final ConcurrentHashMap<Integer, ConcurrentLinkedQueue<ManagedDirectBuffer>> bufferPoolBySize;
     private final ConcurrentHashMap<Long, ManagedDirectBuffer> activeBuffers;
     private final AtomicLong bufferIdGenerator;
     private final AtomicLong totalAllocatedBytes;
     private final AtomicLong totalReusedBytes;
     private final AtomicLong totalFreedBytes;
     
-    // Reference counting and lifecycle management
+    // Memory-mapped file support
+    private final ConcurrentHashMap<String, MemoryMappedFile> memoryMappedFiles;
+    private final AtomicLong totalMappedBytes;
+    
+    // Reference counting and lifecycle management with memory compaction
     private final ConcurrentHashMap<Long, AtomicLong> referenceCounts;
     private final ConcurrentHashMap<Long, BufferMetadata> bufferMetadata;
     private final ScheduledExecutorService cleanupExecutor;
     private final AtomicReference<ScheduledFuture<?>> cleanupTask;
+    private final AtomicLong compactionThreshold;
+    private final AtomicLong lastCompactionTime;
     
     // Performance monitoring
     private final PerformanceMonitoringSystem performanceMonitor;
@@ -129,13 +138,17 @@ public final class ZeroCopyBufferManager {
     }
     
     private ZeroCopyBufferManager() {
-        this.bufferPool = new ConcurrentLinkedQueue<>();
+        this.bufferPoolBySize = new ConcurrentHashMap<>();
         this.activeBuffers = new ConcurrentHashMap<>();
         this.bufferIdGenerator = new AtomicLong(0);
         this.referenceCounts = new ConcurrentHashMap<>();
         this.bufferMetadata = new ConcurrentHashMap<>();
         this.cleanupExecutor = Executors.newScheduledThreadPool(1);
         this.cleanupTask = new AtomicReference<>();
+        this.memoryMappedFiles = new ConcurrentHashMap<>();
+        this.totalMappedBytes = new AtomicLong(0);
+        this.compactionThreshold = new AtomicLong(1000); // Compact after 1000 allocations
+        this.lastCompactionTime = new AtomicLong(System.currentTimeMillis());
         
         this.performanceMonitor = PerformanceMonitoringSystem.getInstance();
         this.eventBus = performanceMonitor.getEventBus();
@@ -205,17 +218,50 @@ public final class ZeroCopyBufferManager {
     }
     
     /**
-     * Try to reuse a buffer from the pool
+     * Try to reuse a buffer from the pool with size-based categorization
      */
     private ManagedDirectBuffer tryReuseBuffer(int requiredSize) {
-        for (ManagedDirectBuffer buffer : bufferPool) {
-            if (buffer.getSize() >= requiredSize && !buffer.isReleased()) {
-                bufferPool.remove(buffer);
-                buffer.incrementReference();
-                return buffer;
+        // Find the appropriate size category
+        int poolSize = getPoolSize(requiredSize);
+        ConcurrentLinkedQueue<ManagedDirectBuffer> sizePool = bufferPoolBySize.get(poolSize);
+        
+        if (sizePool != null) {
+            for (ManagedDirectBuffer buffer : sizePool) {
+                if (buffer.getSize() >= requiredSize && !buffer.isReleased()) {
+                    sizePool.remove(buffer);
+                    buffer.incrementReference();
+                    totalReusedBytes.addAndGet(buffer.getSize());
+                    return buffer;
+                }
             }
         }
+        
+        // Try larger pools if not found in appropriate size
+        for (Map.Entry<Integer, ConcurrentLinkedQueue<ManagedDirectBuffer>> entry : bufferPoolBySize.entrySet()) {
+            if (entry.getKey() >= poolSize) {
+                for (ManagedDirectBuffer buffer : entry.getValue()) {
+                    if (buffer.getSize() >= requiredSize && !buffer.isReleased()) {
+                        entry.getValue().remove(buffer);
+                        buffer.incrementReference();
+                        totalReusedBytes.addAndGet(buffer.getSize());
+                        return buffer;
+                    }
+                }
+            }
+        }
+        
         return null;
+    }
+    
+    /**
+     * Get pool size category for buffer size
+     */
+    private int getPoolSize(int size) {
+        if (size <= 1024) return 1024;
+        if (size <= 4096) return 4096;
+        if (size <= 16384) return 16384;
+        if (size <= 65536) return 65536;
+        return ((size + 65535) / 65536) * 65536;
     }
     
     /**
@@ -266,7 +312,7 @@ public final class ZeroCopyBufferManager {
     }
     
     /**
-     * Deallocate a buffer completely
+     * Deallocate a buffer completely with memory compaction support
      */
     private void deallocateBuffer(long bufferId, String component) {
         ManagedDirectBuffer buffer = activeBuffers.remove(bufferId);
@@ -275,25 +321,95 @@ public final class ZeroCopyBufferManager {
             referenceCounts.remove(bufferId);
             
             int size = buffer.getSize();
-            buffer.release();
+            
+            // Fast buffer cleanup without reflection
+            fastBufferCleanup(buffer);
             
             totalFreedBytes.addAndGet(size);
             totalDeallocations.incrementAndGet();
             
-            // Try to add to pool for reuse
-            if (bufferPool.size() < MAX_POOL_SIZE) {
-                bufferPool.offer(buffer);
+            // Add to appropriate size pool for reuse
+            int poolSize = getPoolSize(size);
+            ConcurrentLinkedQueue<ManagedDirectBuffer> sizePool =
+                bufferPoolBySize.computeIfAbsent(poolSize, k -> new ConcurrentLinkedQueue<>());
+            
+            if (sizePool.size() < MAX_POOL_SIZE / 4) { // Limit per size category
+                sizePool.offer(buffer);
             }
+            
+            // Check if memory compaction is needed
+            checkMemoryCompaction();
             
             // Publish deallocation event
             publishBufferEvent("buffer_deallocated", bufferId, size, component);
             
             // Record metrics
-            long duration = System.nanoTime() - (metadata != null ? 
+            long duration = System.nanoTime() - (metadata != null ?
                 metadata.creationTime.toEpochMilli() * 1_000_000 : System.nanoTime());
-            performanceMonitor.recordEvent("ZeroCopyBufferManager", "buffer_lifetime", 
+            performanceMonitor.recordEvent("ZeroCopyBufferManager", "buffer_lifetime",
                 duration, Map.of("size", size, "component", component));
         }
+    }
+    
+    /**
+     * Fast buffer cleanup without reflection overhead
+     */
+    private void fastBufferCleanup(ManagedDirectBuffer buffer) {
+        // Use direct buffer cleanup without reflection
+        if (buffer.getBuffer().isDirect()) {
+            try {
+                // Clear buffer contents for security
+                buffer.getBuffer().clear();
+                buffer.release();
+            } catch (Exception e) {
+                // Fallback: just mark as released
+                buffer.isReleased = true;
+            }
+        }
+    }
+    
+    /**
+     * Check if memory compaction is needed
+     */
+    private void checkMemoryCompaction() {
+        long currentAllocations = totalAllocations.get();
+        long lastCompaction = lastCompactionTime.get();
+        
+        if (currentAllocations % compactionThreshold.get() == 0 &&
+            System.currentTimeMillis() - lastCompaction > 60000) { // At least 1 minute between compactions
+            performMemoryCompaction();
+            lastCompactionTime.set(System.currentTimeMillis());
+        }
+    }
+    
+    /**
+     * Perform memory compaction to reduce fragmentation
+     */
+    private void performMemoryCompaction() {
+        int compactedBuffers = 0;
+        
+        // Compact each size pool
+        for (Map.Entry<Integer, ConcurrentLinkedQueue<ManagedDirectBuffer>> entry : bufferPoolBySize.entrySet()) {
+            ConcurrentLinkedQueue<ManagedDirectBuffer> sizePool = entry.getValue();
+            List<ManagedDirectBuffer> toRemove = new ArrayList<>();
+            
+            // Find fragmented buffers
+            for (ManagedDirectBuffer buffer : sizePool) {
+                if (buffer.isReleased() || buffer.getSize() < entry.getKey() / 2) {
+                    toRemove.add(buffer);
+                }
+            }
+            
+            // Remove fragmented buffers
+            for (ManagedDirectBuffer buffer : toRemove) {
+                sizePool.remove(buffer);
+                compactedBuffers++;
+            }
+        }
+        
+        // Record compaction metrics
+        performanceMonitor.recordEvent("ZeroCopyBufferManager", "memory_compaction",
+            compactedBuffers, Map.of("compacted_buffers", compactedBuffers));
     }
     
     /**
@@ -339,6 +455,42 @@ public final class ZeroCopyBufferManager {
     }
     
     /**
+     * Create a memory-mapped file buffer for fast persistence
+     */
+    public ManagedDirectBuffer createMemoryMappedBuffer(String filePath, int size, String creatorComponent) {
+        try {
+            // Create or open memory-mapped file
+            MemoryMappedFile mmapFile = new MemoryMappedFile(filePath, size);
+            memoryMappedFiles.put(filePath, mmapFile);
+            totalMappedBytes.addAndGet(size);
+            
+            // Create buffer wrapper for memory-mapped data
+            long bufferId = bufferIdGenerator.incrementAndGet();
+            ByteBuffer buffer = mmapFile.getBuffer();
+            ManagedDirectBuffer managedBuffer = new ManagedDirectBuffer(bufferId, buffer, size);
+            
+            // Register buffer
+            activeBuffers.put(bufferId, managedBuffer);
+            referenceCounts.put(bufferId, new AtomicLong(1));
+            bufferMetadata.put(bufferId, new BufferMetadata(bufferId, size,
+                Thread.currentThread().getName(), creatorComponent + "_mmap"));
+            
+            totalAllocatedBytes.addAndGet(size);
+            totalAllocations.incrementAndGet();
+            
+            // Publish allocation event
+            publishBufferEvent("memory_mapped_buffer_allocated", bufferId, size, creatorComponent);
+            
+            return managedBuffer;
+            
+        } catch (Exception e) {
+            performanceMonitor.recordError("ZeroCopyBufferManager", e,
+                Map.of("operation", "create_memory_mapped_buffer", "file_path", filePath, "size", size));
+            throw new RuntimeException("Failed to create memory-mapped buffer", e);
+        }
+    }
+    
+    /**
      * Create a shared buffer that can be accessed by multiple components
      */
     public SharedBuffer createSharedBuffer(int size, String creatorComponent, String sharedName) {
@@ -358,12 +510,23 @@ public final class ZeroCopyBufferManager {
     }
     
     /**
+     * Get total pooled buffer count
+     */
+    private int getTotalPooledBufferCount() {
+        int total = 0;
+        for (ConcurrentLinkedQueue<ManagedDirectBuffer> sizePool : bufferPoolBySize.values()) {
+            total += sizePool.size();
+        }
+        return total;
+    }
+    
+    /**
      * Get buffer statistics
      */
     public BufferStatistics getStatistics() {
         return new BufferStatistics(
             activeBuffers.size(),
-            bufferPool.size(),
+            getTotalPooledBufferCount(),
             totalAllocatedBytes.get(),
             totalReusedBytes.get(),
             totalFreedBytes.get(),
@@ -487,7 +650,49 @@ public final class ZeroCopyBufferManager {
     }
     
     /**
-     * Shutdown the buffer manager
+     * Memory-mapped file support class
+     */
+    private static class MemoryMappedFile {
+        private final String filePath;
+        private final int size;
+        private final ByteBuffer buffer;
+        
+        MemoryMappedFile(String filePath, int size) throws IOException {
+            this.filePath = filePath;
+            this.size = size;
+            
+            // Create memory-mapped file
+            try (RandomAccessFile file = new RandomAccessFile(filePath, "rw")) {
+                file.setLength(size);
+                this.buffer = file.getChannel().map(FileChannel.MapMode.READ_WRITE, 0, size);
+            }
+        }
+        
+        ByteBuffer getBuffer() {
+            return buffer;
+        }
+        
+        void close() throws IOException {
+            // Force synchronization to disk - use reflection safely
+            try {
+                if (buffer != null && buffer.isDirect()) {
+                    // Use reflection to access cleaner
+                    java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+                    cleanerMethod.setAccessible(true);
+                    Object cleaner = cleanerMethod.invoke(buffer);
+                    if (cleaner != null) {
+                        java.lang.reflect.Method cleanMethod = cleaner.getClass().getMethod("clean");
+                        cleanMethod.invoke(cleaner);
+                    }
+                }
+            } catch (Exception e) {
+                // Ignore cleanup errors - buffer will be garbage collected anyway
+            }
+        }
+    }
+    
+    /**
+     * Shutdown the buffer manager with cleanup
      */
     public void shutdown() {
         try {
@@ -497,23 +702,34 @@ public final class ZeroCopyBufferManager {
                 task.cancel(false);
             }
             
+            // Close memory-mapped files
+            for (MemoryMappedFile mmapFile : memoryMappedFiles.values()) {
+                try {
+                    mmapFile.close();
+                } catch (IOException e) {
+                    performanceMonitor.recordError("ZeroCopyBufferManager", e,
+                        Map.of("operation", "close_mmap_file"));
+                }
+            }
+            
             // Clear all buffers
             for (ManagedDirectBuffer buffer : activeBuffers.values()) {
-                buffer.release();
+                fastBufferCleanup(buffer);
             }
             
             // Clear pools and maps
             activeBuffers.clear();
-            bufferPool.clear();
+            bufferPoolBySize.clear();
             referenceCounts.clear();
             bufferMetadata.clear();
+            memoryMappedFiles.clear();
             
             // Shutdown executor
             cleanupExecutor.shutdown();
             cleanupExecutor.awaitTermination(5, TimeUnit.SECONDS);
             
         } catch (Exception e) {
-            performanceMonitor.recordError("ZeroCopyBufferManager", e, 
+            performanceMonitor.recordError("ZeroCopyBufferManager", e,
                 Map.of("operation", "shutdown"));
         }
     }

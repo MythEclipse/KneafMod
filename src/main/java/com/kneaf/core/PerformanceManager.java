@@ -32,6 +32,15 @@ public final class PerformanceManager {
     private final AtomicBoolean isRustIntegrationEnabled = new AtomicBoolean(false);
     private final AtomicBoolean isHorizontalPhysicsOnly = new AtomicBoolean(false);
     
+    // Combat system optimization flags
+    private final AtomicBoolean isCombatSimdOptimized = new AtomicBoolean(true);
+    private final AtomicBoolean isCombatParallelProcessingEnabled = new AtomicBoolean(true);
+    private final AtomicBoolean isPredictiveLoadBalancingEnabled = new AtomicBoolean(true);
+    private final AtomicBoolean isHitDetectionOptimized = new AtomicBoolean(true);
+    
+    // Performance monitoring for optimizations
+    private final AtomicBoolean isOptimizationMonitoringEnabled = new AtomicBoolean(true);
+    
     // Configuration file path
     private static final String CONFIG_PATH = "config/kneaf-performance.properties";
     
@@ -80,6 +89,15 @@ public final class PerformanceManager {
             isRustIntegrationEnabled.set(parseBooleanProperty(properties, "rustIntegrationEnabled", false));
             isHorizontalPhysicsOnly.set(parseBooleanProperty(properties, "horizontalPhysicsOnly", false));
             
+            // Load combat system optimization flags
+            isCombatSimdOptimized.set(parseBooleanProperty(properties, "combatSimdOptimized", true));
+            isCombatParallelProcessingEnabled.set(parseBooleanProperty(properties, "combatParallelProcessingEnabled", true));
+            isPredictiveLoadBalancingEnabled.set(parseBooleanProperty(properties, "predictiveLoadBalancingEnabled", true));
+            isHitDetectionOptimized.set(parseBooleanProperty(properties, "hitDetectionOptimized", true));
+            
+            // Load monitoring flags
+            isOptimizationMonitoringEnabled.set(parseBooleanProperty(properties, "optimizationMonitoringEnabled", true));
+            
         } catch (IOException e) {
             LOGGER.error("Failed to load performance configuration", e);
             // Set safe defaults on error
@@ -96,6 +114,16 @@ public final class PerformanceManager {
         isRenderingMathOptimized.set(true);
         isRustIntegrationEnabled.set(false);
         isHorizontalPhysicsOnly.set(false);
+        
+        // Combat system defaults
+        isCombatSimdOptimized.set(true);
+        isCombatParallelProcessingEnabled.set(true);
+        isPredictiveLoadBalancingEnabled.set(true);
+        isHitDetectionOptimized.set(true);
+        
+        // Monitoring defaults
+        isOptimizationMonitoringEnabled.set(true);
+        
         LOGGER.info("PerformanceManager reset to default configuration");
     }
     
@@ -248,6 +276,151 @@ public final class PerformanceManager {
         isHorizontalPhysicsOnly.set(enabled);
     }
     
+    // ------------------------------ Combat System Optimization Methods ------------------------------
+    
+    /**
+     * Check if combat SIMD optimization is enabled.
+     * @return true if combat SIMD optimization is enabled, false otherwise
+     */
+    public boolean isCombatSimdOptimized() {
+        return isCombatSimdOptimized.get();
+    }
+    
+    /**
+     * Set combat SIMD optimization state.
+     * @param optimized true to enable combat SIMD optimization, false to disable
+     */
+    public void setCombatSimdOptimized(boolean optimized) {
+        boolean oldValue = isCombatSimdOptimized.get();
+        isCombatSimdOptimized.set(optimized);
+        
+        // Record configuration change in monitoring system
+        PerformanceMonitoringSystem.getInstance().getMetricAggregator().recordMetric(
+            "performance_manager.combat_simd_optimized", optimized ? 1.0 : 0.0);
+        
+        if (oldValue != optimized) {
+            PerformanceMonitoringSystem.getInstance().getEventBus().publishEvent(
+                new com.kneaf.core.performance.CrossComponentEvent(
+                    "PerformanceManager", "combat_simd_config_changed",
+                    java.time.Instant.now(), 0,
+                    java.util.Map.of("old_value", oldValue, "new_value", optimized)
+                )
+            );
+        }
+    }
+    
+    /**
+     * Check if combat parallel processing is enabled.
+     * @return true if combat parallel processing is enabled, false otherwise
+     */
+    public boolean isCombatParallelProcessingEnabled() {
+        return isCombatParallelProcessingEnabled.get();
+    }
+    
+    /**
+     * Set combat parallel processing state.
+     * @param enabled true to enable combat parallel processing, false to disable
+     */
+    public void setCombatParallelProcessingEnabled(boolean enabled) {
+        isCombatParallelProcessingEnabled.set(enabled);
+    }
+    
+    /**
+     * Check if predictive load balancing is enabled.
+     * @return true if predictive load balancing is enabled, false otherwise
+     */
+    public boolean isPredictiveLoadBalancingEnabled() {
+        return isPredictiveLoadBalancingEnabled.get();
+    }
+    
+    /**
+     * Set predictive load balancing state.
+     * @param enabled true to enable predictive load balancing, false to disable
+     */
+    public void setPredictiveLoadBalancingEnabled(boolean enabled) {
+        isPredictiveLoadBalancingEnabled.set(enabled);
+    }
+    
+    /**
+     * Check if hit detection optimization is enabled.
+     * @return true if hit detection optimization is enabled, false otherwise
+     */
+    public boolean isHitDetectionOptimized() {
+        return isHitDetectionOptimized.get();
+    }
+    
+    /**
+     * Set hit detection optimization state.
+     * @param optimized true to enable hit detection optimization, false to disable
+     */
+    public void setHitDetectionOptimized(boolean optimized) {
+        isHitDetectionOptimized.set(optimized);
+    }
+    
+    /**
+     * Check if optimization monitoring is enabled.
+     * @return true if optimization monitoring is enabled, false otherwise
+     */
+    public boolean isOptimizationMonitoringEnabled() {
+        return isOptimizationMonitoringEnabled.get();
+    }
+    
+    /**
+     * Set optimization monitoring state.
+     * @param enabled true to enable optimization monitoring, false to disable
+     */
+    public void setOptimizationMonitoringEnabled(boolean enabled) {
+        isOptimizationMonitoringEnabled.set(enabled);
+    }
+    
+    /**
+     * Get comprehensive performance metrics for all optimizations.
+     * @return map of optimization metrics
+     */
+    public java.util.Map<String, Object> getOptimizationMetrics() {
+        java.util.Map<String, Object> metrics = new java.util.HashMap<>();
+        
+        // Basic optimization flags
+        metrics.put("entity_throttling_enabled", isEntityThrottlingEnabled.get());
+        metrics.put("ai_pathfinding_optimized", isAiPathfindingOptimized.get());
+        metrics.put("rendering_math_optimized", isRenderingMathOptimized.get());
+        metrics.put("rust_integration_enabled", isRustIntegrationEnabled.get());
+        metrics.put("horizontal_physics_only", isHorizontalPhysicsOnly.get());
+        
+        // Combat system optimizations
+        metrics.put("combat_simd_optimized", isCombatSimdOptimized.get());
+        metrics.put("combat_parallel_processing_enabled", isCombatParallelProcessingEnabled.get());
+        metrics.put("predictive_load_balancing_enabled", isPredictiveLoadBalancingEnabled.get());
+        metrics.put("hit_detection_optimized", isHitDetectionOptimized.get());
+        
+        // Monitoring status
+        metrics.put("optimization_monitoring_enabled", isOptimizationMonitoringEnabled.get());
+        
+        return metrics;
+    }
+    
+    /**
+     * Get optimization performance summary for monitoring dashboard.
+     * @return formatted summary string
+     */
+    public String getOptimizationSummary() {
+        return String.format(
+            "PerformanceManager{" +
+            "entityThrottling=%s, aiPathfinding=%s, renderingMath=%s, rustIntegration=%s, " +
+            "combatSimd=%s, combatParallel=%s, predictiveLoadBalancing=%s, hitDetection=%s, " +
+            "optimizationMonitoring=%s}",
+            isEntityThrottlingEnabled.get(),
+            isAiPathfindingOptimized.get(),
+            isRenderingMathOptimized.get(),
+            isRustIntegrationEnabled.get(),
+            isCombatSimdOptimized.get(),
+            isCombatParallelProcessingEnabled.get(),
+            isPredictiveLoadBalancingEnabled.get(),
+            isHitDetectionOptimized.get(),
+            isOptimizationMonitoringEnabled.get()
+        );
+    }
+    
     /**
      * Load configuration asynchronously using virtual threads (Java 21+).
      *
@@ -263,10 +436,6 @@ public final class PerformanceManager {
      */
     @Override
     public String toString() {
-        return String.format("PerformanceManager{entityThrottling=%s, aiPathfinding=%s, renderingMath=%s, rustIntegration=%s}",
-                isEntityThrottlingEnabled.get(),
-                isAiPathfindingOptimized.get(),
-                isRenderingMathOptimized.get(),
-                isRustIntegrationEnabled.get());
+        return getOptimizationSummary();
     }
 }
