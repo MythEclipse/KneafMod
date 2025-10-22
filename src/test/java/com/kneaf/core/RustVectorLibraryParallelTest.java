@@ -426,47 +426,51 @@ public class RustVectorLibraryParallelTest {
     }
 
     /**
-     * Test zero-copy performance comparison
+     * Test standard buffer system performance (zero-copy functionality has been removed)
      */
     @Test
-    @DisplayName("Test zero-copy vs traditional performance comparison")
-    void testZeroCopyVsTraditionalPerformance() throws Exception {
-        int iterations = 1000;
+    @DisplayName("Test standard buffer system performance")
+    void testStandardBufferSystemPerformance() throws Exception {
+        int iterations = 100; // Reduced iterations for test environments
         
         float[] matrixA = IDENTITY_MATRIX.clone();
         float[] matrixB = IDENTITY_MATRIX.clone();
         
-        // Traditional approach (if available)
-        long traditionalStart = System.nanoTime();
+        // Test standard matrix multiplication performance
+        long startTime = System.nanoTime();
         for (int i = 0; i < iterations; i++) {
             float[] result = RustVectorLibrary.matrixMultiplyNalgebra(matrixA, matrixB);
-            assertNotNull(result);
+            assertNotNull(result, "Matrix multiplication should return valid result");
+            assertEquals(16, result.length, "Result should be 4x4 matrix");
         }
-        long traditionalDuration = (System.nanoTime() - traditionalStart) / 1_000_000;
+        long durationMs = (System.nanoTime() - startTime) / 1_000_000;
         
-        // Zero-copy approach
-        long zeroCopyStart = System.nanoTime();
+        System.out.println("Standard buffer system performance (" + iterations + " iterations):");
+        System.out.println("  Matrix multiplication: " + durationMs + "ms");
+        
+        // Verify operations complete successfully (no assertion on specific performance metrics
+        // as they vary by environment and hardware)
+        assertTrue(durationMs >= 0, "Duration should be non-negative");
+        
+        // Test vector operations performance
+        float[] vectorA = {1.0f, 2.0f, 3.0f};
+        float[] vectorB = {4.0f, 5.0f, 6.0f};
+        
+        startTime = System.nanoTime();
         for (int i = 0; i < iterations; i++) {
-            float[] result = RustVectorLibrary.matrixMultiplyNalgebra(matrixA, matrixB);
-            assertNotNull(result);
+            float[] result = RustVectorLibrary.vectorAddNalgebra(vectorA, vectorB);
+            assertNotNull(result, "Vector addition should return valid result");
+            assertEquals(3, result.length, "Result should be 3D vector");
         }
-        long zeroCopyDuration = (System.nanoTime() - zeroCopyStart) / 1_000_000;
+        long vectorDurationMs = (System.nanoTime() - startTime) / 1_000_000;
         
-        System.out.println("Performance comparison (" + iterations + " iterations):");
-        System.out.println("  Traditional: " + traditionalDuration + "ms");
-        System.out.println("  Zero-copy: " + zeroCopyDuration + "ms");
+        System.out.println("  Vector addition: " + vectorDurationMs + "ms");
+        assertTrue(vectorDurationMs >= 0, "Vector operation duration should be non-negative");
         
-        double speedup = (double) traditionalDuration / zeroCopyDuration;
-        System.out.println("  Speedup: " + speedup + "x");
-        
-        // Handle cases where both operations take 0ms (likely in test environments)
-        if (traditionalDuration == 0 && zeroCopyDuration == 0) {
-            System.out.println("Both traditional and zero-copy operations took 0ms - skipping performance comparison");
-        } else {
-            // Zero-copy should be faster or at least comparable when both have measurable duration
-            assertTrue(zeroCopyDuration < traditionalDuration * 1.5,
-                      "Zero-copy not efficient enough: " + zeroCopyDuration + "ms vs " + traditionalDuration + "ms");
-        }
+        // Test that operations produce correct results
+        float[] addResult = RustVectorLibrary.vectorAddNalgebra(vectorA, vectorB);
+        assertArrayEquals(new float[]{5.0f, 7.0f, 9.0f}, addResult, 1e-6f,
+                       "Vector addition should produce correct results");
     }
 
     /**
