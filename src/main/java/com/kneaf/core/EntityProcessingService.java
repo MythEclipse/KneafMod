@@ -4,7 +4,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.kneaf.core.EntityInterface;
 import com.kneaf.core.mock.TestMockEntity;
-import org.slf4j.Logger;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -240,15 +239,17 @@ public final class EntityProcessingService {
             );
         }
         
-        // Mock entity validation for tests - skip complex Minecraft-specific checks
-        try {
-            // For tests, we assume entities are valid and skip client-side/player checks
+        // Perform entity validation appropriate for current runtime mode
+        if (ModeDetector.isTestMode()) {
             LOGGER.debug("Entity processing: skipping Minecraft-specific validation for tests");
-        } catch (Exception e) {
-            LOGGER.debug("Entity validation failed, continuing with processing", e);
-            return CompletableFuture.completedFuture(
-                new EntityProcessingResult(false, "Entity validation failed", physicsData)
-            );
+        } else {
+            // Perform strict validation for production entities
+            if (!isValidProductionEntity(entity)) {
+                return CompletableFuture.completedFuture(
+                    new EntityProcessingResult(false, "Entity failed production validation", physicsData)
+                );
+            }
+            LOGGER.debug("Validated production entity: {}", entity);
         }
         
         // Get entity adapter (handles both EntityInterface and reflection for other objects)
@@ -297,12 +298,9 @@ public final class EntityProcessingService {
                 continue;
             }
             
-            // Mock checks for client side and player (assume not client side and not player for tests)
-            try {
-                // Skip if entity is player or client side (mock implementation)
-                // For tests, we assume entities are valid for processing
-            } catch (Exception e) {
-                LOGGER.debug("Entity validation failed for batch entity, skipping", e);
+            // Perform validation appropriate for current runtime mode
+            if (!ModeDetector.isTestMode() && !isValidProductionEntity(entity)) {
+                LOGGER.debug("Batch entity failed production validation, skipping: {}", entity.getId());
                 continue;
             }
             
@@ -426,7 +424,7 @@ public final class EntityProcessingService {
             }
             double dampingFactor = entityType.getDampingFactor();
             
-            // Perform physics calculation
+            // Perform physics calculation - ALWAYS use native Rust optimization for valid entities in production
             double[] result = OptimizationInjector.rustperf_vector_damp(
                 data.motionX, data.motionY, data.motionZ, dampingFactor
             );
@@ -457,7 +455,7 @@ public final class EntityProcessingService {
                 
                 return new EntityProcessingResult(true, "Physics calculation successful", processedData);
             } else {
-                // Fallback to Java calculation
+                // Fallback to Java calculation only if native fails
                 EntityPhysicsData fallbackData = new EntityPhysicsData(
                     data.motionX * dampingFactor,
                     data.motionY,
@@ -846,6 +844,38 @@ public final class EntityProcessingService {
         }
     }
     
+    /**
+     * Validate that an entity is suitable for production processing
+     * @param entity Entity to validate
+     * @return true if entity is valid for production use
+     */
+    private boolean isValidProductionEntity(Object entity) {
+        if (entity == null) return false;
+        
+        try {
+            // Check if entity is a valid Minecraft entity (production-only check)
+            String entityClassName = entity.getClass().getName();
+            
+            // Reject non-Minecraft entities in production
+            if (!entityClassName.startsWith("net.minecraft.world.entity.")) {
+                LOGGER.warn("Rejected non-Minecraft entity in production: {}", entityClassName);
+                return false;
+            }
+            
+            // Allow specific Minecraft entity types that benefit from optimization
+            // LocalPlayer, EntityLiving, EntityMob, etc. should all be allowed
+            // Block entities and other non-physical entities can be filtered out if needed
+            
+            // Additional validation can be added here for specific entity types
+            // For example: check if entity is a player, mob, etc.
+            
+            return true;
+        } catch (Exception e) {
+            LOGGER.debug("Entity validation failed due to exception", e);
+            return false;
+        }
+    }
+
     public static class EntityProcessingStatistics {
         public final long processedEntities;
         public final long queuedEntities;

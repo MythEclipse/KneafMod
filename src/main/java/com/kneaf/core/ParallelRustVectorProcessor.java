@@ -486,14 +486,18 @@ public class ParallelRustVectorProcessor {
                 // Process block using native batch methods
                 float[] blockResults = processBatch(blockA, blockB, operationType);
                 
-                // Convert results back to individual matrices
+                // Convert results back to individual matrices with bounds checking
+                int expectedResultSize = (endIdx - startIdx) * 16;
+                if (blockResults.length < expectedResultSize) {
+                    throw new IllegalStateException("Native batch operation returned incomplete results: expected " +
+                                                    expectedResultSize + " elements, got " + blockResults.length);
+                }
+                
                 for (int i = 0; i < endIdx - startIdx; i++) {
                     float[] result = new float[16];
-                    // Manual copy to avoid array type issues
+                    // Manual copy to avoid array type issues with proper bounds checking
                     int baseIdx = i * 16;
-                    for (int j = 0; j < 16; j++) {
-                        result[j] = blockResults[baseIdx + j];
-                    }
+                    System.arraycopy(blockResults, baseIdx, result, 0, 16);
                     results.add(result);
                 }
             }
@@ -794,13 +798,14 @@ public class ParallelRustVectorProcessor {
      * Process batch of operations using native batch methods
      */
     private float[] processBatch(float[][] batchA, float[][] batchB, String operationType) {
+        int batchSize = batchA.length;
         switch (operationType) {
             case "nalgebra":
-                return batchNalgebraMatrixMul(batchA, batchB, batchA.length);
+                return batchNalgebraMatrixMul(batchA, batchB, batchSize);
             case "glam":
-                return batchGlamMatrixMul(batchA, batchB, batchA.length);
+                return batchGlamMatrixMul(batchA, batchB, batchSize);
             case "faer":
-                return batchFaerMatrixMul(batchA, batchB, batchA.length);
+                return batchFaerMatrixMul(batchA, batchB, batchSize);
             default:
                 throw new IllegalArgumentException("Unknown operation type: " + operationType);
         }

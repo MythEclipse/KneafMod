@@ -430,9 +430,14 @@ public class RustVectorLibraryParallelTest {
         double speedup = (double) traditionalDuration / zeroCopyDuration;
         System.out.println("  Speedup: " + speedup + "x");
         
-        // Zero-copy should be faster or at least comparable
-        assertTrue(zeroCopyDuration < traditionalDuration * 1.5, 
-                  "Zero-copy not efficient enough: " + zeroCopyDuration + "ms vs " + traditionalDuration + "ms");
+        // Handle cases where both operations take 0ms (likely in test environments)
+        if (traditionalDuration == 0 && zeroCopyDuration == 0) {
+            System.out.println("Both traditional and zero-copy operations took 0ms - skipping performance comparison");
+        } else {
+            // Zero-copy should be faster or at least comparable when both have measurable duration
+            assertTrue(zeroCopyDuration < traditionalDuration * 1.5,
+                      "Zero-copy not efficient enough: " + zeroCopyDuration + "ms vs " + traditionalDuration + "ms");
+        }
     }
 
     /**
