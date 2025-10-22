@@ -67,7 +67,6 @@ public class PerformanceManagerAsyncTest {
         // Verify configuration was loaded
         assertTrue(performanceManager.isEntityThrottlingEnabled());
         assertTrue(performanceManager.isAiPathfindingOptimized());
-        assertTrue(performanceManager.isRenderingMathOptimized());
         assertTrue(performanceManager.isRustIntegrationEnabled());
         assertFalse(performanceManager.isHorizontalPhysicsOnly());
         
@@ -94,7 +93,6 @@ public class PerformanceManagerAsyncTest {
         // Verify fallback to defaults
         assertTrue(performanceManager.isEntityThrottlingEnabled());
         assertTrue(performanceManager.isAiPathfindingOptimized());
-        assertTrue(performanceManager.isRenderingMathOptimized());
         assertFalse(performanceManager.isRustIntegrationEnabled()); // Default is false
         assertFalse(performanceManager.isHorizontalPhysicsOnly());
         
@@ -119,7 +117,6 @@ public class PerformanceManagerAsyncTest {
         // Verify fallback to defaults on error
         assertTrue(performanceManager.isEntityThrottlingEnabled());
         assertTrue(performanceManager.isAiPathfindingOptimized());
-        assertTrue(performanceManager.isRenderingMathOptimized());
         assertFalse(performanceManager.isRustIntegrationEnabled());
         assertFalse(performanceManager.isHorizontalPhysicsOnly());
         
@@ -394,7 +391,6 @@ public class PerformanceManagerAsyncTest {
         try (FileWriter writer = new FileWriter(configFile)) {
             writer.write("entityThrottlingEnabled=true\n");
             writer.write("aiPathfindingOptimized=true\n");
-            writer.write("renderingMathOptimized=true\n");
             writer.write("rustIntegrationEnabled=true\n");
             writer.write("horizontalPhysicsOnly=false\n");
         }
@@ -405,7 +401,6 @@ public class PerformanceManagerAsyncTest {
             writer.write("invalid_property=not_a_boolean\n");
             writer.write("entityThrottlingEnabled=maybe\n"); // Invalid boolean
             writer.write("aiPathfindingOptimized=yes\n"); // Invalid boolean
-            writer.write("renderingMathOptimized=1\n"); // Invalid boolean
         }
     }
 

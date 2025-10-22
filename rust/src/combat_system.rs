@@ -170,7 +170,7 @@ impl CombatComponent {
 
     pub fn can_attack(&self) -> bool {
         self.state == CombatState::Idle && 
-        self.last_combat_action.map_or(true, |last| {
+        self.last_combat_action.is_none_or(|last| {
             Instant::now().duration_since(last) >= self.combat_cooldown
         })
     }
@@ -957,11 +957,10 @@ impl CombatSystem {
         let mut events = Vec::new();
         
         // Process entities with optimized distance calculations
-        for i in 0..entities.len() {
-            let entity_id = entities[i];
+        for entity_id in entities {
             
             // Get entity position
-            let entity_pos = self.get_entity_position(entity_id).unwrap_or(center);
+            let entity_pos = self.get_entity_position(*entity_id).unwrap_or(center);
             
             // Optimized distance calculation using fast inverse square root
             let dx = entity_pos.x - center.x;
@@ -980,7 +979,7 @@ impl CombatSystem {
                 let event = CombatEvent {
                     event_type: CombatEventType::DamageDealt,
                     attacker_id: EntityId(0), // System entity
-                    target_id: entity_id,
+                    target_id: *entity_id,
                     damage_amount: final_damage,
                     is_critical: false,
                     timestamp: Instant::now(),
@@ -988,14 +987,14 @@ impl CombatSystem {
                 };
                 
                 // Apply damage asynchronously for better performance
-                if let Ok(_) = self.apply_damage_optimized(EntityId(0), entity_id, DamageResult {
+                if self.apply_damage_optimized(EntityId(0), *entity_id, DamageResult {
                     final_damage,
                     is_critical: false,
                     damage_type: damage_type.clone(),
                     was_blocked: false,
                     was_dodged: false,
                     overkill_damage: 0.0,
-                }, center) {
+                }, center).is_ok() {
                     events.push(event);
                 }
             }
@@ -1171,7 +1170,7 @@ mod tests {
     #[test]
     fn test_damage_calculation() {
         let monitor = Arc::new(PerformanceMonitor::new());
-        let registry = Arc::new(EntityRegistry::new(monitor));
+        let registry = Arc::new(EntityRegistry::new(monitor.clone()));
         let combat_system = CombatSystem::new(registry, monitor);
         
         let calc = DamageCalculation {
@@ -1212,7 +1211,7 @@ mod tests {
         let ray_direction = Vec3::new(0.0, 0.0, -1.0);
         
         let monitor = Arc::new(PerformanceMonitor::new());
-        let registry = Arc::new(EntityRegistry::new(monitor));
+        let registry = Arc::new(EntityRegistry::new(monitor.clone()));
         let combat_system = CombatSystem::new(registry, monitor);
         
         let result = combat_system.ray_box_intersection(ray_origin, ray_direction, &bbox);

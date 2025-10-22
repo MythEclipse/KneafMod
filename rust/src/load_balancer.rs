@@ -169,7 +169,7 @@ impl WorkerState {
         
         // Predict future load based on arrival rate and average duration
         let predicted_tasks = metrics.task_arrival_rate * metrics.average_task_duration / 1000.0;
-        metrics.predicted_load = predicted_tasks.min(1.0).max(0.0);
+        metrics.predicted_load = predicted_tasks.clamp(0.0, 1.0);
         metrics.last_update = Instant::now();
     }
 }
@@ -220,8 +220,8 @@ impl LoadBalancerMetrics {
             self.completed_tasks.load(Ordering::Relaxed),
             self.stolen_tasks.load(Ordering::Relaxed),
             self.failed_tasks.load(Ordering::Relaxed),
-            self.average_task_duration.load(Ordering::Relaxed),
-            self.load_imbalance.load(Ordering::Relaxed)
+            self.average_task_duration.load(Ordering::Relaxed) as f64 / 1000.0, // Convert nanoseconds to milliseconds
+            self.load_imbalance.load(Ordering::Relaxed) as f64 / 100.0 // Convert to percentage
         )
     }
 }
@@ -628,8 +628,8 @@ impl SchedulerMetrics {
             .collect::<Vec<_>>();
         
         format!(
-            "SchedulerMetrics{{priorities:{}, total_steals:{}, successful_steals:{}, failed_steals:{}, inversions:{}}}",
-            format!("{:?}", priorities),
+            "SchedulerMetrics{{priorities:{:?}, total_steals:{}, successful_steals:{}, failed_steals:{}, inversions:{}}}",
+            priorities,
             self.total_steals.load(Ordering::Relaxed),
             self.successful_steals.load(Ordering::Relaxed),
             self.failed_steals.load(Ordering::Relaxed),
@@ -910,8 +910,8 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_createLoadBalancerEnhance
     max_queue_size: i32,
 ) -> jni::sys::jlong {
     let load_balancer = Box::new(AdaptiveLoadBalancer::new(num_threads as usize, max_queue_size as usize));
-    let ptr = Box::into_raw(load_balancer) as jni::sys::jlong;
-    ptr
+    
+    Box::into_raw(load_balancer) as jni::sys::jlong
 }
 
 #[allow(non_snake_case)]

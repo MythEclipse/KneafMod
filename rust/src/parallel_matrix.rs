@@ -114,11 +114,11 @@ impl DynamicBlockSizer {
         let block_size = (elements_per_block as f64 * self.target_cache_utilization).sqrt() as usize;
         
         // Clamp to reasonable bounds
-        block_size.max(16).min(256)
+        block_size.clamp(16, 256)
     }
     
     pub fn calculate_num_blocks(&self, block_size: usize) -> usize {
-        ((self.matrix_rows + block_size - 1) / block_size) * ((self.matrix_cols + block_size - 1) / block_size)
+        self.matrix_rows.div_ceil(block_size) * self.matrix_cols.div_ceil(block_size)
     }
 }
 
@@ -151,13 +151,13 @@ pub fn enhanced_parallel_matrix_multiply_block(
     println!("Using optimal block size: {} for matrix {}x{}", optimal_block_size, a_rows, b_cols);
     
     // Create enhanced blocks for parallel processing with performance tracking
-    let blocks: Vec<(usize, usize, usize, usize, usize)> = (0..((a_rows + optimal_block_size - 1) / optimal_block_size))
-        .flat_map(|i| (0..((b_cols + optimal_block_size - 1) / optimal_block_size)).map(move |j| {
+    let blocks: Vec<(usize, usize, usize, usize, usize)> = (0..a_rows.div_ceil(optimal_block_size))
+        .flat_map(|i| (0..b_cols.div_ceil(optimal_block_size)).map(move |j| {
             let row_start = i * optimal_block_size;
             let row_end = std::cmp::min((i + 1) * optimal_block_size, a_rows);
             let col_start = j * optimal_block_size;
             let col_end = std::cmp::min((j + 1) * optimal_block_size, b_cols);
-            (row_start, col_start, row_end, col_end, i * ((b_cols + optimal_block_size - 1) / optimal_block_size) + j)
+            (row_start, col_start, row_end, col_end, i * b_cols.div_ceil(optimal_block_size) + j)
         }))
         .collect();
     
@@ -781,10 +781,13 @@ fn combine_matrices(c11: &[f32], c12: &[f32], c21: &[f32], c22: &[f32], n: usize
     result
 }
 
+/// Type alias for complex cache type
+type MatrixCacheMap = HashMap<String, (Vec<f32>, Instant)>;
+
 /// Enhanced matrix cache with LRU eviction and performance tracking
 #[allow(dead_code)]
 pub struct EnhancedMatrixCache {
-    cache: Arc<Mutex<HashMap<String, (Vec<f32>, Instant)>>>,
+    cache: Arc<Mutex<MatrixCacheMap>>,
     max_size: usize,
     hits: AtomicUsize,
     misses: AtomicUsize,

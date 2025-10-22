@@ -7,7 +7,7 @@ homepage = "https://github.com/kneafmod/rustperf"
 repository = "https://github.com/kneafmod/rustperf"
 license = "MIT OR Apache-2.0"
 keywords = ["rust", "jni", "minecraft", "performance", "native", "parallel", "simd", "multicore"]
-categories = ["external-ffi-bindings", "game-development", "multimedia::graphics", "concurrency", "algorithms"]
+categories = ["external-ffi-bindings", "game-development", "concurrency", "algorithms"]
 
 [lib]
 name = "rustperf"
@@ -27,8 +27,6 @@ jni = "0.21"
 lazy_static = "1.4"
 sysinfo = "0.30"
 rayon = "1.8"
-bevy_reflect = "0.14"
-bevy_ecs = "0.14"
 glam = { version = "0.29", features = ["serde"] }
 nalgebra = { version = "0.33", features = ["serde"] }
 faer = { version = "0.20", features = ["std", "rayon"] }
@@ -67,6 +65,7 @@ schemars = "0.8"
 flume = "0.11"
 crossbeam-deque = "0.8.6"
 uuid = { version = "1.0", features = ["v4"] }
+page_size = "0.6"  # Memory page size detection
 
 # Multi-core optimization dependencies
 threadpool = "1.8"

@@ -78,10 +78,10 @@ public class ParallelProcessingIntegrationTest {
         assertEquals(LARGE_BATCH_SIZE, dotProductResults.size());
         System.out.println("   ✓ Batch vector dot products completed in " + dotTime + "ms");
 
-        // Test 4: Zero-copy operations
+        // Test 4: Standard matrix operations (zero-copy feature removed)
         startTime = System.currentTimeMillis();
-        float[] zeroCopyResult = EnhancedRustVectorLibrary.matrixMultiplyZeroCopy(
-            createIdentityMatrix(), createIdentityMatrix(), "nalgebra");
+        float[] zeroCopyResult = RustVectorLibrary.matrixMultiplyNalgebra(
+            createIdentityMatrix(), createIdentityMatrix());
         long zeroCopyTime = System.currentTimeMillis() - startTime;
 
         assertNotNull(zeroCopyResult);

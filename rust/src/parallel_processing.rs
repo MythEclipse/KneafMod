@@ -70,13 +70,13 @@ impl SafeMemoryManager {
     
     pub fn safe_glam_matrix_mul(a: [f32; 16], b: [f32; 16]) -> Vec<f32> {
         let result = glam_matrix_mul(a, b);
-        (&result[..]).to_vec()
+        result[..].to_vec()
     }
 
     #[allow(dead_code)]
     pub fn safe_faer_matrix_mul(a: [f32; 16], b: [f32; 16]) -> Vec<f32> {
         let result = faer_matrix_mul(a, b);
-        (&result[..]).to_vec()
+        result[..].to_vec()
     }
 
     /// JNI helper wrappers (kept as plain Rust functions; actual extern exports live in lib.rs)
@@ -173,7 +173,6 @@ impl SafeMemoryManager {
     }
 
     /// Helper functions for JNI conversions
-
     pub fn convert_jfloat_array_2d(env: &mut JNIEnv, arrays: &JObjectArray, count: i32) -> Vec<[f32; 16]> {
         let mut result = Vec::with_capacity(count as usize);
 
@@ -252,7 +251,7 @@ impl SafeMemoryManager {
     }
 
     fn set_direct_buffer_data(env: &mut JNIEnv, buffer: &JObject, data: &[f32]) {
-        let address = env.call_method(&buffer, "address", "()J", &[]).unwrap().j().unwrap();
+        let address = env.call_method(buffer, "address", "()J", &[]).unwrap().j().unwrap();
 
         // Safety: This assumes the buffer is a direct ByteBuffer with enough capacity
         unsafe {

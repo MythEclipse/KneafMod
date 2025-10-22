@@ -2,6 +2,8 @@ package com.kneaf.core;
 
 import com.kneaf.core.performance.PerformanceMonitoringSystem;
 import java.util.concurrent.*;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
@@ -18,7 +20,6 @@ import java.util.HashMap;
  * Cache-optimized parallel processor for Rust vector operations using Fork/Join framework.
  * Provides batch processing, zero-copy array sharing, and thread-safe operation queue.
  * Enhanced with CPU cache utilization optimizations and work-stealing scheduler.
- * Integrated with ZeroCopyBufferManager for enhanced memory management.
  */
 public class ParallelRustVectorProcessor {
     private static final int DEFAULT_BATCH_SIZE = 100;
@@ -32,25 +33,14 @@ public class ParallelRustVectorProcessor {
     private final OperationQueue operationQueue;
     private final AtomicLong operationCounter;
     private final Lock memoryLock;
-    private final ZeroCopyBufferManager zeroCopyManager;
     private final CacheOptimizedWorkStealingScheduler workStealingScheduler;
     private final ConcurrentHashMap<Integer, CacheAffinity> workerCacheAffinity;
-    
-    // Native batch processing methods
     private static native float[] batchNalgebraMatrixMul(float[][] matricesA, float[][] matricesB, int count);
     private static native float[] batchNalgebraVectorAdd(float[][] vectorsA, float[][] vectorsB, int count);
     private static native float[] batchGlamVectorDot(float[][] vectorsA, float[][] vectorsB, int count);
     private static native float[] batchGlamVectorCross(float[][] vectorsA, float[][] vectorsB, int count);
     private static native float[] batchGlamMatrixMul(float[][] matricesA, float[][] matricesB, int count);
     private static native float[] batchFaerMatrixMul(float[][] matricesA, float[][] matricesB, int count);
-    
-    // Zero-copy native methods using direct ByteBuffers
-    private static native ByteBuffer nalgebraMatrixMulDirect(ByteBuffer a, ByteBuffer b, ByteBuffer result);
-    private static native ByteBuffer nalgebraVectorAddDirect(ByteBuffer a, ByteBuffer b, ByteBuffer result);
-    private static native float glamVectorDotDirect(ByteBuffer a, ByteBuffer b);
-    private static native ByteBuffer glamVectorCrossDirect(ByteBuffer a, ByteBuffer b, ByteBuffer result);
-    private static native ByteBuffer glamMatrixMulDirect(ByteBuffer a, ByteBuffer b, ByteBuffer result);
-    private static native ByteBuffer faerMatrixMulDirect(ByteBuffer a, ByteBuffer b, ByteBuffer result);
     
     // Safe memory management native methods
     private static native void releaseNativeBuffer(long pointer);
@@ -255,7 +245,6 @@ public class ParallelRustVectorProcessor {
         this.operationQueue = new OperationQueue();
         this.operationCounter = new AtomicLong(0);
         this.memoryLock = new ReentrantLock();
-        this.zeroCopyManager = ZeroCopyBufferManager.getInstance();
         this.workStealingScheduler = new CacheOptimizedWorkStealingScheduler(MAX_THREADS);
         this.workerCacheAffinity = new ConcurrentHashMap<>();
         
@@ -581,46 +570,6 @@ public class ParallelRustVectorProcessor {
         });
     }
     
-    /**
-     * Zero-copy matrix multiplication using direct ByteBuffers
-     */
-    public float[] matrixMultiplyZeroCopy(float[] matrixA, float[] matrixB, String operationType) {
-        memoryLock.lock();
-        try {
-            // Allocate direct ByteBuffers
-            ByteBuffer bufferA = ByteBuffer.allocateDirect(matrixA.length * 4).order(ByteOrder.nativeOrder());
-            ByteBuffer bufferB = ByteBuffer.allocateDirect(matrixB.length * 4).order(ByteOrder.nativeOrder());
-            ByteBuffer bufferResult = ByteBuffer.allocateDirect(matrixA.length * 4).order(ByteOrder.nativeOrder());
-            
-            // Copy data to direct buffers
-            bufferA.asFloatBuffer().put(matrixA);
-            bufferB.asFloatBuffer().put(matrixB);
-            
-            // Perform operation using direct buffers
-            ByteBuffer resultBuffer;
-            switch (operationType) {
-                case "nalgebra":
-                    resultBuffer = nalgebraMatrixMulDirect(bufferA, bufferB, bufferResult);
-                    break;
-                case "glam":
-                    resultBuffer = glamMatrixMulDirect(bufferA, bufferB, bufferResult);
-                    break;
-                case "faer":
-                    resultBuffer = faerMatrixMulDirect(bufferA, bufferB, bufferResult);
-                    break;
-                default:
-                    throw new IllegalArgumentException("Unknown operation type: " + operationType);
-            }
-            
-            // Extract result
-            float[] result = new float[matrixA.length];
-            resultBuffer.asFloatBuffer().get(result);
-            
-            return result;
-        } finally {
-            memoryLock.unlock();
-        }
-    }
     
     /**
      * Enhanced parallel matrix multiplication with cache-aware work stealing
@@ -681,12 +630,8 @@ public class ParallelRustVectorProcessor {
                 // Copy data to native memory
                 copyToNativeBuffer(pointer, data, 0, data.length);
                 
-                // Perform operation (would need corresponding native method)
-                // This is a placeholder - actual implementation would call native method
-                
-                // Copy result back
-                float[] result = new float[data.length];
-                copyFromNativeBuffer(pointer, result, 0, data.length);
+                // Perform operation based on operation type
+                float[] result = performNativeOperation(pointer, data.length, operationType);
                 
                 return result;
             } finally {
@@ -697,6 +642,11 @@ public class ParallelRustVectorProcessor {
             memoryLock.unlock();
         }
     }
+    
+    /**
+     * Perform native operation on allocated memory
+     */
+    private native float[] performNativeOperation(long pointer, int length, String operationType);
     
     /**
      * Cache-optimized batch vector operations with spatial locality
@@ -905,226 +855,6 @@ public class ParallelRustVectorProcessor {
         }
     }
     
-    /**
-     * Cache-optimized zero-copy matrix multiplication with enhanced buffer management
-     */
-    public CompletableFuture<float[]> matrixMultiplyZeroCopyEnhanced(float[] matrixA, float[] matrixB, String operationType) {
-        return CompletableFuture.supplyAsync(() -> {
-            long startTime = System.nanoTime();
-            
-            try {
-                // Use cache-aligned buffer size for better performance
-                int dataSize = ((matrixA.length + matrixB.length) * 4 + CACHE_LINE_SIZE - 1) / CACHE_LINE_SIZE * CACHE_LINE_SIZE;
-                
-                ZeroCopyBufferManager.ManagedDirectBuffer sharedBuffer =
-                    zeroCopyManager.allocateBuffer(dataSize, "ParallelRustVectorProcessor");
-                
-                // Copy data to shared buffer with cache-friendly layout
-                ByteBuffer buffer = sharedBuffer.getBuffer();
-                FloatBuffer floatBuffer = buffer.asFloatBuffer();
-                
-                // Ensure cache-aligned access
-                floatBuffer.put(matrixA);
-                floatBuffer.put(matrixB);
-                
-                // Perform zero-copy operation with cache optimization
-                ZeroCopyBufferManager.ZeroCopyOperation operation = new ZeroCopyBufferManager.ZeroCopyOperation() {
-                    @Override
-                    public Object execute() throws Exception {
-                        // Use cache-aligned buffer for result
-                        ByteBuffer resultBuffer = ByteBuffer.allocateDirect(
-                            ((16 * 4 + CACHE_LINE_SIZE - 1) / CACHE_LINE_SIZE) * CACHE_LINE_SIZE
-                        ).order(ByteOrder.nativeOrder());
-                        
-                        ByteBuffer operationResult;
-                        switch (operationType) {
-                            case "nalgebra":
-                                operationResult = nalgebraMatrixMulDirect(buffer, buffer, resultBuffer);
-                                break;
-                            case "glam":
-                                operationResult = glamMatrixMulDirect(buffer, buffer, resultBuffer);
-                                break;
-                            case "faer":
-                                operationResult = faerMatrixMulDirect(buffer, buffer, resultBuffer);
-                                break;
-                            default:
-                                throw new IllegalArgumentException("Unknown operation type: " + operationType);
-                        }
-                        
-                        // Extract result with cache-friendly access
-                        float[] result = new float[16];
-                        operationResult.asFloatBuffer().get(result);
-                        return result;
-                    }
-                    
-                    @Override
-                    public String getType() {
-                        return "cache_optimized_matrix_multiply_" + operationType;
-                    }
-                    
-                    @Override
-                    public long getBytesTransferred() {
-                        return dataSize;
-                    }
-                    
-                    @Override
-                    public ZeroCopyBufferManager.ManagedDirectBuffer getSourceBuffer() {
-                        return sharedBuffer;
-                    }
-                };
-                
-                ZeroCopyBufferManager.ZeroCopyOperationResult result =
-                    zeroCopyManager.performZeroCopyOperation(operation);
-                
-                // Release buffer
-                zeroCopyManager.releaseBuffer(sharedBuffer, "ParallelRustVectorProcessor");
-                
-                long duration = System.nanoTime() - startTime;
-                
-                // Record performance metrics with cache optimization details
-                PerformanceMonitoringSystem.getInstance().recordEvent(
-                    "ParallelRustVectorProcessor", "cache_optimized_matrix_multiply_zero_copy", duration,
-                    Map.of(
-                        "operation_type", operationType,
-                        "bytes_transferred", dataSize,
-                        "cache_line_size", CACHE_LINE_SIZE,
-                        "buffer_alignment", "cache_aligned"
-                    )
-                );
-                
-                if (result.success && result.result instanceof float[]) {
-                    return (float[]) result.result;
-                } else {
-                    throw new RuntimeException("Cache-optimized zero-copy operation failed", result.error);
-                }
-                
-            } catch (Exception e) {
-                long duration = System.nanoTime() - startTime;
-                PerformanceMonitoringSystem.getInstance().recordError(
-                    "ParallelRustVectorProcessor", e,
-                    Map.of("operation", "cache_optimized_matrix_multiply_zero_copy", "operation_type", operationType)
-                );
-                throw new RuntimeException("Cache-optimized zero-copy matrix multiplication failed", e);
-            }
-        });
-    }
-    
-    /**
-     * Batch processing with zero-copy optimization
-     */
-    public CompletableFuture<List<float[]>> batchMatrixMultiplyZeroCopy(
-            List<float[]> matricesA, List<float[]> matricesB, String operationType) {
-        
-        return CompletableFuture.supplyAsync(() -> {
-            long startTime = System.nanoTime();
-            
-            try {
-                int totalMatrices = matricesA.size();
-                int totalDataSize = totalMatrices * 16 * 2 * 4; // 16 floats per matrix, 2 matrices, 4 bytes per float
-                
-                // Allocate large shared buffer for batch processing
-                ZeroCopyBufferManager.ManagedDirectBuffer sharedBuffer =
-                    zeroCopyManager.allocateBuffer(totalDataSize, "ParallelRustVectorProcessor");
-                
-                // Copy all matrices to shared buffer
-                ByteBuffer buffer = sharedBuffer.getBuffer();
-                FloatBuffer floatBuffer = buffer.asFloatBuffer();
-                
-                for (int i = 0; i < totalMatrices; i++) {
-                    floatBuffer.put(matricesA.get(i));
-                    floatBuffer.put(matricesB.get(i));
-                }
-                
-                // Process batch using zero-copy operations
-                List<float[]> results = new ArrayList<>();
-                
-                for (int i = 0; i < totalMatrices; i++) {
-                    final int offset = i * 128; // Calculate offset for each matrix pair
-                    
-                    ZeroCopyBufferManager.ZeroCopyOperation operation = new ZeroCopyBufferManager.ZeroCopyOperation() {
-                        @Override
-                        public Object execute() throws Exception {
-                            // Perform matrix multiplication using existing native methods
-                            ByteBuffer matrixA = buffer.duplicate().position(offset).limit(offset + 64);
-                            ByteBuffer matrixB = buffer.duplicate().position(offset + 64).limit(offset + 128);
-                            ByteBuffer result = ByteBuffer.allocateDirect(64);
-                            
-                            ByteBuffer resultBuffer;
-                            switch (operationType) {
-                                case "nalgebra":
-                                    resultBuffer = nalgebraMatrixMulDirect(matrixA, matrixB, result);
-                                    break;
-                                case "glam":
-                                    resultBuffer = glamMatrixMulDirect(matrixA, matrixB, result);
-                                    break;
-                                case "faer":
-                                    resultBuffer = faerMatrixMulDirect(matrixA, matrixB, result);
-                                    break;
-                                default:
-                                    throw new IllegalArgumentException("Unknown operation type: " + operationType);
-                            }
-                            
-                            float[] resultArray = new float[16];
-                            resultBuffer.asFloatBuffer().get(resultArray);
-                            return resultArray;
-                        }
-                        
-                        @Override
-                        public String getType() {
-                            return "batch_matrix_multiply_" + operationType;
-                        }
-                        
-                        @Override
-                        public long getBytesTransferred() {
-                            return 128; // 2 matrices * 16 floats * 4 bytes
-                        }
-                        
-                        @Override
-                        public ZeroCopyBufferManager.ManagedDirectBuffer getSourceBuffer() {
-                            return sharedBuffer;
-                        }
-                    };
-                    
-                    ZeroCopyBufferManager.ZeroCopyOperationResult result =
-                        zeroCopyManager.performZeroCopyOperation(operation);
-                    
-                    if (result.success && result.result instanceof float[]) {
-                        results.add((float[]) result.result);
-                    } else {
-                        throw new RuntimeException("Batch zero-copy operation failed", result.error);
-                    }
-                }
-                
-                // Release shared buffer
-                zeroCopyManager.releaseBuffer(sharedBuffer, "ParallelRustVectorProcessor");
-                
-                long duration = System.nanoTime() - startTime;
-                
-                // Record performance metrics
-                PerformanceMonitoringSystem.getInstance().recordEvent(
-                    "ParallelRustVectorProcessor", "batch_matrix_multiply_zero_copy", duration,
-                    Map.of("operation_type", operationType, "matrix_count", totalMatrices, "bytes_transferred", totalDataSize)
-                );
-                
-                return results;
-                
-            } catch (Exception e) {
-                long duration = System.nanoTime() - startTime;
-                PerformanceMonitoringSystem.getInstance().recordError(
-                    "ParallelRustVectorProcessor", e,
-                    Map.of("operation", "batch_matrix_multiply_zero_copy", "operation_type", operationType)
-                );
-                throw new RuntimeException("Enhanced batch matrix multiplication failed", e);
-            }
-        });
-    }
-    
-    /**
-     * Get zero-copy buffer manager
-     */
-    public ZeroCopyBufferManager getZeroCopyManager() {
-        return zeroCopyManager;
-    }
     
     /**
      * Get cache-optimized work-stealing scheduler
@@ -1193,8 +923,21 @@ public class ParallelRustVectorProcessor {
                         
                         // Process in cache-friendly blocks
                         for (int i = startIdx; i < endIdx; i++) {
-                            // Use cache-optimized zero-copy approach
-                            float[] result = matrixMultiplyZeroCopyEnhanced(matricesA.get(i), matricesB.get(i), operationType).get();
+                            // Use traditional matrix multiplication approach
+                            float[] result;
+                            switch (operationType) {
+                                case "nalgebra":
+                                    result = RustVectorLibrary.matrixMultiplyNalgebra(matricesA.get(i), matricesB.get(i));
+                                    break;
+                                case "glam":
+                                    result = RustVectorLibrary.matrixMultiplyGlam(matricesA.get(i), matricesB.get(i));
+                                    break;
+                                case "faer":
+                                    result = RustVectorLibrary.matrixMultiplyFaer(matricesA.get(i), matricesB.get(i));
+                                    break;
+                                default:
+                                    throw new IllegalArgumentException("Unknown operation type: " + operationType);
+                            }
                             workerResults.add(result);
                             
                             // Update cache affinity
@@ -1262,10 +1005,6 @@ public class ParallelRustVectorProcessor {
             Thread.currentThread().interrupt();
         }
         
-        // Shutdown zero-copy manager
-        if (zeroCopyManager != null) {
-            zeroCopyManager.shutdown();
-        }
         
         // Log final cache statistics
         Map<Integer, Double> finalHitRates = getCacheHitRates();

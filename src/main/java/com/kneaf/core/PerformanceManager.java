@@ -28,7 +28,6 @@ public final class PerformanceManager {
     // Optimization flags with thread safety
     private final AtomicBoolean isEntityThrottlingEnabled = new AtomicBoolean(false);
     private final AtomicBoolean isAiPathfindingOptimized = new AtomicBoolean(false);
-    private final AtomicBoolean isRenderingMathOptimized = new AtomicBoolean(false);
     private final AtomicBoolean isRustIntegrationEnabled = new AtomicBoolean(false);
     private final AtomicBoolean isHorizontalPhysicsOnly = new AtomicBoolean(false);
     
@@ -85,7 +84,6 @@ public final class PerformanceManager {
             // Load optimization flags with fallback defaults
             isEntityThrottlingEnabled.set(parseBooleanProperty(properties, "entityThrottlingEnabled", true));
             isAiPathfindingOptimized.set(parseBooleanProperty(properties, "aiPathfindingOptimized", true));
-            isRenderingMathOptimized.set(parseBooleanProperty(properties, "renderingMathOptimized", true));
             isRustIntegrationEnabled.set(parseBooleanProperty(properties, "rustIntegrationEnabled", false));
             isHorizontalPhysicsOnly.set(parseBooleanProperty(properties, "horizontalPhysicsOnly", false));
             
@@ -111,7 +109,6 @@ public final class PerformanceManager {
     public void resetToDefaults() {
         isEntityThrottlingEnabled.set(true);
         isAiPathfindingOptimized.set(true);
-        isRenderingMathOptimized.set(true);
         isRustIntegrationEnabled.set(false);
         isHorizontalPhysicsOnly.set(false);
         
@@ -181,21 +178,13 @@ public final class PerformanceManager {
     }
     
     /**
-     * Check if rendering math optimization is enabled.
-     * @return true if rendering math optimization is enabled, false otherwise
-     */
-    public boolean isRenderingMathOptimized() {
-        return isRenderingMathOptimized.get();
-    }
-    
-    /**
      * Check if Rust integration is enabled.
      * @return true if Rust integration is enabled, false otherwise
      */
     public boolean isRustIntegrationEnabled() {
         return isRustIntegrationEnabled.get();
     }
-
+    
     /**
      * Check if horizontal-only physics is enabled.
      * @return true if horizontal-only physics is enabled, false otherwise
@@ -253,21 +242,13 @@ public final class PerformanceManager {
     }
     
     /**
-     * Set rendering math optimization state.
-     * @param optimized true to enable rendering math optimization, false to disable
-     */
-    public void setRenderingMathOptimized(boolean optimized) {
-        isRenderingMathOptimized.set(optimized);
-    }
-    
-    /**
      * Set Rust integration state.
      * @param enabled true to enable Rust integration, false to disable
      */
     public void setRustIntegrationEnabled(boolean enabled) {
         isRustIntegrationEnabled.set(enabled);
     }
-
+    
     /**
      * Set horizontal-only physics state.
      * @param enabled true to enable horizontal-only physics, false to disable
@@ -383,7 +364,6 @@ public final class PerformanceManager {
         // Basic optimization flags
         metrics.put("entity_throttling_enabled", isEntityThrottlingEnabled.get());
         metrics.put("ai_pathfinding_optimized", isAiPathfindingOptimized.get());
-        metrics.put("rendering_math_optimized", isRenderingMathOptimized.get());
         metrics.put("rust_integration_enabled", isRustIntegrationEnabled.get());
         metrics.put("horizontal_physics_only", isHorizontalPhysicsOnly.get());
         
@@ -406,12 +386,11 @@ public final class PerformanceManager {
     public String getOptimizationSummary() {
         return String.format(
             "PerformanceManager{" +
-            "entityThrottling=%s, aiPathfinding=%s, renderingMath=%s, rustIntegration=%s, " +
+            "entityThrottling=%s, aiPathfinding=%s, rustIntegration=%s, " +
             "combatSimd=%s, combatParallel=%s, predictiveLoadBalancing=%s, hitDetection=%s, " +
             "optimizationMonitoring=%s}",
             isEntityThrottlingEnabled.get(),
             isAiPathfindingOptimized.get(),
-            isRenderingMathOptimized.get(),
             isRustIntegrationEnabled.get(),
             isCombatSimdOptimized.get(),
             isCombatParallelProcessingEnabled.get(),

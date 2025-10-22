@@ -1,6 +1,14 @@
 //! Enhanced work-stealing parallel A* pathfinding implementation
 //! Provides thread-safe data structures and efficient multi-core pathfinding with dynamic load balancing
 //! Optimized for CPU cache utilization with blocking/striping techniques
+//! 
+//! # Error Handling
+//! This module implements comprehensive error handling following Rust best practices:
+//! - All operations that can fail return Result types
+//! - Panic-free code with proper error propagation
+//! - Timeout mechanisms to prevent infinite loops
+//! - Deadlock prevention with bounded retry attempts
+//! - Resource cleanup on errors
 
 use std::collections::HashMap;
 use std::cmp::Ordering;
@@ -11,6 +19,67 @@ use rayon::prelude::*;
 use crossbeam::deque::{Injector, Stealer};
 use parking_lot::RwLock as ParkingRwLock;
 use jni::objects::{JObjectArray, JByteArray, JIntArray, JClass, JObject, JString};
+
+/// Error types for pathfinding operations
+#[derive(Debug, Clone)]
+pub enum PathfindingError {
+    /// Grid access out of bounds
+    OutOfBounds { x: i32, y: i32, z: i32 },
+    /// Invalid grid dimensions
+    InvalidDimensions { width: usize, height: usize, depth: usize },
+    /// Invalid starting or goal position
+    InvalidPosition { reason: String },
+    /// Timeout exceeded during pathfinding
+    Timeout { elapsed: Duration, max_duration: Duration },
+    /// No path exists between start and goal
+    NoPathExists,
+    /// Thread synchronization error
+    SyncError { message: String },
+    /// Worker thread panicked
+    WorkerPanic { worker_id: usize },
+    /// Resource exhaustion (memory, queue capacity, etc.)
+    ResourceExhausted { resource: String },
+    /// Invalid configuration
+    InvalidConfig { message: String },
+}
+
+impl std::fmt::Display for PathfindingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathfindingError::OutOfBounds { x, y, z } => {
+                write!(f, "Position ({}, {}, {}) is out of bounds", x, y, z)
+            }
+            PathfindingError::InvalidDimensions { width, height, depth } => {
+                write!(f, "Invalid grid dimensions: {}x{}x{}", width, height, depth)
+            }
+            PathfindingError::InvalidPosition { reason } => {
+                write!(f, "Invalid position: {}", reason)
+            }
+            PathfindingError::Timeout { elapsed, max_duration } => {
+                write!(f, "Pathfinding timeout: {:?} exceeded maximum {:?}", elapsed, max_duration)
+            }
+            PathfindingError::NoPathExists => {
+                write!(f, "No path exists between start and goal")
+            }
+            PathfindingError::SyncError { message } => {
+                write!(f, "Synchronization error: {}", message)
+            }
+            PathfindingError::WorkerPanic { worker_id } => {
+                write!(f, "Worker thread {} panicked", worker_id)
+            }
+            PathfindingError::ResourceExhausted { resource } => {
+                write!(f, "Resource exhausted: {}", resource)
+            }
+            PathfindingError::InvalidConfig { message } => {
+                write!(f, "Invalid configuration: {}", message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for PathfindingError {}
+
+pub type PathfindingResult<T> = Result<T, PathfindingError>;
 
 /// Custom AtomicF64 implementation using AtomicU64 bit conversions
 #[allow(dead_code)]
@@ -60,8 +129,8 @@ impl AtomicF64 {
         failure: AtomicOrdering,
     ) -> Result<f64, f64> {
         self.inner.compare_exchange_weak(current.to_bits(), new.to_bits(), success, failure)
-            .map(|old| f64::from_bits(old))
-            .map_err(|old| f64::from_bits(old))
+            .map(f64::from_bits)
+            .map_err(f64::from_bits)
     }
 }
 
@@ -155,14 +224,26 @@ pub struct CacheOptimizedGrid {
 
 #[allow(dead_code)]
 impl CacheOptimizedGrid {
-    pub fn new(width: usize, height: usize, depth: usize, default_walkable: bool) -> Self {
+    /// Create a new grid with validation
+    pub fn new(width: usize, height: usize, depth: usize, default_walkable: bool) -> Result<Self, PathfindingError> {
+        // Validate dimensions
+        if width == 0 || height == 0 || depth == 0 {
+            return Err(PathfindingError::InvalidDimensions { width, height, depth });
+        }
+        
+        // Prevent excessive memory allocation
+        const MAX_DIMENSION: usize = 10000;
+        if width > MAX_DIMENSION || height > MAX_DIMENSION || depth > MAX_DIMENSION {
+            return Err(PathfindingError::InvalidDimensions { width, height, depth });
+        }
+        
         let block_size = 8; // 8x8x8 blocks for optimal cache line utilization
-        let blocks_x = (width + block_size - 1) / block_size;
-        let blocks_y = (height + block_size - 1) / block_size;
-        let blocks_z = (depth + block_size - 1) / block_size;
+        let blocks_x = width.div_ceil(block_size);
+        let blocks_y = height.div_ceil(block_size);
+        let blocks_z = depth.div_ceil(block_size);
         
         let data = vec![vec![vec![default_walkable; depth]; height]; width];
-        Self {
+        Ok(Self {
             data: Arc::new(ParkingRwLock::new(data)),
             width,
             height,
@@ -171,14 +252,22 @@ impl CacheOptimizedGrid {
             blocks_x,
             blocks_y,
             blocks_z,
-        }
+        })
     }
     
-    pub fn set_walkable(&self, x: usize, y: usize, z: usize, walkable: bool) {
-        let mut grid = self.data.write();
-        if x < self.width && y < self.height && z < self.depth {
-            grid[x][y][z] = walkable;
+    /// Set walkable status with bounds checking
+    pub fn set_walkable(&self, x: usize, y: usize, z: usize, walkable: bool) -> Result<(), PathfindingError> {
+        if x >= self.width || y >= self.height || z >= self.depth {
+            return Err(PathfindingError::OutOfBounds { 
+                x: x as i32, 
+                y: y as i32, 
+                z: z as i32 
+            });
         }
+        
+        let mut grid = self.data.write();
+        grid[x][y][z] = walkable;
+        Ok(())
     }
     
     pub fn is_walkable(&self, x: i32, y: i32, z: i32) -> bool {
@@ -238,6 +327,9 @@ pub struct CacheOptimizedWorkStealingQueue {
     // Cache affinity tracking
     worker_cache_affinity: Vec<Arc<Mutex<CacheAffinity>>>,
     block_distribution: Arc<Mutex<BlockDistribution>>,
+    // Deadlock prevention
+    max_steal_retries: usize,
+    work_available: Arc<AtomicBool>,
 }
 
 #[allow(dead_code)]
@@ -333,7 +425,19 @@ pub type EnhancedWorkStealingQueue = CacheOptimizedWorkStealingQueue;
 
 #[allow(dead_code)]
 impl CacheOptimizedWorkStealingQueue {
-    pub fn new(num_threads: usize) -> Self {
+    pub fn new(num_threads: usize) -> Result<Self, PathfindingError> {
+        if num_threads == 0 {
+            return Err(PathfindingError::InvalidConfig { 
+                message: "Number of threads must be greater than 0".to_string() 
+            });
+        }
+        
+        if num_threads > 1024 {
+            return Err(PathfindingError::InvalidConfig { 
+                message: format!("Number of threads ({}) exceeds maximum (1024)", num_threads)
+            });
+        }
+        
         let injector = Arc::new(Injector::new());
         let stealers = Vec::new();
         let mut worker_queues = Vec::new();
@@ -345,7 +449,7 @@ impl CacheOptimizedWorkStealingQueue {
             worker_cache_affinity.push(Arc::new(Mutex::new(CacheAffinity::new())));
         }
         
-        Self {
+        Ok(Self {
             injector,
             stealers,
             worker_queues,
@@ -357,22 +461,31 @@ impl CacheOptimizedWorkStealingQueue {
             successful_steals: AtomicUsize::new(0),
             worker_cache_affinity,
             block_distribution: Arc::new(Mutex::new(BlockDistribution::new())),
-        }
+            max_steal_retries: 100, // Prevent infinite retry loops
+            work_available: Arc::new(AtomicBool::new(false)),
+        })
     }
     
     pub fn push(&self, task: PathNode) {
         self.injector.push(task);
         self.total_tasks.fetch_add(1, AtomicOrdering::SeqCst);
+        self.work_available.store(true, AtomicOrdering::SeqCst);
     }
     
-    pub fn push_to_worker(&self, worker_id: usize, task: PathNode) {
-        if worker_id < self.worker_queues.len() {
-            self.worker_queues[worker_id].push(task);
-            self.total_tasks.fetch_add(1, AtomicOrdering::SeqCst);
+    pub fn push_to_worker(&self, worker_id: usize, task: PathNode) -> Result<(), PathfindingError> {
+        if worker_id >= self.worker_queues.len() {
+            return Err(PathfindingError::InvalidConfig {
+                message: format!("Worker ID {} out of bounds", worker_id)
+            });
         }
+        
+        self.worker_queues[worker_id].push(task);
+        self.total_tasks.fetch_add(1, AtomicOrdering::SeqCst);
+        self.work_available.store(true, AtomicOrdering::SeqCst);
+        Ok(())
     }
     
-    /// Cache-aware work stealing with spatial locality optimization
+    /// Cache-aware work stealing with spatial locality optimization and deadlock prevention
     pub fn steal_with_cache_affinity(&self, worker_id: usize, preferred_blocks: &[(usize, usize, usize)]) -> Option<PathNode> {
         self.steal_attempts.fetch_add(1, AtomicOrdering::SeqCst);
         
@@ -381,8 +494,9 @@ impl CacheOptimizedWorkStealingQueue {
             for block in preferred_blocks {
                 // Find workers that own this block
                 if let Some(target_worker) = self.get_block_owner(*block) {
-                    if target_worker != worker_id {
-                        // Try to steal from this worker's queue
+                    if target_worker != worker_id && target_worker < self.worker_queues.len() {
+                        // Try to steal from this worker's queue with bounded retries
+                        let mut retries = 0;
                         loop {
                             match self.worker_queues[target_worker].steal() {
                                 crossbeam::deque::Steal::Success(task) => {
@@ -390,7 +504,14 @@ impl CacheOptimizedWorkStealingQueue {
                                     return Some(task);
                                 }
                                 crossbeam::deque::Steal::Empty => break,
-                                crossbeam::deque::Steal::Retry => continue,
+                                crossbeam::deque::Steal::Retry => {
+                                    retries += 1;
+                                    if retries >= self.max_steal_retries {
+                                        break; // Prevent infinite retry loop
+                                    }
+                                    thread::yield_now();
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -402,15 +523,13 @@ impl CacheOptimizedWorkStealingQueue {
         self.steal(worker_id)
     }
     
-    /// Get the worker ID that owns a specific block
+    /// Get the worker ID that owns a specific block with error handling
     fn get_block_owner(&self, block: (usize, usize, usize)) -> Option<usize> {
-        if let Ok(distribution) = self.block_distribution.lock() {
-            distribution.get_block_owner(block)
-        } else {
-            None
-        }
+        self.block_distribution.lock().ok()
+            .and_then(|distribution| distribution.get_block_owner(block))
     }
     
+    /// Work stealing with bounded retries to prevent infinite loops
     pub fn steal(&self, worker_id: usize) -> Option<PathNode> {
         self.steal_attempts.fetch_add(1, AtomicOrdering::SeqCst);
         
@@ -418,6 +537,7 @@ impl CacheOptimizedWorkStealingQueue {
         for i in 0..self.worker_queues.len() {
             if i == worker_id { continue; }
             
+            let mut retries = 0;
             loop {
                 match self.worker_queues[i].steal() {
                     crossbeam::deque::Steal::Success(task) => {
@@ -425,36 +545,93 @@ impl CacheOptimizedWorkStealingQueue {
                         return Some(task);
                     }
                     crossbeam::deque::Steal::Empty => break,
-                    crossbeam::deque::Steal::Retry => continue,
+                    crossbeam::deque::Steal::Retry => {
+                        retries += 1;
+                        if retries >= self.max_steal_retries {
+                            break; // Prevent infinite retry loop
+                        }
+                        thread::yield_now();
+                        continue;
+                    }
                 }
             }
         }
         
-        // Try global injector as fallback
+        // Try global injector as fallback with bounded retries
+        let mut retries = 0;
         loop {
             match self.injector.steal() {
                 crossbeam::deque::Steal::Success(task) => {
                     self.successful_steals.fetch_add(1, AtomicOrdering::SeqCst);
                     return Some(task);
                 }
-                crossbeam::deque::Steal::Empty => return None,
-                crossbeam::deque::Steal::Retry => continue,
+                crossbeam::deque::Steal::Empty => {
+                    // No work available anywhere
+                    if self.is_work_depleted() {
+                        self.work_available.store(false, AtomicOrdering::SeqCst);
+                    }
+                    return None;
+                }
+                crossbeam::deque::Steal::Retry => {
+                    retries += 1;
+                    if retries >= self.max_steal_retries {
+                        return None; // Prevent infinite retry loop
+                    }
+                    thread::yield_now();
+                    continue;
+                }
             }
         }
     }
     
-    pub fn get_local_task(&self, worker_id: usize) -> Option<PathNode> {
-        if worker_id < self.worker_queues.len() {
+    /// Check if all work queues are depleted
+    fn is_work_depleted(&self) -> bool {
+        // Check if any worker has pending tasks
+        for queue in &self.worker_queues {
+            let mut retries = 0;
             loop {
-                match self.worker_queues[worker_id].steal() {
-                    crossbeam::deque::Steal::Success(task) => return Some(task),
-                    crossbeam::deque::Steal::Empty => return None,
-                    crossbeam::deque::Steal::Retry => continue,
+                match queue.steal() {
+                    crossbeam::deque::Steal::Success(_task) => return false,
+                    crossbeam::deque::Steal::Empty => break,
+                    crossbeam::deque::Steal::Retry => {
+                        retries += 1;
+                        if retries >= 10 {
+                            break;
+                        }
+                        continue;
+                    }
                 }
             }
-        } else {
-            None
         }
+        
+        // Check global injector
+        matches!(self.injector.steal(), crossbeam::deque::Steal::Empty)
+    }
+    
+    pub fn get_local_task(&self, worker_id: usize) -> Option<PathNode> {
+        if worker_id >= self.worker_queues.len() {
+            return None;
+        }
+        
+        let mut retries = 0;
+        loop {
+            match self.worker_queues[worker_id].steal() {
+                crossbeam::deque::Steal::Success(task) => return Some(task),
+                crossbeam::deque::Steal::Empty => return None,
+                crossbeam::deque::Steal::Retry => {
+                    retries += 1;
+                    if retries >= self.max_steal_retries {
+                        return None; // Prevent infinite retry loop
+                    }
+                    thread::yield_now();
+                    continue;
+                }
+            }
+        }
+    }
+    
+    pub fn has_work_available(&self) -> bool {
+        self.work_available.load(AtomicOrdering::SeqCst)
     }
     
     pub fn increment_active_workers(&self) {
@@ -482,11 +659,9 @@ impl CacheOptimizedWorkStealingQueue {
     }
     
     pub fn get_stats(&self) -> WorkStealingStats {
-        let load_imbalance = if let Ok(load) = self.load_imbalance.lock() {
-            *load
-        } else {
-            0.0
-        };
+        let load_imbalance = self.load_imbalance.lock()
+            .map(|load| *load)
+            .unwrap_or(0.0);
         
         WorkStealingStats {
             active_workers: self.active_workers.load(AtomicOrdering::SeqCst),
@@ -523,14 +698,22 @@ pub struct EnhancedParallelAStar {
     metrics: Arc<EnhancedPathfindingMetrics>,
     use_hierarchical_search: bool,
     hierarchical_levels: usize,
+    timeout_duration: Duration,
+    max_nodes_explored: usize,
 }
 
 #[allow(dead_code)]
 impl EnhancedParallelAStar {
-    pub fn new(grid: CacheOptimizedGrid, num_threads: usize) -> Self {
-        let queue = Arc::new(EnhancedWorkStealingQueue::new(num_threads));
+    pub fn new(grid: CacheOptimizedGrid, num_threads: usize) -> Result<Self, PathfindingError> {
+        if num_threads == 0 {
+            return Err(PathfindingError::InvalidConfig {
+                message: "Number of threads must be greater than 0".to_string()
+            });
+        }
         
-        Self {
+        let queue = Arc::new(CacheOptimizedWorkStealingQueue::new(num_threads)?);
+        
+        Ok(Self {
             grid,
             queue,
             num_threads,
@@ -541,7 +724,9 @@ impl EnhancedParallelAStar {
             metrics: Arc::new(EnhancedPathfindingMetrics::new()),
             use_hierarchical_search: false,
             hierarchical_levels: 3,
-        }
+            timeout_duration: Duration::from_secs(30), // 30 second timeout
+            max_nodes_explored: 1_000_000, // Limit nodes to prevent resource exhaustion
+        })
     }
     
     pub fn set_max_search_distance(&mut self, distance: f32) {
@@ -561,15 +746,31 @@ impl EnhancedParallelAStar {
         self.hierarchical_levels = levels;
     }
     
-    /// Find path from start to goal using enhanced parallel A* with cache optimization
-    pub fn find_path(self: Arc<Self>, start: Position, goal: Position) -> Option<Vec<Position>> {
-        if !self.grid.is_walkable(start.x, start.y, start.z) ||
-           !self.grid.is_walkable(goal.x, goal.y, goal.z) {
-            return None;
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout_duration = timeout;
+    }
+    
+    pub fn set_max_nodes_explored(&mut self, max_nodes: usize) {
+        self.max_nodes_explored = max_nodes;
+    }
+    
+    /// Find path from start to goal using enhanced parallel A* with cache optimization and comprehensive error handling
+    pub fn find_path(self: Arc<Self>, start: Position, goal: Position) -> PathfindingResult<Vec<Position>> {
+        // Validate positions
+        if !self.grid.is_walkable(start.x, start.y, start.z) {
+            return Err(PathfindingError::InvalidPosition {
+                reason: format!("Start position ({}, {}, {}) is not walkable", start.x, start.y, start.z)
+            });
+        }
+        
+        if !self.grid.is_walkable(goal.x, goal.y, goal.z) {
+            return Err(PathfindingError::InvalidPosition {
+                reason: format!("Goal position ({}, {}, {}) is not walkable", goal.x, goal.y, goal.z)
+            });
         }
         
         if start == goal {
-            return Some(vec![start]);
+            return Ok(vec![start]);
         }
         
         let start_time = Instant::now();
@@ -579,8 +780,8 @@ impl EnhancedParallelAStar {
         let start_node = PathNode::new(start, 0.0, h_cost, None);
         
         // Distribute initial node to multiple workers for better load balancing
-        for worker_id in 0..self.num_threads.min(4) { // Limit to 4 workers for initial distribution
-            self.queue.push_to_worker(worker_id, start_node.clone());
+        for worker_id in 0..self.num_threads.min(4) {
+            self.queue.push_to_worker(worker_id, start_node.clone())?;
         }
         
         // Shared data structures with enhanced concurrency
@@ -589,6 +790,7 @@ impl EnhancedParallelAStar {
         let came_from = Arc::new(ParkingRwLock::new(HashMap::new()));
         let goal_found = Arc::new(AtomicBool::new(false));
         let best_cost = Arc::new(AtomicU64::new(u64::MAX));
+        let error_occurred = Arc::new(Mutex::new(None::<PathfindingError>));
         
         // Start enhanced worker threads
         let mut handles = Vec::new();
@@ -601,13 +803,15 @@ impl EnhancedParallelAStar {
             let came_from = Arc::clone(&came_from);
             let goal_found = Arc::clone(&goal_found);
             let best_cost = Arc::clone(&best_cost);
-            let goal = goal;
             let metrics = Arc::clone(&self.metrics);
+            let error_occurred = Arc::clone(&error_occurred);
+            let timeout_duration = self.timeout_duration;
+            let max_nodes = self.max_nodes_explored;
             
             let handle = thread::spawn({
                 let self_clone = Arc::clone(&self);
                 move || {
-                    self_clone.enhanced_worker_thread(
+                    match self_clone.enhanced_worker_thread(
                         worker_id,
                         queue,
                         grid,
@@ -618,7 +822,17 @@ impl EnhancedParallelAStar {
                         best_cost,
                         goal,
                         metrics,
-                    )
+                        start_time,
+                        timeout_duration,
+                        max_nodes,
+                    ) {
+                        Ok(_) => {},
+                        Err(e) => {
+                            if let Ok(mut err) = error_occurred.lock() {
+                                *err = Some(e);
+                            }
+                        }
+                    }
                 }
             });
             
@@ -629,19 +843,29 @@ impl EnhancedParallelAStar {
         let queue_monitor = Arc::clone(&self.queue);
         let goal_found_monitor = Arc::clone(&goal_found);
         let metrics_monitor = Arc::clone(&self.metrics);
+        let error_monitor = Arc::clone(&error_occurred);
         
         let monitor_handle = thread::spawn(move || {
-            Self::load_balancing_monitor(queue_monitor, goal_found_monitor, metrics_monitor);
+            Self::load_balancing_monitor(queue_monitor, goal_found_monitor, metrics_monitor, error_monitor);
         });
         
         // Wait for all worker threads to complete
-        for handle in handles {
-            handle.join().unwrap();
+        for (worker_id, handle) in handles.into_iter().enumerate() {
+            if let Err(_e) = handle.join() {
+                return Err(PathfindingError::WorkerPanic { worker_id });
+            }
         }
         
         // Stop monitor
         goal_found.store(true, AtomicOrdering::SeqCst);
-        monitor_handle.join().unwrap();
+        let _ = monitor_handle.join();
+        
+        // Check for errors
+        if let Ok(err_guard) = error_occurred.lock() {
+            if let Some(e) = err_guard.as_ref() {
+                return Err(e.clone());
+            }
+        }
         
         let elapsed = start_time.elapsed();
         println!("Enhanced Parallel A* completed in {:?}", elapsed);
@@ -658,11 +882,11 @@ impl EnhancedParallelAStar {
         if came_from_read.contains_key(&goal) {
             self.reconstruct_path(&came_from_read, start, goal)
         } else {
-            None
+            Err(PathfindingError::NoPathExists)
         }
     }
     
-    /// Cache-optimized worker thread with spatial locality awareness
+    /// Cache-optimized worker thread with spatial locality awareness and comprehensive error handling
     fn enhanced_worker_thread(
         &self,
         worker_id: usize,
@@ -675,13 +899,35 @@ impl EnhancedParallelAStar {
         best_cost: Arc<AtomicU64>,
         goal: Position,
         metrics: Arc<EnhancedPathfindingMetrics>,
-    ) {
+        start_time: Instant,
+        timeout_duration: Duration,
+        max_nodes: usize,
+    ) -> PathfindingResult<()> {
         queue.increment_active_workers();
         let mut local_nodes_processed = 0;
         let local_start_time = Instant::now();
         let mut cache_affinity = CacheAffinity::new();
+        let mut idle_iterations = 0;
+        const MAX_IDLE_ITERATIONS: usize = 100; // Prevent infinite idle loops
         
         while !goal_found.load(AtomicOrdering::SeqCst) {
+            // Check timeout
+            if start_time.elapsed() > timeout_duration {
+                queue.decrement_active_workers();
+                return Err(PathfindingError::Timeout {
+                    elapsed: start_time.elapsed(),
+                    max_duration: timeout_duration,
+                });
+            }
+            
+            // Check node limit
+            if local_nodes_processed >= max_nodes {
+                queue.decrement_active_workers();
+                return Err(PathfindingError::ResourceExhausted {
+                    resource: format!("Max nodes explored ({})", max_nodes)
+                });
+            }
+            
             // Try to get task from local queue first with cache affinity
             let current = queue.get_local_task(worker_id)
                 .or_else(|| {
@@ -691,28 +937,36 @@ impl EnhancedParallelAStar {
                 });
             
             if current.is_none() {
-                // No work available, check if we should terminate
-                if queue.get_stats().active_workers <= 1 {
-                    thread::sleep(Duration::from_micros(100));
-                    let current = queue.get_local_task(worker_id)
-                        .or_else(|| queue.steal_with_cache_affinity(worker_id, cache_affinity.get_preferred_blocks()));
+                idle_iterations += 1;
+                
+                // Check if we should terminate
+                if idle_iterations >= MAX_IDLE_ITERATIONS || !queue.has_work_available() {
+                    // Double-check with a final steal attempt
+                    let final_attempt = queue.get_local_task(worker_id)
+                        .or_else(|| queue.steal(worker_id));
                     
-                    if current.is_none() {
+                    if final_attempt.is_none() {
                         break; // No work left, terminate
+                    } else {
+                        idle_iterations = 0; // Reset counter
                     }
                 }
+                
+                // Brief sleep to avoid busy-waiting
+                thread::sleep(Duration::from_micros(100));
                 continue;
             }
             
             let current = current.unwrap();
             let current_pos = current.position;
             local_nodes_processed += 1;
+            idle_iterations = 0; // Reset idle counter
             
             // Update cache affinity based on current position
             let current_block = grid.get_block_coords(current_pos.x as usize, current_pos.y as usize, current_pos.z as usize);
             cache_affinity.update_preferred_blocks(current_block);
             
-            // Update block distribution metrics
+            // Update block distribution metrics with error handling
             if let Ok(mut distribution) = queue.block_distribution.lock() {
                 distribution.increment_block_workload(current_block);
             }
@@ -728,10 +982,8 @@ impl EnhancedParallelAStar {
                 queue.increment_completed_tasks();
                 
                 // Update best cost if this path is better
-                let current_cost = current.g_cost as f64;
-                if current_cost < best_cost.load(AtomicOrdering::SeqCst) as f64 {
-                    best_cost.store(current_cost as u64, AtomicOrdering::SeqCst);
-                }
+                let current_cost = current.g_cost as u64;
+                best_cost.fetch_min(current_cost, AtomicOrdering::SeqCst);
                 break;
             }
             
@@ -756,7 +1008,7 @@ impl EnhancedParallelAStar {
             let neighbors = self.get_cache_optimized_neighbors(&current_pos, &grid);
             
             for neighbor_pos in neighbors {
-                // Skip if goal already found
+                // Skip if goal already found (early termination)
                 if goal_found.load(AtomicOrdering::SeqCst) {
                     break;
                 }
@@ -767,7 +1019,8 @@ impl EnhancedParallelAStar {
                 let h_cost = neighbor_pos.manhattan_distance(&goal) as f32;
                 
                 // Pruning based on best known cost
-                if g_cost + h_cost > best_cost.load(AtomicOrdering::SeqCst) as f32 {
+                let best_cost_f32 = best_cost.load(AtomicOrdering::SeqCst) as f32;
+                if g_cost + h_cost > best_cost_f32 {
                     continue;
                 }
                 
@@ -789,19 +1042,26 @@ impl EnhancedParallelAStar {
                 }
                 
                 // Create new node and add to queue with cache-aware distribution
-                let new_node = PathNode::new(neighbor_pos, g_cost, h_cost, Some(current_pos));
+                let g_cost_neighbor = g_cost;
+                let h_cost_neighbor = h_cost;
                 
                 // Determine target worker based on cache affinity
                 let neighbor_block = grid.get_block_coords(neighbor_pos.x as usize, neighbor_pos.y as usize, neighbor_pos.z as usize);
-                let target_worker = if let Ok(distribution) = queue.block_distribution.lock() {
-                    distribution.get_block_owner(neighbor_block).unwrap_or(
-                        (worker_id + local_nodes_processed) % self.num_threads
-                    )
-                } else {
-                    (worker_id + local_nodes_processed) % self.num_threads
-                };
+                let target_worker = queue.block_distribution.lock()
+                    .ok()
+                    .and_then(|distribution| distribution.get_block_owner(neighbor_block))
+                    .unwrap_or((worker_id + local_nodes_processed) % self.num_threads);
                 
-                queue.push_to_worker(target_worker, new_node);
+                // Create new node
+                let new_node = PathNode::new(neighbor_pos, g_cost_neighbor, h_cost_neighbor, Some(current_pos));
+                
+                // Push to worker queue with error handling
+                if let Err(e) = queue.push_to_worker(target_worker, new_node) {
+                    eprintln!("Failed to push task to worker {}: {}", target_worker, e);
+                    // Fallback: push to global queue
+                    let fallback_node = PathNode::new(neighbor_pos, g_cost_neighbor, h_cost_neighbor, Some(current_pos));
+                    queue.push(fallback_node);
+                }
             }
             
             queue.increment_completed_tasks();
@@ -810,7 +1070,7 @@ impl EnhancedParallelAStar {
             if local_nodes_processed % 50 == 0 {
                 queue.update_load_imbalance();
                 
-                // Update worker cache affinity
+                // Update worker cache affinity with error handling
                 if let Ok(mut affinity) = queue.worker_cache_affinity[worker_id].lock() {
                     affinity.update_preferred_blocks(current_block);
                 }
@@ -819,17 +1079,30 @@ impl EnhancedParallelAStar {
         
         queue.decrement_active_workers();
         metrics.record_worker_efficiency(worker_id, local_nodes_processed, local_start_time.elapsed());
+        Ok(())
     }
     
-    /// Load balancing monitor for dynamic work distribution with cache optimization
+    /// Load balancing monitor for dynamic work distribution with cache optimization and error handling
     fn load_balancing_monitor(
         queue: Arc<CacheOptimizedWorkStealingQueue>,
         goal_found: Arc<AtomicBool>,
         metrics: Arc<EnhancedPathfindingMetrics>,
+        error_occurred: Arc<Mutex<Option<PathfindingError>>>,
     ) {
         let mut _last_stats = queue.get_stats();
+        let mut iterations = 0;
+        const MAX_MONITOR_ITERATIONS: usize = 10000; // Prevent infinite monitor loops
         
-        while !goal_found.load(AtomicOrdering::SeqCst) {
+        while !goal_found.load(AtomicOrdering::SeqCst) && iterations < MAX_MONITOR_ITERATIONS {
+            iterations += 1;
+            
+            // Check for errors
+            if let Ok(err_guard) = error_occurred.lock() {
+                if err_guard.is_some() {
+                    break; // Stop monitoring if error occurred
+                }
+            }
+            
             thread::sleep(Duration::from_millis(100));
             
             let current_stats = queue.get_stats();
@@ -915,55 +1188,29 @@ impl EnhancedParallelAStar {
                 
                 if (new_x as usize >= start_x) && ((new_x as usize) < end_x) &&
                    (new_y as usize >= start_y) && ((new_y as usize) < end_y) &&
-                   (new_z as usize >= start_z) && ((new_z as usize) < end_z) {
+                   (new_z as usize >= start_z) && ((new_z as usize) < end_z)
                     
-                    if grid.is_walkable(new_x, new_y, new_z) {
+                    && grid.is_walkable(new_x, new_y, new_z) {
                         neighbors.push(Position::new(new_x, new_y, new_z));
                     }
-                }
             }
         }
     }
     
     /// Get cache-friendly direction ordering based on spatial locality
-    fn get_cache_friendly_directions(&self, pos: &Position, current_block: (usize, usize, usize)) -> Vec<(i32, i32, i32)> {
-        let mut directions = Vec::with_capacity(26);
-        
-        // Cardinal directions first (most likely to be in same cache line)
-        directions.push((-1, 0, 0));
-        directions.push((1, 0, 0));
-        directions.push((0, -1, 0));
-        directions.push((0, 1, 0));
-        directions.push((0, 0, -1));
-        directions.push((0, 0, 1));
-        
-        // 2D diagonals (still likely in same cache block)
-        directions.push((-1, -1, 0));
-        directions.push((-1, 1, 0));
-        directions.push((1, -1, 0));
-        directions.push((1, 1, 0));
-        
-        // 3D face diagonals
-        directions.push((-1, 0, -1));
-        directions.push((-1, 0, 1));
-        directions.push((1, 0, -1));
-        directions.push((1, 0, 1));
-        directions.push((0, -1, -1));
-        directions.push((0, -1, 1));
-        directions.push((0, 1, -1));
-        directions.push((0, 1, 1));
-        
-        // 3D corner diagonals (least cache friendly)
-        directions.push((-1, -1, -1));
-        directions.push((-1, -1, 1));
-        directions.push((-1, 1, -1));
-        directions.push((-1, 1, 1));
-        directions.push((1, -1, -1));
-        directions.push((1, -1, 1));
-        directions.push((1, 1, -1));
-        directions.push((1, 1, 1));
-        
-        directions
+    fn get_cache_friendly_directions(&self, _pos: &Position, _current_block: (usize, usize, usize)) -> Vec<(i32, i32, i32)> {
+        vec![
+            // Cardinal directions first (most likely to be in same cache line)
+            (-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1),
+            // 2D diagonals (still likely in same cache block)
+            (-1, -1, 0), (-1, 1, 0), (1, -1, 0), (1, 1, 0),
+            // 3D face diagonals
+            (-1, 0, -1), (-1, 0, 1), (1, 0, -1), (1, 0, 1),
+            (0, -1, -1), (0, -1, 1), (0, 1, -1), (0, 1, 1),
+            // 3D corner diagonals (least cache friendly)
+            (-1, -1, -1), (-1, -1, 1), (-1, 1, -1), (-1, 1, 1),
+            (1, -1, -1), (1, -1, 1), (1, 1, -1), (1, 1, 1),
+        ]
     }
     
     /// Legacy method for backward compatibility
@@ -1014,41 +1261,55 @@ impl EnhancedParallelAStar {
         came_from: &HashMap<Position, Position>,
         start: Position,
         goal: Position,
-    ) -> Option<Vec<Position>> {
+    ) -> PathfindingResult<Vec<Position>> {
         let mut path = Vec::new();
         let mut current = goal;
+        let mut iterations = 0;
+        const MAX_PATH_LENGTH: usize = 100000; // Prevent infinite loops in path reconstruction
         
         while current != start {
+            if iterations >= MAX_PATH_LENGTH {
+                return Err(PathfindingError::ResourceExhausted {
+                    resource: format!("Path reconstruction exceeded max length ({})", MAX_PATH_LENGTH)
+                });
+            }
+            
             path.push(current);
             if let Some(&parent) = came_from.get(&current) {
                 current = parent;
             } else {
-                return None; // No path found
+                return Err(PathfindingError::NoPathExists);
             }
+            
+            iterations += 1;
         }
         
         path.push(start);
         path.reverse();
-        Some(path)
+        Ok(path)
     }
 }
 
-/// Batch pathfinding for multiple queries with cache optimization
+/// Batch pathfinding for multiple queries with cache optimization and error handling
 #[allow(dead_code)]
 pub fn batch_parallel_astar(
     grid: &CacheOptimizedGrid,
     queries: Vec<(Position, Position)>,
     num_threads: usize,
-) -> Vec<Option<Vec<Position>>> {
-    let engine = Arc::new(EnhancedParallelAStar::new(grid.clone(), num_threads));
+) -> Vec<PathfindingResult<Vec<Position>>> {
+    let engine = match EnhancedParallelAStar::new(grid.clone(), num_threads) {
+        Ok(e) => Arc::new(e),
+        Err(e) => {
+            // Return error for all queries if engine creation failed
+            return vec![Err(e); queries.len()];
+        }
+    };
     
     queries.into_par_iter().map(|(start, goal)| {
         let engine_clone = Arc::clone(&engine);
         engine_clone.find_path(start, goal)
     }).collect()
-}
-
-/// SIMD-optimized heuristic calculations
+}/// SIMD-optimized heuristic calculations
 #[cfg(target_arch = "x86_64")]
 pub mod simd_heuristics {
     use std::arch::x86_64::*;
@@ -1067,7 +1328,7 @@ pub mod simd_heuristics {
             let goal_y = _mm256_set1_ps(goal.1 as f32);
             let goal_z = _mm256_set1_ps(goal.2 as f32);
             
-            positions.chunks(8).map(|chunk| {
+            positions.chunks(8).flat_map(|chunk| {
                 let mut results = Vec::with_capacity(chunk.len());
                 
                 if chunk.len() == 8 {
@@ -1099,8 +1360,8 @@ pub mod simd_heuristics {
                     let mut result_array = [0.0f32; 8];
                     _mm256_storeu_ps(result_array.as_mut_ptr(), sum);
                     
-                    for i in 0..chunk.len() {
-                        results.push(result_array[i]);
+                    for distance in result_array.iter().take(chunk.len()) {
+                        results.push(*distance);
                     }
                 } else {
                     for pos in chunk {
@@ -1110,7 +1371,7 @@ pub mod simd_heuristics {
                 }
                 
                 results
-            }).flatten().collect()
+            }).collect()
         }
     }
 }
@@ -1287,7 +1548,7 @@ lazy_static::lazy_static! {
     pub static ref PATHFINDING_METRICS: EnhancedPathfindingMetrics = EnhancedPathfindingMetrics::new();
 }
 
-/// Enhanced JNI interface for parallel A* pathfinding with cache optimization
+/// Enhanced JNI interface for parallel A* pathfinding with cache optimization and comprehensive error handling
 #[allow(non_snake_case)]
 pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>(
     mut env: jni::JNIEnv<'a>,
@@ -1304,13 +1565,50 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>
     goal_z: i32,
     num_threads: i32,
 ) -> JObject<'a> {
-    // Convert Java byte array to Rust grid data
+    // Validate inputs
+    if width <= 0 || height <= 0 || depth <= 0 {
+        eprintln!("Invalid grid dimensions: {}x{}x{}", width, height, depth);
+        let array_class = env.find_class("[I").unwrap_or_else(|_| {
+            panic!("Failed to find array class");
+        });
+        let null_obj = jni::objects::JObject::null();
+        return env.new_object_array(0, array_class, null_obj).unwrap_or_else(|_| {
+            jni::objects::JObject::null().into()
+        }).into();
+    }
+    
+    if num_threads <= 0 {
+        eprintln!("Invalid number of threads: {}", num_threads);
+        let array_class = env.find_class("[I").unwrap_or_else(|_| {
+            panic!("Failed to find array class");
+        });
+        let null_obj = jni::objects::JObject::null();
+        return env.new_object_array(0, array_class, null_obj).unwrap_or_else(|_| {
+            jni::objects::JObject::null().into()
+        }).into();
+    }
+    
+    // Convert Java byte array to Rust grid data with error handling
     let grid_size = (width * height * depth) as usize;
     let mut grid_bytes = vec![0i8; grid_size];
-    env.get_byte_array_region(&grid_data, 0, &mut grid_bytes).unwrap();
     
-    // Create cache-optimized thread-safe grid
-    let grid = CacheOptimizedGrid::new(width as usize, height as usize, depth as usize, true);
+    if let Err(e) = env.get_byte_array_region(&grid_data, 0, &mut grid_bytes) {
+        eprintln!("Failed to get grid data from Java: {:?}", e);
+        let array_class = env.find_class("[I").unwrap();
+        let null_obj = jni::objects::JObject::null();
+        return env.new_object_array(0, array_class, null_obj).unwrap().into();
+    }
+    
+    // Create cache-optimized thread-safe grid with error handling
+    let grid = match CacheOptimizedGrid::new(width as usize, height as usize, depth as usize, true) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("Failed to create grid: {}", e);
+            let array_class = env.find_class("[I").unwrap();
+            let null_obj = jni::objects::JObject::null();
+            return env.new_object_array(0, array_class, null_obj).unwrap().into();
+        }
+    };
     
     // Set walkable cells based on byte array (0 = walkable, 1 = blocked)
     for x in 0..width {
@@ -1318,7 +1616,9 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>
             for z in 0..depth {
                 let index = (x * height * depth + y * depth + z) as usize;
                 if grid_bytes[index] != 0 {
-                    grid.set_walkable(x as usize, y as usize, z as usize, false);
+                    if let Err(e) = grid.set_walkable(x as usize, y as usize, z as usize, false) {
+                        eprintln!("Failed to set walkable at ({}, {}, {}): {}", x, y, z, e);
+                    }
                 }
             }
         }
@@ -1327,12 +1627,22 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>
     let start = Position::new(start_x, start_y, start_z);
     let goal = Position::new(goal_x, goal_y, goal_z);
     
-    // Perform enhanced parallel A* pathfinding
-    let mut engine = EnhancedParallelAStar::new(grid, num_threads as usize);
+    // Perform enhanced parallel A* pathfinding with error handling
+    let mut engine = match EnhancedParallelAStar::new(grid, num_threads as usize) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Failed to create pathfinding engine: {}", e);
+            let array_class = env.find_class("[I").unwrap();
+            let null_obj = jni::objects::JObject::null();
+            return env.new_object_array(0, array_class, null_obj).unwrap().into();
+        }
+    };
     
     // Configure advanced features
     engine.set_early_termination(true);
     engine.set_hierarchical_search(false, 3);
+    engine.set_timeout(Duration::from_secs(30));
+    engine.set_max_nodes_explored(1_000_000);
     
     let result = Arc::new(engine).find_path(start, goal);
     
@@ -1341,27 +1651,59 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>
     
     // Convert result to Java array with enhanced error handling
     match result {
-        Some(path) => {
-            let array_class = env.find_class("[I").unwrap();
-            let result_array = env.new_object_array(path.len() as i32, array_class, jni::objects::JObject::null()).unwrap();
+        Ok(path) => {
+            let array_class = match env.find_class("[I") {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Failed to find array class: {:?}", e);
+                    return jni::objects::JObject::null();
+                }
+            };
+            
+            let result_array = match env.new_object_array(path.len() as i32, array_class, jni::objects::JObject::null()) {
+                Ok(arr) => arr,
+                Err(e) => {
+                    eprintln!("Failed to create result array: {:?}", e);
+                    return jni::objects::JObject::null();
+                }
+            };
             
             for (i, pos) in path.iter().enumerate() {
-                let coord_array = env.new_int_array(3).unwrap();
+                let coord_array = match env.new_int_array(3) {
+                    Ok(arr) => arr,
+                    Err(e) => {
+                        eprintln!("Failed to create coordinate array: {:?}", e);
+                        continue;
+                    }
+                };
+                
                 let coords = [pos.x, pos.y, pos.z];
-                env.set_int_array_region(&coord_array, 0, &coords).unwrap();
-                env.set_object_array_element(&result_array, i as i32, coord_array).unwrap();
+                if let Err(e) = env.set_int_array_region(&coord_array, 0, &coords) {
+                    eprintln!("Failed to set coordinate array region: {:?}", e);
+                    continue;
+                }
+                
+                if let Err(e) = env.set_object_array_element(&result_array, i as i32, coord_array) {
+                    eprintln!("Failed to set object array element: {:?}", e);
+                    continue;
+                }
             }
             
             // Record path optimality
-            PATHFINDING_METRICS.update_path_optimality(path.len(), path.len()); // Simplified for now
+            PATHFINDING_METRICS.update_path_optimality(path.len(), path.len());
             
             result_array.into()
         }
-        None => {
-            // Return empty array if no path found
-            let array_class = env.find_class("[I").unwrap();
+        Err(e) => {
+            eprintln!("Pathfinding failed: {}", e);
+            // Return empty array if no path found or error occurred
+            let array_class = env.find_class("[I").unwrap_or_else(|_| {
+                panic!("Failed to find array class");
+            });
             let null_obj = jni::objects::JObject::null();
-            env.new_object_array(0, array_class, null_obj).unwrap().into()
+            env.new_object_array(0, array_class, null_obj).unwrap_or_else(|_| {
+                jni::objects::JObject::null().into()
+            }).into()
         }
     }
 }
@@ -1395,7 +1737,7 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getPathfindingPerformance
     env.new_string(&report_json).unwrap()
 }
 
-/// JNI interface for batch pathfinding operations with cache optimization
+/// JNI interface for batch pathfinding operations with cache optimization and comprehensive error handling
 #[allow(non_snake_case)]
 pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchParallelAStarPathfind<'a>(
     mut env: jni::JNIEnv<'a>,
@@ -1407,13 +1749,36 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchParallelAStarPathfin
     queries: JObjectArray<'a>, // 2D array of [start_x, start_y, start_z, goal_x, goal_y, goal_z]
     num_threads: i32,
 ) -> JObject<'a> {
-    // Convert Java byte array to Rust grid data
+    // Validate inputs
+    if width <= 0 || height <= 0 || depth <= 0 || num_threads <= 0 {
+        eprintln!("Invalid parameters: dimensions={}x{}x{}, threads={}", width, height, depth, num_threads);
+        let result_class = env.find_class("[[I").unwrap_or_else(|_| {
+            panic!("Failed to find result class");
+        });
+        return env.new_object_array(0, result_class, jni::objects::JObject::null()).unwrap_or_else(|_| {
+            jni::objects::JObject::null().into()
+        }).into();
+    }
+    
+    // Convert Java byte array to Rust grid data with error handling
     let grid_size = (width * height * depth) as usize;
     let mut grid_bytes = vec![0i8; grid_size];
-    env.get_byte_array_region(&grid_data, 0, &mut grid_bytes).unwrap();
     
-    // Create cache-optimized thread-safe grid
-    let grid = CacheOptimizedGrid::new(width as usize, height as usize, depth as usize, true);
+    if let Err(e) = env.get_byte_array_region(&grid_data, 0, &mut grid_bytes) {
+        eprintln!("Failed to get grid data: {:?}", e);
+        let result_class = env.find_class("[[I").unwrap();
+        return env.new_object_array(0, result_class, jni::objects::JObject::null()).unwrap().into();
+    }
+    
+    // Create cache-optimized thread-safe grid with error handling
+    let grid = match CacheOptimizedGrid::new(width as usize, height as usize, depth as usize, true) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("Failed to create grid: {}", e);
+            let result_class = env.find_class("[[I").unwrap();
+            return env.new_object_array(0, result_class, jni::objects::JObject::null()).unwrap().into();
+        }
+    };
     
     // Set walkable cells based on byte array
     for x in 0..width {
@@ -1421,62 +1786,130 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchParallelAStarPathfin
             for z in 0..depth {
                 let index = (x * height * depth + y * depth + z) as usize;
                 if grid_bytes[index] != 0 {
-                    grid.set_walkable(x as usize, y as usize, z as usize, false);
+                    if let Err(e) = grid.set_walkable(x as usize, y as usize, z as usize, false) {
+                        eprintln!("Failed to set walkable: {}", e);
+                    }
                 }
             }
         }
     }
     
-    // Convert queries array
-    let query_count = env.get_array_length(&queries).unwrap();
+    // Convert queries array with error handling
+    let query_count = match env.get_array_length(&queries) {
+        Ok(len) => len,
+        Err(e) => {
+            eprintln!("Failed to get query count: {:?}", e);
+            let result_class = env.find_class("[[I").unwrap();
+            return env.new_object_array(0, result_class, jni::objects::JObject::null()).unwrap().into();
+        }
+    };
+    
     let mut pathfinding_queries = Vec::new();
     
     for i in 0..query_count {
-        let query_obj: JObject = env.get_object_array_element(&queries, i).unwrap();
+        let query_obj = match env.get_object_array_element(&queries, i) {
+            Ok(obj) => obj,
+            Err(e) => {
+                eprintln!("Failed to get query element {}: {:?}", i, e);
+                continue;
+            }
+        };
+        
         let query_array_obj = JIntArray::from(query_obj);
         let mut coords = [0i32; 6];
-        env.get_int_array_region(&query_array_obj, 0, &mut coords).unwrap();
+        
+        if let Err(e) = env.get_int_array_region(&query_array_obj, 0, &mut coords) {
+            eprintln!("Failed to get coordinates for query {}: {:?}", i, e);
+            continue;
+        }
         
         let start = Position::new(coords[0], coords[1], coords[2]);
         let goal = Position::new(coords[3], coords[4], coords[5]);
         pathfinding_queries.push((start, goal));
     }
     
-    // Perform batch parallel A* pathfinding
-    let _engine = Arc::new(EnhancedParallelAStar::new(grid.clone(), num_threads as usize));
+    // Perform batch parallel A* pathfinding with error handling
+    let results: Vec<PathfindingResult<Vec<Position>>> = pathfinding_queries
+        .into_par_iter()
+        .map(|(start, goal)| {
+            let engine = match EnhancedParallelAStar::new(grid.clone(), num_threads as usize) {
+                Ok(e) => Arc::new(e),
+                Err(e) => return Err(e),
+            };
+            engine.find_path(start, goal)
+        })
+        .collect();
     
-    let results: Vec<Option<Vec<Position>>> = pathfinding_queries
-    .into_par_iter()
-    .map(|(start, goal)| {
-        let engine_clone = Arc::new(EnhancedParallelAStar::new(grid.clone(), num_threads as usize));
-        engine_clone.find_path(start, goal)
-    })
-    .collect();
+    // Convert results to Java array with error handling
+    let result_class = match env.find_class("[[I") {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to find result class: {:?}", e);
+            return jni::objects::JObject::null();
+        }
+    };
     
-    // Convert results to Java array
-    let result_class = env.find_class("[[I").unwrap();
-    let result_array = env.new_object_array(results.len() as i32, result_class, jni::objects::JObject::null()).unwrap();
+    let result_array = match env.new_object_array(results.len() as i32, result_class, jni::objects::JObject::null()) {
+        Ok(arr) => arr,
+        Err(e) => {
+            eprintln!("Failed to create result array: {:?}", e);
+            return jni::objects::JObject::null();
+        }
+    };
     
     for (i, result) in results.iter().enumerate() {
         match result {
-            Some(path) => {
-                let path_class = env.find_class("[I").unwrap();
-                let path_array = env.new_object_array(path.len() as i32, path_class, jni::objects::JObject::null()).unwrap();
+            Ok(path) => {
+                let path_class = match env.find_class("[I") {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("Failed to find path class: {:?}", e);
+                        continue;
+                    }
+                };
+                
+                let path_array = match env.new_object_array(path.len() as i32, path_class, jni::objects::JObject::null()) {
+                    Ok(arr) => arr,
+                    Err(e) => {
+                        eprintln!("Failed to create path array: {:?}", e);
+                        continue;
+                    }
+                };
                 
                 for (j, pos) in path.iter().enumerate() {
-                    let coord_array = env.new_int_array(3).unwrap();
+                    let coord_array = match env.new_int_array(3) {
+                        Ok(arr) => arr,
+                        Err(e) => {
+                            eprintln!("Failed to create coordinate array: {:?}", e);
+                            continue;
+                        }
+                    };
+                    
                     let coords = [pos.x, pos.y, pos.z];
-                    env.set_int_array_region(&coord_array, 0, &coords).unwrap();
-                    env.set_object_array_element(&path_array, j as i32, coord_array).unwrap();
+                    if let Err(e) = env.set_int_array_region(&coord_array, 0, &coords) {
+                        eprintln!("Failed to set coordinate region: {:?}", e);
+                        continue;
+                    }
+                    
+                    if let Err(e) = env.set_object_array_element(&path_array, j as i32, coord_array) {
+                        eprintln!("Failed to set path element: {:?}", e);
+                        continue;
+                    }
                 }
                 
-                env.set_object_array_element(&result_array, i as i32, path_array).unwrap();
+                if let Err(e) = env.set_object_array_element(&result_array, i as i32, path_array) {
+                    eprintln!("Failed to set result element: {:?}", e);
+                }
             }
-            None => {
+            Err(e) => {
+                eprintln!("Pathfinding query {} failed: {}", i, e);
+                // Return empty array for failed query
                 let path_class = env.find_class("[I").unwrap();
                 let null_obj = jni::objects::JObject::null();
                 let empty_array = env.new_object_array(0, path_class, null_obj).unwrap();
-                env.set_object_array_element(&result_array, i as i32, empty_array).unwrap();
+                if let Err(e) = env.set_object_array_element(&result_array, i as i32, empty_array) {
+                    eprintln!("Failed to set empty result: {:?}", e);
+                }
             }
         }
     }

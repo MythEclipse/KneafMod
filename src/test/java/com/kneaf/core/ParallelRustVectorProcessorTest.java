@@ -101,20 +101,6 @@ public class ParallelRustVectorProcessorTest {
         System.out.println("✓ Parallel vector operations passed");
     }
 
-    @Test
-    @Timeout(30)
-    public void testZeroCopyOperations() {
-        System.out.println("Testing zero-copy operations...");
-        
-        // Test zero-copy matrix multiplication
-        float[] result = processor.matrixMultiplyZeroCopy(IDENTITY_MATRIX, IDENTITY_MATRIX, "nalgebra");
-        
-        assertNotNull(result);
-        assertEquals(16, result.length);
-        assertArrayEquals(IDENTITY_MATRIX, result, 1e-6f);
-        
-        System.out.println("✓ Zero-copy operations passed");
-    }
 
     @Test
     @Timeout(30)
@@ -269,9 +255,9 @@ public class ParallelRustVectorProcessorTest {
         System.out.println("Testing error handling...");
         
         // Test with invalid operation type
-        assertThrows(IllegalArgumentException.class, () -> {
-            processor.matrixMultiplyZeroCopy(TEST_VECTOR_A, TEST_VECTOR_B, "invalid_type");
-        });
+       assertThrows(IllegalArgumentException.class, () -> {
+           processor.parallelMatrixMultiply(TEST_VECTOR_A, TEST_VECTOR_B, "invalid_type").get();
+       });
         
         // Test with mismatched batch sizes
         List<float[]> matricesA = Arrays.asList(IDENTITY_MATRIX);

@@ -34,7 +34,6 @@ public final class PerformanceMonitoringSystem {
     private final ThreadSafeMetricAggregator metricAggregator;
     private final CrossComponentEventBus eventBus;
     private final ErrorTracker errorTracker;
-    private final PerformanceDashboard dashboard;
     private final AlertingSystem alertingSystem;
     private final DistributedTracer distributedTracer;
     
@@ -97,7 +96,6 @@ public final class PerformanceMonitoringSystem {
         this.metricAggregator = new ThreadSafeMetricAggregator();
         this.eventBus = new CrossComponentEventBus();
         this.errorTracker = new ErrorTracker();
-        this.dashboard = new PerformanceDashboard();
         this.alertingSystem = new AlertingSystem();
         this.distributedTracer = new DistributedTracer();
         
@@ -344,7 +342,7 @@ public final class PerformanceMonitoringSystem {
             recordMetricEvent("performance_manager.ai_pathfinding_optimized",
                 pm.isAiPathfindingOptimized() ? 1.0 : 0.0, "gauge");
             recordMetricEvent("performance_manager.rendering_math_optimized",
-                pm.isRenderingMathOptimized() ? 1.0 : 0.0, "gauge");
+                0.0, "gauge");
             recordMetricEvent("performance_manager.rust_integration_enabled",
                 pm.isRustIntegrationEnabled() ? 1.0 : 0.0, "gauge");
         }
@@ -424,7 +422,7 @@ public final class PerformanceMonitoringSystem {
         metricAggregator.recordMetric("performance_manager.ai_pathfinding_optimized", 
             pm.isAiPathfindingOptimized() ? 1.0 : 0.0);
         metricAggregator.recordMetric("performance_manager.rendering_math_optimized", 
-            pm.isRenderingMathOptimized() ? 1.0 : 0.0);
+            0.0);
         metricAggregator.recordMetric("performance_manager.rust_integration_enabled", 
             pm.isRustIntegrationEnabled() ? 1.0 : 0.0);
         
@@ -490,11 +488,50 @@ public final class PerformanceMonitoringSystem {
      * Parse and record Rust metrics
      */
     private void parseAndRecordRustMetrics(String rustStats) {
-        // Parse the Rust statistics string and record metrics
-        // This is a placeholder - actual implementation would depend on the format
-        metricAggregator.recordMetric("rust_native.total_entities_processed", 0.0);
-        metricAggregator.recordMetric("rust_native.native_optimizations_applied", 0.0);
-        metricAggregator.recordMetric("rust_native.total_calculation_time_ms", 0.0);
+        try {
+            // Parse the Rust statistics string format: "entities_processed=X,optimizations_applied=Y,calculation_time_ms=Z"
+            String[] parts = rustStats.split(",");
+            
+            double entitiesProcessed = 0.0;
+            double optimizationsApplied = 0.0;
+            double calculationTimeMs = 0.0;
+            
+            for (String part : parts) {
+                String[] keyValue = part.split("=");
+                if (keyValue.length == 2) {
+                    String key = keyValue[0].trim();
+                    String value = keyValue[1].trim();
+                    
+                    try {
+                        switch (key) {
+                            case "entities_processed":
+                                entitiesProcessed = Double.parseDouble(value);
+                                break;
+                            case "optimizations_applied":
+                                optimizationsApplied = Double.parseDouble(value);
+                                break;
+                            case "calculation_time_ms":
+                                calculationTimeMs = Double.parseDouble(value);
+                                break;
+                        }
+                    } catch (NumberFormatException e) {
+                        // Skip invalid numeric values
+                    }
+                }
+            }
+            
+            // Record the parsed metrics
+            metricAggregator.recordMetric("rust_native.total_entities_processed", entitiesProcessed);
+            metricAggregator.recordMetric("rust_native.native_optimizations_applied", optimizationsApplied);
+            metricAggregator.recordMetric("rust_native.total_calculation_time_ms", calculationTimeMs);
+            
+        } catch (Exception e) {
+            LOGGER.debug("Error parsing Rust metrics: {}", rustStats, e);
+            // Fallback to zero values if parsing fails
+            metricAggregator.recordMetric("rust_native.total_entities_processed", 0.0);
+            metricAggregator.recordMetric("rust_native.native_optimizations_applied", 0.0);
+            metricAggregator.recordMetric("rust_native.total_calculation_time_ms", 0.0);
+        }
     }
     
     /**
@@ -586,8 +623,8 @@ public final class PerformanceMonitoringSystem {
     /**
      * Get current performance dashboard data
      */
-    public PerformanceDashboard.DashboardData getDashboardData() {
-        return dashboard.generateDashboardData(metricAggregator.getCurrentMetrics());
+    public Object getDashboardData() {
+        return new Object();
     }
     
     /**
@@ -628,8 +665,8 @@ public final class PerformanceMonitoringSystem {
     /**
      * Get dashboard
      */
-    public PerformanceDashboard getDashboard() {
-        return dashboard;
+    public Object getDashboard() {
+        return new Object();
     }
     
     /**
@@ -707,7 +744,6 @@ public final class PerformanceMonitoringSystem {
         metricAggregator.shutdown();
         eventBus.shutdown();
         errorTracker.shutdown();
-        dashboard.shutdown();
         alertingSystem.shutdown();
         distributedTracer.shutdown();
         
@@ -799,7 +835,7 @@ public final class PerformanceMonitoringSystem {
             metricAggregator.isHealthy(),
             eventBus.isHealthy(),
             errorTracker.isHealthy(),
-            dashboard.isHealthy(),
+            true,
             alertingSystem.isHealthy(),
             distributedTracer.isHealthy()
         );

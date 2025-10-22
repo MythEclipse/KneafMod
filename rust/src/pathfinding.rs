@@ -122,6 +122,9 @@ pub struct PathfindingResult {
     pub error_message: Option<String>,
 }
 
+/// Type alias for complex pathfinding request type
+type PathfindingRequest = (PathfindingGrid, (usize, usize), (usize, usize));
+
 /// Main pathfinding system
 pub struct PathfindingSystem {
     config: PathfindingConfig,
@@ -315,7 +318,7 @@ impl PathfindingSystem {
     /// Perform parallel A* pathfinding for multiple requests
     pub fn find_paths_parallel(
         &self,
-        requests: Vec<(PathfindingGrid, (usize, usize), (usize, usize))>,
+        requests: Vec<PathfindingRequest>,
     ) -> Vec<PathfindingResult> {
         let start_time = Instant::now();
         

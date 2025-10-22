@@ -23,7 +23,6 @@ mod arena_memory;
 mod simd_runtime;
 mod load_balancer;
 mod performance_monitoring;
-mod zero_copy_buffer;
 mod tests;
 
 // Performance Monitoring System modules
@@ -35,12 +34,31 @@ mod dashboard;
 // Entity Processing System modules
 mod entity_registry;
 mod shadow_zombie_ninja;
-mod entity_renderer;
 mod combat_system;
 mod entity_modulation;
 
 // AI Pathfinding System modules
 mod pathfinding;
+
+// Component definitions for entity system
+use glam::Vec3;
+
+#[derive(Debug, Clone)]
+pub struct PositionComponent {
+    pub position: Vec3,
+    pub velocity: Vec3,
+}
+
+impl entity_registry::Component for PositionComponent {}
+
+#[derive(Debug, Clone)]
+pub struct HealthComponent {
+    pub current: f32,
+    pub max: f32,
+    pub regeneration: f32,
+}
+
+impl entity_registry::Component for HealthComponent {}
 
 // Import functions from modules
 
@@ -53,7 +71,6 @@ pub extern "C" fn JNI_OnLoad(_vm: *mut jni::sys::JavaVM, _reserved: *mut c_void)
 /// JNI functions for RustVectorLibrary - STRICTLY MATHEMATICAL OPERATIONS ONLY
 /// These functions provide native vector/matrix operations using nalgebra, glam, and faer
 /// NO game state access, NO entity references, NO AI logic - pure input→output
-
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_nalgebra_1matrix_1mul<'a>(
     env: JNIEnv<'a>,
@@ -156,7 +173,6 @@ pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_faer_1matrix_1mul<'a>(
 /// JNI functions for OptimizationInjector - STRICTLY MATHEMATICAL OPERATIONS ONLY
 /// These functions provide pure vector operations with NO game state access
 /// Input: numerical values only, Output: numerical results only
-
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1multiply<'a>(
     env: JNIEnv<'a>,
@@ -208,7 +224,6 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1dam
 
 /// Enhanced JNI functions for multi-core optimization
 /// These functions provide access to the new parallel processing capabilities
-
 /// Work-stealing parallel A* pathfinding
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>(
@@ -521,7 +536,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_copyFromNative
         } else {
             &data
         };
-        
+         
         parallel_processing::copy_from_native_buffer(&env, data_slice, &result, offset);
     }
 }
@@ -557,7 +572,6 @@ pub fn glam_vector_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 }
 
 
-
 /// Performance monitoring JNI functions
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_getRustPerformanceStats<'a>(
@@ -581,7 +595,6 @@ pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_getRustMetri
 
 /// JNI functions for Entity Processing System - Native ECS Implementation
 /// These functions provide native Rust entity processing with GPU acceleration and SIMD optimization
-
 /// Initialize Entity Registry
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityRegistry<'a>(
@@ -590,10 +603,10 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityRe
 ) -> jni::sys::jlong {
     // Create performance monitor
     let performance_monitor = Arc::new(performance_monitor::PerformanceMonitor::new());
-    
+     
     // Create entity registry
     let entity_registry = Arc::new(entity_registry::EntityRegistry::new(performance_monitor));
-    
+     
     // Convert to raw pointer for Java
     Box::into_raw(Box::new(entity_registry)) as jlong
 }
@@ -609,15 +622,15 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_createShadowZombie
     z: jdouble,
 ) -> jni::sys::jlong {
     let registry = unsafe { Arc::from_raw(registry_ptr as *const entity_registry::EntityRegistry) };
-    
+     
     let position = glam::Vec3::new(x as f32, y as f32, z as f32);
     let entity_id = registry.create_entity(entity_registry::EntityType::ShadowZombieNinja);
-    
+     
     // Create ShadowZombieNinja with factory
     let performance_monitor = Arc::new(performance_monitor::PerformanceMonitor::new());
     let factory = shadow_zombie_ninja::ShadowZombieNinjaFactory::new(performance_monitor);
     let ninja = factory.create_entity(entity_id, position);
-    
+     
     // Convert to raw pointer for Java
     Box::into_raw(Box::new(ninja)) as jlong
 }
@@ -633,10 +646,10 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_updateEntityPositi
     z: jdouble,
 ) {
     let mut ninja = unsafe { Box::from_raw(entity_ptr as *mut shadow_zombie_ninja::ShadowZombieNinja) };
-    
+     
     let new_position = glam::Vec3::new(x as f32, y as f32, z as f32);
     ninja.transform.position = new_position;
-    
+     
     // Don't drop the box, convert back to raw pointer
     let _ = Box::into_raw(ninja); // Retain ownership of the box
 }
@@ -653,25 +666,25 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_processEntityComba
     let combat_system = unsafe { Arc::from_raw(combat_system_ptr as *const combat_system::CombatSystem) };
     let attacker = unsafe { Box::from_raw(attacker_ptr as *mut shadow_zombie_ninja::ShadowZombieNinja) };
     let target = unsafe { Box::from_raw(target_ptr as *mut shadow_zombie_ninja::ShadowZombieNinja) };
-    
+     
     let attacker_pos = attacker.transform.position;
     let target_pos = target.transform.position;
-    
+     
     // Process combat
     let result = combat_system.process_attack(attacker.entity_id, target.entity_id, target_pos);
-    
+     
     // Convert results back to raw pointers
     let _ = Box::into_raw(attacker);
     let _ = Box::into_raw(target);
-    
+     
     // Return result as JSON string
     match result {
         Ok(event) => {
             let json = format!(
-                r#"{{"success": true, "damage": {}, "critical": {}, "event_type": "{}"}}"#,
+                r#"{{"success": true, "damage": {}, "critical": {}, "event_type": {:?}}}"#,
                 event.damage_amount,
                 event.is_critical,
-                format!("{:?}", event.event_type)
+                event.event_type
             );
             env.new_string(&json).unwrap()
         }
@@ -691,97 +704,10 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeCombatSy
 ) -> jni::sys::jlong {
     let registry = unsafe { Arc::from_raw(registry_ptr as *const entity_registry::EntityRegistry) };
     let performance_monitor = Arc::new(performance_monitor::PerformanceMonitor::new());
-    
+     
     let combat_system = Arc::new(combat_system::CombatSystem::new(registry, performance_monitor));
-    
+     
     Box::into_raw(Box::new(combat_system)) as jlong
-}
-
-/// Initialize entity renderer
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityRenderer<'a>(
-    env: jni::JNIEnv<'a>,
-    _class: jni::objects::JClass<'a>,
-    registry_ptr: jni::sys::jlong,
-) -> jni::sys::jlong {
-    let registry = unsafe { Arc::from_raw(registry_ptr as *const entity_registry::EntityRegistry) };
-    let performance_monitor = Arc::new(performance_monitor::PerformanceMonitor::new());
-    let zero_copy_buffer = Arc::new(zero_copy_buffer::ZeroCopyBufferPool::new(1024 * 1024, 10));
-    
-    let renderer = Arc::new(entity_renderer::EntityRenderer::new(
-        registry,
-        performance_monitor,
-        zero_copy_buffer,
-    ));
-    
-    // Initialize renderer
-    if let Err(e) = renderer.initialize() {
-        // Return error as null pointer
-        return 0;
-    }
-    
-    Box::into_raw(Box::new(renderer)) as jlong
-}
-
-/// Render entities
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_renderEntities(
-    env: jni::JNIEnv,
-    _class: jni::objects::JClass,
-    renderer_ptr: jni::sys::jlong,
-    delta_time: jdouble,
-) {
-    let renderer = unsafe { Box::from_raw(renderer_ptr as *mut entity_renderer::EntityRenderer) };
-    
-    // Render entities
-    if let Err(e) = renderer.render(delta_time as f32) {
-        // Log error - in real implementation would use proper logging
-        eprintln!("Entity rendering error: {}", e);
-    }
-    
-    // Don't drop the box, convert back to raw pointer
-    let _ = Box::into_raw(renderer); // Retain ownership of the box
-}
-
-/// Get entity statistics
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_getEntityStatistics<'a>(
-    env: jni::JNIEnv<'a>,
-    _class: jni::objects::JClass<'a>,
-    registry_ptr: jni::sys::jlong,
-) -> jni::objects::JString<'a> {
-    let registry = unsafe { Arc::from_raw(registry_ptr as *const entity_registry::EntityRegistry) };
-    
-    let stats = registry.get_statistics();
-    
-    let json = format!(
-        r#"{{"total_entities": {}, "active_entities": {}, "shadow_zombie_ninjas": {}}}"#,
-        stats.total_entities,
-        stats.active_entities,
-        stats.entities_by_type.get(&entity_registry::EntityType::ShadowZombieNinja).unwrap_or(&0)
-    );
-    
-    env.new_string(&json).unwrap()
-}
-
-/// Update all entities
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_updateAllEntities(
-    env: jni::JNIEnv,
-    _class: jni::objects::JClass,
-    registry_ptr: jni::sys::jlong,
-    delta_time: jdouble,
-) {
-    let registry = unsafe { Box::from_raw(registry_ptr as *mut entity_registry::EntityRegistry) };
-    
-    // Process entities in parallel
-    registry.process_entities_parallel(|entity_id, entity, components| {
-        // Update entity logic would be implemented here
-        // This is a placeholder for the actual update logic
-    });
-    
-    // Don't drop the box, convert back to raw pointer
-    let _ = Box::into_raw(registry); // Retain ownership of the box
 }
 
 /// Clean up entity system resources
@@ -791,19 +717,14 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_cleanupEntitySyste
     _class: jni::objects::JClass,
     registry_ptr: jni::sys::jlong,
     combat_system_ptr: jni::sys::jlong,
-    renderer_ptr: jni::sys::jlong,
 ) {
     // Clean up resources
     if registry_ptr != 0 {
         unsafe { Box::from_raw(registry_ptr as *mut entity_registry::EntityRegistry) };
     }
-    
+
     if combat_system_ptr != 0 {
         unsafe { Box::from_raw(combat_system_ptr as *mut combat_system::CombatSystem) };
-    }
-    
-    if renderer_ptr != 0 {
-        unsafe { Box::from_raw(renderer_ptr as *mut entity_renderer::EntityRenderer) };
     }
 }
 
@@ -815,7 +736,7 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityMo
     max_entities: i32,
 ) -> jni::sys::jlong {
     let modulation_system = entity_modulation::EntityModulationSystem::new(max_entities as usize);
-    
+     
     // Convert to raw pointer for Java
     Box::into_raw(Box::new(modulation_system)) as jlong
 }
@@ -831,13 +752,13 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_spawnShadowZombieN
     z: jdouble,
 ) -> jni::objects::JString<'a> {
     let system = unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
-    
+     
     let position = glam::Vec3::new(x as f32, y as f32, z as f32);
     let result = system.spawn_shadow_zombie_ninja(position);
-    
+     
     // Convert back to raw pointer
     let _ = Box::into_raw(system);
-    
+     
     match result {
         Ok(entity_id) => {
             let json = format!(r#"{{"success": true, "entity_id": {}}}"#, entity_id.0);
@@ -859,12 +780,12 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_updateEntityModula
     delta_time: jdouble,
 ) -> jni::objects::JString<'a> {
     let mut system = unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
-    
+     
     let result = system.update(delta_time as f32);
-    
+     
     // Convert back to raw pointer
     let _ = Box::into_raw(system);
-    
+     
     match result {
         Ok(_) => {
             let json = r#"{"success": true}"#;
@@ -885,25 +806,20 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_getEntityModulatio
     system_ptr: jni::sys::jlong,
 ) -> jni::objects::JString<'a> {
     let system = unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
-    
+     
     let stats = system.get_statistics();
-    
+     
     // Convert back to raw pointer
     let _ = Box::into_raw(system);
-    
+     
     let json = format!(
-        r#"{{"total_entities": {}, "active_entities": {}, "shadow_zombie_ninjas": {}, "entities_rendered": {}, "triangles_rendered": {}, "draw_calls": {}, "render_time_ms": {}, "total_frame_time_ms": {}, "is_initialized": {}}}"#,
+        r#"{{"total_entities": {}, "active_entities": {}, "shadow_zombie_ninjas": {}, "is_initialized": {}}}"#,
         stats.total_entities,
         stats.active_entities,
         stats.shadow_zombie_ninjas,
-        stats.entities_rendered,
-        stats.triangles_rendered,
-        stats.draw_calls,
-        stats.render_time_ms,
-        stats.total_frame_time_ms,
         stats.is_initialized
     );
-    
+     
     env.new_string(&json).unwrap()
 }
 
@@ -915,12 +831,12 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeModulati
     system_ptr: jni::sys::jlong,
 ) -> jni::objects::JString<'a> {
     let mut system = unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
-    
+     
     let result = system.initialize();
-    
+     
     // Convert back to raw pointer
     let _ = Box::into_raw(system);
-    
+     
     match result {
         Ok(_) => {
             let json = r#"{"success": true}"#;
@@ -972,7 +888,6 @@ pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_recordRustEr
 
 /// JNI functions for AI Pathfinding System - Native A* Implementation
 /// These functions provide native Rust pathfinding with high performance and memory safety
-
 /// Initialize pathfinding system
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializePathfindingSystem<'a>(

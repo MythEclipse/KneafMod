@@ -33,8 +33,6 @@ public class RustPerformanceBasicTest {
         performanceManager.setAiPathfindingOptimized(true);
         assertTrue(performanceManager.isAiPathfindingOptimized());
         
-        performanceManager.setRenderingMathOptimized(true);
-        assertTrue(performanceManager.isRenderingMathOptimized());
         
         performanceManager.setRustIntegrationEnabled(false);
         assertFalse(performanceManager.isRustIntegrationEnabled());
@@ -51,7 +49,6 @@ public class RustPerformanceBasicTest {
         assertTrue(representation.contains("PerformanceManager"));
         assertTrue(representation.contains("entityThrottling"));
         assertTrue(representation.contains("aiPathfinding"));
-        assertTrue(representation.contains("renderingMath"));
         assertTrue(representation.contains("rustIntegration"));
     }
 
@@ -61,7 +58,6 @@ public class RustPerformanceBasicTest {
         // Modify some settings
         performanceManager.setEntityThrottlingEnabled(false);
         performanceManager.setAiPathfindingOptimized(false);
-        performanceManager.setRenderingMathOptimized(false);
         
         // Reset to defaults
         performanceManager.resetToDefaults();
@@ -69,7 +65,6 @@ public class RustPerformanceBasicTest {
         // Verify defaults are restored
         assertTrue(performanceManager.isEntityThrottlingEnabled());
         assertTrue(performanceManager.isAiPathfindingOptimized());
-        assertTrue(performanceManager.isRenderingMathOptimized());
         assertFalse(performanceManager.isRustIntegrationEnabled());
         assertFalse(performanceManager.isHorizontalPhysicsOnly());
     }
@@ -100,7 +95,6 @@ public class RustPerformanceBasicTest {
                 for (int j = 0; j < 100; j++) {
                     performanceManager.setEntityThrottlingEnabled(j % 2 == 0);
                     performanceManager.setAiPathfindingOptimized(j % 3 == 0);
-                    performanceManager.setRenderingMathOptimized(j % 5 == 0);
                 }
             }));
         }

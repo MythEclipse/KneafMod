@@ -14,11 +14,11 @@ pub enum SimdLevel {
     SSSE3,
     SSE41,
     SSE42,
-    AVX,
-    AVX2,
-    AVX512F,
-    AVX512BW,
-    AVX512DQ,
+    Avx,
+    Avx2,
+    Avx512f,
+    Avx512bw,
+    Avx512dq,
 }
 
 /// Runtime SIMD capability detection
@@ -39,7 +39,7 @@ impl SimdDetector {
     pub fn detect_capabilities(&self) -> SimdLevel {
         self.detection_done.call_once(|| {
             let level = self.perform_detection();
-            self.detected_level.store(level as usize, Ordering::Relaxed);
+            self.detected_level.store(level, Ordering::Relaxed);
         });
         
         match self.detected_level.load(Ordering::Relaxed) {
@@ -49,11 +49,11 @@ impl SimdDetector {
             3 => SimdLevel::SSSE3,
             4 => SimdLevel::SSE41,
             5 => SimdLevel::SSE42,
-            6 => SimdLevel::AVX,
-            7 => SimdLevel::AVX2,
-            8 => SimdLevel::AVX512F,
-            9 => SimdLevel::AVX512BW,
-            10 => SimdLevel::AVX512DQ,
+            6 => SimdLevel::Avx,
+            7 => SimdLevel::Avx2,
+            8 => SimdLevel::Avx512f,
+            9 => SimdLevel::Avx512bw,
+            10 => SimdLevel::Avx512dq,
             _ => SimdLevel::None,
         }
     }
@@ -118,13 +118,13 @@ pub fn runtime_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usiz
     let simd_level = SIMD_DETECTOR.detect_capabilities();
     
     match simd_level {
-        SimdLevel::AVX512F | SimdLevel::AVX512BW | SimdLevel::AVX512DQ => {
+        SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
             avx512_matrix_multiply(a, b, a_rows, a_cols, b_cols)
         }
-        SimdLevel::AVX2 => {
+        SimdLevel::Avx2 => {
             avx2_matrix_multiply(a, b, a_rows, a_cols, b_cols)
         }
-        SimdLevel::AVX => {
+        SimdLevel::Avx => {
             avx_matrix_multiply(a, b, a_rows, a_cols, b_cols)
         }
         SimdLevel::SSE41 | SimdLevel::SSE42 => {
@@ -336,10 +336,10 @@ pub fn runtime_vector_dot_product(a: &[f32], b: &[f32]) -> f32 {
     let simd_level = SIMD_DETECTOR.detect_capabilities();
     
     match simd_level {
-        SimdLevel::AVX512F | SimdLevel::AVX512BW | SimdLevel::AVX512DQ => {
+        SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
             avx512_vector_dot_product(a, b)
         }
-        SimdLevel::AVX2 | SimdLevel::AVX => {
+        SimdLevel::Avx2 | SimdLevel::Avx => {
             avx_vector_dot_product(a, b)
         }
         SimdLevel::SSE41 | SimdLevel::SSE42 => {
@@ -451,10 +451,10 @@ pub fn runtime_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
     let simd_level = SIMD_DETECTOR.detect_capabilities();
     
     match simd_level {
-        SimdLevel::AVX512F | SimdLevel::AVX512BW | SimdLevel::AVX512DQ => {
+        SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
             avx512_vector_add(a, b)
         }
-        SimdLevel::AVX2 | SimdLevel::AVX => {
+        SimdLevel::Avx2 | SimdLevel::Avx => {
             avx_vector_add(a, b)
         }
         SimdLevel::SSE41 | SimdLevel::SSE42 => {
@@ -559,10 +559,10 @@ pub fn runtime_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     let simd_level = SIMD_DETECTOR.detect_capabilities();
     
     match simd_level {
-        SimdLevel::AVX512F | SimdLevel::AVX512BW | SimdLevel::AVX512DQ => {
+        SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
             avx512_matrix4x4_multiply(a, b)
         }
-        SimdLevel::AVX2 | SimdLevel::AVX => {
+        SimdLevel::Avx2 | SimdLevel::Avx => {
             avx_matrix4x4_multiply(a, b)
         }
         SimdLevel::SSE41 | SimdLevel::SSE42 => {
@@ -731,13 +731,13 @@ impl SimdStats {
         self.total_operations.fetch_add(1, Ordering::Relaxed);
         
         match simd_level {
-            SimdLevel::AVX512F | SimdLevel::AVX512BW | SimdLevel::AVX512DQ => {
+            SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
                 self.avx512_operations.fetch_add(1, Ordering::Relaxed);
             }
-            SimdLevel::AVX2 => {
+            SimdLevel::Avx2 => {
                 self.avx2_operations.fetch_add(1, Ordering::Relaxed);
             }
-            SimdLevel::AVX => {
+            SimdLevel::Avx => {
                 self.avx_operations.fetch_add(1, Ordering::Relaxed);
             }
             SimdLevel::SSE41 | SimdLevel::SSE42 | SimdLevel::SSSE3 | SimdLevel::SSE3 | SimdLevel::SSE2 => {
@@ -864,11 +864,11 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getSimdCapabilities<'a>(
         SimdLevel::SSSE3 => "SSSE3",
         SimdLevel::SSE41 => "SSE4.1",
         SimdLevel::SSE42 => "SSE4.2",
-        SimdLevel::AVX => "AVX",
-        SimdLevel::AVX2 => "AVX2",
-        SimdLevel::AVX512F => "AVX512F",
-        SimdLevel::AVX512BW => "AVX512BW",
-        SimdLevel::AVX512DQ => "AVX512DQ",
+        SimdLevel::Avx => "AVX",
+        SimdLevel::Avx2 => "AVX2",
+        SimdLevel::Avx512f => "AVX512F",
+        SimdLevel::Avx512bw => "AVX512BW",
+        SimdLevel::Avx512dq => "AVX512DQ",
     };
     
     env.new_string(level_str).unwrap()

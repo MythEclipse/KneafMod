@@ -2,7 +2,7 @@
 //! 
 //! This module provides the main integration point for the Entity Processing System,
 //! combining all ECS components into a cohesive system with performance monitoring
-//! and native GPU acceleration.
+//! and efficient entity management.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,10 +12,8 @@ use rayon::prelude::*;
 
 use crate::entity_registry::{EntityRegistry, EntityId, EntityType, EntitySystem};
 use crate::shadow_zombie_ninja::ShadowZombieNinjaFactory;
-use crate::entity_renderer::{EntityRenderer, EntityRendererFactory};
 use crate::combat_system::{CombatSystem, CombatEvent};
 use crate::performance_monitor::PerformanceMonitor;
-use crate::zero_copy_buffer::ZeroCopyBufferPool;
 
 /// Entity priority levels for CPU resource allocation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -146,7 +144,7 @@ impl SpatialGrid {
 
         // Add to new cell
         self.entities.insert(entity_id, new_cell);
-        self.grid.entry(new_cell).or_insert_with(Vec::new).push(entity_id);
+        self.grid.entry(new_cell).or_default().push(entity_id);
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId) {
@@ -209,10 +207,8 @@ pub enum BatchUpdateType {
 pub struct EntityModulationSystem {
     entity_registry: Arc<EntityRegistry>,
     ninja_factory: Arc<ShadowZombieNinjaFactory>,
-    entity_renderer: Arc<EntityRenderer>,
     combat_system: Arc<CombatSystem>,
     performance_monitor: Arc<PerformanceMonitor>,
-    zero_copy_buffer: Arc<ZeroCopyBufferPool>,
     object_pool: Arc<parking_lot::Mutex<EntityObjectPool>>,
     spatial_grid: Arc<parking_lot::Mutex<SpatialGrid>>,
     entity_batches: Arc<parking_lot::Mutex<HashMap<EntityPriority, Vec<EntityBatch>>>>,
@@ -228,16 +224,9 @@ impl EntityModulationSystem {
     /// Create a new entity modulation system
     pub fn new(max_entities: usize) -> Self {
         let performance_monitor = Arc::new(PerformanceMonitor::new());
-        let zero_copy_buffer = Arc::new(ZeroCopyBufferPool::new(1024 * 1024, 10));
         
         let entity_registry = Arc::new(EntityRegistry::new(performance_monitor.clone()));
         let ninja_factory = Arc::new(ShadowZombieNinjaFactory::new(performance_monitor.clone()));
-        
-        let entity_renderer_factory = EntityRendererFactory::new(
-            performance_monitor.clone(),
-            zero_copy_buffer.clone(),
-        );
-        let entity_renderer = Arc::new(entity_renderer_factory.create_renderer(entity_registry.clone()));
         
         let combat_system = Arc::new(CombatSystem::new(
             entity_registry.clone(),
@@ -252,10 +241,8 @@ impl EntityModulationSystem {
         Self {
             entity_registry,
             ninja_factory,
-            entity_renderer,
             combat_system,
             performance_monitor,
-            zero_copy_buffer,
             object_pool,
             spatial_grid,
             entity_batches,
@@ -272,10 +259,7 @@ impl EntityModulationSystem {
     pub fn initialize(&mut self) -> Result<(), String> {
         let start_time = Instant::now();
         
-        // Initialize entity renderer
-        self.entity_renderer.initialize()?;
-        
-        // Set up default materials and shaders
+        // Set up default resources
         self.setup_default_resources()?;
         
         self.is_initialized = true;
@@ -293,7 +277,7 @@ impl EntityModulationSystem {
     /// Set up default resources (materials, shaders, meshes)
     fn setup_default_resources(&self) -> Result<(), String> {
         // This would load default textures, materials, and shader programs
-        // For now, we'll use the built-in defaults from the renderer
+        // For now, we'll use the built-in defaults
         
         Ok(())
     }
@@ -328,11 +312,11 @@ impl EntityModulationSystem {
         let transform = pool.get_transform_component()
             .unwrap_or_else(|| crate::shadow_zombie_ninja::TransformComponent::new(position));
         let combat = pool.get_combat_component()
-            .unwrap_or_else(|| crate::combat_system::CombatComponent::new());
+            .unwrap_or_else(crate::combat_system::CombatComponent::new);
         let movement = pool.get_movement_component()
             .unwrap_or_else(|| crate::shadow_zombie_ninja::MovementComponent::new(1.0)); // Default movement speed
         let animation = pool.get_animation_component()
-            .unwrap_or_else(|| crate::shadow_zombie_ninja::AnimationComponent::new());
+            .unwrap_or_else(crate::shadow_zombie_ninja::AnimationComponent::new);
         let ai = pool.get_ai_component()
             .unwrap_or_else(|| crate::shadow_zombie_ninja::AIComponent::new(
                 crate::shadow_zombie_ninja::AIType::Aggressive, 5.0, 10.0
@@ -378,10 +362,7 @@ impl EntityModulationSystem {
         let entity_ids: Vec<EntityId> = positions
             .par_iter()
             .filter_map(|&position| {
-                match self.spawn_shadow_zombie_ninja(position) {
-                    Ok(entity_id) => Some(entity_id),
-                    Err(_) => None,
-                }
+                self.spawn_shadow_zombie_ninja(position).ok()
             })
             .collect();
         
@@ -467,9 +448,6 @@ impl EntityModulationSystem {
         // Clean up expired entities
         self.cleanup_expired_entities()?;
         
-        // Update renderer
-        self.entity_renderer.render(delta_time)?;
-        
         self.last_update = now;
         
         // Record update metrics
@@ -492,7 +470,7 @@ impl EntityModulationSystem {
         
         for &entity_id in &entities {
             let priority = priorities.get(&entity_id).copied().unwrap_or(EntityPriority::Medium);
-            priority_groups.entry(priority).or_insert_with(Vec::new).push(entity_id);
+            priority_groups.entry(priority).or_default().push(entity_id);
         }
         
         // Process entities by priority order (Critical first, Low last)
@@ -600,25 +578,14 @@ impl EntityModulationSystem {
         self.combat_system.process_aoe_damage(center, radius, damage, crate::combat_system::DamageType::Physical, exclude_entity)
     }
 
-    /// Set camera position for rendering
-    pub fn set_camera_position(&self, position: Vec3, target: Vec3, up: Vec3) {
-        self.entity_renderer.update_camera(position, target, up);
-    }
-
     /// Get system statistics
     pub fn get_statistics(&self) -> EntityModulationStats {
         let registry_stats = self.entity_registry.get_statistics();
-        let render_stats = self.entity_renderer.get_render_stats();
         
         EntityModulationStats {
             total_entities: registry_stats.total_entities,
             active_entities: registry_stats.active_entities,
             shadow_zombie_ninjas: *registry_stats.entities_by_type.get(&EntityType::ShadowZombieNinja).unwrap_or(&0),
-            entities_rendered: render_stats.entities_rendered,
-            triangles_rendered: render_stats.triangles_rendered,
-            draw_calls: render_stats.draw_calls,
-            render_time_ms: render_stats.render_time_ms,
-            total_frame_time_ms: render_stats.total_frame_time_ms,
             is_initialized: self.is_initialized,
         }
     }
@@ -663,11 +630,6 @@ pub struct EntityModulationStats {
     pub total_entities: usize,
     pub active_entities: usize,
     pub shadow_zombie_ninjas: usize,
-    pub entities_rendered: u32,
-    pub triangles_rendered: u32,
-    pub draw_calls: u32,
-    pub render_time_ms: f32,
-    pub total_frame_time_ms: f32,
     pub is_initialized: bool,
 }
 

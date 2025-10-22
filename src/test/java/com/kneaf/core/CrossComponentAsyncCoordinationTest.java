@@ -310,11 +310,10 @@ public class CrossComponentAsyncCoordinationTest {
                                 100_000L, createContext("thread_id", threadId, "operation_id", j));
                             
                         } else {
-                            // Zero-copy operation
-                            CompletableFuture<float[]> future = 
-                                EnhancedRustVectorLibrary.vectorAddZeroCopy(
-                                    createTestVector(), createTestVector(), "nalgebra");
-                            float[] result = future.get(1, TimeUnit.SECONDS);
+                            // Standard vector operation (zero-copy feature removed)
+                            float[] vectorA = createTestVector();
+                            float[] vectorB = createTestVector();
+                            float[] result = RustVectorLibrary.vectorAddNalgebra(vectorA, vectorB);
                             assertNotNull(result);
                         }
                         

@@ -123,7 +123,7 @@ impl EntityRegistry {
         // Add to type-specific storage
         self.entity_type_map.write().unwrap()
             .entry(entity_type.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(entity_id);
 
         // Create component storage for this entity
@@ -147,9 +147,8 @@ impl EntityRegistry {
         // Remove from main storage
         if let Some(entity) = self.entities.write().unwrap().remove(&entity_id) {
             // Remove from type-specific storage
-            self.entity_type_map.write().unwrap()
-                .get_mut(&entity.entity_type)
-                .map(|vec| vec.retain(|&id| id != entity_id));
+            if let Some(vec) = self.entity_type_map.write().unwrap()
+                .get_mut(&entity.entity_type) { vec.retain(|&id| id != entity_id) }
 
             // Remove component storage
             self.component_storages.write().unwrap().remove(&entity_id);

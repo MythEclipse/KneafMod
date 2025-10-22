@@ -195,7 +195,7 @@ impl PerformanceMonitor {
         // Use cached decision to avoid RNG overhead
         if effective_rate >= 100 {
             true
-        } else if effective_rate <= 0 {
+        } else if effective_rate == 0 {
             false
         } else {
             // Simple deterministic sampling based on time
@@ -327,21 +327,29 @@ impl PerformanceMonitor {
         let avg_cpu = if cpu_metrics.is_empty() {
             0.0
         } else {
-            cpu_metrics.iter().map(|(_, v)| v).sum::<f64>() / cpu_metrics.len() as f64
+            let sum: f64 = cpu_metrics.iter().map(|(_, v)| *v).sum();
+            sum / cpu_metrics.len() as f64
         };
 
-        let total_memory = memory_metrics.iter().map(|(_, v)| v).sum::<u64>();
+        let total_memory = memory_metrics.iter().map(|(_, v)| *v).sum::<u64>();
         let avg_response_time = if response_metrics.is_empty() {
             0.0
         } else {
-            response_metrics.iter().map(|(_, v)| v).sum::<f64>() / response_metrics.len() as f64
+            let sum: f64 = response_metrics.iter().map(|(_, v)| *v).sum();
+            sum / response_metrics.len() as f64
         };
 
+        // Use a set to track unique components (avoid double-counting)
+        let mut unique_components = std::collections::HashSet::new();
+        cpu_metrics.iter().for_each(|(c, _)| { unique_components.insert(c); });
+        memory_metrics.iter().for_each(|(c, _)| { unique_components.insert(c); });
+        response_metrics.iter().for_each(|(c, _)| { unique_components.insert(c); });
+
         PerformanceSummary {
-            total_components: cpu_metrics.len() + memory_metrics.len() + response_metrics.len(),
+            total_components: unique_components.len(),
             avg_cpu_usage: avg_cpu,
             total_memory_usage: total_memory,
-            avg_response_time: avg_response_time,
+            avg_response_time,
             uptime_seconds: self.get_uptime_seconds(),
         }
     }
@@ -405,7 +413,7 @@ mod tests {
         monitor.record_response_time("comp1", 100.0);
         
         let summary = monitor.get_summary_stats();
-        assert_eq!(summary.total_components, 3);
+        assert_eq!(summary.total_components, 2); // Only comp1 and comp2
         assert_eq!(summary.avg_cpu_usage, 60.0);
         assert_eq!(summary.total_memory_usage, 1024);
         assert_eq!(summary.avg_response_time, 100.0);

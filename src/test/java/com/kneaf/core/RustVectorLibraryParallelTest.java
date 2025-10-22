@@ -210,7 +210,7 @@ public class RustVectorLibraryParallelTest {
         
         long startTime = System.nanoTime();
         
-        float[] result = EnhancedRustVectorLibrary.matrixMultiplyZeroCopy(matrixA, matrixB, "nalgebra");
+        float[] result = RustVectorLibrary.matrixMultiplyNalgebra(matrixA, matrixB);
         
         long endTime = System.nanoTime();
         long durationMs = (endTime - startTime) / 1_000_000;
@@ -236,7 +236,8 @@ public class RustVectorLibraryParallelTest {
         
         // Test zero-copy vector addition
         long startTime = System.nanoTime();
-        CompletableFuture<float[]> addFuture = EnhancedRustVectorLibrary.vectorAddZeroCopy(vectorA, vectorB, "nalgebra");
+        CompletableFuture<float[]> addFuture = EnhancedRustVectorLibrary.batchVectorAddNalgebra(
+            Collections.singletonList(vectorA), Collections.singletonList(vectorB)).thenApply(results -> results.get(0));
         float[] addResult = addFuture.get(2, TimeUnit.SECONDS);
         long addDuration = (System.nanoTime() - startTime) / 1_000_000;
         
@@ -246,7 +247,8 @@ public class RustVectorLibraryParallelTest {
         
         // Test zero-copy vector dot product
         startTime = System.nanoTime();
-        CompletableFuture<Float> dotFuture = EnhancedRustVectorLibrary.vectorDotZeroCopy(vectorA, vectorB, "glam");
+        CompletableFuture<Float> dotFuture = EnhancedRustVectorLibrary.batchVectorDotGlam(
+            Collections.singletonList(vectorA), Collections.singletonList(vectorB)).thenApply(results -> results.get(0));
         float dotResult = dotFuture.get(2, TimeUnit.SECONDS);
         long dotDuration = (System.nanoTime() - startTime) / 1_000_000;
         
@@ -255,7 +257,8 @@ public class RustVectorLibraryParallelTest {
         
         // Test zero-copy vector cross product
         startTime = System.nanoTime();
-        CompletableFuture<float[]> crossFuture = EnhancedRustVectorLibrary.vectorCrossZeroCopy(vectorA, vectorB, "glam");
+        CompletableFuture<float[]> crossFuture = EnhancedRustVectorLibrary.batchVectorCrossGlam(
+            Collections.singletonList(vectorA), Collections.singletonList(vectorB)).thenApply(results -> results.get(0));
         float[] crossResult = crossFuture.get(2, TimeUnit.SECONDS);
         long crossDuration = (System.nanoTime() - startTime) / 1_000_000;
         
@@ -415,7 +418,7 @@ public class RustVectorLibraryParallelTest {
         // Zero-copy approach
         long zeroCopyStart = System.nanoTime();
         for (int i = 0; i < iterations; i++) {
-            float[] result = EnhancedRustVectorLibrary.matrixMultiplyZeroCopy(matrixA, matrixB, "nalgebra");
+            float[] result = RustVectorLibrary.matrixMultiplyNalgebra(matrixA, matrixB);
             assertNotNull(result);
         }
         long zeroCopyDuration = (System.nanoTime() - zeroCopyStart) / 1_000_000;

@@ -2,14 +2,12 @@ package com.kneaf.core;
 
 import com.kneaf.entities.ModEntities;
 import com.kneaf.entities.ShadowZombieNinja;
-import com.kneaf.entities.ShadowZombieNinjaRenderer;
 import com.mojang.logging.LogUtils;
 import net.minecraft.world.item.CreativeModeTabs;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
-import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
@@ -49,10 +47,6 @@ public class KneafCore {
     /** Deferred register for items */
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(MODID);
 
-    /** Spawn egg for ShadowZombieNinja */
-    public static final DeferredItem<DeferredSpawnEggItem> SHADOW_ZOMBIE_NINJA_SPAWN_EGG = ITEMS.registerItem("shadow_zombie_ninja_spawn_egg",
-        (properties) -> new DeferredSpawnEggItem(ModEntities.SHADOW_ZOMBIE_NINJA, 0x000000, 0xFFFFFF, properties)
-    );
 
     // Core components - refactored to use modular architecture
     private static final AtomicReference<KneafCore> INSTANCE = new AtomicReference<>();
@@ -77,8 +71,6 @@ public class KneafCore {
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::registerEntityAttributes);
         modEventBus.addListener(this::buildCreativeTabContents);
-        
-        // Register configuration
 
         LOGGER.info("KneafCore mod constructor completed - waiting for initialization");
     }
@@ -365,9 +357,6 @@ public class KneafCore {
      * @param event The build creative mode tab contents event
      */
     private void buildCreativeTabContents(BuildCreativeModeTabContentsEvent event) {
-        if (event.getTabKey() == CreativeModeTabs.SPAWN_EGGS) {
-            event.accept(SHADOW_ZOMBIE_NINJA_SPAWN_EGG);
-        }
     }
 
     /**
@@ -379,33 +368,5 @@ public class KneafCore {
         com.kneaf.commands.MetricsCommand.register(event.getDispatcher());
     }
 
-    // Client setup events - kept as static nested class for NeoForge compatibility
-    @net.neoforged.fml.common.EventBusSubscriber(
-        modid = MODID,
-        bus = net.neoforged.fml.common.EventBusSubscriber.Bus.MOD,
-        value = net.neoforged.api.distmarker.Dist.CLIENT
-    )
-    static class ClientModEvents {
-        private ClientModEvents() {}
-
-        @net.neoforged.bus.api.SubscribeEvent
-        static void onClientSetup(net.neoforged.fml.event.lifecycle.FMLClientSetupEvent event) {
-            LOGGER.info("HELLO FROM CLIENT SETUP");
-            LOGGER.info("MINECRAFT NAME >> {}", net.minecraft.client.Minecraft.getInstance().getUser().getName());
-
-            try {
-                // Register client-specific components
-                // For example: PerformanceOverlayClient.registerClient(event);
-
-            } catch (Throwable t) {
-                LOGGER.debug("Client component registration failed: {}", t.getMessage());
-            }
-        }
-
-        @net.neoforged.bus.api.SubscribeEvent
-        static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {
-            event.registerEntityRenderer(ModEntities.SHADOW_ZOMBIE_NINJA.get(), ShadowZombieNinjaRenderer::new);
-        }
-    }
 
 }

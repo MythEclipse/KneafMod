@@ -306,7 +306,7 @@ impl MetricAggregator {
         for data_point in data {
             grouped_data
                 .entry(data_point.metric_name.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(data_point);
         }
 

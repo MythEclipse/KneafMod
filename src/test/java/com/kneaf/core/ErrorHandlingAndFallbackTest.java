@@ -370,6 +370,7 @@ public class ErrorHandlingAndFallbackTest {
      */
     @Test
     @DisplayName("Test zero-copy system error handling and fallback")
+    @Disabled("Zero-copy functionality has been removed")
     void testZeroCopySystemErrorHandling() throws Exception {
         System.out.println("Zero-Copy System Error Handling Test:");
         
@@ -378,8 +379,8 @@ public class ErrorHandlingAndFallbackTest {
         
         try {
             // Try to create buffer with invalid size
-            ZeroCopyBufferManager.SharedBuffer invalidBuffer = 
-                EnhancedRustVectorLibrary.createSharedBuffer(-1, "TestComponent", "invalid_buffer");
+            // Using standard buffer instead of zero-copy (feature removed)
+            float[] invalidBuffer = new float[0];
             fail("Should throw exception for invalid buffer size");
         } catch (Exception e) {
             errorCount.incrementAndGet();
@@ -393,15 +394,16 @@ public class ErrorHandlingAndFallbackTest {
         System.out.println("  Test 2: Zero-copy transfer with invalid data");
         
         try {
-            CompletableFuture<ZeroCopyDataTransfer.ZeroCopyTransferResult> future = 
-                EnhancedRustVectorLibrary.getZeroCopyTransfer().transferData(
-                    "Source", "Target", "invalid_operation", null, 0, 100);
-            
-            ZeroCopyDataTransfer.ZeroCopyTransferResult result = future.get(5, TimeUnit.SECONDS);
-            
-            // Should handle invalid data gracefully
-            assertFalse(result.success, "Operation should fail with invalid data");
-            assertNotNull(result.error, "Error should be recorded");
+            // Using standard vector operation instead of zero-copy transfer (feature removed)
+            float[] vectorA = {1.0f, 2.0f, 3.0f};
+            float[] vectorB = {4.0f, 5.0f, 6.0f};
+            CompletableFuture<Float> future = EnhancedRustVectorLibrary.parallelVectorDot(
+                    vectorA, vectorB, "glam");
+         
+            Float result = future.get(5, TimeUnit.SECONDS);
+         
+            // Just verify we got a result (error handling is tested elsewhere)
+            assertNotNull(result, "Should get a result");
             errorCount.incrementAndGet();
         } catch (Exception e) {
             errorCount.incrementAndGet();
@@ -413,12 +415,14 @@ public class ErrorHandlingAndFallbackTest {
         
         try {
             // Try to access buffer that doesn't exist
-            CompletableFuture<ZeroCopyDataTransfer.ZeroCopyTransferResult> future =
-                EnhancedRustVectorLibrary.getZeroCopyTransfer().transferData(
-                    "NonExistentSource", "NonExistentTarget", "data_copy", null, 0, 100);
-            
-            ZeroCopyDataTransfer.ZeroCopyTransferResult result = future.get(5, TimeUnit.SECONDS);
-            assertFalse(result.success, "Should fail for non-existent buffer");
+            // Using standard vector operation instead of zero-copy transfer (feature removed)
+            float[] vectorA = {1.0f, 2.0f, 3.0f};
+            float[] vectorB = {4.0f, 5.0f, 6.0f};
+            CompletableFuture<Float> future = EnhancedRustVectorLibrary.parallelVectorDot(vectorA, vectorB, "glam");
+         
+            Float result = future.get(5, TimeUnit.SECONDS);
+            // Just verify we got a result (error handling is tested elsewhere)
+            assertNotNull(result, "Should get a result");
             errorCount.incrementAndGet();
         } catch (Exception e) {
             errorCount.incrementAndGet();
@@ -471,14 +475,17 @@ public class ErrorHandlingAndFallbackTest {
                     successfulOperations.incrementAndGet();
                     
                 } else {
-                    // Zero-copy under load
-                    CompletableFuture<float[]> future = 
-                        EnhancedRustVectorLibrary.vectorAddZeroCopy(
-                            createTestVector(), createTestVector(), "nalgebra");
-                    float[] result = future.get(100, TimeUnit.MILLISECONDS); // Short timeout
-                    if (result != null) {
-                        successfulOperations.incrementAndGet();
-                    } else {
+                    // Standard vector operation under load (zero-copy feature removed)
+                    try {
+                        float[] vectorA = createTestVector();
+                        float[] vectorB = createTestVector();
+                        float[] standardResult = RustVectorLibrary.vectorAddNalgebra(vectorA, vectorB);
+                        if (standardResult != null) {
+                            successfulOperations.incrementAndGet();
+                        } else {
+                            degradedOperations.incrementAndGet();
+                        }
+                    } catch (Exception e) {
                         degradedOperations.incrementAndGet();
                     }
                 }
@@ -705,12 +712,13 @@ public class ErrorHandlingAndFallbackTest {
             // Ignore
         }
         
-        // Zero-copy error
+        // Standard vector operation error test
         try {
-            EnhancedRustVectorLibrary.getZeroCopyTransfer().transferData(
-                "TestSource", "TestTarget", "invalid_operation", null, 0, 100);
+            // Test with invalid parameters to trigger error handling
+            RustVectorLibrary.vectorAddNalgebra(null, createTestVector());
         } catch (Exception e) {
-            // Expected
+            // Expected - null input should cause error
+            errorCount.incrementAndGet();
         }
     }
 }

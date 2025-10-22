@@ -127,8 +127,17 @@ impl MemoryArena {
         let aligned_size = (size + self.alignment - 1) & !(self.alignment - 1);
         
         let mut chunks = self.chunks.lock().unwrap();
+        
+        // Ensure we have at least one chunk
+        if chunks.is_empty() {
+            let new_chunk = self.get_chunk_from_pool();
+            chunks.push(new_chunk);
+            self.current_chunk.store(0, Ordering::Release);
+            self.current_offset.store(0, Ordering::Relaxed);
+        }
+        
         let mut chunk_idx = self.current_chunk.load(Ordering::Relaxed);
-        let mut offset = self.current_offset.fetch_add(aligned_size, Ordering::Relaxed);
+        let offset = self.current_offset.fetch_add(aligned_size, Ordering::Relaxed);
         
         if offset + aligned_size > self.chunk_size {
             // Need new chunk - use pooled allocation
@@ -136,10 +145,9 @@ impl MemoryArena {
             chunks.push(new_chunk);
             let new_chunk_idx = chunks.len() - 1;
             self.current_chunk.store(new_chunk_idx, Ordering::Release);
-            self.current_offset.store(aligned_size, Ordering::Release);
+            self.current_offset.store(0, Ordering::Release);
             
             chunk_idx = new_chunk_idx;
-            offset = 0;
         }
         
         let chunk = &chunks[chunk_idx];
@@ -162,13 +170,7 @@ impl MemoryArena {
     pub fn reset(&mut self) {
         let mut chunks = self.chunks.lock().unwrap();
         
-        // Return chunks to pool instead of dropping them
-        for chunk in chunks.iter_mut() {
-            if chunk.len() == self.chunk_size {
-                self.return_chunk_to_pool(chunk.clone());
-            }
-        }
-        
+        // Reset offsets without returning chunks to pool - maintain same memory blocks
         self.current_chunk.store(0, Ordering::Release);
         self.current_offset.store(0, Ordering::Release);
     }
@@ -524,11 +526,10 @@ impl HotLoopAllocator {
     }
     
     /// Allocate from thread-local arena
-    pub fn allocate_thread_local<T>(&self, thread_id: usize, _count: usize) -> NonNull<T> {
-        let _arena = self.thread_local_arenas.get_arena(thread_id);
-        // Skip allocation for now - need to redesign thread-safe arena
-        // Return a dummy NonNull pointer for now
-        NonNull::new(std::ptr::NonNull::dangling().as_ptr()).unwrap()
+    pub fn allocate_thread_local<T>(&self, thread_id: usize, count: usize) -> NonNull<T> {
+        let arena = self.thread_local_arenas.get_arena(thread_id);
+        let mut arena_guard = arena.lock().unwrap();
+        arena_guard.allocate::<T>(count)
     }
     
     /// Batch allocate multiple objects
@@ -622,7 +623,7 @@ pub fn arena_matrix_multiply(
     let result_size = a_rows * b_cols;
     
     // Allocate result matrix from arena
-    let result_ptr = HOT_LOOP_ALLOCATOR.allocate_thread_local::<f32>(thread_id as usize, result_size);
+    let result_ptr = HOT_LOOP_ALLOCATOR.allocate_thread_local::<f32>(thread_id, result_size);
     let result_slice = unsafe {
         slice::from_raw_parts_mut(result_ptr.as_ptr(), result_size)
     };
@@ -691,8 +692,8 @@ pub fn arena_matrix_multiply_jni<'a>(
     let mut a_data = vec![0.0f32; a_size];
     let mut b_data = vec![0.0f32; b_size];
     
-    env.get_float_array_region(&a, 0, &mut a_data).unwrap();
-    env.get_float_array_region(&b, 0, &mut b_data).unwrap();
+    env.get_float_array_region(a, 0, &mut a_data).unwrap();
+    env.get_float_array_region(b, 0, &mut b_data).unwrap();
     
     let result = arena_matrix_multiply(&a_data, &b_data, a_rows as usize, a_cols as usize, b_cols as usize, thread_id as usize);
     

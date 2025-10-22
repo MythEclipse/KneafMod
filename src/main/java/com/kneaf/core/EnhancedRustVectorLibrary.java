@@ -6,15 +6,14 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * Enhanced RustVectorLibrary with parallel processing capabilities and zero-copy integration.
- * Provides batch operations, zero-copy processing, and thread-safe execution.
+ * Enhanced RustVectorLibrary with parallel processing capabilities.
+ * Provides batch operations and thread-safe execution with optimized performance.
  */
 public final class EnhancedRustVectorLibrary {
     private static final String LIBRARY_NAME = "rustperf";
     private static volatile ParallelRustVectorProcessor parallelProcessor;
     private static final Object processorLock = new Object();
     private static volatile boolean isLibraryLoaded = false;
-    private static volatile ZeroCopyDataTransfer zeroCopyTransfer;
 
     static {
         try {
@@ -79,12 +78,6 @@ public final class EnhancedRustVectorLibrary {
         return getParallelProcessor().batchVectorCrossOperation(vectorsA, vectorsB);
     }
 
-    /**
-     * Zero-copy matrix operations
-     */
-    public static float[] matrixMultiplyZeroCopy(float[] matrixA, float[] matrixB, String operationType) {
-        return getParallelProcessor().matrixMultiplyZeroCopy(matrixA, matrixB, operationType);
-    }
 
     /**
      * Parallel single operations using Fork/Join framework
@@ -284,108 +277,6 @@ public final class EnhancedRustVectorLibrary {
         return getParallelProcessor().getQueueStatistics();
     }
     
-    /**
-     * Get zero-copy data transfer instance
-     */
-    public static ZeroCopyDataTransfer getZeroCopyTransfer() {
-        if (zeroCopyTransfer == null) {
-            synchronized (processorLock) {
-                if (zeroCopyTransfer == null) {
-                    zeroCopyTransfer = ZeroCopyDataTransfer.getInstance();
-                    zeroCopyTransfer.initializeComponentIntegration();
-                }
-            }
-        }
-        return zeroCopyTransfer;
-    }
-    
-    /**
-     * Enhanced matrix multiplication with zero-copy optimization
-     */
-    public static CompletableFuture<float[]> matrixMultiplyZeroCopyEnhanced(float[] matrixA, float[] matrixB, String operationType) {
-        return getParallelProcessor().matrixMultiplyZeroCopyEnhanced(matrixA, matrixB, operationType);
-    }
-    
-    /**
-     * Enhanced batch matrix multiplication with zero-copy optimization
-     */
-    public static CompletableFuture<List<float[]>> batchMatrixMultiplyZeroCopyEnhanced(
-            List<float[]> matricesA, List<float[]> matricesB, String operationType) {
-        return getParallelProcessor().batchMatrixMultiplyZeroCopy(matricesA, matricesB, operationType);
-    }
-    
-    /**
-     * Vector addition with zero-copy optimization using data transfer system
-     */
-    public static CompletableFuture<float[]> vectorAddZeroCopy(float[] vectorA, float[] vectorB, String operationType) {
-        return getZeroCopyTransfer().transferVectorData(
-            "JavaComponent", "RustComponent", operationType, vectorA, vectorB, "vector_add")
-            .thenApply(result -> {
-                if (result.success && result.result instanceof float[]) {
-                    return (float[]) result.result;
-                } else {
-                    throw new RuntimeException("Vector addition failed", result.error);
-                }
-            });
-    }
-    
-    /**
-     * Vector dot product with zero-copy optimization using data transfer system
-     */
-    public static CompletableFuture<Float> vectorDotZeroCopy(float[] vectorA, float[] vectorB, String operationType) {
-        return getZeroCopyTransfer().transferVectorData(
-            "JavaComponent", "RustComponent", operationType, vectorA, vectorB, "vector_dot")
-            .thenApply(result -> {
-                if (result.success && result.result instanceof Float) {
-                    return (Float) result.result;
-                } else {
-                    throw new RuntimeException("Vector dot product failed", result.error);
-                }
-            });
-    }
-    
-    /**
-     * Vector cross product with zero-copy optimization using data transfer system
-     */
-    public static CompletableFuture<float[]> vectorCrossZeroCopy(float[] vectorA, float[] vectorB, String operationType) {
-        return getZeroCopyTransfer().transferVectorData(
-            "JavaComponent", "RustComponent", operationType, vectorA, vectorB, "vector_cross")
-            .thenApply(result -> {
-                if (result.success && result.result instanceof float[]) {
-                    return (float[]) result.result;
-                } else {
-                    throw new RuntimeException("Vector cross product failed", result.error);
-                }
-            });
-    }
-    
-    /**
-     * Create shared buffer for cross-component data sharing
-     */
-    public static ZeroCopyBufferManager.SharedBuffer createSharedBuffer(int size, String creatorComponent, String sharedName) {
-        return getZeroCopyTransfer().createSharedDataBuffer(creatorComponent, sharedName, size);
-    }
-    
-    /**
-     * Get zero-copy buffer statistics
-     */
-    public static ZeroCopyBufferManager.BufferStatistics getZeroCopyBufferStatistics() {
-        return ZeroCopyBufferManager.getInstance().getStatistics();
-    }
-    
-    /**
-     * Get zero-copy transfer statistics
-     */
-    public static ZeroCopyDataTransfer.TransferStatistics getZeroCopyTransferStatistics() {
-        return getZeroCopyTransfer().getStatistics();
-    }
-    
-    /**
-     * Get zero-copy data transfer instance (alternative method)
-     */
-    public static ZeroCopyDataTransfer getZeroCopyDataTransfer() {
-        return getZeroCopyTransfer();
-    }
 
     /**
      * Shutdown parallel processor and release resources

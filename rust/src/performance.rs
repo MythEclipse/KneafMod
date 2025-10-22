@@ -219,7 +219,7 @@ impl PartialOrd for Node {
 }
 
 #[allow(dead_code)]
-pub fn a_star_pathfind(grid: &Vec<Vec<bool>>, start: (i32, i32), goal: (i32, i32)) -> Option<Vec<(i32, i32)>> {
+pub fn a_star_pathfind(grid: &[Vec<bool>], start: (i32, i32), goal: (i32, i32)) -> Option<Vec<(i32, i32)>> {
     let rows = grid.len() as i32;
     let cols = grid[0].len() as i32;
     let mut open_set = BinaryHeap::new();
@@ -334,6 +334,6 @@ pub fn faer_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
 
 
 #[allow(dead_code)]
-pub fn parallel_a_star(grid: &Vec<Vec<bool>>, queries: &[PathQuery]) -> Vec<Option<Vec<(i32,i32)>>> {
+pub fn parallel_a_star(grid: &[Vec<bool>], queries: &[PathQuery]) -> Vec<Option<Vec<(i32,i32)>>> {
     queries.par_iter().map(|query| a_star_pathfind(grid, query.start, query.goal)).collect()
 }

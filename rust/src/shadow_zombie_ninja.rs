@@ -9,7 +9,8 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use crate::entity_registry::{Component, EntityId};
 use crate::performance_monitor::PerformanceMonitor;
-use crate::pathfinding::EntityPathfindingSystem;
+use crate::pathfinding::{EntityPathfindingSystem, PathfindingConfig};
+use crate::parallel_astar::{ThreadSafeGrid, Position, EnhancedParallelAStar};
 use crate::combat_system::CombatComponent;
 
 /// Health component for entities with combat capabilities
@@ -88,7 +89,7 @@ impl TransformComponent {
     }
 
     pub fn rotate(&mut self, rotation: Quat) {
-        self.rotation = self.rotation * rotation;
+        self.rotation *= rotation;
     }
 
     pub fn set_scale(&mut self, scale: Vec3) {
@@ -460,11 +461,10 @@ impl ShadowZombieNinja {
             self.animation.set_animation(AnimationState::Damaged);
             
             // Update AI state if health is low
-            if self.health.get_health_percentage() < 0.2 {
-                if self.ai.ai_type == AIType::Aggressive {
+            if self.health.get_health_percentage() < 0.2
+                && self.ai.ai_type == AIType::Aggressive {
                     self.ai.state = AIState::Fleeing;
                 }
-            }
             
             // Record performance metrics
             self.performance_monitor.record_metric(
@@ -600,11 +600,6 @@ impl ShadowZombieNinja {
         }
     }
 
-    /// Check if the entity should be rendered (within view distance)
-    pub fn should_render(&self, camera_position: Vec3, max_render_distance: f32) -> bool {
-        let distance = self.transform.position.distance(camera_position);
-        distance <= max_render_distance && self.health.is_alive()
-    }
 
     /// Get the entity's current state for debugging
     pub fn get_debug_info(&self) -> String {
@@ -693,6 +688,7 @@ impl ShadowZombieNinjaFactory {
 
         entity.health = HealthComponent::new(health);
         entity.combat = CombatComponent::new();
+        entity.combat.attack_damage = attack_damage; // Set the attack damage
         entity.movement = MovementComponent::new(movement_speed);
 
         // Pathfinding system is already set in create_entity
@@ -737,8 +733,11 @@ mod tests {
         assert!(ninja.take_damage(20.0));
         assert_eq!(ninja.health.current_health, 80.0);
         
+        // Wait for invulnerability to expire before applying fatal damage
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        
         // Test death
-        ninja.take_damage(100.0);
+        assert!(ninja.take_damage(100.0));
         assert!(!ninja.health.is_alive());
     }
 
