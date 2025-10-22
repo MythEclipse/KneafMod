@@ -8,8 +8,6 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
-import org.slf4j.Logger;
-
 import java.net.URL;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -88,9 +86,6 @@ public final class OptimizationInjector {
                     userDir + "\\src\\main\\resources\\natives\\" + libName, userDir + "\\build\\resources\\main\\natives\\" + libName,
                     userDir + "\\run\\natives\\" + libName, userDir + "\\target\\natives\\" + libName,
                     userDir + "\\target\\debug\\" + libName, userDir + "\\target\\release\\" + libName, userDir + "\\" + libName,
-                    "D:\\KneafMod\\src\\main\\resources\\natives\\" + libName, "D:\\KneafMod\\build\\resources\\main\\natives\\" + libName,
-                    "D:\\KneafMod\\run\\natives\\" + libName, "D:\\KneafMod\\target\\debug\\" + libName,
-                    "D:\\KneafMod\\target\\release\\" + libName, "D:\\KneafMod\\" + libName,
                     getUserProfilePath() + "\\.minecraft\\mods\\natives\\" + libName, getUserProfilePath() + "\\.minecraft\\" + libName,
                     getAppDataPath() + "\\.minecraft\\mods\\natives\\" + libName, getAppDataPath() + "\\.minecraft\\" + libName
                 };
@@ -102,6 +97,12 @@ public final class OptimizationInjector {
                 logLibraryNotFoundError(classpathPaths, absolutePaths);
                 isNativeLibraryLoaded = false;
 
+            } catch (SecurityException e) {
+                LOGGER.error("Security exception prevented native library loading: {}", e.getMessage(), e);
+                isNativeLibraryLoaded = false;
+            } catch (UnsatisfiedLinkError ule) {
+                LOGGER.error("Unsatisfied link error in native library loading: {} ({})", ule.getMessage(), getOSErrorMessage(ule), ule);
+                isNativeLibraryLoaded = false;
             } catch (Throwable t) {
                 LOGGER.error("Critical error in native library loading system: {} ({})", t.getMessage(), getDetailedErrorMessage(t), t);
                 isNativeLibraryLoaded = false;
@@ -268,7 +269,7 @@ public final class OptimizationInjector {
                     useNativeResult = true;
                     recordOptimizationHit("Native vector calculation succeeded");
                 } else {
-                    resultData = java_vector_damp(x, y, z, dampingFactor);
+                    resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
                     if (isNaturalMovement(resultData, originalX, originalY, originalZ)) {
                         useNativeResult = true;
                         recordOptimizationHit("Java fallback vector calculation succeeded");
@@ -278,7 +279,7 @@ public final class OptimizationInjector {
                 }
             } catch (UnsatisfiedLinkError ule) {
                 LOGGER.error("JNI link error in rustperf_vector_damp: {}", ule.getMessage());
-                resultData = java_vector_damp(x, y, z, dampingFactor);
+                resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
                 if (isNaturalMovement(resultData, originalX, originalY, originalZ)) {
                     useNativeResult = true;
                     recordOptimizationHit("Java fallback used due to JNI error");
@@ -287,7 +288,7 @@ public final class OptimizationInjector {
                 }
             } catch (Throwable t) {
                 LOGGER.error("Error in rustperf_vector_damp: {}", t.getMessage());
-                resultData = java_vector_damp(x, y, z, dampingFactor);
+                resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
                 if (isNaturalMovement(resultData, originalX, originalY, originalZ)) {
                     useNativeResult = true;
                     recordOptimizationHit("Java fallback used due to error");
@@ -359,7 +360,7 @@ public final class OptimizationInjector {
     
     static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
 
-    private static double[] java_vector_damp(double x, double y, double z, double dampingFactor) {
+    private static double[] java_vector_damp(double x, double y, double z, double dampingFactor, double originalY) {
         // TRUE vanilla knockback - NO damping for horizontal movement
         // Only apply damping to vertical (gravity) for stability
         double verticalDamping = 0.015;   // Standard damping for vertical movement only
@@ -369,7 +370,7 @@ public final class OptimizationInjector {
         
         // Only preserve external gravity modifications if they are significant (knockback, explosions)
         // Allow natural gravity to work normally
-        if (Math.abs(y - y) > 0.5) {
+        if (Math.abs(y - originalY) > 0.5) {
             // Significant external effect detected (explosion, strong knockback)
             processedY = y;
         } else if (y < -0.1) {
@@ -396,18 +397,18 @@ public final class OptimizationInjector {
         optimizationHits.incrementAndGet();
     }
 
-    static double calculateEntitySpecificDamping(Entity entity) {
+    static double calculateEntitySpecificDamping(Object entity) {
         // Use EntityTypeEnum for consistent damping factor calculation
         // This aligns hash-based lookup with string-based fallback
         // For tests, return a default damping factor when entity is null
         if (entity == null) {
-            return 0.980; // Default to "other" entity damping factor
+            return EntityTypeEnum.DEFAULT.getDampingFactor(); // Use DEFAULT enum value
         }
         try {
             return EntityTypeEnum.calculateDampingFactor(entity);
         } catch (Exception e) {
             LOGGER.debug("Entity type damping calculation failed, using default", e);
-            return 0.980; // Default to "other" entity damping factor
+            return EntityTypeEnum.DEFAULT.getDampingFactor(); // Use DEFAULT enum value
         }
     }
 
@@ -476,7 +477,9 @@ public final class OptimizationInjector {
 
     static void enableTestMode(boolean enabled) {
         isTestMode = enabled;
-        if (!enabled) {
+        if (enabled) {
+            isNativeLibraryLoaded = false;
+        } else {
             isNativeLibraryLoaded = false;
             loadNativeLibrary();
         }
