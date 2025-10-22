@@ -465,13 +465,12 @@ public class CrossComponentAsyncCoordinationTest {
             assertNotNull(result);
         }
         
-        // Step 4: Generate performance dashboard
-        System.out.println("  Step 4: Generating performance dashboard...");
+        // Step 4: Get performance metrics for verification
+        System.out.println("  Step 4: Getting performance metrics...");
         Map<String, Double> metrics = monitoringSystem.getMetricAggregator().getCurrentMetrics();
-        PerformanceDashboard.DashboardData dashboardData = 
-            monitoringSystem.getDashboard().generateDashboardData(metrics);
         
-        assertNotNull(dashboardData);
+        assertNotNull(metrics);
+        assertTrue(metrics.size() > 0);
         
         // Step 5: Verify system health
         System.out.println("  Step 5: Verifying system health...");

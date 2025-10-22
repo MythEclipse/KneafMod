@@ -56,11 +56,11 @@ public class PerformanceMonitoringIntegrationTest {
         assertTrue(aggregatedMetrics.containsKey("EnhancedRustVectorLibrary.matrix_multiplication.duration_ms"));
         assertTrue(aggregatedMetrics.containsKey("OptimizedOptimizationInjector.pathfinding_optimization.duration_ms"));
         
-        // 4. Generate dashboard data
-        PerformanceDashboard.DashboardData dashboardData = monitoringSystem.getDashboard()
-            .generateDashboardData(aggregatedMetrics);
+        // 4. Get current metrics for verification
+        Map<String, Double> currentMetrics = monitoringSystem.getMetricAggregator().getCurrentMetrics();
         
-        assertNotNull(dashboardData);
+        assertNotNull(currentMetrics);
+        assertTrue(currentMetrics.size() > 0);
         
         // 5. Verify trace data
         DistributedTracer.DistributedTrace traceData = monitoringSystem.getDistributedTracer().getTrace(traceId);

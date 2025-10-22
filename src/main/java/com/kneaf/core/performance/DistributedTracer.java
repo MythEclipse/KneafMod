@@ -1,7 +1,7 @@
 package com.kneaf.core.performance;
 
-import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -14,7 +14,7 @@ import java.time.Duration;
  * Provides trace correlation, context propagation, and cross-component trace analysis.
  */
 public final class DistributedTracer {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(DistributedTracer.class);
     
     // Trace storage
     private final ConcurrentHashMap<String, DistributedTrace> activeTraces = new ConcurrentHashMap<>();

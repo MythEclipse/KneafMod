@@ -1,7 +1,9 @@
 package com.kneaf.core.performance;
 
-import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+// Minecraft-specific imports commented out for test compatibility
+// import com.mojang.logging.LogUtils;
 
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -12,7 +14,7 @@ import java.util.*;
  * Thread-safe and optimized for high-frequency metric collection.
  */
 public final class MetricsCollector {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(MetricsCollector.class);
     
     // Metric storage with thread safety
     private final ConcurrentHashMap<String, AtomicLong> counters = new ConcurrentHashMap<>();

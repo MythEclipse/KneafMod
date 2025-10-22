@@ -26,19 +26,19 @@ mod performance_monitoring;
 mod tests;
 
 // Performance Monitoring System modules
-mod performance_monitor;
+pub mod performance_monitor;
 mod metrics_collector;
 mod metric_aggregator;
 mod dashboard;
 
 // Entity Processing System modules
-mod entity_registry;
+pub mod entity_registry;
 mod shadow_zombie_ninja;
 mod combat_system;
 mod entity_modulation;
 
 // AI Pathfinding System modules
-mod pathfinding;
+pub mod pathfinding;
 
 // Component definitions for entity system
 use glam::Vec3;

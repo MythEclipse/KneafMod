@@ -1,7 +1,9 @@
 package com.kneaf.core.performance;
 
-import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+// Minecraft-specific imports commented out for test compatibility
+// import com.mojang.logging.LogUtils;
 
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -12,7 +14,7 @@ import java.util.*;
  * Provides low-overhead aggregation with lock-free data structures where possible.
  */
 public final class ThreadSafeMetricAggregator {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(ThreadSafeMetricAggregator.class);
     
     // Current metrics storage
     private final ConcurrentHashMap<String, AtomicDouble> currentMetrics = new ConcurrentHashMap<>();

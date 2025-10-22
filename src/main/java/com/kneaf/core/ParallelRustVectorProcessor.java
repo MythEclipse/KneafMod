@@ -489,7 +489,11 @@ public class ParallelRustVectorProcessor {
                 // Convert results back to individual matrices
                 for (int i = 0; i < endIdx - startIdx; i++) {
                     float[] result = new float[16];
-                    System.arraycopy(blockResults, i * 16, result, 0, 16);
+                    // Manual copy to avoid array type issues
+                    int baseIdx = i * 16;
+                    for (int j = 0; j < 16; j++) {
+                        result[j] = blockResults[baseIdx + j];
+                    }
                     results.add(result);
                 }
             }

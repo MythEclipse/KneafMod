@@ -222,8 +222,8 @@ tasks.withType(Test).configureEach {
     ]
     
     // Include all test classes for comprehensive testing
-    include '**/Test.class'
-    include '**/Tests.class'
+    include '**/*Test.class'
+    include '**/*Tests.class'
     
     // Exclude problematic test classes that were failing
     exclude '**/EntityMovementTest.class'

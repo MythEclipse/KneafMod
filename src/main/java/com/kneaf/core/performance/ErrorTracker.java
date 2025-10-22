@@ -1,7 +1,7 @@
 package com.kneaf.core.performance;
 
-import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -14,7 +14,7 @@ import java.time.Duration;
  * Provides comprehensive error tracking, categorization, and analysis capabilities.
  */
 public final class ErrorTracker {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(ErrorTracker.class);
     
     // Error storage with thread safety
     private final ConcurrentHashMap<String, ErrorCategory> errorCategories = new ConcurrentHashMap<>();

@@ -121,8 +121,8 @@ public class ShadowZombieNinja extends Zombie {
 
         // Ensure the position is valid
         BlockPos pos = new BlockPos((int)blinkPos.x, (int)blinkPos.y, (int)blinkPos.z);
-        if (this.level().isEmptyBlock(pos) &&
-            this.level().isEmptyBlock(pos.above())) {
+        if (this.level().getBlockState(pos).isAir() &&
+            this.level().getBlockState(pos.above()).isAir()) {
             this.teleportTo(blinkPos.x, blinkPos.y, blinkPos.z);
 
             // Visual effects
@@ -143,9 +143,11 @@ public class ShadowZombieNinja extends Zombie {
         // Use proper weapon for arrow firing (required by Minecraft's Arrow constructor)
         Arrow arrow = new Arrow(this.level(), this, new ItemStack(Items.BOW), new ItemStack(Items.ARROW));
         arrow.setPos(this.getX(), this.getEyeY() - 0.1D, this.getZ());
-        arrow.shoot(d0, d1 + d3 * 0.2D, d2, 1.6F, 14 - this.level().getDifficulty().getId() * 4);
+        arrow.shoot(d0, d1 + d3 * 0.2D, d2, 1.6F, 14);
         arrow.setBaseDamage(6.0D);
-        this.level().addFreshEntity(arrow);
+        if (!this.level().isClientSide()) {
+            ((net.minecraft.server.level.ServerLevel)this.level()).addFreshEntity(arrow);
+        }
         this.playSound(SoundEvents.SKELETON_SHOOT, 1.0F, 1.0F / (this.getRandom().nextFloat() * 0.4F + 0.8F));
     }
 

@@ -1,7 +1,7 @@
 package com.kneaf.core;
 
-import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.net.URL;
@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Handles multiple library loading paths concurrently with fallback mechanisms.
  */
 public final class ParallelLibraryLoader {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(ParallelLibraryLoader.class);
     private static final ParallelLibraryLoader INSTANCE = new ParallelLibraryLoader();
     
     // Thread pool for parallel library loading

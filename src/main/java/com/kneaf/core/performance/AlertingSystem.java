@@ -1,7 +1,7 @@
 package com.kneaf.core.performance;
 
-import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -13,7 +13,7 @@ import java.time.Instant;
  * Provides real-time alerting with multiple notification channels and escalation.
  */
 public final class AlertingSystem {
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(AlertingSystem.class);
     
     // Alert configuration
     private final ConcurrentHashMap<String, AlertRule> alertRules = new ConcurrentHashMap<>();
