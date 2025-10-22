@@ -486,17 +486,29 @@ public class ParallelRustVectorProcessor {
                 // Process block using native batch methods
                 float[] blockResults = processBatch(blockA, blockB, operationType);
                 
-                // Convert results back to individual matrices with bounds checking
-                int expectedResultSize = (endIdx - startIdx) * 16;
+                // Convert results back to individual matrices with robust bounds checking
+                int matrixCount = endIdx - startIdx;
+                int expectedResultSize = matrixCount * 16;
+               
+                if (blockResults == null) {
+                    throw new IllegalStateException("Native batch operation returned null results");
+                }
                 if (blockResults.length < expectedResultSize) {
                     throw new IllegalStateException("Native batch operation returned incomplete results: expected " +
                                                     expectedResultSize + " elements, got " + blockResults.length);
                 }
                 
-                for (int i = 0; i < endIdx - startIdx; i++) {
+                // Process results with additional safety checks
+                for (int i = 0; i < matrixCount; i++) {
                     float[] result = new float[16];
-                    // Manual copy to avoid array type issues with proper bounds checking
                     int baseIdx = i * 16;
+                    
+                    // Verify we won't go out of bounds before copying
+                    if (baseIdx + 16 > blockResults.length) {
+                        throw new ArrayIndexOutOfBoundsException("Result array too small for matrix " + i +
+                                                                ": baseIdx=" + baseIdx + ", length=" + blockResults.length);
+                    }
+                    
                     System.arraycopy(blockResults, baseIdx, result, 0, 16);
                     results.add(result);
                 }
@@ -798,16 +810,37 @@ public class ParallelRustVectorProcessor {
      * Process batch of operations using native batch methods
      */
     private float[] processBatch(float[][] batchA, float[][] batchB, String operationType) {
+        if (batchA == null || batchB == null || batchA.length != batchB.length) {
+            throw new IllegalArgumentException("Batch arrays must be non-null and of equal length");
+        }
+        
         int batchSize = batchA.length;
-        switch (operationType) {
-            case "nalgebra":
-                return batchNalgebraMatrixMul(batchA, batchB, batchSize);
-            case "glam":
-                return batchGlamMatrixMul(batchA, batchB, batchSize);
-            case "faer":
-                return batchFaerMatrixMul(batchA, batchB, batchSize);
-            default:
-                throw new IllegalArgumentException("Unknown operation type: " + operationType);
+        
+        // Validate all matrix dimensions are correct (4x4 = 16 elements)
+        for (int i = 0; i < batchSize; i++) {
+            if (batchA[i] == null || batchA[i].length != 16) {
+                throw new IllegalArgumentException("Matrix at index " + i + " has invalid size: expected 16 elements, got " +
+                                                (batchA[i] == null ? "null" : batchA[i].length));
+            }
+            if (batchB[i] == null || batchB[i].length != 16) {
+                throw new IllegalArgumentException("Matrix at index " + i + " has invalid size: expected 16 elements, got " +
+                                                (batchB[i] == null ? "null" : batchB[i].length));
+            }
+        }
+        
+        try {
+            switch (operationType) {
+                case "nalgebra":
+                    return batchNalgebraMatrixMul(batchA, batchB, batchSize);
+                case "glam":
+                    return batchGlamMatrixMul(batchA, batchB, batchSize);
+                case "faer":
+                    return batchFaerMatrixMul(batchA, batchB, batchSize);
+                default:
+                    throw new IllegalArgumentException("Unknown operation type: " + operationType);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Native batch operation failed for " + operationType + ": " + e.getMessage(), e);
         }
     }
     

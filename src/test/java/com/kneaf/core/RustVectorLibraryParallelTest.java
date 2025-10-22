@@ -521,6 +521,14 @@ public class RustVectorLibraryParallelTest {
         for (int i = 0; i < count; i++) {
             matrices.add(IDENTITY_MATRIX.clone());
         }
+        
+        // Verify all matrices are valid
+        for (int i = 0; i < matrices.size(); i++) {
+            if (matrices.get(i).length != 16) {
+                throw new IllegalStateException("Created matrix at index " + i + " has invalid size: " + matrices.get(i).length);
+            }
+        }
+        
         return matrices;
     }
 
