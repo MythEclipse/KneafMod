@@ -224,12 +224,9 @@ public final class AsyncLogger {
                     readSequence.addAndGet(batchSize);
                     batchesProcessed.incrementAndGet();
                 } else {
-                    // No work, sleep briefly
-                    Thread.sleep(1);
+                    // No work, park briefly (more efficient than Thread.sleep)
+                    java.util.concurrent.locks.LockSupport.parkNanos(100_000); // 100 microseconds
                 }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
             } catch (Exception e) {
                 // Log to delegate directly untuk avoid infinite loop
                 delegate.error("Error in async logging thread", e);

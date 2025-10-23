@@ -528,12 +528,13 @@ public final class OptimizedOptimizationInjector {
     
     /**
      * Reload native library asynchronously
+     * Optimized: Removed unnecessary synchronization, library loading is already thread-safe
      */
-    public static synchronized void reloadNativeLibraryAsync() {
-        // Shutdown existing services
+    public static void reloadNativeLibraryAsync() {
+        // Note: entityProcessingService.shutdown() is already thread-safe
         entityProcessingService.shutdown();
 
-        // Re-initialize async library loading
+        // Re-initialize async library loading (thread-safe)
         initializeAsyncLibraryLoading();
 
         LOGGER.info("Async native library reload initiated");

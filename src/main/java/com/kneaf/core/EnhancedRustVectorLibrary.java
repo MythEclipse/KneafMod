@@ -1,51 +1,54 @@
 package com.kneaf.core;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.*;
 import java.util.concurrent.*;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 
 /**
  * Enhanced RustVectorLibrary with parallel processing capabilities.
  * Provides batch operations and thread-safe execution with optimized performance.
  */
 public final class EnhancedRustVectorLibrary {
+    private static final Logger LOGGER = LoggerFactory.getLogger(EnhancedRustVectorLibrary.class);
     private static final String LIBRARY_NAME = "rustperf";
     private static volatile ParallelRustVectorProcessor parallelProcessor;
-    private static final Object processorLock = new Object();
     private static volatile boolean isLibraryLoaded = false;
 
     static {
         // Use OptimizationInjector's native library loading instead of loading separately
         // to avoid double-loading issues (JNI library can only be loaded once per JVM)
         try {
-            System.out.println("EnhancedRustVectorLibrary: Checking native library status...");
+            LOGGER.debug("EnhancedRustVectorLibrary: Checking native library status...");
             // OptimizationInjector handles the actual loading in its static block
             // We just check if it was successful
             isLibraryLoaded = OptimizationInjector.isNativeLibraryLoaded();
             if (isLibraryLoaded) {
-                System.out.println("EnhancedRustVectorLibrary: Successfully using native library '" + LIBRARY_NAME + "' loaded by OptimizationInjector");
+                LOGGER.info("EnhancedRustVectorLibrary: Successfully using native library '{}'", LIBRARY_NAME);
             } else {
-                System.out.println("EnhancedRustVectorLibrary: Native library not loaded by OptimizationInjector, using Java fallback");
+                LOGGER.warn("EnhancedRustVectorLibrary: Native library not loaded, using Java fallback");
             }
         } catch (Throwable e) {
-            System.out.println("EnhancedRustVectorLibrary: Failed to check library status: " + e.getMessage());
+            LOGGER.error("EnhancedRustVectorLibrary: Failed to check library status", e);
             isLibraryLoaded = false;
         }
     }
 
     /**
-     * Get the parallel processor instance (lazy initialization)
+     * Get the parallel processor instance (lazy initialization with double-checked locking)
+     * Optimized: Uses volatile for safe publication without synchronization on fast path
      */
     public static ParallelRustVectorProcessor getParallelProcessor() {
-        if (parallelProcessor == null) {
-            synchronized (processorLock) {
-                if (parallelProcessor == null) {
-                    parallelProcessor = new ParallelRustVectorProcessor();
+        ParallelRustVectorProcessor result = parallelProcessor;
+        if (result == null) {
+            synchronized (EnhancedRustVectorLibrary.class) {
+                result = parallelProcessor;
+                if (result == null) {
+                    parallelProcessor = result = new ParallelRustVectorProcessor();
                 }
             }
         }
-        return parallelProcessor;
+        return result;
     }
 
     /**
@@ -286,10 +289,11 @@ public final class EnhancedRustVectorLibrary {
 
     /**
      * Shutdown parallel processor and release resources
+     * Optimized: Uses class-level lock for consistency with getParallelProcessor()
      */
     public static void shutdown() {
         if (parallelProcessor != null) {
-            synchronized (processorLock) {
+            synchronized (EnhancedRustVectorLibrary.class) {
                 if (parallelProcessor != null) {
                     parallelProcessor.shutdown();
                     parallelProcessor = null;

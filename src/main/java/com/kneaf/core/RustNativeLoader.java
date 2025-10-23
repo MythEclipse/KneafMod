@@ -24,47 +24,57 @@ import java.util.*;
  */
 public class RustNativeLoader {
     private static final Logger LOGGER = LoggerFactory.getLogger(RustNativeLoader.class);
-    private static boolean libraryLoaded = false;
+    private static volatile boolean libraryLoaded = false; // volatile for double-checked locking
     private static String loadedLibraryPath = null;
     private static final Set<String> availableMethods = new HashSet<>();
+    private static final Object LOAD_LOCK = new Object(); // Dedicated lock object
     
     // Prevent instantiation
     private RustNativeLoader() {}
     
     /**
      * Load the native library from various possible locations
+     * Uses double-checked locking for optimal performance
      */
-    public static synchronized boolean loadLibrary() {
+    public static boolean loadLibrary() {
+        // Fast path - no lock required
         if (libraryLoaded) {
-            LOGGER.debug("Native library already loaded from: {}", loadedLibraryPath);
             return true;
         }
         
-        try {
-            // Try method 1: Load from classpath
-            if (loadFromClasspath()) {
-                libraryLoaded = true;
+        // Slow path - synchronized only when needed
+        synchronized (LOAD_LOCK) {
+            // Double-check after acquiring lock
+            if (libraryLoaded) {
                 return true;
             }
             
-            // Try method 2: Load from filesystem paths
-            if (loadFromFilesystem()) {
-                libraryLoaded = true;
-                return true;
+            try {
+                // Try method 1: Load from classpath
+                if (loadFromClasspath()) {
+                    libraryLoaded = true;
+                    return true;
+                }
+                
+                // Try method 2: Load from filesystem paths
+                if (loadFromFilesystem()) {
+                    libraryLoaded = true;
+                    return true;
+                }
+                
+                // Try method 3: System.loadLibrary (searches java.library.path)
+                if (loadFromSystemPath()) {
+                    libraryLoaded = true;
+                    return true;
+                }
+                
+                LOGGER.error("❌ Failed to load native library from all attempted locations");
+                return false;
+                
+            } catch (Exception e) {
+                LOGGER.error("❌ Exception while loading native library", e);
+                return false;
             }
-            
-            // Try method 3: System.loadLibrary (searches java.library.path)
-            if (loadFromSystemPath()) {
-                libraryLoaded = true;
-                return true;
-            }
-            
-            LOGGER.error("❌ Failed to load native library from all attempted locations");
-            return false;
-            
-        } catch (Exception e) {
-            LOGGER.error("❌ Exception while loading native library", e);
-            return false;
         }
     }
     
