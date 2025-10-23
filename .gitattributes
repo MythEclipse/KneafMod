@@ -3,3 +3,9 @@
 # are changed when only line endings change.
 src/generated/**/.cache/cache text eol=lf
 src/generated/**/*.json text eol=lf
+
+# Ensure shell scripts always use LF line endings (Unix-style)
+# This prevents "cannot execute: required file not found" errors on Linux
+*.sh text eol=lf
+gradlew text eol=lf
+gradlew.bat text eol=crlf
