@@ -67,6 +67,7 @@ public class KneafCore {
 
         // Register deferred registers
         ModEntities.ENTITIES.register(modEventBus);
+        ModEntities.ITEMS.register(modEventBus);
         BLOCKS.register(modEventBus);
         ITEMS.register(modEventBus);
 
@@ -376,6 +377,10 @@ public class KneafCore {
      * @param event The build creative mode tab contents event
      */
     private void buildCreativeTabContents(BuildCreativeModeTabContentsEvent event) {
+        // Add Shadow Zombie Ninja spawn egg to spawn eggs creative tab
+        if (event.getTabKey().location().toString().equals("minecraft:spawn_eggs")) {
+            event.accept(ModEntities.SHADOW_ZOMBIE_NINJA_SPAWN_EGG.get().getDefaultInstance());
+        }
     }
 
     /**
