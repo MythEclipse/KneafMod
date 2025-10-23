@@ -8,13 +8,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.ArrayList;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.Map;
-import java.util.HashMap;
 
 /**
  * Cache-optimized parallel processor for Rust vector operations using Fork/Join framework.
@@ -684,7 +679,6 @@ public class ParallelRustVectorProcessor {
                     // Create final copies for use in anonymous class
                     final int currentBlock = block;
                     final int currentStartIdx = startIdx;
-                    final int currentEndIdx = endIdx;
                     final int currentBlockLength = blockLength;
                     
                     Future<float[]> future = forkJoinPool.submit(() -> {
@@ -794,7 +788,6 @@ public class ParallelRustVectorProcessor {
                 return result;
                 
             } catch (Exception e) {
-                long duration = System.nanoTime() - startTime;
                 PerformanceMonitoringSystem.getInstance().recordError(
                     "ParallelRustVectorProcessor", e,
                     Map.of("operation", "parallel_matrix_multiply_optimized", "operation_type", operationType)
@@ -867,7 +860,6 @@ public class ParallelRustVectorProcessor {
 
                         return result;
                     } catch (Exception e) {
-                        long duration = System.nanoTime() - startTime;
                         PerformanceMonitoringSystem.getInstance().recordError(
                             "ParallelRustVectorProcessor", e,
                             Map.of("operation", "parallel_matrix_multiply_test_fallback", "operation_type", operationType)
@@ -901,7 +893,6 @@ public class ParallelRustVectorProcessor {
                         
                         return result;
                     } catch (Exception fallbackException) {
-                        long duration = System.nanoTime() - startTime;
                         PerformanceMonitoringSystem.getInstance().recordError(
                             "ParallelRustVectorProcessor", fallbackException,
                             Map.of("operation", "parallel_matrix_multiply_fallback", "operation_type", operationType)
@@ -911,7 +902,6 @@ public class ParallelRustVectorProcessor {
                 }
                 
             } catch (Exception e) {
-                long duration = System.nanoTime() - startTime;
                 PerformanceMonitoringSystem.getInstance().recordError(
                     "ParallelRustVectorProcessor", e,
                     Map.of("operation", "parallel_matrix_multiply", "operation_type", operationType)
@@ -1062,7 +1052,6 @@ public class ParallelRustVectorProcessor {
                 return results;
                 
             } catch (Exception e) {
-                long duration = System.nanoTime() - startTime;
                 PerformanceMonitoringSystem.getInstance().recordError(
                     "ParallelRustVectorProcessor", e,
                     Map.of("operation", "cache_optimized_vector_operation", "operation_type", operationType)
@@ -1347,7 +1336,6 @@ public class ParallelRustVectorProcessor {
                 return results;
                 
             } catch (Exception e) {
-                long duration = System.nanoTime() - startTime;
                 PerformanceMonitoringSystem.getInstance().recordError(
                     "ParallelRustVectorProcessor", e,
                     Map.of("operation", "cache_optimized_batch_matrix_multiply", "operation_type", operationType)

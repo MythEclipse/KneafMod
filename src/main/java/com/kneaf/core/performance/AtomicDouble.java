@@ -39,7 +39,8 @@ public final class AtomicDouble {
     public boolean weakCompareAndSet(double expected, double newValue) {
         long expectedBits = Double.doubleToRawLongBits(expected);
         long newBits = Double.doubleToRawLongBits(newValue);
-        return value.weakCompareAndSet(expectedBits, newBits);
+        // Use weakCompareAndSetPlain instead of deprecated weakCompareAndSet
+        return value.weakCompareAndSetPlain(expectedBits, newBits);
     }
     
     public double addAndGet(double delta) {

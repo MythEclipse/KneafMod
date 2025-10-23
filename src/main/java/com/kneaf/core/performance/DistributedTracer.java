@@ -7,7 +7,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.*;
 import java.time.Instant;
-import java.time.Duration;
 
 /**
  * Distributed tracing support for Java and Rust components.

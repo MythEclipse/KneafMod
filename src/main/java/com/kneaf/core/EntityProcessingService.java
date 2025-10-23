@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 import com.kneaf.core.async.AsyncLogger;
 import com.kneaf.core.async.AsyncLoggingManager;
 import com.kneaf.core.async.AsyncMetricsCollector;
-import com.kneaf.core.EntityInterface;
 import com.kneaf.core.mock.TestMockEntity;
 
 import java.lang.management.ManagementFactory;
@@ -16,8 +15,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReferenceArray;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /**
  * Entity priority levels for CPU resource allocation

@@ -190,7 +190,6 @@ public final class OptimizedOptimizationInjector {
                         new RuntimeException("Entity processing failed: " + result.message), errorContext);
                 }
             }).exceptionally(throwable -> {
-                long processingTime = System.nanoTime() - startTime;
                 recordAsyncOptimizationError("Async processing error: " + throwable.getMessage());
                 
                 // Record error metrics
