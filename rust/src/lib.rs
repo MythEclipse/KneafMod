@@ -10,7 +10,7 @@
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JFloatArray, JDoubleArray, JObject, JObjectArray};
-use jni::sys::{jdouble, jlong};
+use jni::sys::{jdouble, jlong, jint, jboolean};
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -33,7 +33,7 @@ mod dashboard;
 
 // Entity Processing System modules
 pub mod entity_registry;
-mod shadow_zombie_ninja;
+pub mod entity_framework;
 mod combat_system;
 mod entity_modulation;
 
@@ -541,6 +541,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_copyFromNative
     }
 }
 
+
 /// Original performance functions (unchanged)
 // These are internal helpers and are not FFI entry points. Use Rust ABI to avoid
 // improper_ctypes warnings when passing fixed-size arrays.
@@ -593,7 +594,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_getRustMetri
     )
 }
 
-/// JNI functions for Entity Processing System - Native ECS Implementation
+/// JNI functions for Entity Processing System - Generic Framework Implementation
 /// These functions provide native Rust entity processing with GPU acceleration and SIMD optimization
 /// Initialize Entity Registry
 #[no_mangle]
@@ -611,123 +612,6 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityRe
     Box::into_raw(Box::new(entity_registry)) as jlong
 }
 
-/// Create ShadowZombieNinja entity
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_createShadowZombieNinja<'a>(
-    env: jni::JNIEnv<'a>,
-    _class: jni::objects::JClass<'a>,
-    registry_ptr: jni::sys::jlong,
-    x: jdouble,
-    y: jdouble,
-    z: jdouble,
-) -> jni::sys::jlong {
-    let registry = unsafe { Arc::from_raw(registry_ptr as *const entity_registry::EntityRegistry) };
-     
-    let position = glam::Vec3::new(x as f32, y as f32, z as f32);
-    let entity_id = registry.create_entity(entity_registry::EntityType::ShadowZombieNinja);
-     
-    // Create ShadowZombieNinja with factory
-    let performance_monitor = Arc::new(performance_monitor::PerformanceMonitor::new());
-    let factory = shadow_zombie_ninja::ShadowZombieNinjaFactory::new(performance_monitor);
-    let ninja = factory.create_entity(entity_id, position);
-     
-    // Convert to raw pointer for Java
-    Box::into_raw(Box::new(ninja)) as jlong
-}
-
-/// Update entity position
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_updateEntityPosition(
-    env: jni::JNIEnv,
-    _class: jni::objects::JClass,
-    entity_ptr: jni::sys::jlong,
-    x: jdouble,
-    y: jdouble,
-    z: jdouble,
-) {
-    let mut ninja = unsafe { Box::from_raw(entity_ptr as *mut shadow_zombie_ninja::ShadowZombieNinja) };
-     
-    let new_position = glam::Vec3::new(x as f32, y as f32, z as f32);
-    ninja.transform.position = new_position;
-     
-    // Don't drop the box, convert back to raw pointer
-    let _ = Box::into_raw(ninja); // Retain ownership of the box
-}
-
-/// Process entity combat action
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_processEntityCombat<'a>(
-    env: jni::JNIEnv<'a>,
-    _class: jni::objects::JClass<'a>,
-    combat_system_ptr: jni::sys::jlong,
-    attacker_ptr: jni::sys::jlong,
-    target_ptr: jni::sys::jlong,
-) -> jni::objects::JString<'a> {
-    let combat_system = unsafe { Arc::from_raw(combat_system_ptr as *const combat_system::CombatSystem) };
-    let attacker = unsafe { Box::from_raw(attacker_ptr as *mut shadow_zombie_ninja::ShadowZombieNinja) };
-    let target = unsafe { Box::from_raw(target_ptr as *mut shadow_zombie_ninja::ShadowZombieNinja) };
-     
-    let attacker_pos = attacker.transform.position;
-    let target_pos = target.transform.position;
-     
-    // Process combat
-    let result = combat_system.process_attack(attacker.entity_id, target.entity_id, target_pos);
-     
-    // Convert results back to raw pointers
-    let _ = Box::into_raw(attacker);
-    let _ = Box::into_raw(target);
-     
-    // Return result as JSON string
-    match result {
-        Ok(event) => {
-            let json = format!(
-                r#"{{"success": true, "damage": {}, "critical": {}, "event_type": {:?}}}"#,
-                event.damage_amount,
-                event.is_critical,
-                event.event_type
-            );
-            env.new_string(&json).unwrap()
-        }
-        Err(error) => {
-            let json = format!(r#"{{"success": false, "error": "{}"}}"#, error);
-            env.new_string(&json).unwrap()
-        }
-    }
-}
-
-/// Initialize combat system
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeCombatSystem<'a>(
-    env: jni::JNIEnv<'a>,
-    _class: jni::objects::JClass<'a>,
-    registry_ptr: jni::sys::jlong,
-) -> jni::sys::jlong {
-    let registry = unsafe { Arc::from_raw(registry_ptr as *const entity_registry::EntityRegistry) };
-    let performance_monitor = Arc::new(performance_monitor::PerformanceMonitor::new());
-     
-    let combat_system = Arc::new(combat_system::CombatSystem::new(registry, performance_monitor));
-     
-    Box::into_raw(Box::new(combat_system)) as jlong
-}
-
-/// Clean up entity system resources
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_cleanupEntitySystem(
-    env: jni::JNIEnv,
-    _class: jni::objects::JClass,
-    registry_ptr: jni::sys::jlong,
-    combat_system_ptr: jni::sys::jlong,
-) {
-    // Clean up resources
-    if registry_ptr != 0 {
-        unsafe { Box::from_raw(registry_ptr as *mut entity_registry::EntityRegistry) };
-    }
-
-    if combat_system_ptr != 0 {
-        unsafe { Box::from_raw(combat_system_ptr as *mut combat_system::CombatSystem) };
-    }
-}
-
 /// Initialize complete Entity Modulation System
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityModulationSystem<'a>(
@@ -739,36 +623,6 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityMo
      
     // Convert to raw pointer for Java
     Box::into_raw(Box::new(modulation_system)) as jlong
-}
-
-/// Spawn ShadowZombieNinja using modulation system
-#[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_spawnShadowZombieNinjaModulation<'a>(
-    env: jni::JNIEnv<'a>,
-    _class: jni::objects::JClass<'a>,
-    system_ptr: jni::sys::jlong,
-    x: jdouble,
-    y: jdouble,
-    z: jdouble,
-) -> jni::objects::JString<'a> {
-    let system = unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
-     
-    let position = glam::Vec3::new(x as f32, y as f32, z as f32);
-    let result = system.spawn_shadow_zombie_ninja(position);
-     
-    // Convert back to raw pointer
-    let _ = Box::into_raw(system);
-     
-    match result {
-        Ok(entity_id) => {
-            let json = format!(r#"{{"success": true, "entity_id": {}}}"#, entity_id.0);
-            env.new_string(&json).unwrap()
-        }
-        Err(error) => {
-            let json = format!(r#"{{"success": false, "error": "{}"}}"#, error);
-            env.new_string(&json).unwrap()
-        }
-    }
 }
 
 /// Update entity modulation system
@@ -813,10 +667,9 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_getEntityModulatio
     let _ = Box::into_raw(system);
      
     let json = format!(
-        r#"{{"total_entities": {}, "active_entities": {}, "shadow_zombie_ninjas": {}, "is_initialized": {}}}"#,
+        r#"{{"total_entities": {}, "active_entities": {}, "is_initialized": {}}}"#,
         stats.total_entities,
         stats.active_entities,
-        stats.shadow_zombie_ninjas,
         stats.is_initialized
     );
      
@@ -1194,4 +1047,103 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_cleanupEntityPathf
     if system_ptr != 0 {
         unsafe { Box::from_raw(system_ptr as *mut pathfinding::EntityPathfindingSystem) };
     }
+}
+
+/// Generic utility functions for mathematical operations
+/// These functions provide pure mathematical computations without any game-specific logic
+
+/// Calculate trajectory for projectile motion
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_calculateTrajectory<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    start_x: jdouble,
+    start_y: jdouble,
+    start_z: jdouble,
+    target_x: jdouble,
+    target_y: jdouble,
+    target_z: jdouble,
+    speed: jdouble,
+) -> JDoubleArray<'a> {
+    let dx = target_x - start_x;
+    let dy = target_y - start_y;
+    let dz = target_z - start_z;
+    let distance = (dx*dx + dy*dy + dz*dz).sqrt();
+    
+    if distance == 0.0 {
+        return env.new_double_array(0).unwrap();
+    }
+    
+    let normalized_x = dx / distance;
+    let normalized_y = dy / distance;
+    let normalized_z = dz / distance;
+    
+    // Return next position with speed applied
+    let result = [
+        start_x + normalized_x * speed * 0.1,
+        start_y + normalized_y * speed * 0.1,
+        start_z + normalized_z * speed * 0.1
+    ];
+    
+    let output = env.new_double_array(3).expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+/// Calculate positions in circular pattern
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_calculateCircularPositions<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    center_x: jdouble,
+    center_y: jdouble,
+    center_z: jdouble,
+    radius: jdouble,
+    count: i32,
+) -> JObjectArray<'a> {
+    let mut positions = Vec::new();
+    
+    for i in 0..count {
+        let angle = (i as f64 * 2.0 * std::f64::consts::PI) / (count as f64);
+        positions.push([
+            center_x + angle.cos() * radius,
+            center_y,
+            center_z + angle.sin() * radius
+        ]);
+    }
+    
+    // Create 2D array: double[count][3]
+    let double_array_class = env.find_class("[D").expect("Failed to find double array class");
+    let result_array = env.new_object_array(count, double_array_class, JObject::null()).expect("Failed to create object array");
+    
+    for (i, pos) in positions.iter().enumerate() {
+        let pos_array = env.new_double_array(3).expect("Failed to create position array");
+        env.set_double_array_region(&pos_array, 0, pos).expect("Failed to set position array");
+        env.set_object_array_element(&result_array, i as i32, pos_array).expect("Failed to set array element");
+    }
+    
+    result_array
+}
+
+/// Calculate damage with multiplier
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_calculateScaledDamage(
+    _env: JNIEnv,
+    _class: JClass,
+    base_damage: jdouble,
+    multiplier: jdouble,
+) -> jdouble {
+    base_damage * multiplier
+}
+
+/// Calculate stacks with maximum limit
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_calculateLimitedStacks(
+    _env: JNIEnv,
+    _class: JClass,
+    current_stacks: jint,
+    increment: jint,
+    max_stacks: jint,
+) -> jint {
+    std::cmp::min(current_stacks + increment, max_stacks)
 }

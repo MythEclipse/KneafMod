@@ -373,6 +373,12 @@ public final class OptimizationInjector {
     static native double[] rustperf_vector_add(double x1, double y1, double z1, double x2, double y2, double z2);
     
     static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
+    
+    // Hayabusa skill methods for ShadowZombieNinja
+    static native double[] rustperf_hayabusa_phantom_shuriken(double startX, double startY, double startZ, double targetX, double targetY, double targetZ, double speed);
+    static native double[][] rustperf_hayabusa_quad_shadow(double centerX, double centerY, double centerZ, double radius);
+    static native double rustperf_hayabusa_shadow_kill_damage(int passiveStacks, double baseDamage);
+    static native int rustperf_hayabusa_calculate_passive_stacks(int currentStacks, boolean successfulHit, int maxStacks);
 
     private static double[] java_vector_damp(double x, double y, double z, double dampingFactor, double originalY) {
         double verticalDamping = 0.015;
@@ -524,6 +530,145 @@ public final class OptimizationInjector {
 
     public static void logFromRust(String message) {
         LOGGER.info("[Rust] {}", message);
+    }
+    
+    /**
+     * Hayabusa skill calculations using Rust optimization
+     */
+    public static double[] calculatePhantomShurikenTrajectory(double startX, double startY, double startZ,
+                                                             double targetX, double targetY, double targetZ, double speed) {
+        if (!isNativeLibraryLoaded) {
+            LOGGER.debug("Phantom shuriken calculation using Java fallback");
+            return java_phantom_shuriken_trajectory(startX, startY, startZ, targetX, targetY, targetZ, speed);
+        }
+        
+        try {
+            double[] result = rustperf_hayabusa_phantom_shuriken(startX, startY, startZ, targetX, targetY, targetZ, speed);
+            if (result == null || result.length != 3) {
+                LOGGER.warn("Phantom shuriken Rust returned invalid result, using fallback");
+                return java_phantom_shuriken_trajectory(startX, startY, startZ, targetX, targetY, targetZ, speed);
+            }
+            return result;
+        } catch (UnsatisfiedLinkError e) {
+            LOGGER.warn("Phantom shuriken native method not found, using fallback: {}", e.getMessage());
+            return java_phantom_shuriken_trajectory(startX, startY, startZ, targetX, targetY, targetZ, speed);
+        } catch (Exception e) {
+            LOGGER.warn("Phantom shuriken Rust calculation failed, using fallback: {}", e.getMessage());
+            return java_phantom_shuriken_trajectory(startX, startY, startZ, targetX, targetY, targetZ, speed);
+        }
+    }
+    
+    public static double[][] calculateQuadShadowPositions(double centerX, double centerY, double centerZ, double radius) {
+        if (!isNativeLibraryLoaded) {
+            LOGGER.debug("Quad shadow calculation using Java fallback");
+            return java_quad_shadow_positions(centerX, centerY, centerZ, radius);
+        }
+        
+        try {
+            double[][] result = rustperf_hayabusa_quad_shadow(centerX, centerY, centerZ, radius);
+            if (result == null || result.length != 4 || result[0].length != 3) {
+                LOGGER.warn("Quad shadow Rust returned invalid result, using fallback");
+                return java_quad_shadow_positions(centerX, centerY, centerZ, radius);
+            }
+            return result;
+        } catch (UnsatisfiedLinkError e) {
+            LOGGER.warn("Quad shadow native method not found, using fallback: {}", e.getMessage());
+            return java_quad_shadow_positions(centerX, centerY, centerZ, radius);
+        } catch (Exception e) {
+            LOGGER.warn("Quad shadow Rust calculation failed, using fallback: {}", e.getMessage());
+            return java_quad_shadow_positions(centerX, centerY, centerZ, radius);
+        }
+    }
+    
+    public static double calculateShadowKillDamage(int passiveStacks, double baseDamage) {
+        if (!isNativeLibraryLoaded) {
+            LOGGER.debug("Shadow kill damage calculation using Java fallback");
+            return java_shadow_kill_damage(passiveStacks, baseDamage);
+        }
+        
+        try {
+            double result = rustperf_hayabusa_shadow_kill_damage(passiveStacks, baseDamage);
+            if (result <= 0 || Double.isNaN(result) || Double.isInfinite(result)) {
+                LOGGER.warn("Shadow kill damage Rust returned invalid result, using fallback");
+                return java_shadow_kill_damage(passiveStacks, baseDamage);
+            }
+            return result;
+        } catch (UnsatisfiedLinkError e) {
+            LOGGER.warn("Shadow kill damage native method not found, using fallback: {}", e.getMessage());
+            return java_shadow_kill_damage(passiveStacks, baseDamage);
+        } catch (Exception e) {
+            LOGGER.warn("Shadow kill damage Rust calculation failed, using fallback: {}", e.getMessage());
+            return java_shadow_kill_damage(passiveStacks, baseDamage);
+        }
+    }
+    
+    public static int calculatePassiveStacks(int currentStacks, boolean successfulHit, int maxStacks) {
+        if (!isNativeLibraryLoaded) {
+            LOGGER.debug("Passive stacks calculation using Java fallback");
+            return java_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
+        }
+        
+        try {
+            int result = rustperf_hayabusa_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
+            if (result < 0 || result > maxStacks) {
+                LOGGER.warn("Passive stacks Rust returned invalid result {}, using fallback", result);
+                return java_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
+            }
+            return result;
+        } catch (UnsatisfiedLinkError e) {
+            LOGGER.warn("Passive stacks native method not found, using fallback: {}", e.getMessage());
+            return java_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
+        } catch (Exception e) {
+            LOGGER.warn("Passive stacks Rust calculation failed, using fallback: {}", e.getMessage());
+            return java_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
+        }
+    }
+    
+    // Java fallback implementations for Hayabusa skills
+    private static double[] java_phantom_shuriken_trajectory(double startX, double startY, double startZ,
+                                                            double targetX, double targetY, double targetZ, double speed) {
+        double dx = targetX - startX;
+        double dy = targetY - startY;
+        double dz = targetZ - startZ;
+        double distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        
+        if (distance == 0) return new double[]{startX, startY, startZ};
+        
+        double normalizedX = dx / distance;
+        double normalizedY = dy / distance;
+        double normalizedZ = dz / distance;
+        
+        // Return trajectory with speed applied
+        return new double[]{
+            startX + normalizedX * speed * 0.1,
+            startY + normalizedY * speed * 0.1,
+            startZ + normalizedZ * speed * 0.1
+        };
+    }
+    
+    private static double[][] java_quad_shadow_positions(double centerX, double centerY, double centerZ, double radius) {
+        double[][] positions = new double[4][3];
+        
+        for (int i = 0; i < 4; i++) {
+            double angle = (i * Math.PI) / 2.0;
+            positions[i][0] = centerX + Math.cos(angle) * radius;
+            positions[i][1] = centerY;
+            positions[i][2] = centerZ + Math.sin(angle) * radius;
+        }
+        
+        return positions;
+    }
+    
+    private static double java_shadow_kill_damage(int passiveStacks, double baseDamage) {
+        double multiplier = 1.0 + (passiveStacks * 0.25);
+        return baseDamage * multiplier;
+    }
+    
+    private static int java_calculate_passive_stacks(int currentStacks, boolean successfulHit, int maxStacks) {
+        if (successfulHit) {
+            return Math.min(currentStacks + 1, maxStacks);
+        }
+        return currentStacks;
     }
     
     /**

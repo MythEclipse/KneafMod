@@ -1,4 +1,5 @@
 package com.kneaf.entities;
+import com.kneaf.core.OptimizationInjector;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -32,13 +33,28 @@ import javax.annotation.Nonnull;
 
 public class ShadowZombieNinja extends Zombie {
     private final ServerBossEvent bossEvent = new ServerBossEvent(
-        net.minecraft.network.chat.Component.literal("Shadow Zombie Ninja"),
+        net.minecraft.network.chat.Component.literal("Hayabusa Shadow Ninja"),
         BossEvent.BossBarColor.PURPLE,
         BossEvent.BossBarOverlay.PROGRESS
     );
 
-    private int blinkCooldown = 0;
-    private static final int BLINK_COOLDOWN_TIME = 100; // 5 seconds at 20 TPS
+    // Hayabusa skill cooldowns
+    private int phantomShurikenCooldown = 0;
+    private int quadShadowCooldown = 0;
+    private int shadowKillCooldown = 0;
+    private int shadowKillPassiveStacks = 0;
+    
+    // Skill constants
+    private static final int PHANTOM_SHURIKEN_COOLDOWN = 60; // 3 seconds
+    private static final int QUAD_SHADOW_COOLDOWN = 120; // 6 seconds
+    private static final int SHADOW_KILL_COOLDOWN = 300; // 15 seconds
+    private static final int MAX_PASSIVE_STACKS = 4;
+    private static final float PASSIVE_DAMAGE_MULTIPLIER = 1.2f;
+    
+    // Shadow clones for Quad Shadow skill
+    private final java.util.List<Vec3> shadowClones = new java.util.ArrayList<>();
+    private int shadowCloneDuration = 0;
+    private static final int SHADOW_CLONE_DURATION = 200; // 10 seconds
 
     public ShadowZombieNinja(EntityType<? extends Zombie> entityType, Level level) {
         super(entityType, level);
@@ -48,12 +64,13 @@ public class ShadowZombieNinja extends Zombie {
 
     @Override
     protected void registerGoals() {
-        this.goalSelector.addGoal(1, new BlinkGoal(this));
-        this.goalSelector.addGoal(2, new MeleeAttackGoal(this, 1.2D, false));
-        this.goalSelector.addGoal(3, new MoveTowardsTargetGoal(this, 1.2D, 32.0F));
-        this.goalSelector.addGoal(4, new RangedAttackGoal(this));
-        this.goalSelector.addGoal(5, new RandomStrollGoal(this, 1.0D));
-        this.goalSelector.addGoal(6, new RandomLookAroundGoal(this));
+        this.goalSelector.addGoal(1, new PhantomShurikenGoal(this));
+        this.goalSelector.addGoal(2, new QuadShadowGoal(this));
+        this.goalSelector.addGoal(3, new ShadowKillGoal(this));
+        this.goalSelector.addGoal(4, new MeleeAttackGoal(this, 1.2D, false));
+        this.goalSelector.addGoal(5, new MoveTowardsTargetGoal(this, 1.2D, 32.0F));
+        this.goalSelector.addGoal(6, new RandomStrollGoal(this, 1.0D));
+        this.goalSelector.addGoal(7, new RandomLookAroundGoal(this));
 
         this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
         this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, Player.class, true));
@@ -63,8 +80,26 @@ public class ShadowZombieNinja extends Zombie {
     @Override
     public void tick() {
         super.tick();
-        if (blinkCooldown > 0) {
-            blinkCooldown--;
+        // Update skill cooldowns
+        if (phantomShurikenCooldown > 0) {
+            phantomShurikenCooldown--;
+        }
+        if (quadShadowCooldown > 0) {
+            quadShadowCooldown--;
+        }
+        if (shadowKillCooldown > 0) {
+            shadowKillCooldown--;
+        }
+        if (shadowCloneDuration > 0) {
+            shadowCloneDuration--;
+            if (shadowCloneDuration <= 0) {
+                shadowClones.clear();
+            }
+        }
+        
+        // Update passive stacks decay
+        if (shadowKillPassiveStacks > 0 && this.tickCount % 40 == 0) { // Decay every 2 seconds
+            shadowKillPassiveStacks--;
         }
     }
 
@@ -72,8 +107,17 @@ public class ShadowZombieNinja extends Zombie {
     public boolean doHurtTarget(@Nonnull Entity target) {
         boolean flag = super.doHurtTarget(target);
         if (flag && target instanceof LivingEntity livingTarget) {
-            // Ninja melee attack - extra damage
-            livingTarget.hurt(this.damageSources().mobAttack(this), 4.0F);
+            // Hayabusa passive: Shadow Kill enhanced attacks
+            float baseDamage = 4.0F;
+            float passiveMultiplier = 1.0f + (shadowKillPassiveStacks * 0.1f);
+            float totalDamage = baseDamage * passiveMultiplier;
+            
+            livingTarget.hurt(this.damageSources().mobAttack(this), totalDamage);
+            
+            // Use Rust optimization for passive stack calculation
+            shadowKillPassiveStacks = OptimizationInjector.calculatePassiveStacks(
+                shadowKillPassiveStacks, true, MAX_PASSIVE_STACKS
+            );
         }
         return flag;
     }
@@ -107,31 +151,106 @@ public class ShadowZombieNinja extends Zombie {
             .add(Attributes.SPAWN_REINFORCEMENTS_CHANCE, 0.0D);
     }
 
-    private void performBlink() {
-        if (this.blinkCooldown > 0 || this.getTarget() == null) return;
+    // Hayabusa Skills Implementation with Rust Optimization
+    
+    private void performPhantomShuriken(LivingEntity target) {
+        if (phantomShurikenCooldown > 0 || target == null) return;
 
-        LivingEntity target = this.getTarget();
-        if (target == null) return;
         Vec3 targetPos = target.position();
         Vec3 currentPos = this.position();
 
-        // Find a position near the target but behind them
-        Vec3 direction = targetPos.subtract(currentPos).normalize();
-        Vec3 blinkPos = targetPos.add(direction.scale(-3.0D)).add(0, 1, 0);
+        // Use Rust optimization for trajectory calculation
+        double[] trajectory = OptimizationInjector.calculatePhantomShurikenTrajectory(
+            currentPos.x, currentPos.y, currentPos.z,
+            targetPos.x, targetPos.y, targetPos.z, 15.0
+        );
 
-        // Ensure the position is valid
-        BlockPos pos = new BlockPos((int)blinkPos.x, (int)blinkPos.y, (int)blinkPos.z);
-        if (this.level().getBlockState(pos).isAir() &&
-            this.level().getBlockState(pos.above()).isAir()) {
-            this.teleportTo(blinkPos.x, blinkPos.y, blinkPos.z);
+        // Create phantom shuriken projectile with optimized trajectory
+        double d0 = trajectory[0] - currentPos.x;
+        double d1 = trajectory[1] - currentPos.y + 0.3333333333333333D;
+        double d2 = trajectory[2] - currentPos.z;
+        double d3 = Math.sqrt(d0 * d0 + d2 * d2);
 
-            // Visual effects
-            this.level().addParticle(ParticleTypes.SMOKE, this.getX(), this.getY() + 1, this.getZ(), 0.0D, 0.0D, 0.0D);
-            this.level().addParticle(ParticleTypes.SMOKE, pos.getX() + 0.5, pos.getY() + 1.5, pos.getZ() + 0.5, 0.0D, 0.0D, 0.0D);
-            this.playSound(SoundEvents.ENDERMAN_TELEPORT, 1.0F, 1.0F);
-
-            this.blinkCooldown = BLINK_COOLDOWN_TIME;
+        // Create shuriken that will return
+        Arrow shuriken = new Arrow(this.level(), this, new ItemStack(Items.NETHERITE_SCRAP), new ItemStack(Items.IRON_SWORD));
+        shuriken.setPos(this.getX(), this.getEyeY() - 0.1D, this.getZ());
+        shuriken.shoot(d0, d1 + d3 * 0.2D, d2, 2.0F, 8);
+        shuriken.setBaseDamage(8.0D);
+        shuriken.setNoGravity(true);
+        shuriken.pickup = net.minecraft.world.entity.projectile.AbstractArrow.Pickup.DISALLOWED;
+        
+        if (!this.level().isClientSide()) {
+            ((net.minecraft.server.level.ServerLevel)this.level()).addFreshEntity(shuriken);
         }
+        
+        // Visual effects
+        this.level().addParticle(ParticleTypes.SONIC_BOOM, this.getX(), this.getY() + 1, this.getZ(), 0.0D, 0.0D, 0.0D);
+        this.playSound(SoundEvents.PLAYER_ATTACK_SWEEP, 1.0F, 1.5F);
+
+        phantomShurikenCooldown = PHANTOM_SHURIKEN_COOLDOWN;
+        
+        // Schedule shuriken return after 2 seconds
+        this.level().scheduleTick(this.blockPosition(), this.level().getBlockState(this.blockPosition()).getBlock(), 40);
+    }
+    
+    private void performQuadShadow() {
+        if (quadShadowCooldown > 0) return;
+
+        Vec3 currentPos = this.position();
+        
+        // Use Rust optimization for shadow clone positions
+        double[][] clonePositions = OptimizationInjector.calculateQuadShadowPositions(
+            currentPos.x, currentPos.y, currentPos.z, 3.0
+        );
+        
+        // Create 4 shadow clones around the ninja
+        shadowClones.clear();
+        for (int i = 0; i < 4; i++) {
+            Vec3 clonePos = new Vec3(clonePositions[i][0], clonePositions[i][1], clonePositions[i][2]);
+            shadowClones.add(clonePos);
+            
+            // Visual effect for clone creation
+            this.level().addParticle(ParticleTypes.PORTAL, clonePos.x, clonePos.y + 1, clonePos.z, 0.0D, 0.0D, 0.0D);
+        }
+        
+        shadowCloneDuration = SHADOW_CLONE_DURATION;
+        quadShadowCooldown = QUAD_SHADOW_COOLDOWN;
+        this.playSound(SoundEvents.ILLUSIONER_MIRROR_MOVE, 1.0F, 1.0F);
+    }
+    
+    private void teleportToShadowClone(int cloneIndex) {
+        if (cloneIndex < 0 || cloneIndex >= shadowClones.size()) return;
+        
+        Vec3 clonePos = shadowClones.get(cloneIndex);
+        this.teleportTo(clonePos.x, clonePos.y, clonePos.z);
+        
+        // Visual effects
+        this.level().addParticle(ParticleTypes.EXPLOSION, this.getX(), this.getY() + 1, this.getZ(), 0.0D, 0.0D, 0.0D);
+        this.playSound(SoundEvents.ENDERMAN_TELEPORT, 1.0F, 1.0F);
+        
+        // Clear clones after teleport
+        shadowClones.clear();
+        shadowCloneDuration = 0;
+    }
+    
+    private void performShadowKill(LivingEntity target) {
+        if (shadowKillCooldown > 0 || target == null) return;
+
+        // Use Rust optimization for damage calculation
+        double optimizedDamage = OptimizationInjector.calculateShadowKillDamage(shadowKillPassiveStacks, 20.0);
+        
+        // Apply damage
+        target.hurt(this.damageSources().mobAttack(this), (float) optimizedDamage);
+        
+        // Consume all passive stacks
+        shadowKillPassiveStacks = 0;
+        
+        // Visual effects
+        this.level().addParticle(ParticleTypes.DRAGON_BREATH, target.getX(), target.getY() + 1, target.getZ(), 0.0D, 0.0D, 0.0D);
+        this.level().addParticle(ParticleTypes.SWEEP_ATTACK, this.getX(), this.getY() + 1, this.getZ(), 0.0D, 0.0D, 0.0D);
+        this.playSound(SoundEvents.PLAYER_ATTACK_CRIT, 1.0F, 0.5F);
+        
+        shadowKillCooldown = SHADOW_KILL_COOLDOWN;
     }
 
     private void performRangedAttack(LivingEntity target) {
@@ -151,36 +270,120 @@ public class ShadowZombieNinja extends Zombie {
         this.playSound(SoundEvents.SKELETON_SHOOT, 1.0F, 1.0F / (this.getRandom().nextFloat() * 0.4F + 0.8F));
     }
 
-    private static class BlinkGoal extends Goal {
+    // Hayabusa Goal Classes
+    
+    private static class PhantomShurikenGoal extends Goal {
         private final ShadowZombieNinja ninja;
-        private int blinkTimer = 0;
+        private int attackTimer = 0;
 
-        public BlinkGoal(ShadowZombieNinja ninja) {
+        public PhantomShurikenGoal(ShadowZombieNinja ninja) {
             this.ninja = ninja;
             this.setFlags(EnumSet.of(Goal.Flag.MOVE, Goal.Flag.LOOK));
         }
 
         @Override
         public boolean canUse() {
-            return ninja.getTarget() != null && ninja.blinkCooldown == 0;
+            LivingEntity target = ninja.getTarget();
+            return target != null && target.isAlive() && ninja.phantomShurikenCooldown == 0 && ninja.distanceToSqr(target) > 4.0D;
         }
 
         @Override
         public void start() {
-            this.blinkTimer = 40; // 2 seconds
+            this.attackTimer = 10; // 0.5 seconds charge time
         }
 
         @Override
         public void tick() {
-            if (--this.blinkTimer <= 0) {
-                ninja.performBlink();
+            LivingEntity target = ninja.getTarget();
+            if (target != null) {
+                ninja.getLookControl().setLookAt(target, 30.0F, 30.0F);
+                if (--this.attackTimer <= 0) {
+                    ninja.performPhantomShuriken(target);
+                    this.stop();
+                }
+            }
+        }
+
+        @Override
+        public boolean canContinueToUse() {
+            return this.attackTimer > 0;
+        }
+    }
+    
+    private static class QuadShadowGoal extends Goal {
+        private final ShadowZombieNinja ninja;
+        private int teleportTimer = 0;
+
+        public QuadShadowGoal(ShadowZombieNinja ninja) {
+            this.ninja = ninja;
+            this.setFlags(EnumSet.of(Goal.Flag.MOVE, Goal.Flag.LOOK));
+        }
+
+        @Override
+        public boolean canUse() {
+            return ninja.getTarget() != null && ninja.quadShadowCooldown == 0;
+        }
+
+        @Override
+        public void start() {
+            this.teleportTimer = 20; // 1 second
+        }
+
+        @Override
+        public void tick() {
+            if (--this.teleportTimer <= 0) {
+                ninja.performQuadShadow();
+                // Randomly teleport to one of the clones
+                if (!ninja.shadowClones.isEmpty()) {
+                    int randomClone = ninja.random.nextInt(ninja.shadowClones.size());
+                    ninja.teleportToShadowClone(randomClone);
+                }
                 this.stop();
             }
         }
 
         @Override
         public boolean canContinueToUse() {
-            return this.blinkTimer > 0;
+            return this.teleportTimer > 0;
+        }
+    }
+    
+    private static class ShadowKillGoal extends Goal {
+        private final ShadowZombieNinja ninja;
+        private int ultimateTimer = 0;
+
+        public ShadowKillGoal(ShadowZombieNinja ninja) {
+            this.ninja = ninja;
+            this.setFlags(EnumSet.of(Goal.Flag.MOVE, Goal.Flag.LOOK));
+        }
+
+        @Override
+        public boolean canUse() {
+            LivingEntity target = ninja.getTarget();
+            return target != null && target.isAlive() && ninja.shadowKillCooldown == 0 &&
+                   ninja.distanceToSqr(target) <= 16.0D && ninja.shadowKillPassiveStacks >= 2;
+        }
+
+        @Override
+        public void start() {
+            this.ultimateTimer = 15; // 0.75 seconds
+        }
+
+        @Override
+        public void tick() {
+            LivingEntity target = ninja.getTarget();
+            if (target != null) {
+                ninja.getLookControl().setLookAt(target, 30.0F, 30.0F);
+                if (--this.ultimateTimer <= 0) {
+                    ninja.performShadowKill(target);
+                    this.stop();
+                }
+            }
+        }
+
+        @Override
+        public boolean canContinueToUse() {
+            return this.ultimateTimer > 0;
         }
     }
 

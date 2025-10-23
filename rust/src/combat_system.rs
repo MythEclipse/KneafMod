@@ -10,7 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use rayon::prelude::*;
 use crate::entity_registry::{EntityId, EntityRegistry, EntityType, Component};
-use crate::shadow_zombie_ninja::{HealthComponent, BoundingBox};
+use crate::entity_framework::{HealthComponent, BoundingBox};
 use crate::performance_monitor::PerformanceMonitor;
 
 /// Combat event types for the combat system
