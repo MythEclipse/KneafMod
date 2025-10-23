@@ -307,6 +307,14 @@ public class RustNativeLoader {
     public static native double[] batchDistanceCalculation(float[] positions, int count, double centerX, double centerY, double centerZ);
     
     /**
+     * Zero-copy batch distance calculation using native buffer handle
+     * Input: native buffer handle, count, centerX, centerY, centerZ
+     * Output: array of distances from center
+     * Optimized for reduced data transfer overhead between Java and Rust
+     */
+    public static native double[] batchDistanceCalculationWithZeroCopy(long bufferHandle, int count, double centerX, double centerY, double centerZ);
+    
+    /**
      * Calculate circular position using trigonometric functions
      * Returns [x, z] coordinates at given angle and radius from center
      * Optimized for entity positioning in circular patterns

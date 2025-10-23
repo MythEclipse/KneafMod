@@ -3,7 +3,7 @@
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JFloatArray, JObject, JObjectArray};
-use jni::sys::{jlong, jint};
+use jni::sys::{jlong, jint, jdouble};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use rayon::prelude::*;
@@ -324,4 +324,30 @@ pub fn batch_nalgebra_vector_add(vectors_a: Vec<[f32; 3]>, vectors_b: Vec<[f32; 
         let b = convert_jfloat_vector_2d(&mut env, &vectors_b, count);
         let res = batch_nalgebra_vector_add(a, b);
         create_jfloat_vector_2d(&mut env, res)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn Java_com_kneaf_core_RustNativeLoader_batchDistanceCalculationWithZeroCopy<'a>(
+        mut env: JNIEnv<'a>,
+        _class: JClass,
+        buffer_handle: jlong,
+        count: jint,
+        center_x: jdouble,
+        center_y: jdouble,
+        center_z: jdouble,
+    ) -> JFloatArray<'a> {
+        // Retrieve data from native memory manager using zero-copy
+        let positions = MEMORY_MANAGER.retrieve_data(buffer_handle)
+            .ok_or_else(|| env.throw_new("java/lang/IllegalArgumentException", "Invalid buffer handle")).unwrap();
+        
+        let mut distances = Vec::with_capacity(count as usize);
+        
+        for i in 0..count as usize {
+            let x = positions[i * 3] as jdouble - center_x;
+            let y = positions[i * 3 + 1] as jdouble - center_y;
+            let z = positions[i * 3 + 2] as jdouble - center_z;
+            distances.push((x * x + y * y + z * z).sqrt() as f32);
+        }
+        
+        create_jfloat_array_1d(&mut env, distances)
     }
