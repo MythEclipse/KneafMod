@@ -210,9 +210,10 @@ tasks.withType(Test).configureEach {
         exceptionFormat = 'full'
     }
     
-    // Thread-safe test configuration
-    maxParallelForks = 1 // Ensure tests run sequentially to avoid race conditions
-    forkEvery = 1 // Fork a new JVM for each test class
+    // Thread-safe test configuration with optimized parallelization
+    // Increased from 1 to use available cores for faster test execution
+    maxParallelForks = Math.max(1, (int)(Runtime.getRuntime().availableProcessors() / 2))
+    forkEvery = 0 // Reuse JVM for all tests in a class (faster, more memory efficient)
     
     // Set java.library.path for native libraries
     systemProperty 'java.library.path', file('src/main/resources/natives').absolutePath
@@ -222,9 +223,12 @@ tasks.withType(Test).configureEach {
     
     // JVM arguments for thread safety and performance
     jvmArgs = [
-        '-Xmx2g', // Increase heap size for complex tests
+        '-Xmx4g', // Increased heap size from 2g for complex tests
+        '-Xms1g', // Initial heap size for faster startup
         '-XX:+UseG1GC', // Use G1 garbage collector for better performance
         '-XX:+UseStringDeduplication', // Optimize string memory usage
+        '-XX:MaxGCPauseMillis=200', // Target max GC pause time
+        '-XX:+ParallelRefProcEnabled', // Parallel reference processing
         '-Djava.awt.headless=true', // Run in headless mode for CI environments
         '-Dfile.encoding=UTF-8' // Ensure consistent file encoding
     ]

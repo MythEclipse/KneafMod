@@ -224,7 +224,8 @@ public final class ParallelLibraryLoader {
                         if (attempt < LOAD_RETRY_ATTEMPTS) {
                             LOGGER.warn("⚠️ Retry {} for {} from {}: {}", 
                                 attempt, libFile.getName(), pathType, e.getMessage());
-                            Thread.sleep(RETRY_DELAY_MS);
+                            // Use LockSupport.parkNanos for more efficient waiting (no InterruptedException)
+                            java.util.concurrent.locks.LockSupport.parkNanos(RETRY_DELAY_MS * 1_000_000L);
                         } else {
                             return new LibraryPathResult(path, false, 
                                 System.currentTimeMillis() - startTime, e.getMessage());
@@ -235,10 +236,9 @@ public final class ParallelLibraryLoader {
                     }
                 }
                 
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            } catch (SecurityException e) {
                 return new LibraryPathResult(path, false, 
-                    System.currentTimeMillis() - startTime, "Interrupted");
+                    System.currentTimeMillis() - startTime, "Security restriction: " + e.getMessage());
             } catch (Exception e) {
                 return new LibraryPathResult(path, false, 
                     System.currentTimeMillis() - startTime, e.getMessage());

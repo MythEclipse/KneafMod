@@ -564,12 +564,8 @@ public class ParallelRustVectorProcessor {
                             throw e;
                         }
                         System.out.println("Retrying native batch operation (attempt " + retryCount + "/" + MAX_RETRIES + ")");
-                        try {
-                            Thread.sleep(100); // Brief pause before retry
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            throw new RuntimeException("Thread interrupted during retry", ie);
-                        }
+                        // Use LockSupport.parkNanos for more efficient waiting (no exception handling needed)
+                        java.util.concurrent.locks.LockSupport.parkNanos(100_000_000L); // 100ms in nanoseconds
                     }
                 }
                 

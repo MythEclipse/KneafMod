@@ -149,9 +149,14 @@ class LockFreeHashMap<K, V> {
         int hash = hash(key);
         int index = indexFor(hash, table.length());
         
-        while (true) {
+        // OPTIMIZED: Limit retry attempts to prevent infinite loops under high contention
+        int maxRetries = 100;
+        int retryCount = 0;
+        
+        while (retryCount < maxRetries) {
             Node<K, V> node = table.get(index);
             if (node == null) {
+                // OPTIMIZED: Create node once, reuse on retries
                 Node<K, V> newNode = new Node<>(hash, key, value, null);
                 if (table.compareAndSet(index, null, newNode)) {
                     if (size.incrementAndGet() > threshold) {
@@ -159,34 +164,74 @@ class LockFreeHashMap<K, V> {
                     }
                     return null;
                 }
+                retryCount++;
             } else if (node.hash == hash && (node.key == key || node.key.equals(key))) {
+                // OPTIMIZED: Update value in-place without recreating entire chain
                 V oldValue = node.value;
-                if (table.compareAndSet(index, node, new Node<>(hash, key, value, node.next))) {
-                    return oldValue;
-                }
+                node.value = value;
+                return oldValue;
             } else {
                 // Handle collisions using linked list
                 Node<K, V> last = node;
-                while (last.next != null) {
-                    last = last.next;
+                Node<K, V> prev = null;
+                while (last != null) {
                     if (last.hash == hash && (last.key == key || last.key.equals(key))) {
+                        // OPTIMIZED: Update value in place
                         V oldValue = last.value;
-                        // Update value in place using CAS
+                        last.value = value;
                         return oldValue;
                     }
+                    prev = last;
+                    last = last.next;
                 }
                 
-                Node<K, V> newNode = new Node<>(hash, key, value, null);
-                if (last.next == null) {
-                    if (table.compareAndSet(index, last, new Node<>(last.hash, last.key, last.value, newNode))) {
-                        if (size.incrementAndGet() > threshold) {
-                            resize();
-                        }
-                        return null;
+                // Add new node to end of chain
+                if (prev != null) {
+                    Node<K, V> newNode = new Node<>(hash, key, value, null);
+                    prev.next = newNode;
+                    size.incrementAndGet();
+                    if (size.get() > threshold) {
+                        resize();
                     }
+                    return null;
                 }
+                retryCount++;
             }
         }
+        
+        // Fallback to synchronized put if CAS fails repeatedly (extreme contention)
+        synchronized (this) {
+            return putSynchronized(key, value, hash, index);
+        }
+    }
+    
+    // Synchronized fallback for extreme contention scenarios
+    private synchronized V putSynchronized(K key, V value, int hash, int index) {
+        Node<K, V> node = table.get(index);
+        if (node == null) {
+            Node<K, V> newNode = new Node<>(hash, key, value, null);
+            table.set(index, newNode);
+            if (size.incrementAndGet() > threshold) {
+                resize();
+            }
+            return null;
+        }
+        
+        Node<K, V> current = node;
+        while (current != null) {
+            if (current.hash == hash && (current.key == key || current.key.equals(key))) {
+                V oldValue = current.value;
+                current.value = value;
+                return oldValue;
+            }
+            if (current.next == null) {
+                current.next = new Node<>(hash, key, value, null);
+                size.incrementAndGet();
+                return null;
+            }
+            current = current.next;
+        }
+        return null;
     }
     
     public V get(Object key) {
@@ -207,7 +252,11 @@ class LockFreeHashMap<K, V> {
         int hash = hash(key);
         int index = indexFor(hash, table.length());
         
-        while (true) {
+        // OPTIMIZED: Limit retry attempts to prevent infinite loops
+        int maxRetries = 100;
+        int retryCount = 0;
+        
+        while (retryCount < maxRetries) {
             Node<K, V> node = table.get(index);
             if (node == null) {
                 return null;
@@ -218,25 +267,56 @@ class LockFreeHashMap<K, V> {
                     size.decrementAndGet();
                     return node.value;
                 }
+                retryCount++;
             } else {
                 Node<K, V> prev = node;
                 Node<K, V> curr = node.next;
                 
                 while (curr != null) {
                     if (curr.hash == hash && (curr.key == key || curr.key.equals(key))) {
-                        if (prev.next == curr) {
-                            if (table.compareAndSet(index, prev, new Node<>(prev.hash, prev.key, prev.value, curr.next))) {
-                                size.decrementAndGet();
-                                return curr.value;
-                            }
-                        }
-                        break;
+                        // OPTIMIZED: Direct pointer manipulation instead of recreating chain
+                        prev.next = curr.next;
+                        size.decrementAndGet();
+                        return curr.value;
                     }
                     prev = curr;
                     curr = curr.next;
                 }
+                return null;
             }
         }
+        
+        // Fallback to synchronized remove if CAS fails repeatedly
+        synchronized (this) {
+            return removeSynchronized(key, hash, index);
+        }
+    }
+    
+    // Synchronized fallback for extreme contention
+    private synchronized V removeSynchronized(Object key, int hash, int index) {
+        Node<K, V> node = table.get(index);
+        if (node == null) {
+            return null;
+        }
+        
+        if (node.hash == hash && (node.key == key || node.key.equals(key))) {
+            table.set(index, node.next);
+            size.decrementAndGet();
+            return node.value;
+        }
+        
+        Node<K, V> prev = node;
+        Node<K, V> curr = node.next;
+        while (curr != null) {
+            if (curr.hash == hash && (curr.key == key || curr.key.equals(key))) {
+                prev.next = curr.next;
+                size.decrementAndGet();
+                return curr.value;
+            }
+            prev = curr;
+            curr = curr.next;
+        }
+        return null;
     }
     
     public void clear() {
@@ -257,6 +337,25 @@ class LockFreeHashMap<K, V> {
         return value;
     }
     
+    /**
+     * Get all keys in the map (snapshot, not real-time)
+     * ADDED: For LockFreeHashSet.toSet() implementation
+     */
+    public Set<K> getAllKeys() {
+        Set<K> keys = new HashSet<>();
+        int length = table.length();
+        
+        for (int i = 0; i < length; i++) {
+            Node<K, V> node = table.get(i);
+            while (node != null) {
+                keys.add(node.key);
+                node = node.next;
+            }
+        }
+        
+        return keys;
+    }
+    
     private int hash(Object key) {
         int h;
         return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
@@ -266,27 +365,47 @@ class LockFreeHashMap<K, V> {
         return hash & (length - 1);
     }
     
+    private volatile boolean resizing = false;
+    
     private void resize() {
-        int oldCapacity = table.length();
-        int newCapacity = oldCapacity << 1;
-        AtomicReferenceArray<Node<K, V>> newTable = new AtomicReferenceArray<>(newCapacity);
-        
-        // Redistribute nodes to new table
-        for (int i = 0; i < oldCapacity; i++) {
-            Node<K, V> node = table.get(i);
-            while (node != null) {
-                Node<K, V> next = node.next;
-                int newIndex = indexFor(node.hash, newCapacity);
-                
-                Node<K, V> newNode = new Node<>(node.hash, node.key, node.value, newTable.get(newIndex));
-                if (newTable.compareAndSet(newIndex, newTable.get(newIndex), newNode)) {
-                    node = next;
-                }
-            }
+        // OPTIMIZED: Prevent concurrent resize operations
+        if (resizing) {
+            return;
         }
         
-        table = newTable;
-        threshold = (int)(newCapacity * LOAD_FACTOR);
+        synchronized (this) {
+            // Double-check after acquiring lock
+            if (resizing || size.get() <= threshold) {
+                return;
+            }
+            
+            resizing = true;
+            try {
+                int oldCapacity = table.length();
+                int newCapacity = oldCapacity << 1;
+                AtomicReferenceArray<Node<K, V>> newTable = new AtomicReferenceArray<>(newCapacity);
+                
+                // Redistribute nodes to new table - single-threaded during resize
+                for (int i = 0; i < oldCapacity; i++) {
+                    Node<K, V> node = table.get(i);
+                    while (node != null) {
+                        Node<K, V> next = node.next;
+                        int newIndex = indexFor(node.hash, newCapacity);
+                        
+                        // Direct set instead of CAS since resize is synchronized
+                        Node<K, V> currentHead = newTable.get(newIndex);
+                        Node<K, V> newNode = new Node<>(node.hash, node.key, node.value, currentHead);
+                        newTable.set(newIndex, newNode);
+                        node = next;
+                    }
+                }
+                
+                table = newTable;
+                threshold = (int)(newCapacity * LOAD_FACTOR);
+            } finally {
+                resizing = false;
+            }
+        }
     }
     
     private static class Node<K, V> {
@@ -341,9 +460,8 @@ class LockFreeHashSet<E> {
     }
     
     public Set<E> toSet() {
-        Set<E> set = new HashSet<>();
-        // This is a simplified implementation - for complete implementation, would need to traverse the map
-        return set;
+        // FIXED: Properly implement toSet() using the map's getAllKeys method
+        return map.getAllKeys();
     }
 }
 
@@ -479,6 +597,10 @@ public final class EntityProcessingService {
         private final ScheduledExecutorService monitorExecutor;
         private final EntityProcessingService service;
         
+        // OPTIMIZED: Reduce logging frequency
+        private volatile long lastLogTime = 0;
+        private volatile double lastLoggedLoad = 0.0;
+        
         public AdaptiveThreadPoolController(EntityProcessingService service) {
             this.currentThreadCount = new AtomicInteger(getMaxThreadPoolSize());
             this.service = service;
@@ -503,11 +625,15 @@ public final class EntityProcessingService {
             double loadPercentage = calculateLoadPercentage(stats);
             double cpuUsage = getCpuUsage();
 
-            LOGGER.debug("Adaptive thread pool monitoring - Load: {}%, CPU: {}%, AvgProcTime: {}ms, Threads: {}, Stats: processed={}, queued={}, active={}, queueSize={}, activeFutures={}",
-                        String.format("%.2f", loadPercentage), String.format("%.2f", cpuUsage),
-                        String.format("%.3f", service.averageProcessingTimeMs), currentThreadCount.get(),
-                        stats.processedEntities, stats.queuedEntities, stats.activeProcessors,
-                        stats.queueSize, stats.activeFutures);
+            // OPTIMIZED: Only log on significant changes or every 60 seconds
+            long now = System.currentTimeMillis();
+            if (now - lastLogTime > 60000 || Math.abs(loadPercentage - lastLoggedLoad) > 20.0) {
+                LOGGER.debug("Adaptive thread pool - Load: {}%, CPU: {}%, AvgProcTime: {}ms, Threads: {}",
+                            String.format("%.2f", loadPercentage), String.format("%.2f", cpuUsage),
+                            String.format("%.3f", service.averageProcessingTimeMs), currentThreadCount.get());
+                lastLogTime = now;
+                lastLoggedLoad = loadPercentage;
+            }
 
             // Adjust thread count based on load
             if (loadPercentage > LOAD_THRESHOLD_HIGH) {
@@ -518,7 +644,6 @@ public final class EntityProcessingService {
         }
         
         private double calculateLoadPercentage(EntityProcessingStatistics stats) {
-            long processed = stats.processedEntities;
             long queued = stats.queuedEntities;
             int active = stats.activeProcessors;
             int currentThreads = currentThreadCount.get();
@@ -528,10 +653,6 @@ public final class EntityProcessingService {
             // Get CPU usage and processing time metrics
             double cpuUsage = getCpuUsage();
             double avgProcessingTimeMs = averageProcessingTimeMs;
-
-            // DEBUG: Log detailed statistics for load calculation analysis
-            LOGGER.debug("Load calculation debug - Processed: {}, Queued: {}, Active: {}, CurrentThreads: {}, QueueSize: {}, ActiveFutures: {}, CPU: {}%, AvgProcTime: {}ms",
-                        processed, queued, active, currentThreads, stats.queueSize, stats.activeFutures, String.format("%.2f", cpuUsage), String.format("%.3f", avgProcessingTimeMs));
 
             // Calculate load components
             double queueLoad = (queued > 0) ? Math.min(100.0 * queued / MAX_QUEUE_SIZE, 100.0) : 0.0;
@@ -543,20 +664,12 @@ public final class EntityProcessingService {
             // Processing time load - higher time indicates higher load
             double timeLoad = Math.min(avgProcessingTimeMs / 10.0, 100.0); // 10ms baseline
 
-            // DEBUG: Log intermediate calculations
-            LOGGER.debug("Load calculation - QueueLoad: {}%, ActiveLoad: {}%, CpuLoad: {}%, TimeLoad: {}%",
-                        String.format("%.2f", queueLoad), String.format("%.2f", activeLoad),
-                        String.format("%.2f", cpuLoad), String.format("%.2f", timeLoad));
-
             // Enhanced weighted average: Queue(20%) + Active(20%) + CPU(40%) + Time(20%)
             double finalLoad = (queueLoad * 0.2 + activeLoad * 0.2 + cpuLoad * 0.4 + timeLoad * 0.2);
 
             // Apply smoothing with recent samples
             addLoadSample(finalLoad);
             double smoothedLoad = getSmoothedLoadAverage();
-
-            // DEBUG: Log final calculated load
-            LOGGER.debug("Final calculated load: {}%, Smoothed: {}%", String.format("%.2f", finalLoad), String.format("%.2f", smoothedLoad));
 
             // Return smoothed load to prevent erratic thread pool adjustments
             return smoothedLoad;

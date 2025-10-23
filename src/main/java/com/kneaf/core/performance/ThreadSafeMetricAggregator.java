@@ -513,13 +513,18 @@ public final class ThreadSafeMetricAggregator {
             lastValue.set(value);
             lastUpdateTime.set(System.currentTimeMillis());
             
-            // Update min and max
-            synchronized (this) {
-                if (value < min.get()) {
-                    min.set(value);
+            // Update min and max using lock-free CAS operations
+            double currentMin;
+            while ((currentMin = min.get()) > value) {
+                if (min.compareAndSet(currentMin, value)) {
+                    break;
                 }
-                if (value > max.get()) {
-                    max.set(value);
+            }
+            
+            double currentMax;
+            while ((currentMax = max.get()) < value) {
+                if (max.compareAndSet(currentMax, value)) {
+                    break;
                 }
             }
         }

@@ -26,7 +26,21 @@ public final class AlertingSystem {
     
     // Notification channels
     private final List<NotificationChannel> notificationChannels = new ArrayList<>();
-    private final ExecutorService notificationExecutor = Executors.newCachedThreadPool();
+    // OPTIMIZED: Use bounded thread pool instead of cached (prevents unlimited thread creation)
+    private final ExecutorService notificationExecutor = new ThreadPoolExecutor(
+        2, 4, 60L, TimeUnit.SECONDS,
+        new LinkedBlockingQueue<>(100),
+        new ThreadFactory() {
+            private final AtomicInteger threadNumber = new AtomicInteger(1);
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "AlertNotification-" + threadNumber.getAndIncrement());
+                t.setDaemon(true);
+                return t;
+            }
+        },
+        new ThreadPoolExecutor.CallerRunsPolicy()
+    );
     
     // Alert processing
     private final ScheduledExecutorService alertProcessor = Executors.newScheduledThreadPool(2);

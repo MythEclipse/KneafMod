@@ -657,7 +657,7 @@ public final class OptimizationInjector {
          * Throttle entity processing to prevent server overload when native optimizations are unavailable
          */
         private static final AtomicInteger entityProcessingCounter = new AtomicInteger(0);
-        private static final int ENTITY_PROCESSING_THROTTLE = 5; // Process 1 in every N entities
+        private static final int ENTITY_PROCESSING_THROTTLE = 3; // Process 1 in every N entities (reduced from 5 for better performance)
         
         @SubscribeEvent
         public static void onEntityTickThrottle(EntityTickEvent.Pre event) {
