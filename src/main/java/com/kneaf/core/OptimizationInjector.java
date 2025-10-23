@@ -2,7 +2,6 @@ package com.kneaf.core;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import net.minecraft.world.entity.player.Player;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
@@ -11,9 +10,22 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
 import java.io.File;
 import java.net.URL;
 import java.util.Arrays;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * OptimizationInjector - Rust-powered performance optimization for Minecraft entities
+ * 
+ * MOD COMPATIBILITY POLICY:
+ * This optimization system ONLY applies to:
+ * - Vanilla Minecraft entities (net.minecraft.world.entity.*)
+ * - Kneaf Mod custom entities (com.kneaf.entities.*)
+ * 
+ * Entities from other mods are NEVER touched to ensure full compatibility.
+ * This whitelist approach prevents conflicts with other mods' custom entity behaviors.
+ */
 @EventBusSubscriber(modid = KneafCore.MODID, bus = EventBusSubscriber.Bus.GAME)
 public final class OptimizationInjector {
     private static final String RUST_USAGE_POLICY = "CALCULATION_ONLY - NO_GAME_LOGIC - NO_AI - NO_STATE_MODIFICATION - NO_ENTITY_CONTROL";
@@ -26,6 +38,9 @@ public final class OptimizationInjector {
     private static final AtomicInteger combinedOptimizationMisses = new AtomicInteger(0);
     private static final AtomicInteger optimizationMisses = new AtomicInteger(0);
     private static final AtomicLong totalEntitiesProcessed = new AtomicLong(0);
+    
+    // Cache to track which entity classes have been logged to prevent spam
+    private static final Set<String> loggedEntityClasses = ConcurrentHashMap.newKeySet();
 
     private static final String RUST_PERF_LIBRARY_NAME = "rustperf";
     private static final String[] RUST_PERF_LIBRARY_PATHS = {
@@ -470,8 +485,12 @@ public final class OptimizationInjector {
                 
                 // Perform strict validation only when needed
                 if (!ModeDetector.isTestMode() && !isValidMinecraftEntity(entity)) {
-                    recordOptimizationMiss("Entity failed Minecraft-specific validation");
-                    return;
+                    // Log info only once per entity class to avoid spam
+                    String entityClass = entity.getClass().getName();
+                    if (loggedEntityClasses.add(entityClass)) {
+                        LOGGER.debug("Skipping optimization for entity: {} (compatibility filter)", entityClass);
+                    }
+                    return; // Don't record miss, just skip silently
                 }
     
                 double[] movementData = getEntityMovementData(entity);
@@ -664,9 +683,8 @@ public final class OptimizationInjector {
     public static void onLevelTick(LevelTickEvent.Pre event) {
         if (PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
             try {
-                var level = event.getLevel();
-                int entityCount = ModeDetector.isTestMode() ? 100 : getActualEntityCount(event);
-                String dimension = level.dimension().location().toString();
+                // Track entity count for metrics
+                getActualEntityCount(event);
                 // Silent success - no logging, just metrics
             } catch (Throwable t) {
                 recordOptimizationMiss("Level tick processing failed: " + t.getMessage());
@@ -775,7 +793,8 @@ public final class OptimizationInjector {
 
     private static void recordOptimizationMiss(String details) {
         optimizationMisses.incrementAndGet();
-        LOGGER.warn("Optimization fallback: {}", details);
+        // Only log as debug to reduce spam - these are normal when entities are filtered
+        LOGGER.debug("Optimization skipped: {}", details);
     }
 
     private static void recordCombinedOptimizationHit(String details) {
@@ -1053,6 +1072,8 @@ public final class OptimizationInjector {
     
     /**
      * Perform strict Minecraft-specific entity validation
+     * Only allows vanilla mobs and custom mobs from this mod for compatibility with other mods
+     * Items are excluded as they often have custom behaviors from other mods
      * @param entity Entity to validate
      * @return true if entity is valid for production processing
      */
@@ -1063,24 +1084,50 @@ public final class OptimizationInjector {
             // Check if entity is a valid Minecraft entity
             String entityClassName = entity.getClass().getName();
             
-            // Accept Minecraft entities from various packages:
-            // - net.minecraft.world.entity.* (standard entities)
-            // - net.minecraft.client.player.* (client-side player)
-            // - net.minecraft.server.level.* (server-side entities)
-            // - com.kneaf.entities.* (custom mod entities)
-            boolean isValidMinecraftEntity =
+            // EXCLUDE ITEMS - they often have custom behaviors from mods
+            if (entityClassName.contains(".item.") || 
+                entityClassName.contains("ItemEntity") ||
+                entityClassName.contains("ItemFrame") ||
+                entityClassName.contains("ItemStack")) {
+                return false; // Never optimize items
+            }
+            
+            // WHITELIST APPROACH FOR COMPATIBILITY:
+            // Only optimize vanilla Minecraft entities and our custom mod entities
+            // This ensures compatibility with other mods by not touching their entities
+            
+            boolean isVanillaMinecraftEntity = 
                 entityClassName.startsWith("net.minecraft.world.entity.") ||
                 entityClassName.startsWith("net.minecraft.client.player.") ||
-                entityClassName.startsWith("net.minecraft.server.level.") ||
+                entityClassName.startsWith("net.minecraft.server.level.");
+            
+            boolean isKneafModEntity = 
                 entityClassName.startsWith("com.kneaf.entities.");
             
-            if (!isValidMinecraftEntity) {
-                LOGGER.warn("Rejected non-Minecraft entity: {}", entityClassName);
+            // Only allow vanilla or our mod's entities
+            if (!isVanillaMinecraftEntity && !isKneafModEntity) {
+                // Silently skip other mod entities for compatibility
+                // Don't log to avoid spam from other mods
                 return false;
             }
             
-            // Additional validation can be added here for specific entity types
-            // For example: check if entity is a player, mob, etc.
+            // Additional validation: Skip entities from other mods even if they extend vanilla
+            // Check package hierarchy to ensure it's truly vanilla or ours
+            if (isVanillaMinecraftEntity) {
+                // Make sure it's not a subclass from another mod
+                Class<?> entityClass = entity.getClass();
+                while (entityClass != null && !entityClass.getName().equals("java.lang.Object")) {
+                    String className = entityClass.getName();
+                    // If we find a class from another mod in the hierarchy, skip it
+                    if (!className.startsWith("net.minecraft.") && 
+                        !className.startsWith("com.kneaf.") && 
+                        !className.startsWith("java.")) {
+                        // This is from another mod, skip for compatibility
+                        return false;
+                    }
+                    entityClass = entityClass.getSuperclass();
+                }
+            }
             
             return true;
         } catch (Exception e) {
@@ -1116,12 +1163,35 @@ public final class OptimizationInjector {
      */
     private static int getActualEntityCount(ServerTickEvent.Pre event) {
         try {
-            // In a real implementation, this would get the actual entity count
-            // For now, return a reasonable default
-            return 500;
+            // Try to get server from event context
+            Object server = event.getServer();
+            if (server != null) {
+                // Use reflection to get all levels and count entities
+                java.lang.reflect.Method getAllLevels = server.getClass().getMethod("getAllLevels");
+                Object levels = getAllLevels.invoke(server);
+                
+                if (levels instanceof Iterable) {
+                    int totalEntities = 0;
+                    for (Object level : (Iterable<?>) levels) {
+                        java.lang.reflect.Method getEntities = level.getClass().getMethod("getEntities");
+                        Object entityAccess = getEntities.invoke(level);
+                        
+                        java.lang.reflect.Method getAll = entityAccess.getClass().getMethod("getAll");
+                        Object entities = getAll.invoke(entityAccess);
+                        
+                        if (entities instanceof Iterable) {
+                            int count = 0;
+                            for (Object ignored : (Iterable<?>) entities) count++;
+                            totalEntities += count;
+                        }
+                    }
+                    return totalEntities > 0 ? totalEntities : 500;
+                }
+            }
+            return 500; // Fallback if server not available
         } catch (Exception e) {
-            LOGGER.debug("Failed to get actual entity count", e);
-            return 200;
+            LOGGER.debug("Failed to get actual entity count: {}", e.getMessage());
+            return 200; // Conservative fallback
         }
     }
     
@@ -1133,13 +1203,27 @@ public final class OptimizationInjector {
     private static int getActualEntityCount(LevelTickEvent.Pre event) {
         try {
             var level = event.getLevel();
-            // In a real implementation, this would get the actual entity count
-            // For now, return a reasonable default based on dimension
-            String dimension = level.dimension().location().toString();
-            return dimension.contains("overworld") ? 1000 : 300;
+            
+            // Try to get actual entity count from level
+            java.lang.reflect.Method getEntities = level.getClass().getMethod("getEntities");
+            Object entityAccess = getEntities.invoke(level);
+            
+            java.lang.reflect.Method getAll = entityAccess.getClass().getMethod("getAll");
+            Object entities = getAll.invoke(entityAccess);
+            
+            if (entities instanceof Iterable) {
+                int count = 0;
+                for (Object entity : (Iterable<?>) entities) {
+                    count++;
+                }
+                return count > 0 ? count : 100;
+            }
+            
+            // Fallback to reasonable default
+            return 300;
         } catch (Exception e) {
-            LOGGER.debug("Failed to get actual entity count", e);
-            return 100;
+            LOGGER.debug("Failed to get actual entity count: {}", e.getMessage());
+            return 100; // Conservative fallback
         }
     }
 }

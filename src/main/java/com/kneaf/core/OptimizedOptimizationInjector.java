@@ -3,7 +3,6 @@ package com.kneaf.core;
 import com.kneaf.core.performance.PerformanceMonitoringSystem;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -26,6 +25,14 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Optimized entity processing injector with async processing, parallel library loading,
  * and hash-based entity type lookup for maximum performance.
+ *
+ * MOD COMPATIBILITY POLICY:
+ * This optimization system ONLY applies to:
+ * - Vanilla Minecraft entities (net.minecraft.world.entity.*)
+ * - Kneaf Mod custom entities (com.kneaf.entities.*)
+ * 
+ * Entities from other mods are NEVER touched to ensure full compatibility.
+ * This whitelist approach prevents conflicts with other mods' custom entity behaviors.
  *
  * Key optimizations:
  * - Async entity processing using CompletableFuture and ExecutorService
@@ -123,6 +130,11 @@ public final class OptimizedOptimizationInjector {
             if (entity.level().isClientSide() || entity.isRemoved()) {
                 return;
             }
+            
+            // COMPATIBILITY CHECK: Only optimize vanilla and our mod entities
+            if (!isEntityOptimizable(entity)) {
+                return; // Skip other mod entities for compatibility
+            }
 
             // Check for knockback protection
             Integer protectionTicks = recentlyDamagedEntities.get(entity.getId());
@@ -208,6 +220,65 @@ public final class OptimizedOptimizationInjector {
                 "OptimizedOptimizationInjector", e, errorContext);
             
             LOGGER.error("Unexpected error in entity tick handler: {}", e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Check if entity should be optimized for compatibility with other mods
+     * Only vanilla and Kneaf mod entities are optimized
+     * Items are excluded as they often have custom behaviors from other mods
+     * @param entity Entity to check
+     * @return true if entity can be optimized
+     */
+    private static boolean isEntityOptimizable(Entity entity) {
+        if (entity == null) return false;
+        
+        try {
+            String entityClassName = entity.getClass().getName();
+            
+            // EXCLUDE ITEMS - they often have custom behaviors from mods
+            if (entityClassName.contains(".item.") || 
+                entityClassName.contains("ItemEntity") ||
+                entityClassName.contains("ItemFrame") ||
+                entityClassName.contains("ItemStack")) {
+                return false; // Never optimize items
+            }
+            
+            // WHITELIST APPROACH FOR MOD COMPATIBILITY:
+            // Only optimize vanilla Minecraft entities and our custom mod entities
+            // This ensures compatibility by not touching other mods' entities
+            
+            boolean isVanillaMinecraftEntity = 
+                entityClassName.startsWith("net.minecraft.world.entity.") ||
+                entityClassName.startsWith("net.minecraft.client.player.") ||
+                entityClassName.startsWith("net.minecraft.server.level.");
+            
+            boolean isKneafModEntity = 
+                entityClassName.startsWith("com.kneaf.entities.");
+            
+            // Only allow vanilla or our mod's entities
+            if (!isVanillaMinecraftEntity && !isKneafModEntity) {
+                return false; // Skip other mod entities
+            }
+            
+            // Additional safety: Check inheritance hierarchy for other mod classes
+            if (isVanillaMinecraftEntity) {
+                Class<?> entityClass = entity.getClass();
+                while (entityClass != null && !entityClass.getName().equals("java.lang.Object")) {
+                    String className = entityClass.getName();
+                    // If we find a class from another mod, skip it
+                    if (!className.startsWith("net.minecraft.") && 
+                        !className.startsWith("com.kneaf.") && 
+                        !className.startsWith("java.")) {
+                        return false; // From another mod
+                    }
+                    entityClass = entityClass.getSuperclass();
+                }
+            }
+            
+            return true;
+        } catch (Exception e) {
+            return false; // Skip on any error
         }
     }
     
@@ -336,9 +407,6 @@ public final class OptimizedOptimizationInjector {
     public static void onLevelTick(LevelTickEvent.Pre event) {
         if (performanceManager.isEntityThrottlingEnabled()) {
             try {
-                var level = event.getLevel();
-                String dimension = level.dimension().location().toString();
-                
                 // Silent success - no logging, just metrics
                 PerformanceMonitoringSystem.getInstance().getMetricAggregator().incrementCounter("optimization_injector.level_tick");
                 
@@ -522,7 +590,7 @@ public final class OptimizedOptimizationInjector {
             baseTimeout = Math.min(baseTimeout * 3, MAX_ASYNC_TIMEOUT_MS);
         }
         // Player entities get moderate timeout
-        else if (entity instanceof Player) {
+        else if (entityType.contains("player")) {
             baseTimeout = Math.min(baseTimeout * 2, MAX_ASYNC_TIMEOUT_MS);
         }
         // Simple entities get standard timeout

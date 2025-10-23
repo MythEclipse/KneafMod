@@ -442,21 +442,66 @@ public class RustNativeLoader {
         return flat;
     }
     
-    // Other batch operations not yet implemented - provide fallback stubs
+    // Batch vector operations with Java fallback implementations
     public static float[] batchGlamVectorDot(float[][] vectorsA, float[][] vectorsB, int count) {
-        throw new UnsatisfiedLinkError("batchGlamVectorDot not yet implemented for RustNativeLoader");
+        float[] results = new float[count];
+        for (int i = 0; i < count; i++) {
+            if (i < vectorsA.length && i < vectorsB.length) {
+                float[] a = vectorsA[i];
+                float[] b = vectorsB[i];
+                float dot = 0.0f;
+                int len = Math.min(a.length, b.length);
+                for (int j = 0; j < len; j++) {
+                    dot += a[j] * b[j];
+                }
+                results[i] = dot;
+            }
+        }
+        return results;
     }
     
     public static float[] batchGlamVectorCross(float[][] vectorsA, float[][] vectorsB, int count) {
-        throw new UnsatisfiedLinkError("batchGlamVectorCross not yet implemented for RustNativeLoader");
+        // Cross product only for 3D vectors, returns flattened array
+        float[] results = new float[count * 3];
+        for (int i = 0; i < count; i++) {
+            if (i < vectorsA.length && i < vectorsB.length && 
+                vectorsA[i].length >= 3 && vectorsB[i].length >= 3) {
+                float[] a = vectorsA[i];
+                float[] b = vectorsB[i];
+                results[i * 3] = a[1] * b[2] - a[2] * b[1];
+                results[i * 3 + 1] = a[2] * b[0] - a[0] * b[2];
+                results[i * 3 + 2] = a[0] * b[1] - a[1] * b[0];
+            }
+        }
+        return results;
     }
     
     public static float[] batchGlamMatrixMul(float[][] matricesA, float[][] matricesB, int count) {
-        throw new UnsatisfiedLinkError("batchGlamMatrixMul not yet implemented for RustNativeLoader");
+        // Simplified 4x4 matrix multiplication fallback
+        float[] results = new float[count * 16]; // 4x4 matrices
+        for (int i = 0; i < count; i++) {
+            if (i < matricesA.length && i < matricesB.length && 
+                matricesA[i].length >= 16 && matricesB[i].length >= 16) {
+                float[] a = matricesA[i];
+                float[] b = matricesB[i];
+                // Matrix multiplication for 4x4 matrices
+                for (int row = 0; row < 4; row++) {
+                    for (int col = 0; col < 4; col++) {
+                        float sum = 0.0f;
+                        for (int k = 0; k < 4; k++) {
+                            sum += a[row * 4 + k] * b[k * 4 + col];
+                        }
+                        results[i * 16 + row * 4 + col] = sum;
+                    }
+                }
+            }
+        }
+        return results;
     }
     
     public static float[] batchFaerMatrixMul(float[][] matricesA, float[][] matricesB, int count) {
-        throw new UnsatisfiedLinkError("batchFaerMatrixMul not yet implemented for RustNativeLoader");
+        // Faer matrix multiplication uses same algorithm as Glam for Java fallback
+        return batchGlamMatrixMul(matricesA, matricesB, count);
     }
     
     // ========================================

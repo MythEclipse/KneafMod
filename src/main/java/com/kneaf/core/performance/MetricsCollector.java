@@ -19,7 +19,7 @@ public final class MetricsCollector {
     // Metric storage with thread safety
     private final ConcurrentHashMap<String, AtomicLong> counters = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicDouble> gauges = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, LongAdder> histograms = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedQueue<Long>> histograms = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedQueue<Long>> timers = new ConcurrentHashMap<>();
     
     // Sampling configuration
@@ -77,7 +77,7 @@ public final class MetricsCollector {
         }
         
         try {
-            histograms.computeIfAbsent(name, k -> new LongAdder()).add(value);
+            histograms.computeIfAbsent(name, k -> new ConcurrentLinkedQueue<>()).offer(value);
             updateLastCollectionTime();
         } catch (Exception e) {
             LOGGER.error("Error recording histogram metric: " + name, e);
@@ -129,18 +129,27 @@ public final class MetricsCollector {
      * Get histogram statistics
      */
     public HistogramStatistics getHistogramStatistics(String name) {
-        LongAdder histogram = histograms.get(name);
-        if (histogram == null) {
+        ConcurrentLinkedQueue<Long> histogram = histograms.get(name);
+        if (histogram == null || histogram.isEmpty()) {
             return new HistogramStatistics(0, 0, 0, 0, 0);
         }
         
-        long sum = histogram.sum();
-        long count = histogram.sum(); // For LongAdder, sum gives total count
+        // Extract all values from histogram
+        List<Long> allValues = new ArrayList<>(histogram);
         
-        // Calculate min, max, avg (simplified)
-        long avg = count > 0 ? sum / count : 0;
+        if (allValues.isEmpty()) {
+            return new HistogramStatistics(0, 0, 0, 0, 0);
+        }
         
-        return new HistogramStatistics(sum, count, avg, avg, avg); // Simplified for now
+        // Calculate full statistics
+        Collections.sort(allValues);
+        long sum = allValues.stream().mapToLong(Long::longValue).sum();
+        long count = allValues.size();
+        long min = allValues.get(0);
+        long max = allValues.get(allValues.size() - 1);
+        long avg = sum / count;
+        
+        return new HistogramStatistics(sum, count, min, max, avg);
     }
     
     /**
@@ -185,8 +194,12 @@ public final class MetricsCollector {
         gauges.forEach((name, gauge) -> allMetrics.put(name, gauge.get()));
         
         // Add histograms
-        histograms.forEach((name, histogram) -> allMetrics.put(name + "_sum", histogram.sum()));
-        histograms.forEach((name, histogram) -> allMetrics.put(name + "_count", histogram.sum()));
+        histograms.forEach((name, histogram) -> {
+            List<Long> values = new ArrayList<>(histogram);
+            long sum = values.stream().mapToLong(Long::longValue).sum();
+            allMetrics.put(name + "_sum", sum);
+            allMetrics.put(name + "_count", (long)values.size());
+        });
         
         // Add timer statistics
         timers.keySet().forEach(name -> {
