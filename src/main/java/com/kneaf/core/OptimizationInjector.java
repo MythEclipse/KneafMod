@@ -485,12 +485,8 @@ public final class OptimizationInjector {
                 
                 // Perform strict validation only when needed
                 if (!ModeDetector.isTestMode() && !isValidMinecraftEntity(entity)) {
-                    // Log info only once per entity class to avoid spam
-                    String entityClass = entity.getClass().getName();
-                    if (loggedEntityClasses.add(entityClass)) {
-                        LOGGER.debug("Skipping optimization for entity: {} (compatibility filter)", entityClass);
-                    }
-                    return; // Don't record miss, just skip silently
+                    // Skip silently for compatibility with other mods
+                    return;
                 }
     
                 double[] movementData = getEntityMovementData(entity);
@@ -1096,8 +1092,7 @@ public final class OptimizationInjector {
             }
             
             // WHITELIST APPROACH FOR COMPATIBILITY:
-            // Only optimize vanilla Minecraft entities and our custom mod entities
-            // This ensures compatibility with other mods by not touching their entities
+            // Optimize vanilla Minecraft entities and our custom mod entities
             
             boolean isVanillaMinecraftEntity = 
                 entityClassName.startsWith("net.minecraft.world.entity.") ||
@@ -1110,28 +1105,11 @@ public final class OptimizationInjector {
             // Only allow vanilla or our mod's entities
             if (!isVanillaMinecraftEntity && !isKneafModEntity) {
                 // Silently skip other mod entities for compatibility
-                // Don't log to avoid spam from other mods
                 return false;
             }
             
-            // Additional validation: Skip entities from other mods even if they extend vanilla
-            // Check package hierarchy to ensure it's truly vanilla or ours
-            if (isVanillaMinecraftEntity) {
-                // Make sure it's not a subclass from another mod
-                Class<?> entityClass = entity.getClass();
-                while (entityClass != null && !entityClass.getName().equals("java.lang.Object")) {
-                    String className = entityClass.getName();
-                    // If we find a class from another mod in the hierarchy, skip it
-                    if (!className.startsWith("net.minecraft.") && 
-                        !className.startsWith("com.kneaf.") && 
-                        !className.startsWith("java.")) {
-                        // This is from another mod, skip for compatibility
-                        return false;
-                    }
-                    entityClass = entityClass.getSuperclass();
-                }
-            }
-            
+            // For vanilla entities, accept them directly without extra checks
+            // The original hierarchy check was too restrictive and blocked valid entities
             return true;
         } catch (Exception e) {
             LOGGER.debug("Entity validation failed due to exception", e);
