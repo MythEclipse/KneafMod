@@ -16,14 +16,20 @@ public final class EnhancedRustVectorLibrary {
     private static volatile boolean isLibraryLoaded = false;
 
     static {
+        // Use OptimizationInjector's native library loading instead of loading separately
+        // to avoid double-loading issues (JNI library can only be loaded once per JVM)
         try {
-            System.out.println("EnhancedRustVectorLibrary: Loading native library...");
-            String libPath = System.getProperty("user.dir") + "/src/main/resources/natives/rustperf.dll";
-            System.load(libPath);
-            isLibraryLoaded = true;
-            System.out.println("EnhancedRustVectorLibrary: Successfully loaded native library '" + LIBRARY_NAME + "'");
+            System.out.println("EnhancedRustVectorLibrary: Checking native library status...");
+            // OptimizationInjector handles the actual loading in its static block
+            // We just check if it was successful
+            isLibraryLoaded = OptimizationInjector.isNativeLibraryLoaded();
+            if (isLibraryLoaded) {
+                System.out.println("EnhancedRustVectorLibrary: Successfully using native library '" + LIBRARY_NAME + "' loaded by OptimizationInjector");
+            } else {
+                System.out.println("EnhancedRustVectorLibrary: Native library not loaded by OptimizationInjector, using Java fallback");
+            }
         } catch (Throwable e) {
-            System.out.println("EnhancedRustVectorLibrary: Failed to load native library: " + e.getMessage());
+            System.out.println("EnhancedRustVectorLibrary: Failed to check library status: " + e.getMessage());
             isLibraryLoaded = false;
         }
     }

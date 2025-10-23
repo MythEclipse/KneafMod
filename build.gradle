@@ -535,6 +535,19 @@ tasks.register('runRustTest', JavaExec) {
     systemProperty 'org.slf4j.simpleLogger.log.com.kneaf.core.performance.bridge.NativeLibraryLoader', 'debug'
 }
 
+// Task to run comprehensive JNI test suite
+tasks.register('testNativeJNI', JavaExec) {
+    group = 'verification'
+    description = 'Run comprehensive JNI test suite for all Rust native methods'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.kneaf.core.RustNativeTestRunner'
+    systemProperty 'java.library.path', file('src/main/resources/natives').absolutePath
+    systemProperty 'org.slf4j.simpleLogger.defaultLogLevel', 'info'
+    systemProperty 'org.slf4j.simpleLogger.showThreadName', 'false'
+    systemProperty 'org.slf4j.simpleLogger.showShortLogName', 'true'
+    dependsOn 'compileJava', 'copyRustToSrc'
+}
+
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {
     module {

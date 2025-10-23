@@ -4,40 +4,23 @@ package com.kneaf.core;
  * JNI wrapper class for dynamic exposure of Rust vector library functions.
  * Provides type-safe access to nalgebra, glam, and faer vector/matrix operations
  * implemented in the native Rust performance library.
+ * 
+ * NOTE: All native methods are now centralized in RustNativeLoader.
+ * This class delegates to RustNativeLoader for all operations.
  */
 public final class RustVectorLibrary {
     private static final String LIBRARY_NAME = "rustperf";
     private static boolean isLibraryLoaded = false;
 
     static {
-        try {
-            System.out.println("RustVectorLibrary: java.library.path = " + System.getProperty("java.library.path"));
-            System.out.println("RustVectorLibrary: user.dir = " + System.getProperty("user.dir"));
-            // Load from absolute path for testing
-            String libPath = System.getProperty("user.dir") + "/src/main/resources/natives/rustperf.dll";
-            System.out.println("RustVectorLibrary: attempting to load from " + libPath);
-            System.load(libPath);
-            isLibraryLoaded = true;
-            System.out.println("RustVectorLibrary: Successfully loaded native library '" + LIBRARY_NAME + "'");
-        } catch (Throwable e) {
-            System.out.println("RustVectorLibrary: Exception in static initializer: " + e.getClass().getName() + ": " + e.getMessage());
-            e.printStackTrace();
-            isLibraryLoaded = false;
+        // Delegate library loading to RustNativeLoader
+        isLibraryLoaded = RustNativeLoader.loadLibrary();
+        if (isLibraryLoaded) {
+            System.out.println("RustVectorLibrary: Successfully loaded via RustNativeLoader");
+        } else {
+            System.out.println("RustVectorLibrary: Failed to load via RustNativeLoader");
         }
     }
-
-    // Native method declarations - direct mappings to Rust extern "C" functions
-    private static native float[] nalgebra_matrix_mul(float[] a, float[] b);
-    private static native float[] nalgebra_vector_add(float[] a, float[] b);
-    private static native float glam_vector_dot(float[] a, float[] b);
-    private static native float[] glam_vector_cross(float[] a, float[] b);
-    private static native float[] glam_matrix_mul(float[] a, float[] b);
-    private static native float[] faer_matrix_mul(float[] a, float[] b);
-
-    // Rustperf native methods (direct from OptimizationInjector)
-    public static native double[] rustperf_vector_multiply(double x, double y, double z, double scalar);
-    public static native double[] rustperf_vector_add(double x1, double y1, double z1, double x2, double y2, double z2);
-    public static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
 
     /**
      * Multiplies two 4x4 matrices using nalgebra.
@@ -57,7 +40,7 @@ public final class RustVectorLibrary {
             throw new IllegalArgumentException("Matrices must be non-null float arrays of length 16");
         }
         try {
-            return nalgebra_matrix_mul(a, b);
+            return RustNativeLoader.nalgebra_matrix_mul(a, b);
         } catch (Exception e) {
             System.out.println("JNI call failed in nalgebra_matrix_mul: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
@@ -82,7 +65,7 @@ public final class RustVectorLibrary {
             throw new IllegalArgumentException("Vectors must be non-null float arrays of length 3");
         }
         try {
-            return nalgebra_vector_add(a, b);
+            return RustNativeLoader.nalgebra_vector_add(a, b);
         } catch (Exception e) {
             System.out.println("JNI call failed in nalgebra_vector_add: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
@@ -107,7 +90,7 @@ public final class RustVectorLibrary {
             throw new IllegalArgumentException("Vectors must be non-null float arrays of length 3");
         }
         try {
-            return glam_vector_dot(a, b);
+            return RustNativeLoader.glam_vector_dot(a, b);
         } catch (Exception e) {
             System.out.println("JNI call failed in glam_vector_dot: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
@@ -132,7 +115,7 @@ public final class RustVectorLibrary {
             throw new IllegalArgumentException("Vectors must be non-null float arrays of length 3");
         }
         try {
-            return glam_vector_cross(a, b);
+            return RustNativeLoader.glam_vector_cross(a, b);
         } catch (Exception e) {
             System.out.println("JNI call failed in glam_vector_cross: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
@@ -157,7 +140,7 @@ public final class RustVectorLibrary {
             throw new IllegalArgumentException("Matrices must be non-null float arrays of length 16");
         }
         try {
-            return glam_matrix_mul(a, b);
+            return RustNativeLoader.glam_matrix_mul(a, b);
         } catch (Exception e) {
             System.out.println("JNI call failed in glam_matrix_mul: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);
@@ -165,7 +148,7 @@ public final class RustVectorLibrary {
     }
 
     /**
-     * Multiplies two 4x4 matrices using faer.
+     * Multiplies two 4x4 matrices using faer (returns double[] from RustNativeLoader, needs conversion).
      *
      * @param a first matrix as float array of length 16 (row-major order)
      * @param b second matrix as float array of length 16 (row-major order)
@@ -182,7 +165,19 @@ public final class RustVectorLibrary {
             throw new IllegalArgumentException("Matrices must be non-null float arrays of length 16");
         }
         try {
-            return faer_matrix_mul(a, b);
+            // RustNativeLoader.faer_matrix_mul returns double[], convert to float[]
+            double[] ad = new double[16];
+            double[] bd = new double[16];
+            for (int i = 0; i < 16; i++) {
+                ad[i] = a[i];
+                bd[i] = b[i];
+            }
+            double[] resultDouble = RustNativeLoader.faer_matrix_mul(ad, bd);
+            float[] result = new float[16];
+            for (int i = 0; i < 16; i++) {
+                result[i] = (float) resultDouble[i];
+            }
+            return result;
         } catch (Exception e) {
             System.out.println("JNI call failed in faer_matrix_mul: " + e.getMessage());
             throw new RuntimeException("JNI call failed", e);

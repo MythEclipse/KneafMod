@@ -482,9 +482,11 @@ public final class PerformanceMonitoringSystem {
     }
     
     /**
-     * Get Rust performance statistics via JNI
+     * Get Rust performance statistics via JNI (delegates to RustNativeLoader)
      */
-    private native String getRustPerformanceStats();
+    private String getRustPerformanceStats() {
+        return com.kneaf.core.RustNativeLoader.getRustPerformanceStats();
+    }
     
     /**
      * Parse and record Rust metrics

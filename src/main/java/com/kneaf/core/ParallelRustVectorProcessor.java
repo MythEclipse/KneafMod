@@ -35,18 +35,9 @@ public class ParallelRustVectorProcessor {
     private final Lock memoryLock;
     private final CacheOptimizedWorkStealingScheduler workStealingScheduler;
     private final ConcurrentHashMap<Integer, CacheAffinity> workerCacheAffinity;
-    private static native float[] batchNalgebraMatrixMul(float[][] matricesA, float[][] matricesB, int count);
-    private static native float[] batchNalgebraVectorAdd(float[][] vectorsA, float[][] vectorsB, int count);
-    private static native float[] batchGlamVectorDot(float[][] vectorsA, float[][] vectorsB, int count);
-    private static native float[] batchGlamVectorCross(float[][] vectorsA, float[][] vectorsB, int count);
-    private static native float[] batchGlamMatrixMul(float[][] matricesA, float[][] matricesB, int count);
-    private static native float[] batchFaerMatrixMul(float[][] matricesA, float[][] matricesB, int count);
     
-    // Safe memory management native methods
-    private static native void releaseNativeBuffer(long pointer);
-    private static native long allocateNativeBuffer(int size);
-    private static native void copyToNativeBuffer(long pointer, float[] data, int offset, int length);
-    private static native void copyFromNativeBuffer(long pointer, float[] result, int offset, int length);
+    // All native methods now centralized in RustNativeLoader
+    // These methods delegate to RustNativeLoader for JNI calls
     
     /**
      * Cache affinity tracking for spatial locality optimization
@@ -947,11 +938,11 @@ public class ParallelRustVectorProcessor {
         memoryLock.lock();
         try {
             // Allocate native memory
-            long pointer = allocateNativeBuffer(data.length * 4);
+            long pointer = RustNativeLoader.allocateNativeBuffer(data.length * 4);
             
             try {
                 // Copy data to native memory
-                copyToNativeBuffer(pointer, data, 0, data.length);
+                RustNativeLoader.copyToNativeBuffer(pointer, data, 0, data.length);
                 
                 // Perform operation based on operation type
                 float[] result = performNativeOperation(pointer, data.length, operationType);
@@ -959,7 +950,7 @@ public class ParallelRustVectorProcessor {
                 return result;
             } finally {
                 // Always release native memory
-                releaseNativeBuffer(pointer);
+                RustNativeLoader.releaseNativeBuffer(pointer);
             }
         } finally {
             memoryLock.unlock();
@@ -968,8 +959,12 @@ public class ParallelRustVectorProcessor {
     
     /**
      * Perform native operation on allocated memory
+     * NOTE: This is an internal method that is not implemented in Rust.
+     * Use specific operations like batchNalgebraMatrixMul instead.
      */
-    private native float[] performNativeOperation(long pointer, int length, String operationType);
+    private float[] performNativeOperation(long pointer, int length, String operationType) {
+        throw new UnsatisfiedLinkError("performNativeOperation is deprecated. Use specific batch operations from RustNativeLoader instead.");
+    }
     
     /**
      * Cache-optimized batch vector operations with spatial locality
@@ -1136,13 +1131,13 @@ public class ParallelRustVectorProcessor {
             float[] result;
             switch (operationType) {
                 case "nalgebra":
-                    result = batchNalgebraMatrixMul(batchA, batchB, batchSize);
+                    result = RustNativeLoader.batchNalgebraMatrixMul(batchA, batchB, batchSize);
                     break;
                 case "glam":
-                    result = batchGlamMatrixMul(batchA, batchB, batchSize);
+                    result = RustNativeLoader.batchGlamMatrixMul(batchA, batchB, batchSize);
                     break;
                 case "faer":
-                    result = batchFaerMatrixMul(batchA, batchB, batchSize);
+                    result = RustNativeLoader.batchFaerMatrixMul(batchA, batchB, batchSize);
                     break;
                 default:
                     throw new IllegalArgumentException("Unknown operation type: " + operationType);

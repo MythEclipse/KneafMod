@@ -9,7 +9,7 @@
 //! Provides STRICTLY PURE vector/matrix operations - NO game state access, NO entity references
 
 use jni::JNIEnv;
-use jni::objects::{JClass, JFloatArray, JDoubleArray, JObject, JObjectArray};
+use jni::objects::{JClass, JFloatArray, JDoubleArray, JObject, JObjectArray, JString};
 use jni::sys::{jdouble, jlong, jint, jboolean};
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -1150,8 +1150,8 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_calculateLimitedStack
 
 /// JNI functions for Hayabusa skill optimizations - ShadowZombieNinja specific
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_phantom_shuriken<'a>(
-    mut env: JNIEnv<'a>,
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1phantom_1shuriken<'a>(
+    env: JNIEnv<'a>,
     _class: JClass,
     start_x: jdouble,
     start_y: jdouble,
@@ -1190,7 +1190,7 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_pha
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_quad_shadow<'a>(
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1quad_1shadow<'a>(
     mut env: JNIEnv<'a>,
     _class: JClass,
     center_x: jdouble,
@@ -1220,7 +1220,7 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_qua
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_shadow_kill_damage(
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1shadow_1kill_1damage(
     _env: JNIEnv,
     _class: JClass,
     passive_stacks: jint,
@@ -1231,7 +1231,7 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_sha
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_calculate_passive_stacks(
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1calculate_1passive_1stacks(
     _env: JNIEnv,
     _class: JClass,
     current_stacks: jint,
@@ -1244,4 +1244,454 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_cal
     
     let new_stacks = current_stacks + 2; // Faster stacking for more dynamic combat
     std::cmp::min(new_stacks, max_stacks)
+}
+
+// ============================================================================
+// JNI functions for RustNativeLoader - Centralized loader implementations
+// These are duplicates of RustVectorLibrary methods but with RustNativeLoader prefix
+// ============================================================================
+
+/// RustNativeLoader - Category 1: Pure Mathematical Operations
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_nalgebra_1matrix_1mul<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 16];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 16];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    let result = parallel_processing::nalgebra_matrix_mul(a_buf, b_buf);
+    let output = env.new_float_array(16).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_nalgebra_1vector_1add<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 3];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 3];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    let result = parallel_processing::nalgebra_vector_add(a_buf, b_buf);
+    let output = env.new_float_array(3).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_glam_1vector_1dot(
+    env: JNIEnv,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> f32 {
+    let mut a_buf = [0.0f32; 3];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 3];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    parallel_processing::glam_vector_dot(a_buf, b_buf)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_glam_1vector_1cross<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 3];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 3];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    let result = parallel_processing::glam_vector_cross(a_buf, b_buf);
+    let output = env.new_float_array(3).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_glam_1matrix_1mul<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 16];
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    let mut b_buf = [0.0f32; 16];
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    let result = performance::glam_matrix_mul(a_buf, b_buf);
+    let output = env.new_float_array(16).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_faer_1matrix_1mul<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JDoubleArray,
+    b: JDoubleArray,
+) -> JDoubleArray<'a> {
+    // Convert f64 to f32 for now since faer_matrix_mul only supports f32
+    let mut a_buf_f64 = [0.0f64; 16];
+    env.get_double_array_region(&a, 0, &mut a_buf_f64).expect("Failed to get a array");
+    let mut b_buf_f64 = [0.0f64; 16];
+    env.get_double_array_region(&b, 0, &mut b_buf_f64).expect("Failed to get b array");
+    
+    // Convert to f32
+    let mut a_buf = [0.0f32; 16];
+    let mut b_buf = [0.0f32; 16];
+    for i in 0..16 {
+        a_buf[i] = a_buf_f64[i] as f32;
+        b_buf[i] = b_buf_f64[i] as f32;
+    }
+    
+    let result_f32 = performance::faer_matrix_mul(a_buf, b_buf);
+    
+    // Convert back to f64
+    let mut result = [0.0f64; 16];
+    for i in 0..16 {
+        result[i] = result_f32[i] as f64;
+    }
+    
+    let output = env.new_double_array(16).expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+/// RustNativeLoader - Category 3: Parallel Processing Operations
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_parallelMatrixMultiplyBlock<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+    size: jint,
+) -> JFloatArray<'a> {
+    let len = (size * size) as usize;
+    let mut a_buf = vec![0.0f32; len];
+    let mut b_buf = vec![0.0f32; len];
+    
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    
+    // Use enhanced version which exists
+    let size_usize = size as usize;
+    let result = parallel_matrix::enhanced_parallel_matrix_multiply_block(&a_buf, &b_buf, size_usize, size_usize, size_usize);
+    let output = env.new_float_array(len as i32).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_parallelStrassenMultiply<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+    n: jint,
+) -> JFloatArray<'a> {
+    let len = (n * n) as usize;
+    let mut a_buf = vec![0.0f32; len];
+    let mut b_buf = vec![0.0f32; len];
+    
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    
+    let result = parallel_matrix::parallel_strassen_multiply(&a_buf, &b_buf, n as usize);
+    let output = env.new_float_array(len as i32).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_arenaMatrixMultiply<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+    size: jint,
+) -> JFloatArray<'a> {
+    let size_usize = size as usize;
+    let len = size_usize * size_usize;
+    let mut a_buf = vec![0.0f32; len];
+    let mut b_buf = vec![0.0f32; len];
+    
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    
+    // arena_matrix_multiply needs: a, b, a_rows, a_cols, b_cols, thread_id
+    let result = arena_memory::arena_matrix_multiply(&a_buf, &b_buf, size_usize, size_usize, size_usize, 0);
+    let output = env.new_float_array(len as i32).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_runtimeMatrixMultiply<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+    size: jint,
+) -> JFloatArray<'a> {
+    let size_usize = size as usize;
+    let len = size_usize * size_usize;
+    let mut a_buf = vec![0.0f32; len];
+    let mut b_buf = vec![0.0f32; len];
+    
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    
+    // runtime_matrix_multiply needs: a, b, a_rows, a_cols, b_cols
+    let result = simd_runtime::runtime_matrix_multiply(&a_buf, &b_buf, size_usize, size_usize, size_usize);
+    let output = env.new_float_array(len as i32).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_runtimeVectorDotProduct(
+    env: JNIEnv,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> f32 {
+    let len = env.get_array_length(&a).expect("Failed to get array length") as usize;
+    let mut a_buf = vec![0.0f32; len];
+    let mut b_buf = vec![0.0f32; len];
+    
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    
+    simd_runtime::runtime_vector_dot_product(&a_buf, &b_buf)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_runtimeVectorAdd<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let len = env.get_array_length(&a).expect("Failed to get array length") as usize;
+    let mut a_buf = vec![0.0f32; len];
+    let mut b_buf = vec![0.0f32; len];
+    
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    
+    let result = simd_runtime::runtime_vector_add(&a_buf, &b_buf);
+    let output = env.new_float_array(len as i32).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_runtimeMatrix4x4Multiply<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    a: JFloatArray,
+    b: JFloatArray,
+) -> JFloatArray<'a> {
+    let mut a_buf = [0.0f32; 16];
+    let mut b_buf = [0.0f32; 16];
+    
+    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    
+    let result = simd_runtime::runtime_matrix4x4_multiply(&a_buf, &b_buf);
+    let output = env.new_float_array(16).expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+// ========================================
+// RustNativeLoader - Category 2: OptimizationInjector Delegates
+// Wrapper methods that delegate to existing OptimizationInjector implementations
+// ========================================
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1vector_1multiply<'a>(
+    env: JNIEnv<'a>,
+    class: JClass,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+    scalar: jdouble,
+) -> JDoubleArray<'a> {
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1multiply(env, class, x, y, z, scalar)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1vector_1add<'a>(
+    env: JNIEnv<'a>,
+    class: JClass,
+    x1: jdouble,
+    y1: jdouble,
+    z1: jdouble,
+    x2: jdouble,
+    y2: jdouble,
+    z2: jdouble,
+) -> JDoubleArray<'a> {
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1add(env, class, x1, y1, z1, x2, y2, z2)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1vector_1damp<'a>(
+    env: JNIEnv<'a>,
+    class: JClass,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+    damping: jdouble,
+) -> JDoubleArray<'a> {
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1damp(env, class, x, y, z, damping)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1hayabusa_1phantom_1shuriken<'a>(
+    env: JNIEnv<'a>,
+    class: JClass,
+    start_x: jdouble,
+    start_y: jdouble,
+    start_z: jdouble,
+    target_x: jdouble,
+    target_y: jdouble,
+    target_z: jdouble,
+    speed: jdouble,
+) -> JDoubleArray<'a> {
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1phantom_1shuriken(
+        env, class, start_x, start_y, start_z, target_x, target_y, target_z, speed
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1hayabusa_1quad_1shadow<'a>(
+    env: JNIEnv<'a>,
+    class: JClass,
+    center_x: jdouble,
+    center_y: jdouble,
+    center_z: jdouble,
+    radius: jdouble,
+) -> JObjectArray<'a> {
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1quad_1shadow(env, class, center_x, center_y, center_z, radius)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1hayabusa_1shadow_1kill_1damage(
+    env: JNIEnv,
+    class: JClass,
+    passive_stacks: jint,
+    base_damage: jdouble,
+) -> jdouble {
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1shadow_1kill_1damage(env, class, passive_stacks, base_damage)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1hayabusa_1calculate_1passive_1stacks(
+    env: JNIEnv,
+    class: JClass,
+    current_stacks: jint,
+    successful_hit: jboolean,
+    max_stacks: jint,
+) -> jint {
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1calculate_1passive_1stacks(env, class, current_stacks, successful_hit, max_stacks)
+}
+
+// ========================================
+// RustNativeLoader - Category 4: Batch Operations Delegates
+// Only implemented batch operations (batchNalgebra methods)
+// ========================================
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchNalgebraMatrixMulNative<'a>(
+    env: JNIEnv<'a>,
+    class: JClass<'a>,
+    matrices_a: JObjectArray<'a>,
+    matrices_b: JObjectArray<'a>,
+    count: jint,
+) -> JObjectArray<'a> {
+    Java_com_kneaf_core_ParallelRustVectorProcessor_batchNalgebraMatrixMul(env, class, matrices_a, matrices_b, count)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchNalgebraVectorAddNative<'a>(
+    env: JNIEnv<'a>,
+    class: JClass<'a>,
+    vectors_a: JObjectArray<'a>,
+    vectors_b: JObjectArray<'a>,
+    count: jint,
+) -> JObjectArray<'a> {
+    Java_com_kneaf_core_ParallelRustVectorProcessor_batchNalgebraVectorAdd(env, class, vectors_a, vectors_b, count)
+}
+
+// Note: Other batch methods (batchGlamVectorDot, batchGlamVectorCross, batchGlamMatrixMul, batchFaerMatrixMul)
+// are not implemented in Rust yet. Java will need to provide stubs or fallbacks.
+
+// ========================================
+// RustNativeLoader - Category 5: Memory Management Delegates
+// ========================================
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_releaseNativeBuffer(
+    env: JNIEnv,
+    class: JClass,
+    pointer: jlong,
+) {
+    Java_com_kneaf_core_ParallelRustVectorProcessor_releaseNativeBuffer(env, class, pointer)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_allocateNativeBuffer(
+    env: JNIEnv,
+    class: JClass,
+    size: jint,
+) -> jlong {
+    Java_com_kneaf_core_ParallelRustVectorProcessor_allocateNativeBuffer(env, class, size)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_copyToNativeBuffer(
+    env: JNIEnv,
+    class: JClass,
+    pointer: jlong,
+    data: JFloatArray,
+    offset: jint,
+    length: jint,
+) {
+    Java_com_kneaf_core_ParallelRustVectorProcessor_copyToNativeBuffer(env, class, pointer, data, offset, length)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_copyFromNativeBuffer<'a>(
+    env: JNIEnv<'a>,
+    class: JClass,
+    pointer: jlong,
+    result: JFloatArray,
+    offset: jint,
+    length: jint,
+) {
+    Java_com_kneaf_core_ParallelRustVectorProcessor_copyFromNativeBuffer(env, class, pointer, result, offset, length)
+}
+
+// ========================================
+// RustNativeLoader - Category 6: Performance Stats Delegate
+// ========================================
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_getRustPerformanceStats<'a>(
+    env: JNIEnv<'a>,
+    class: JClass<'a>,
+) -> JString<'a> {
+    Java_com_kneaf_core_performance_DistributedTracer_getRustPerformanceStats(env, class)
 }

@@ -73,8 +73,20 @@ public final class OptimizationInjector {
         return errorDetails.toString();
     }
 
-    static { if (!isTestMode) loadNativeLibrary(); }
+    static { 
+        if (!isTestMode) {
+            // Use new RustNativeLoader instead of old loading logic
+            isNativeLibraryLoaded = RustNativeLoader.loadLibrary();
+            if (isNativeLibraryLoaded) {
+                LOGGER.info("✅ OptimizationInjector: Native library loaded via RustNativeLoader");
+            } else {
+                LOGGER.error("❌ OptimizationInjector: Failed to load native library");
+                enableSafeMode();
+            }
+        }
+    }
 
+    @Deprecated
     private static void loadNativeLibrary() {
                 synchronized (nativeLibraryLock) {
                     if (isNativeLibraryLoaded) return;
@@ -662,17 +674,37 @@ public final class OptimizationInjector {
         }
     }
 
-    static native double[] rustperf_vector_multiply(double x, double y, double z, double scalar);
+    // Native methods now centralized in RustNativeLoader
+    // These are kept for backward compatibility and delegate to RustNativeLoader
     
-    static native double[] rustperf_vector_add(double x1, double y1, double z1, double x2, double y2, double z2);
+    static double[] rustperf_vector_multiply(double x, double y, double z, double scalar) {
+        return RustNativeLoader.rustperf_vector_multiply(x, y, z, scalar);
+    }
     
-    static native double[] rustperf_vector_damp(double x, double y, double z, double damping);
+    static double[] rustperf_vector_add(double x1, double y1, double z1, double x2, double y2, double z2) {
+        return RustNativeLoader.rustperf_vector_add(x1, y1, z1, x2, y2, z2);
+    }
+    
+    static double[] rustperf_vector_damp(double x, double y, double z, double damping) {
+        return RustNativeLoader.rustperf_vector_damp(x, y, z, damping);
+    }
     
     // Hayabusa skill methods for ShadowZombieNinja
-    static native double[] rustperf_hayabusa_phantom_shuriken(double startX, double startY, double startZ, double targetX, double targetY, double targetZ, double speed);
-    static native double[][] rustperf_hayabusa_quad_shadow(double centerX, double centerY, double centerZ, double radius);
-    static native double rustperf_hayabusa_shadow_kill_damage(int passiveStacks, double baseDamage);
-    static native int rustperf_hayabusa_calculate_passive_stacks(int currentStacks, boolean successfulHit, int maxStacks);
+    static double[] rustperf_hayabusa_phantom_shuriken(double startX, double startY, double startZ, double targetX, double targetY, double targetZ, double speed) {
+        return RustNativeLoader.rustperf_hayabusa_phantom_shuriken(startX, startY, startZ, targetX, targetY, targetZ, speed);
+    }
+    
+    static double[][] rustperf_hayabusa_quad_shadow(double centerX, double centerY, double centerZ, double radius) {
+        return RustNativeLoader.rustperf_hayabusa_quad_shadow(centerX, centerY, centerZ, radius);
+    }
+    
+    static double rustperf_hayabusa_shadow_kill_damage(int passiveStacks, double baseDamage) {
+        return RustNativeLoader.rustperf_hayabusa_shadow_kill_damage(passiveStacks, baseDamage);
+    }
+    
+    static int rustperf_hayabusa_calculate_passive_stacks(int currentStacks, boolean successfulHit, int maxStacks) {
+        return RustNativeLoader.rustperf_hayabusa_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
+    }
 
     private static double[] java_vector_damp(double x, double y, double z, double dampingFactor, double originalY) {
             double verticalDamping = 0.015;
