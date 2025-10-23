@@ -536,8 +536,21 @@ public final class OptimizationInjector {
         
         try {
             // Check if entity is a valid Minecraft entity
-            if (!entity.getClass().getName().startsWith("net.minecraft.world.entity.")) {
-                LOGGER.warn("Rejected non-Minecraft entity: {}", entity.getClass().getName());
+            String entityClassName = entity.getClass().getName();
+            
+            // Accept Minecraft entities from various packages:
+            // - net.minecraft.world.entity.* (standard entities)
+            // - net.minecraft.client.player.* (client-side player)
+            // - net.minecraft.server.level.* (server-side entities)
+            // - com.kneaf.entities.* (custom mod entities)
+            boolean isValidMinecraftEntity =
+                entityClassName.startsWith("net.minecraft.world.entity.") ||
+                entityClassName.startsWith("net.minecraft.client.player.") ||
+                entityClassName.startsWith("net.minecraft.server.level.") ||
+                entityClassName.startsWith("com.kneaf.entities.");
+            
+            if (!isValidMinecraftEntity) {
+                LOGGER.warn("Rejected non-Minecraft entity: {}", entityClassName);
                 return false;
             }
             

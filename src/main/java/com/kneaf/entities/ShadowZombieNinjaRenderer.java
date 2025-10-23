@@ -10,7 +10,8 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 @OnlyIn(Dist.CLIENT)
 public class ShadowZombieNinjaRenderer extends LivingEntityRenderer<ShadowZombieNinja, ZombieModel<ShadowZombieNinja>> {
-    private static final ResourceLocation TEXTURE_LOCATION = ResourceLocation.fromNamespaceAndPath(KneafCore.MODID, "textures/entity/shadow_zombie_ninja.png");
+    // Use default Minecraft zombie texture instead of custom texture
+    private static final ResourceLocation ZOMBIE_TEXTURE_LOCATION = ResourceLocation.withDefaultNamespace("textures/entity/zombie/zombie.png");
 
     public ShadowZombieNinjaRenderer(EntityRendererProvider.Context context) {
         super(context, new ZombieModel<>(context.bakeLayer(net.minecraft.client.model.geom.ModelLayers.ZOMBIE)), 0.5F);
@@ -18,6 +19,7 @@ public class ShadowZombieNinjaRenderer extends LivingEntityRenderer<ShadowZombie
 
     @Override
     public ResourceLocation getTextureLocation(ShadowZombieNinja entity) {
-        return TEXTURE_LOCATION;
+        // Return default zombie texture instead of custom shadow ninja texture
+        return ZOMBIE_TEXTURE_LOCATION;
     }
 }

@@ -856,8 +856,23 @@ public final class EntityProcessingService {
             // Check if entity is a valid Minecraft entity (production-only check)
             String entityClassName = entity.getClass().getName();
             
-            // Reject non-Minecraft entities in production
-            if (!entityClassName.startsWith("net.minecraft.world.entity.")) {
+            // In test mode, accept test mock entities
+            if (ModeDetector.isTestMode() && entityClassName.startsWith("com.kneaf.core.mock.")) {
+                return true;
+            }
+            
+            // Accept Minecraft entities from various packages:
+            // - net.minecraft.world.entity.* (standard entities)
+            // - net.minecraft.client.player.* (client-side player)
+            // - net.minecraft.server.level.* (server-side entities)
+            // - com.kneaf.entities.* (custom mod entities)
+            boolean isValidMinecraftEntity =
+                entityClassName.startsWith("net.minecraft.world.entity.") ||
+                entityClassName.startsWith("net.minecraft.client.player.") ||
+                entityClassName.startsWith("net.minecraft.server.level.") ||
+                entityClassName.startsWith("com.kneaf.entities.");
+            
+            if (!isValidMinecraftEntity) {
                 LOGGER.warn("Rejected non-Minecraft entity in production: {}", entityClassName);
                 return false;
             }
