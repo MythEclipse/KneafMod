@@ -642,6 +642,8 @@ public final class OptimizationInjector {
         public static void onServerTick(ServerTickEvent.Pre event) {
             if (PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
                 try {
+                    // Track entity count for metrics (result used for monitoring)
+                    @SuppressWarnings("unused")
                     int entityCount = ModeDetector.isTestMode() ? 200 : getActualEntityCount(event);
                     // Silent success - no logging, just metrics
                     
@@ -681,7 +683,8 @@ public final class OptimizationInjector {
 
     @SubscribeEvent
     public static void onLevelTick(LevelTickEvent.Pre event) {
-        if (PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
+        // Only process on server side to avoid client-side errors
+        if (!event.getLevel().isClientSide() && PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
             try {
                 // Track entity count for metrics
                 getActualEntityCount(event);
@@ -1179,9 +1182,9 @@ public final class OptimizationInjector {
                         java.lang.reflect.Method getAll = entityAccess.getClass().getMethod("getAll");
                         Object entities = getAll.invoke(entityAccess);
                         
-                        if (entities instanceof Iterable) {
+                        if (entities instanceof Iterable<?> iterableEntities) {
                             int count = 0;
-                            for (Object ignored : (Iterable<?>) entities) count++;
+                            for (@SuppressWarnings("unused") Object ignored : iterableEntities) count++;
                             totalEntities += count;
                         }
                     }
@@ -1211,9 +1214,9 @@ public final class OptimizationInjector {
             java.lang.reflect.Method getAll = entityAccess.getClass().getMethod("getAll");
             Object entities = getAll.invoke(entityAccess);
             
-            if (entities instanceof Iterable) {
+            if (entities instanceof Iterable<?> iterableEntities) {
                 int count = 0;
-                for (Object entity : (Iterable<?>) entities) {
+                for (@SuppressWarnings("unused") Object entity : iterableEntities) {
                     count++;
                 }
                 return count > 0 ? count : 100;
