@@ -84,21 +84,19 @@ class SpatialGrid {
     }
     
     public Set<Long> getNearbyEntities(double x, double y, double z, double radius) {
-        String centerCell = getCellKey(x, y, z);
+        // OPTIMIZED: Avoid string operations - calculate cell coordinates directly
+        int centerX = (int) (x / cellSize);
+        int centerY = (int) (y / cellSize);
+        int centerZ = (int) (z / cellSize);
         int radiusCells = (int) (radius / cellSize) + 1;
         Set<Long> nearby = new HashSet<>();
-        
-        // Parse center cell coordinates
-        String[] parts = centerCell.split(",");
-        int cx = Integer.parseInt(parts[0]);
-        int cy = Integer.parseInt(parts[1]);
-        int cz = Integer.parseInt(parts[2]);
         
         // Check surrounding cells using lock-free access
         for (int dx = -radiusCells; dx <= radiusCells; dx++) {
             for (int dy = -radiusCells; dy <= radiusCells; dy++) {
                 for (int dz = -radiusCells; dz <= radiusCells; dz++) {
-                    String cell = (cx + dx) + "," + (cy + dy) + "," + (cz + dz);
+                    // OPTIMIZED: Use getCellKeyDirect to avoid redundant calculations
+                    String cell = getCellKeyDirect(centerX + dx, centerY + dy, centerZ + dz);
                     LockFreeHashSet<Long> entities = grid.get(cell);
                     if (entities != null) {
                         nearby.addAll(entities.toSet());
@@ -114,6 +112,11 @@ class SpatialGrid {
         int cellX = (int) (x / cellSize);
         int cellY = (int) (y / cellSize);
         int cellZ = (int) (z / cellSize);
+        return getCellKeyDirect(cellX, cellY, cellZ);
+    }
+    
+    // OPTIMIZED: Direct cell key generation from integer coordinates
+    private String getCellKeyDirect(int cellX, int cellY, int cellZ) {
         return cellX + "," + cellY + "," + cellZ;
     }
     
