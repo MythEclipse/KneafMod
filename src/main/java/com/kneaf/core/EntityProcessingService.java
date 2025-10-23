@@ -1056,59 +1056,16 @@ public final class EntityProcessingService {
                 return new EntityProcessingResult(false, "Invalid motion values", data);
             }
             
-            // Get entity type for optimized damping calculation
-            EntityTypeEnum entityType = EntityTypeEnum.fromEntity(entity);
-            if (entityType == null) {
-                entityType = EntityTypeEnum.DEFAULT;
-                LOGGER.debug("Using default entity type for processing");
-            }
-            double dampingFactor = entityType.getDampingFactor();
-            
-            // OPTIMIZATION: Skip magnitude check if velocity is too low (precomputed)
-            if (velocityMagnitude < 0.005) {
-                // Entity is nearly stationary, apply simple damping
-                EntityPhysicsData processedData = new EntityPhysicsData(
-                    data.motionX * dampingFactor,
-                    data.motionY * dampingFactor,
-                    data.motionZ * dampingFactor
-                );
-                return new EntityProcessingResult(true, "Low velocity optimization applied", processedData);
-            }
-            
-            // Perform physics calculation - use native Rust optimization
-            double[] result = OptimizationInjector.rustperf_vector_damp(
-                data.motionX, data.motionY, data.motionZ, dampingFactor
-            );
-            
-            if (isValidPhysicsResult(result, data)) {
-                double verticalDamping = 0.02;
-                double processedY = result[1];
-                
-                EntityPhysicsData processedData = new EntityPhysicsData(
-                    result[0],
-                    processedY * (1 - verticalDamping),
-                    result[2]
-                );
-                
-                return new EntityProcessingResult(true, "Optimized physics calculation successful", processedData);
-            } else {
-                // Fallback to Java calculation
-                EntityPhysicsData fallbackData = new EntityPhysicsData(
-                    data.motionX * dampingFactor,
-                    data.motionY,
-                    data.motionZ * dampingFactor
-                );
-                return new EntityProcessingResult(true, "Fallback to Java physics", fallbackData);
-            }
-            
-        } catch (UnsatisfiedLinkError e) {
-            LOGGER.warn("Native library not available for entity {}, using fallback", entity.getId());
-            EntityPhysicsData fallbackData = new EntityPhysicsData(
-                data.motionX * 0.98,
+            // NO DAMPING - Pure vanilla physics passthrough
+            // Just validate and return the data unchanged to preserve vanilla gameplay
+            EntityPhysicsData processedData = new EntityPhysicsData(
+                data.motionX,
                 data.motionY,
-                data.motionZ * 0.98
+                data.motionZ
             );
-            return new EntityProcessingResult(true, "Native library fallback", fallbackData);
+            
+            return new EntityProcessingResult(true, "Pure vanilla physics - no damping", processedData);
+            
         } catch (Exception e) {
             LOGGER.error("Physics calculation failed for entity {}: {}", entity.getId(), e.getMessage());
             return new EntityProcessingResult(false, "Physics calculation error: " + e.getMessage(), data);
@@ -1130,62 +1087,16 @@ public final class EntityProcessingService {
                 return new EntityProcessingResult(false, "Invalid motion values", data);
             }
             
-            // Get entity type for optimized damping calculation
-            EntityTypeEnum entityType = EntityTypeEnum.fromEntity(entity);
-            if (entityType == null) {
-                entityType = EntityTypeEnum.DEFAULT;
-                LOGGER.debug("Using default entity type for processing");
-            }
-            double dampingFactor = entityType.getDampingFactor();
-            
-            // Perform physics calculation - ALWAYS use native Rust optimization for valid entities in production
-            double[] result = OptimizationInjector.rustperf_vector_damp(
-                data.motionX, data.motionY, data.motionZ, dampingFactor
-            );
-            
-            if (result != null && result.length == 3 && isValidPhysicsResult(result, data)) {
-                // Improved gravity handling - allow natural gravity while preserving external effects
-                double processedY = data.motionY;
-                
-                // Only preserve external gravity modifications if they are significant (knockback, explosions)
-                // Allow natural gravity to work normally
-                if (Math.abs(result[1] - data.motionY) > 0.5) {
-                    // Significant external effect detected (explosion, strong knockback)
-                    processedY = result[1];
-                } else if (data.motionY < -0.1) {
-                    // Natural falling - apply enhanced gravity for better feel
-                    processedY = Math.min(data.motionY * 1.1, result[1]);
-                }
-                
-                // TRUE vanilla knockback - NO damping for horizontal movement
-                // Only apply damping to vertical (gravity) for stability
-                double verticalDamping = 0.015;   // Standard damping for vertical movement only
-                
-                EntityPhysicsData processedData = new EntityPhysicsData(
-                    result[0], // NO damping for horizontal X - pure vanilla knockback
-                    processedY * (1 - verticalDamping), // Apply damping only to gravity (Y)
-                    result[2]  // NO damping for horizontal Z - pure vanilla knockback
-                );
-                
-                return new EntityProcessingResult(true, "Physics calculation successful", processedData);
-            } else {
-                // Fallback to Java calculation only if native fails
-                EntityPhysicsData fallbackData = new EntityPhysicsData(
-                    data.motionX * dampingFactor,
-                    data.motionY,
-                    data.motionZ * dampingFactor
-                );
-                return new EntityProcessingResult(true, "Fallback to Java physics", fallbackData);
-            }
-            
-        } catch (UnsatisfiedLinkError e) {
-            LOGGER.warn("Native library not available for entity {}, using fallback", entity.getId());
-            EntityPhysicsData fallbackData = new EntityPhysicsData(
-                data.motionX * 0.98, // Default damping
+            // NO DAMPING - Pure vanilla physics passthrough
+            // Just validate and return the data unchanged to preserve vanilla gameplay
+            EntityPhysicsData processedData = new EntityPhysicsData(
+                data.motionX,
                 data.motionY,
-                data.motionZ * 0.98
+                data.motionZ
             );
-            return new EntityProcessingResult(true, "Native library fallback", fallbackData);
+            
+            return new EntityProcessingResult(true, "Pure vanilla physics - no damping", processedData);
+            
         } catch (Exception e) {
             LOGGER.error("Physics calculation failed for entity {}: {}", entity.getId(), e.getMessage());
             return new EntityProcessingResult(false, "Physics calculation error: " + e.getMessage(), data);

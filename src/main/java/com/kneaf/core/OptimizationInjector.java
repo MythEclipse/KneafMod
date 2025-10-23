@@ -68,7 +68,6 @@ public final class OptimizationInjector {
     private static boolean quadShadowWarningLogged = false;
     private static boolean shadowKillDamageWarningLogged = false;
     private static boolean passiveStacksWarningLogged = false;
-    private static boolean vectorDampWarningLogged = false;
 
     private static String getOSErrorMessage(Throwable t) {
         String os = System.getProperty("os.name").toLowerCase();
@@ -504,45 +503,16 @@ public final class OptimizationInjector {
                     return;
                 }
     
-                double originalX = x;
                 double originalY = y;
-                double originalZ = z;
-                double[] resultData = null;
-                boolean useOptimizedResult = false;
-                double dampingFactor = calculateEntitySpecificDamping(entity);
-    
-                try {
-                    // Optimized path with validation
-                    resultData = rustperf_vector_damp(x, y, z, dampingFactor);
-                    
-                    if (isValidOptimizationResult(resultData, originalX, originalY, originalZ)) {
-                        useOptimizedResult = true;
-                        recordOptimizationHit("Native vector optimization applied");
-                    } else {
-                        // Fallback to Java implementation with same validation
-                        resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
-                        if (isValidOptimizationResult(resultData, originalX, originalY, originalZ)) {
-                            useOptimizedResult = true;
-                            recordOptimizationHit("Java fallback optimization applied");
-                        }
-                    }
-                } catch (UnsatisfiedLinkError ule) {
-                    if (!vectorDampWarningLogged) {
-                        LOGGER.warn("JNI error in native optimization: {}", ule.getMessage());
-                        LOGGER.warn("Falling back to Java implementation. This will only be logged once.");
-                        vectorDampWarningLogged = true;
-                    }
-                    resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
-                    if (isValidOptimizationResult(resultData, originalX, originalY, originalZ)) {
-                        useOptimizedResult = true;
-                        recordOptimizationHit("Java fallback used due to JNI error");
-                    }
-                } catch (Throwable t) {
-                    LOGGER.debug("Optimization calculation failed: {}", t.getMessage());
-                    // Don't spam logs for expected fallback cases
-                }
-    
+                
+                // NO DAMPING - Pure vanilla physics passthrough
+                // Just validate and pass through the original values
+                double[] resultData = new double[] { x, y, z };
+                boolean useOptimizedResult = true;
+                recordOptimizationHit("Pure vanilla physics - no damping applied");
+
                 if (useOptimizedResult) {
+                    applyOptimizedMovement(entity, resultData, originalY);
                     applyOptimizedMovement(entity, resultData, originalY);
                 } else {
                     // Silent: No need to log when using original movement
@@ -607,31 +577,13 @@ public final class OptimizationInjector {
     
         private static void applyOptimizedMovement(Object entity, double[] resultData, double originalY) {
             try {
-                double processedY = resultData[1];
-                
-                // More sophisticated vertical movement handling
-                if (Math.abs(processedY - originalY) > 0.7) {
-                    processedY = applyVerticalDamping(processedY, originalY);
-                } else if (originalY < -0.15) {
-                    processedY = Math.max(originalY * 0.9, processedY); // More conservative falling
-                }
-    
-                applyEntityMovement(entity, resultData[0], processedY, resultData[2]);
+                // NO DAMPING - Pure vanilla physics passthrough
+                applyEntityMovement(entity, resultData[0], resultData[1], resultData[2]);
                 
             } catch (Exception e) {
                 LOGGER.debug("Failed to apply optimized movement: {}", e.getMessage());
                 // Don't spam logs for expected reflection failures
             }
-        }
-    
-        private static double applyVerticalDamping(double processedY, double originalY) {
-            double verticalDampingFactor = 0.985;
-            if (originalY < -0.5) {
-                return processedY * verticalDampingFactor * 0.9; // More damping for steep falls
-            } else if (originalY > 0.3) {
-                return processedY * verticalDampingFactor * 1.1; // Less damping for jumps
-            }
-            return processedY * verticalDampingFactor;
         }
 
     @SubscribeEvent
@@ -723,27 +675,6 @@ public final class OptimizationInjector {
         return RustNativeLoader.rustperf_hayabusa_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
     }
 
-    private static double[] java_vector_damp(double x, double y, double z, double dampingFactor, double originalY) {
-            double verticalDamping = 0.015;
-            
-            double processedY = y;
-            
-            // More consistent vertical damping logic
-            if (Math.abs(y - originalY) > 0.5) {
-                processedY = y * 0.98; // Apply slight damping even for large changes
-            } else if (y < -0.1) {
-                processedY = Math.max(y * 0.9, -0.5); // More controlled falling
-            } else if (y > 0.3) {
-                processedY = Math.min(y * 0.95, 0.5); // More controlled jumping
-            }
-            
-            return new double[] {
-                x * dampingFactor,
-                processedY * (1 - verticalDamping),
-                z * dampingFactor
-            };
-        }
-
     private static double[] java_vector_multiply(double x, double y, double z, double scalar) {
         return new double[] { x * scalar, y * scalar, z * scalar };
     }
@@ -755,18 +686,6 @@ public final class OptimizationInjector {
     private static void recordOptimizationHit(String details) {
         optimizationHits.incrementAndGet();
         // Silent success - no logging for successful operations
-    }
-
-    static double calculateEntitySpecificDamping(Object entity) {
-        if (entity == null) {
-            return EntityTypeEnum.DEFAULT.getDampingFactor();
-        }
-        try {
-            return EntityTypeEnum.calculateDampingFactor(entity);
-        } catch (Exception e) {
-            LOGGER.debug("Entity type damping calculation failed, using default", e);
-            return EntityTypeEnum.DEFAULT.getDampingFactor();
-        }
     }
 
     static boolean isNaturalMovement(double[] result, double originalX, double originalY, double originalZ) {
