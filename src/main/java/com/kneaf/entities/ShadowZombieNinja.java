@@ -3,6 +3,7 @@ import com.kneaf.core.OptimizationInjector;
 
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ServerBossEvent;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.BossEvent;
@@ -79,6 +80,19 @@ public class ShadowZombieNinja extends Zombie {
     @Override
     public void tick() {
         super.tick();
+        
+        // Check if target player is dead - despawn with animation
+        if (!this.level().isClientSide() && this.getTarget() instanceof ServerPlayer targetPlayer) {
+            if (targetPlayer.isDeadOrDying()) {
+                // Trigger despawn through handler
+                if (this.level() instanceof ServerLevel) {
+                    // Let handler do the despawn animation
+                    ShadowNinjaSpawnHandler.despawnNinjaPublic(this);
+                    return;
+                }
+            }
+        }
+        
         // Update skill cooldowns
         if (phantomShurikenCooldown > 0) {
             phantomShurikenCooldown--;
