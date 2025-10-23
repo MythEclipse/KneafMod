@@ -302,7 +302,8 @@ public final class PerformanceMonitoringSystem {
         
         if (eventsProcessed > 0) {
             lastMetricAggregationTime.set(currentTime);
-            LOGGER.debug("Stream aggregated {} metric events", eventsProcessed);
+            // Removed debug log to reduce console spam
+            // LOGGER.debug("Stream aggregated {} metric events", eventsProcessed);
         }
     }
     
