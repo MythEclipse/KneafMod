@@ -362,7 +362,9 @@ public class ShadowZombieNinja extends Zombie {
         shadowClones.clear();
         usedShadowClones.clear(); // Reset used shadows tracker
         for (int i = 0; i < 4; i++) {
-            Vec3 clonePos = new Vec3(clonePositions[i][0], clonePositions[i][1], clonePositions[i][2]);
+            // Adjust Y-coordinate to be on the ground
+            double groundY = findGroundY(clonePositions[i][0], clonePositions[i][1], clonePositions[i][2]);
+            Vec3 clonePos = new Vec3(clonePositions[i][0], groundY, clonePositions[i][2]);
             shadowClones.add(clonePos);
             
             // SERVER-SIDE particle effects for each clone for visibility
@@ -405,6 +407,45 @@ public class ShadowZombieNinja extends Zombie {
         this.playSound(SoundEvents.ENDER_DRAGON_FLAP, 1.0F, 0.8F);
         this.playSound(SoundEvents.WITHER_SPAWN, 0.3F, 2.0F);
     }
+
+    private double findGroundY(double x, double y, double z) {
+        net.minecraft.core.BlockPos.MutableBlockPos mutablePos = new net.minecraft.core.BlockPos.MutableBlockPos(x, y, z);
+        
+        // First, find the highest solid block below us
+        double highestSolidY = -1.0;
+        while (mutablePos.getY() > this.level().getMinBuildHeight()) {
+            net.minecraft.world.level.block.state.BlockState blockState = this.level().getBlockState(mutablePos);
+            
+            // Check for solid, non-air blocks that provide collision
+            if (blockState.isSolid() && !blockState.getCollisionShape(this.level(), mutablePos).isEmpty()) {
+                highestSolidY = mutablePos.getY();
+                break; // Found the highest solid block
+            }
+            
+            mutablePos.move(net.minecraft.core.Direction.DOWN);
+        }
+        
+        // If we found solid ground, return Y position ABOVE the solid block (1 block up)
+        if (highestSolidY >= 0) {
+            return highestSolidY + 1.0;
+        }
+        
+        // If no ground found, search upwards to find any solid block to attach to
+        mutablePos = new net.minecraft.core.BlockPos.MutableBlockPos(x, y, z);
+        while (mutablePos.getY() < this.level().getMaxBuildHeight()) {
+            net.minecraft.world.level.block.state.BlockState blockState = this.level().getBlockState(mutablePos);
+            
+            // Check for solid, non-air blocks that provide collision
+            if (blockState.isSolid() && !blockState.getCollisionShape(this.level(), mutablePos).isEmpty()) {
+                return mutablePos.getY() + 1.0; // Position above the found block
+            }
+            
+            mutablePos.move(net.minecraft.core.Direction.UP);
+        }
+        
+        // Fallback: return original position if no solid blocks found (should be rare)
+        return y;
+    }
     
     private void teleportToShadowClone(int cloneIndex) {
         if (cloneIndex < 0 || cloneIndex >= shadowClones.size()) return;
@@ -416,6 +457,11 @@ public class ShadowZombieNinja extends Zombie {
         
         Vec3 oldPos = this.position();
         Vec3 clonePos = shadowClones.get(cloneIndex);
+        
+        // Validate teleport destination - ensure it's not inside blocks
+        if (!isValidTeleportLocation(clonePos)) {
+            return; // Skip teleport if destination is invalid (inside blocks)
+        }
         
         // Mark this shadow as used
         usedShadowClones.add(cloneIndex);
@@ -490,6 +536,31 @@ public class ShadowZombieNinja extends Zombie {
         if (shadowClones.isEmpty()) {
             shadowCloneDuration = 0;
         }
+    }
+    
+    /**
+     * Check if a position is valid for teleportation (not inside blocks)
+     * @param pos Position to check
+     * @return True if position is valid (above ground, not inside blocks)
+     */
+    private boolean isValidTeleportLocation(Vec3 pos) {
+        // Use proper BlockPos construction from integer coordinates
+        net.minecraft.core.BlockPos blockPos = new net.minecraft.core.BlockPos((int)Math.floor(pos.x), (int)Math.floor(pos.y), (int)Math.floor(pos.z));
+        
+        // Check if the position is inside any solid blocks
+        for (net.minecraft.core.Direction direction : net.minecraft.core.Direction.values()) {
+            net.minecraft.core.BlockPos neighborPos = blockPos.relative(direction);
+            net.minecraft.world.level.block.state.BlockState state = this.level().getBlockState(neighborPos);
+            
+            // If any adjacent block is solid and we're inside it, invalid
+            if (state.isSolid() && neighborPos.getY() >= blockPos.getY() - 1 && neighborPos.getY() <= blockPos.getY() + 1) {
+                return false;
+            }
+        }
+        
+        // Check if we're above ground (Y position is valid)
+        double groundY = findGroundY(pos.x, pos.y, pos.z);
+        return pos.y >= groundY;
     }
     
     private void performShadowKill(LivingEntity target) {
@@ -617,7 +688,9 @@ public class ShadowZombieNinja extends Zombie {
     private static class ShadowTeleportGoal extends Goal {
         private final ShadowZombieNinja ninja;
         private int teleportDelay = 0;
-        private static final int MIN_TELEPORT_DELAY = 10; // 0.5 second minimum between teleports (faster)
+        private static final int MIN_TELEPORT_DELAY = 20; // 1 second minimum between teleports
+        private static final double DODGE_DISTANCE_SQR = 9.0D; // Dodge if closer than 3 blocks
+        private static final double ENGAGE_DISTANCE_SQR = 64.0D; // Engage if further than 8 blocks
 
         public ShadowTeleportGoal(ShadowZombieNinja ninja) {
             this.ninja = ninja;
@@ -626,12 +699,7 @@ public class ShadowZombieNinja extends Zombie {
 
         @Override
         public boolean canUse() {
-            // Can teleport if:
-            // 1. Shadow clones exist
-            // 2. Has a target
-            // 3. Minimum delay passed (to prevent spam)
-            // 4. Ada shadow yang belum dipakai
-            if (ninja.shadowClones.isEmpty() || ninja.getTarget() == null) {
+            if (ninja.shadowClones.isEmpty() || ninja.getTarget() == null || !ninja.hasLineOfSight(ninja.getTarget())) {
                 return false;
             }
             
@@ -640,59 +708,93 @@ public class ShadowZombieNinja extends Zombie {
                 return false;
             }
             
-            // Teleport untuk positioning atau dodging
-            LivingEntity target = ninja.getTarget();
-            if (target == null) return false;
-            double distToTarget = ninja.distanceToSqr(target);
-            
-            // Teleport jika terlalu dekat (untuk dodge) atau terlalu jauh (untuk reposition)
-            return distToTarget < 4.0D || distToTarget > 64.0D;
+            // Check if there are any unused clones left
+            boolean hasUnusedClones = false;
+            for (int i = 0; i < ninja.shadowClones.size(); i++) {
+                if (!ninja.usedShadowClones.contains(i)) {
+                    hasUnusedClones = true;
+                    break;
+                }
+            }
+            if (!hasUnusedClones) {
+                return false;
+            }
+
+            double distToTargetSqr = ninja.distanceToSqr(ninja.getTarget());
+            // Teleport to dodge or to engage
+            return distToTargetSqr < DODGE_DISTANCE_SQR || distToTargetSqr > ENGAGE_DISTANCE_SQR;
         }
 
         @Override
         public void start() {
-            // Instant teleport to best clone position
-            if (!ninja.shadowClones.isEmpty()) {
-                LivingEntity target = ninja.getTarget();
-                if (target == null) {
-                    this.stop();
-                    return;
-                }
-                int bestClone = -1;
-                double bestDistance = Double.MAX_VALUE;
-                
-                // Find unused clone closest to target for aggressive repositioning
+            LivingEntity target = ninja.getTarget();
+            if (target == null || ninja.shadowClones.isEmpty()) {
+                this.stop();
+                return;
+            }
+
+            double distToTargetSqr = ninja.distanceToSqr(target);
+            int bestCloneIndex = -1;
+
+            if (distToTargetSqr < DODGE_DISTANCE_SQR) {
+                // --- DODGE LOGIC ---
+                // Ninja is too close, find the FARTHEST available clone to teleport to.
+                double maxDist = -1.0;
                 for (int i = 0; i < ninja.shadowClones.size(); i++) {
-                    // Skip jika shadow ini sudah dipakai
-                    if (ninja.usedShadowClones.contains(i)) {
-                        continue;
-                    }
-                    
+                    if (ninja.usedShadowClones.contains(i)) continue;
+
                     Vec3 clonePos = ninja.shadowClones.get(i);
-                    double dist = clonePos.distanceToSqr(target.position());
-                    if (dist < bestDistance) {
-                        bestDistance = dist;
-                        bestClone = i;
+                    double cloneToTargetDistSqr = clonePos.distanceToSqr(target.position());
+                    if (cloneToTargetDistSqr > maxDist) {
+                        maxDist = cloneToTargetDistSqr;
+                        bestCloneIndex = i;
                     }
                 }
-                
-                // Teleport hanya jika ada unused shadow
-                if (bestClone >= 0) {
-                    ninja.teleportToShadowClone(bestClone);
-                    teleportDelay = MIN_TELEPORT_DELAY; // Reset delay
+            } else {
+                // --- ENGAGE LOGIC ---
+                // Ninja is too far, find the CLOSEST available clone to the target.
+                double minDist = Double.MAX_VALUE;
+                for (int i = 0; i < ninja.shadowClones.size(); i++) {
+                    if (ninja.usedShadowClones.contains(i)) continue;
+
+                    Vec3 clonePos = ninja.shadowClones.get(i);
+                    double cloneToTargetDistSqr = clonePos.distanceToSqr(target.position());
+                    if (cloneToTargetDistSqr < minDist) {
+                        minDist = cloneToTargetDistSqr;
+                        bestCloneIndex = i;
+                    }
                 }
             }
+
+            // Final validation: ensure the selected clone position is valid (not inside blocks)
+            if (bestCloneIndex != -1 && ninja.shadowClones.size() > bestCloneIndex) {
+                Vec3 clonePos = ninja.shadowClones.get(bestCloneIndex);
+                if (!ninja.isValidTeleportLocation(clonePos)) {
+                    // If the best clone is invalid, find the next best valid clone
+                    bestCloneIndex = -1;
+                    for (int i = 0; i < ninja.shadowClones.size(); i++) {
+                        if (ninja.usedShadowClones.contains(i)) continue;
+
+                        Vec3 checkPos = ninja.shadowClones.get(i);
+                        if (ninja.isValidTeleportLocation(checkPos)) {
+                            bestCloneIndex = i;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (bestCloneIndex != -1) {
+                ninja.teleportToShadowClone(bestCloneIndex);
+                teleportDelay = MIN_TELEPORT_DELAY; // Reset delay
+            }
+            
             this.stop();
         }
 
         @Override
-        public void tick() {
-            // Goal completes instantly in start()
-        }
-
-        @Override
         public boolean canContinueToUse() {
-            return false; // Always complete immediately
+            return false; // Goal completes instantly
         }
     }
     
