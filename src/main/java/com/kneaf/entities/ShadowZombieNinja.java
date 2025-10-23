@@ -44,10 +44,10 @@ public class ShadowZombieNinja extends Zombie {
     private int shadowKillCooldown = 0;
     private int shadowKillPassiveStacks = 0;
     
-    // Skill constants
-    private static final int PHANTOM_SHURIKEN_COOLDOWN = 60; // 3 seconds
-    private static final int QUAD_SHADOW_COOLDOWN = 120; // 6 seconds
-    private static final int SHADOW_KILL_COOLDOWN = 300; // 15 seconds
+    // Skill constants (balanced like Hayabusa)
+    private static final int PHANTOM_SHURIKEN_COOLDOWN = 50; // 2.5 seconds - Skill 1
+    private static final int QUAD_SHADOW_COOLDOWN = 180; // 9 seconds - Skill 2 
+    private static final int SHADOW_KILL_COOLDOWN = 600; // 30 seconds - Ultimate
     private static final int MAX_PASSIVE_STACKS = 4;
     private static final float PASSIVE_DAMAGE_MULTIPLIER = 1.2f;
     
@@ -108,8 +108,9 @@ public class ShadowZombieNinja extends Zombie {
         boolean flag = super.doHurtTarget(target);
         if (flag && target instanceof LivingEntity livingTarget) {
             // Hayabusa passive: Shadow Kill enhanced attacks
-            float baseDamage = 4.0F;
-            float passiveMultiplier = 1.0f + (shadowKillPassiveStacks * 0.1f);
+            // Each stack increases damage by 15%
+            float baseDamage = 6.0F;
+            float passiveMultiplier = 1.0f + (shadowKillPassiveStacks * 0.15f);
             float totalDamage = baseDamage * passiveMultiplier;
             
             livingTarget.hurt(this.damageSources().mobAttack(this), totalDamage);
@@ -118,6 +119,11 @@ public class ShadowZombieNinja extends Zombie {
             shadowKillPassiveStacks = OptimizationInjector.calculatePassiveStacks(
                 shadowKillPassiveStacks, true, MAX_PASSIVE_STACKS
             );
+            
+            // Visual feedback for passive stacks
+            if (shadowKillPassiveStacks > 0) {
+                this.level().addParticle(ParticleTypes.CRIT, this.getX(), this.getY() + 1, this.getZ(), 0.0D, 0.0D, 0.0D);
+            }
         }
         return flag;
     }
@@ -143,11 +149,12 @@ public class ShadowZombieNinja extends Zombie {
 
     public static AttributeSupplier.Builder createAttributes() {
         return Monster.createMonsterAttributes()
-            .add(Attributes.MAX_HEALTH, 200.0D)
-            .add(Attributes.MOVEMENT_SPEED, 0.3D)
-            .add(Attributes.ATTACK_DAMAGE, 8.0D)
-            .add(Attributes.FOLLOW_RANGE, 35.0D)
-            .add(Attributes.ARMOR, 4.0D)
+            .add(Attributes.MAX_HEALTH, 250.0D) // Increased HP for boss
+            .add(Attributes.MOVEMENT_SPEED, 0.35D) // Fast like assassin
+            .add(Attributes.ATTACK_DAMAGE, 12.0D) // High burst damage
+            .add(Attributes.FOLLOW_RANGE, 40.0D) // Large detection range
+            .add(Attributes.ARMOR, 6.0D) // Moderate armor
+            .add(Attributes.ATTACK_KNOCKBACK, 0.5D) // Slight knockback
             .add(Attributes.SPAWN_REINFORCEMENTS_CHANCE, 0.0D);
     }
 
@@ -159,24 +166,19 @@ public class ShadowZombieNinja extends Zombie {
         Vec3 targetPos = target.position();
         Vec3 currentPos = this.position();
 
-        // Use Rust optimization for trajectory calculation
-        double[] trajectory = OptimizationInjector.calculatePhantomShurikenTrajectory(
-            currentPos.x, currentPos.y, currentPos.z,
-            targetPos.x, targetPos.y, targetPos.z, 15.0
-        );
-
-        // Create phantom shuriken projectile with optimized trajectory
-        double d0 = trajectory[0] - currentPos.x;
-        double d1 = trajectory[1] - currentPos.y + 0.3333333333333333D;
-        double d2 = trajectory[2] - currentPos.z;
+        // Direct targeting - calculate vector directly to target
+        double d0 = targetPos.x - currentPos.x;
+        double d1 = targetPos.y + target.getEyeHeight() * 0.5 - (currentPos.y + this.getEyeHeight());
+        double d2 = targetPos.z - currentPos.z;
         
-        // Use Rust-optimized distance calculation instead of Math.sqrt
+        // Use Rust-optimized distance calculation
         double d3 = com.kneaf.core.RustNativeLoader.vectorLength(d0, 0.0, d2);
 
-        // Create shuriken that will return
+        // Create shuriken with precise targeting
         Arrow shuriken = new Arrow(this.level(), this, new ItemStack(Items.NETHERITE_SCRAP), new ItemStack(Items.IRON_SWORD));
         shuriken.setPos(this.getX(), this.getEyeY() - 0.1D, this.getZ());
-        shuriken.shoot(d0, d1 + d3 * 0.2D, d2, 2.0F, 8);
+        // Direct shoot to target with no inaccuracy
+        shuriken.shoot(d0, d1 + d3 * 0.2D, d2, 2.5F, 0.0F);
         shuriken.setBaseDamage(8.0D);
         shuriken.setNoGravity(true);
         shuriken.pickup = net.minecraft.world.entity.projectile.AbstractArrow.Pickup.DISALLOWED;
@@ -238,19 +240,32 @@ public class ShadowZombieNinja extends Zombie {
     private void performShadowKill(LivingEntity target) {
         if (shadowKillCooldown > 0 || target == null) return;
 
-        // Use Rust optimization for damage calculation
-        double optimizedDamage = OptimizationInjector.calculateShadowKillDamage(shadowKillPassiveStacks, 20.0);
+        // Dash to target like Hayabusa ultimate
+        Vec3 targetPos = target.position();
+        Vec3 direction = targetPos.subtract(this.position()).normalize();
+        Vec3 dashTarget = targetPos.subtract(direction.scale(1.5)); // Stop slightly before target
         
-        // Apply damage
+        // Instant teleport/dash to target
+        this.teleportTo(dashTarget.x, dashTarget.y, dashTarget.z);
+        
+        // Use Rust optimization for damage calculation
+        // Base damage 30.0 with scaling from passive stacks
+        double optimizedDamage = OptimizationInjector.calculateShadowKillDamage(shadowKillPassiveStacks, 30.0);
+        
+        // Apply massive damage immediately
         target.hurt(this.damageSources().mobAttack(this), (float) optimizedDamage);
         
         // Consume all passive stacks
         shadowKillPassiveStacks = 0;
         
-        // Visual effects
+        // Visual effects at both positions - ultimate should be flashy!
         this.level().addParticle(ParticleTypes.DRAGON_BREATH, target.getX(), target.getY() + 1, target.getZ(), 0.0D, 0.0D, 0.0D);
         this.level().addParticle(ParticleTypes.SWEEP_ATTACK, this.getX(), this.getY() + 1, this.getZ(), 0.0D, 0.0D, 0.0D);
+        this.level().addParticle(ParticleTypes.SONIC_BOOM, this.getX(), this.getY() + 1, this.getZ(), 0.0D, 0.0D, 0.0D);
+        this.level().addParticle(ParticleTypes.EXPLOSION, target.getX(), target.getY() + 1, target.getZ(), 0.0D, 0.0D, 0.0D);
         this.playSound(SoundEvents.PLAYER_ATTACK_CRIT, 1.0F, 0.5F);
+        this.playSound(SoundEvents.ENDERMAN_TELEPORT, 1.0F, 1.2F);
+        this.playSound(SoundEvents.LIGHTNING_BOLT_THUNDER, 0.5F, 1.5F);
         
         shadowKillCooldown = SHADOW_KILL_COOLDOWN;
     }
@@ -278,7 +293,6 @@ public class ShadowZombieNinja extends Zombie {
     
     private static class PhantomShurikenGoal extends Goal {
         private final ShadowZombieNinja ninja;
-        private int attackTimer = 0;
 
         public PhantomShurikenGoal(ShadowZombieNinja ninja) {
             this.ninja = ninja;
@@ -293,30 +307,28 @@ public class ShadowZombieNinja extends Zombie {
 
         @Override
         public void start() {
-            this.attackTimer = 10; // 0.5 seconds charge time
+            // Instant cast - no charge time like Hayabusa
+            LivingEntity target = ninja.getTarget();
+            if (target != null) {
+                ninja.getLookControl().setLookAt(target, 30.0F, 30.0F);
+                ninja.performPhantomShuriken(target);
+            }
+            this.stop();
         }
 
         @Override
         public void tick() {
-            LivingEntity target = ninja.getTarget();
-            if (target != null) {
-                ninja.getLookControl().setLookAt(target, 30.0F, 30.0F);
-                if (--this.attackTimer <= 0) {
-                    ninja.performPhantomShuriken(target);
-                    this.stop();
-                }
-            }
+            // Goal completes instantly in start()
         }
 
         @Override
         public boolean canContinueToUse() {
-            return this.attackTimer > 0;
+            return false; // Always complete immediately
         }
     }
     
     private static class QuadShadowGoal extends Goal {
         private final ShadowZombieNinja ninja;
-        private int teleportTimer = 0;
 
         public QuadShadowGoal(ShadowZombieNinja ninja) {
             this.ninja = ninja;
@@ -330,31 +342,29 @@ public class ShadowZombieNinja extends Zombie {
 
         @Override
         public void start() {
-            this.teleportTimer = 20; // 1 second
+            // Instant teleport - no timer
+            ninja.performQuadShadow();
+            // Randomly teleport to one of the clones immediately
+            if (!ninja.shadowClones.isEmpty()) {
+                int randomClone = ninja.random.nextInt(ninja.shadowClones.size());
+                ninja.teleportToShadowClone(randomClone);
+            }
+            this.stop();
         }
 
         @Override
         public void tick() {
-            if (--this.teleportTimer <= 0) {
-                ninja.performQuadShadow();
-                // Randomly teleport to one of the clones
-                if (!ninja.shadowClones.isEmpty()) {
-                    int randomClone = ninja.random.nextInt(ninja.shadowClones.size());
-                    ninja.teleportToShadowClone(randomClone);
-                }
-                this.stop();
-            }
+            // Goal completes instantly in start()
         }
 
         @Override
         public boolean canContinueToUse() {
-            return this.teleportTimer > 0;
+            return false; // Always complete immediately
         }
     }
     
     private static class ShadowKillGoal extends Goal {
         private final ShadowZombieNinja ninja;
-        private int ultimateTimer = 0;
 
         public ShadowKillGoal(ShadowZombieNinja ninja) {
             this.ninja = ninja;
@@ -370,24 +380,23 @@ public class ShadowZombieNinja extends Zombie {
 
         @Override
         public void start() {
-            this.ultimateTimer = 15; // 0.75 seconds
+            // Instant execution like Hayabusa ultimate - dash and execute immediately
+            LivingEntity target = ninja.getTarget();
+            if (target != null) {
+                ninja.getLookControl().setLookAt(target, 30.0F, 30.0F);
+                ninja.performShadowKill(target);
+            }
+            this.stop();
         }
 
         @Override
         public void tick() {
-            LivingEntity target = ninja.getTarget();
-            if (target != null) {
-                ninja.getLookControl().setLookAt(target, 30.0F, 30.0F);
-                if (--this.ultimateTimer <= 0) {
-                    ninja.performShadowKill(target);
-                    this.stop();
-                }
-            }
+            // Goal completes instantly in start()
         }
 
         @Override
         public boolean canContinueToUse() {
-            return this.ultimateTimer > 0;
+            return false; // Always complete immediately
         }
     }
 

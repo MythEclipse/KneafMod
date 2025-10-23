@@ -1039,7 +1039,8 @@ public final class OptimizationInjector {
     }
     
     private static double java_shadow_kill_damage(int passiveStacks, double baseDamage) {
-        double multiplier = 1.0 + (passiveStacks * 0.25);
+        // Hayabusa ultimate scaling: base damage + 30% per stack
+        double multiplier = 1.0 + (passiveStacks * 0.30);
         return baseDamage * multiplier;
     }
     
