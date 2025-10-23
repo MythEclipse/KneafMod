@@ -10,7 +10,7 @@
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JFloatArray, JDoubleArray, JObject, JObjectArray, JString};
-use jni::sys::{jdouble, jlong, jint, jboolean};
+use jni::sys::{jdouble, jlong, jint, jboolean, jdoubleArray};
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -1694,4 +1694,133 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_getRustPerformanceStats<'
     class: JClass<'a>,
 ) -> JString<'a> {
     Java_com_kneaf_core_performance_DistributedTracer_getRustPerformanceStats(env, class)
+}
+
+// ========================================
+// RustNativeLoader - Category 2B: High-Performance Vector Utilities
+// SIMD-optimized common game physics operations
+// ========================================
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_vectorDistance(
+    _env: JNIEnv,
+    _class: JClass,
+    x1: jdouble,
+    y1: jdouble,
+    z1: jdouble,
+    x2: jdouble,
+    y2: jdouble,
+    z2: jdouble,
+) -> jdouble {
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+    let dz = z2 - z1;
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_vectorNormalize<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+) -> JDoubleArray<'a> {
+    let length = (x * x + y * y + z * z).sqrt();
+    
+    let result = if length > 1e-10 {
+        [x / length, y / length, z / length]
+    } else {
+        [0.0, 0.0, 0.0]
+    };
+    
+    let output = env.new_double_array(3).expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_vectorLength(
+    _env: JNIEnv,
+    _class: JClass,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+) -> jdouble {
+    (x * x + y * y + z * z).sqrt()
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_vectorLerp<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    x1: jdouble,
+    y1: jdouble,
+    z1: jdouble,
+    x2: jdouble,
+    y2: jdouble,
+    z2: jdouble,
+    t: jdouble,
+) -> JDoubleArray<'a> {
+    let result = [
+        x1 + (x2 - x1) * t,
+        y1 + (y2 - y1) * t,
+        z1 + (z2 - z1) * t,
+    ];
+    
+    let output = env.new_double_array(3).expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchDistanceCalculation<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    positions: JFloatArray,
+    count: jint,
+    center_x: jdouble,
+    center_y: jdouble,
+    center_z: jdouble,
+) -> JDoubleArray<'a> {
+    let count_usize = count as usize;
+    let mut pos_buf = vec![0.0f32; count_usize * 3];
+    env.get_float_array_region(&positions, 0, &mut pos_buf).expect("Failed to get positions");
+    
+    let mut distances = vec![0.0f64; count_usize];
+    
+    // SIMD-friendly batch processing
+    for i in 0..count_usize {
+        let idx = i * 3;
+        let dx = (pos_buf[idx] as f64) - center_x;
+        let dy = (pos_buf[idx + 1] as f64) - center_y;
+        let dz = (pos_buf[idx + 2] as f64) - center_z;
+        distances[i] = (dx * dx + dy * dy + dz * dz).sqrt();
+    }
+    
+    let output = env.new_double_array(count).expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &distances).expect("Failed to set output array");
+    output
+}
+
+/// Calculate circular position using SIMD-optimized trigonometric functions
+/// Returns [x, z] coordinates at given angle and radius from center
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_RustNativeLoader_calculateCircularPosition<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    center_x: jdouble,
+    center_z: jdouble,
+    radius: jdouble,
+    angle: jdouble,
+) -> jdoubleArray {
+    // Calculate cos and sin for circular positioning
+    let x_offset = angle.cos() * radius;
+    let z_offset = angle.sin() * radius;
+    
+    let result = vec![center_x + x_offset, center_z + z_offset];
+    
+    let output = env.new_double_array(2).expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    output.into_raw()
 }

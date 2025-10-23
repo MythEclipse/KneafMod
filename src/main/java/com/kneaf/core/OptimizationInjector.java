@@ -1007,30 +1007,32 @@ public final class OptimizationInjector {
         double dx = targetX - startX;
         double dy = targetY - startY;
         double dz = targetZ - startZ;
-        double distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        // Optimized: Use Rust vector length instead of Math.sqrt
+        double distance = RustNativeLoader.vectorLength(dx, dy, dz);
         
         if (distance == 0) return new double[]{startX, startY, startZ};
         
-        double normalizedX = dx / distance;
-        double normalizedY = dy / distance;
-        double normalizedZ = dz / distance;
+        // Optimized: Use Rust vector normalization
+        double[] normalized = RustNativeLoader.vectorNormalize(dx, dy, dz);
         
         // Return trajectory with speed applied
         return new double[]{
-            startX + normalizedX * speed * 0.1,
-            startY + normalizedY * speed * 0.1,
-            startZ + normalizedZ * speed * 0.1
+            startX + normalized[0] * speed * 0.1,
+            startY + normalized[1] * speed * 0.1,
+            startZ + normalized[2] * speed * 0.1
         };
     }
     
     private static double[][] java_quad_shadow_positions(double centerX, double centerY, double centerZ, double radius) {
         double[][] positions = new double[4][3];
         
+        // Optimized: Use Rust trigonometric calculations for circular positions
         for (int i = 0; i < 4; i++) {
             double angle = (i * Math.PI) / 2.0;
-            positions[i][0] = centerX + Math.cos(angle) * radius;
+            double[] circularPos = RustNativeLoader.calculateCircularPosition(centerX, centerZ, radius, angle);
+            positions[i][0] = circularPos[0];
             positions[i][1] = centerY;
-            positions[i][2] = centerZ + Math.sin(angle) * radius;
+            positions[i][2] = circularPos[1];
         }
         
         return positions;

@@ -341,6 +341,7 @@ public final class EntityProcessingService {
     
     /**
      * Process a batch of entities with the same priority
+     * OPTIMIZED: Use Rust batch processing for distance calculations
      */
     private void processPriorityBatch(List<EntityProcessingTask> tasks, List<CompletableFuture<EntityProcessingResult>> futures) {
         if (tasks == null || tasks.isEmpty()) {
@@ -351,15 +352,83 @@ public final class EntityProcessingService {
         for (int i = 0; i < tasks.size(); i += 32) {
             List<EntityProcessingTask> batch = tasks.subList(i, Math.min(i + 32, tasks.size()));
             
-            for (EntityProcessingTask task : batch) {
-                queuedEntities.incrementAndGet();
+            // OPTIMIZATION: Use Rust batch distance calculation if entities need distance checks
+            // Extract positions for batch processing
+            float[] positions = new float[batch.size() * 3];
+            for (int j = 0; j < batch.size(); j++) {
+                EntityProcessingTask task = batch.get(j);
+                positions[j * 3] = (float) task.physicsData.motionX;
+                positions[j * 3 + 1] = (float) task.physicsData.motionY;
+                positions[j * 3 + 2] = (float) task.physicsData.motionZ;
+            }
+            
+            try {
+                // Batch distance calculation from origin (0,0,0) - useful for magnitude checks
+                double[] distances = RustNativeLoader.batchDistanceCalculation(positions, batch.size(), 0.0, 0.0, 0.0);
                 
-                CompletableFuture<EntityProcessingResult> future = new CompletableFuture<>();
-                activeFutures.put(task.entity.getId(), future);
-                futures.add(future);
-                
-                // Submit batch processing
-                entityProcessor.submit(() -> processEntityTask(task, future));
+                // Process each entity with precomputed distance
+                for (int j = 0; j < batch.size(); j++) {
+                    EntityProcessingTask task = batch.get(j);
+                    queuedEntities.incrementAndGet();
+                    
+                    CompletableFuture<EntityProcessingResult> future = new CompletableFuture<>();
+                    activeFutures.put(task.entity.getId(), future);
+                    futures.add(future);
+                    
+                    // Submit batch processing with precomputed distance
+                    final double entityVelocityMagnitude = distances[j];
+                    entityProcessor.submit(() -> processEntityTaskOptimized(task, future, entityVelocityMagnitude));
+                }
+            } catch (Exception e) {
+                // Fallback to regular processing if Rust batch fails
+                LOGGER.warn("Rust batch processing failed, falling back to individual processing: {}", e.getMessage());
+                for (EntityProcessingTask task : batch) {
+                    queuedEntities.incrementAndGet();
+                    
+                    CompletableFuture<EntityProcessingResult> future = new CompletableFuture<>();
+                    activeFutures.put(task.entity.getId(), future);
+                    futures.add(future);
+                    
+                    // Submit batch processing
+                    entityProcessor.submit(() -> processEntityTask(task, future));
+                }
+            }
+        }
+    }
+    
+    /**
+     * Process entity task with precomputed velocity magnitude (OPTIMIZED)
+     */
+    private void processEntityTaskOptimized(EntityProcessingTask task, CompletableFuture<EntityProcessingResult> future, double velocityMagnitude) {
+        activeProcessors.incrementAndGet();
+        long startTime = System.nanoTime();
+        
+        try {
+            // Perform entity physics calculation with optimization hint
+            EntityProcessingResult result = calculateEntityPhysicsOptimized(task, velocityMagnitude);
+            
+            long processingTime = System.nanoTime() - startTime;
+            if (processingTime > PROCESSING_TIMEOUT_MS * 1_000_000L) {
+                LOGGER.warn("Entity processing took {}ms for entity {}",
+                    processingTime / 1_000_000L, task.entity.getId());
+            }
+            
+            future.complete(result);
+            processedEntities.incrementAndGet();
+            
+        } catch (Exception e) {
+            LOGGER.error("Error processing entity {}: {}", task.entity.getId(), e.getMessage(), e);
+            future.completeExceptionally(e);
+        } finally {
+            activeProcessors.decrementAndGet();
+            queuedEntities.decrementAndGet();
+            activeFutures.remove(task.entity.getId());
+            
+            // Return physics data to pool if it's not the original data
+            if (task.physicsData != null) {
+                // Reset data before returning to pool
+                task.physicsData.reset();
+                physicsDataPool.offer(task.physicsData);
             }
         }
     }
@@ -398,6 +467,81 @@ public final class EntityProcessingService {
                 task.physicsData.reset();
                 physicsDataPool.offer(task.physicsData);
             }
+        }
+    }
+    
+    /**
+     * Calculate entity physics using optimized algorithms with precomputed velocity magnitude
+     * OPTIMIZED VERSION: Uses Rust-precomputed distance to skip magnitude calculation
+     */
+    private EntityProcessingResult calculateEntityPhysicsOptimized(EntityProcessingTask task, double velocityMagnitude) {
+        EntityInterface entity = task.entity;
+        EntityPhysicsData data = task.physicsData;
+        
+        try {
+            // Validate input data
+            if (Double.isNaN(data.motionX) || Double.isInfinite(data.motionX) ||
+                Double.isNaN(data.motionY) || Double.isInfinite(data.motionY) ||
+                Double.isNaN(data.motionZ) || Double.isInfinite(data.motionZ)) {
+                return new EntityProcessingResult(false, "Invalid motion values", data);
+            }
+            
+            // Get entity type for optimized damping calculation
+            EntityTypeEnum entityType = EntityTypeEnum.fromEntity(entity);
+            if (entityType == null) {
+                entityType = EntityTypeEnum.DEFAULT;
+                LOGGER.debug("Using default entity type for processing");
+            }
+            double dampingFactor = entityType.getDampingFactor();
+            
+            // OPTIMIZATION: Skip magnitude check if velocity is too low (precomputed)
+            if (velocityMagnitude < 0.005) {
+                // Entity is nearly stationary, apply simple damping
+                EntityPhysicsData processedData = new EntityPhysicsData(
+                    data.motionX * dampingFactor,
+                    data.motionY * dampingFactor,
+                    data.motionZ * dampingFactor
+                );
+                return new EntityProcessingResult(true, "Low velocity optimization applied", processedData);
+            }
+            
+            // Perform physics calculation - use native Rust optimization
+            double[] result = OptimizationInjector.rustperf_vector_damp(
+                data.motionX, data.motionY, data.motionZ, dampingFactor
+            );
+            
+            if (isValidPhysicsResult(result, data)) {
+                double verticalDamping = 0.02;
+                double processedY = result[1];
+                
+                EntityPhysicsData processedData = new EntityPhysicsData(
+                    result[0],
+                    processedY * (1 - verticalDamping),
+                    result[2]
+                );
+                
+                return new EntityProcessingResult(true, "Optimized physics calculation successful", processedData);
+            } else {
+                // Fallback to Java calculation
+                EntityPhysicsData fallbackData = new EntityPhysicsData(
+                    data.motionX * dampingFactor,
+                    data.motionY,
+                    data.motionZ * dampingFactor
+                );
+                return new EntityProcessingResult(true, "Fallback to Java physics", fallbackData);
+            }
+            
+        } catch (UnsatisfiedLinkError e) {
+            LOGGER.warn("Native library not available for entity {}, using fallback", entity.getId());
+            EntityPhysicsData fallbackData = new EntityPhysicsData(
+                data.motionX * 0.98,
+                data.motionY,
+                data.motionZ * 0.98
+            );
+            return new EntityProcessingResult(true, "Native library fallback", fallbackData);
+        } catch (Exception e) {
+            LOGGER.error("Physics calculation failed for entity {}: {}", entity.getId(), e.getMessage());
+            return new EntityProcessingResult(false, "Physics calculation error: " + e.getMessage(), data);
         }
     }
     

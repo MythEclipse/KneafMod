@@ -169,7 +169,9 @@ public class ShadowZombieNinja extends Zombie {
         double d0 = trajectory[0] - currentPos.x;
         double d1 = trajectory[1] - currentPos.y + 0.3333333333333333D;
         double d2 = trajectory[2] - currentPos.z;
-        double d3 = Math.sqrt(d0 * d0 + d2 * d2);
+        
+        // Use Rust-optimized distance calculation instead of Math.sqrt
+        double d3 = com.kneaf.core.RustNativeLoader.vectorLength(d0, 0.0, d2);
 
         // Create shuriken that will return
         Arrow shuriken = new Arrow(this.level(), this, new ItemStack(Items.NETHERITE_SCRAP), new ItemStack(Items.IRON_SWORD));
@@ -257,7 +259,9 @@ public class ShadowZombieNinja extends Zombie {
         double d0 = target.getX() - this.getX();
         double d1 = target.getY(0.3333333333333333D) - this.getY();
         double d2 = target.getZ() - this.getZ();
-        double d3 = Math.sqrt(d0 * d0 + d2 * d2);
+        
+        // Use Rust-optimized distance calculation
+        double d3 = com.kneaf.core.RustNativeLoader.vectorLength(d0, 0.0, d2);
 
         // Use proper weapon for arrow firing (required by Minecraft's Arrow constructor)
         Arrow arrow = new Arrow(this.level(), this, new ItemStack(Items.BOW), new ItemStack(Items.ARROW));

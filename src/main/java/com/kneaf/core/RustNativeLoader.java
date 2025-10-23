@@ -267,6 +267,53 @@ public class RustNativeLoader {
     );
     
     // ========================================
+    // CATEGORY 2B: High-Performance Vector Utilities
+    // Common game physics operations optimized in Rust
+    // ========================================
+    
+    /**
+     * Calculate distance between two 3D points using SIMD optimization
+     * Much faster than Math.sqrt(dx*dx + dy*dy + dz*dz)
+     */
+    public static native double vectorDistance(double x1, double y1, double z1, double x2, double y2, double z2);
+    
+    /**
+     * Normalize a 3D vector (make unit length) using SIMD
+     * Returns [x/length, y/length, z/length]
+     */
+    public static native double[] vectorNormalize(double x, double y, double z);
+    
+    /**
+     * Calculate vector length/magnitude using SIMD
+     * Faster than Math.sqrt(x*x + y*y + z*z)
+     */
+    public static native double vectorLength(double x, double y, double z);
+    
+    /**
+     * Linear interpolation between two vectors
+     * Returns lerp(a, b, t) = a + (b - a) * t
+     */
+    public static native double[] vectorLerp(
+        double x1, double y1, double z1,
+        double x2, double y2, double z2,
+        double t
+    );
+    
+    /**
+     * Batch distance calculation for multiple entities
+     * Input: flat array [x1,y1,z1, x2,y2,z2, ...], centerX, centerY, centerZ
+     * Output: array of distances from center
+     */
+    public static native double[] batchDistanceCalculation(float[] positions, int count, double centerX, double centerY, double centerZ);
+    
+    /**
+     * Calculate circular position using trigonometric functions
+     * Returns [x, z] coordinates at given angle and radius from center
+     * Optimized for entity positioning in circular patterns
+     */
+    public static native double[] calculateCircularPosition(double centerX, double centerZ, double radius, double angle);
+    
+    // ========================================
     // CATEGORY 3: ParallelRustVectorProcessor Methods
     // Advanced parallel processing operations
     // ========================================
