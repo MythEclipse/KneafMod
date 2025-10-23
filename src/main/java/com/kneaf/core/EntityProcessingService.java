@@ -2,6 +2,9 @@ package com.kneaf.core;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.kneaf.core.async.AsyncLogger;
+import com.kneaf.core.async.AsyncLoggingManager;
+import com.kneaf.core.async.AsyncMetricsCollector;
 import com.kneaf.core.EntityInterface;
 import com.kneaf.core.mock.TestMockEntity;
 
@@ -351,9 +354,12 @@ class LockFreeHashSet<E> {
 /**
  * Async entity processing service with thread-safe queue and parallel processing capabilities.
  * Handles entity physics calculations asynchronously to prevent main thread blocking.
+ * Uses AsyncLogger untuk non-blocking logging dan AsyncMetricsCollector untuk metrics.
  */
 public final class EntityProcessingService {
     private static final Logger LOGGER = LoggerFactory.getLogger(EntityProcessingService.class);
+    private static final AsyncLogger ASYNC_LOGGER = AsyncLoggingManager.getAsyncLogger(EntityProcessingService.class);
+    private static final AsyncMetricsCollector METRICS = AsyncLoggingManager.getMetricsCollector();
     private static final EntityProcessingService INSTANCE = new EntityProcessingService();
     
     // Thread pool for async entity processing
@@ -633,7 +639,9 @@ public final class EntityProcessingService {
         // Start maintenance task
         startMaintenanceTask();
         
-        LOGGER.info("EntityProcessingService initialized with {} max threads", maxThreadPoolSize);
+        // Use async logger untuk avoid blocking main thread
+        ASYNC_LOGGER.info("EntityProcessingService initialized with {} max threads", maxThreadPoolSize);
+        METRICS.incrementCounter("entity_processing.service.initialized");
         
         // Initialize adaptive thread pool controller
         this.adaptiveThreadPoolController = new AdaptiveThreadPoolController(this);
@@ -735,7 +743,8 @@ public final class EntityProcessingService {
             
             // Perform validation appropriate for current runtime mode
             if (!ModeDetector.isTestMode() && !isValidProductionEntity(entity)) {
-                LOGGER.debug("Batch entity failed production validation, skipping: {}", entity.getId());
+                ASYNC_LOGGER.debug(() -> "Batch entity failed production validation, skipping: " + entity.getId());
+                METRICS.incrementCounter("entity_processing.validation_failed");
                 continue;
             }
             
