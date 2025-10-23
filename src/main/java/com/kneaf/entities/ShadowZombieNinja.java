@@ -21,7 +21,6 @@ import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.entity.npc.Villager;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Arrow;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -45,34 +44,35 @@ public class ShadowZombieNinja extends Zombie {
     
     // Skill constants (balanced like Hayabusa)
     private static final int PHANTOM_SHURIKEN_COOLDOWN = 50; // 2.5 seconds - Skill 1
-    private static final int QUAD_SHADOW_COOLDOWN = 180; // 9 seconds - Skill 2 
+    private static final int QUAD_SHADOW_COOLDOWN = 360; // 18 seconds - Skill 2 (diperpanjang)
     private static final int SHADOW_KILL_COOLDOWN = 600; // 30 seconds - Ultimate
     private static final int MAX_PASSIVE_STACKS = 4;
     private static final float PASSIVE_DAMAGE_MULTIPLIER = 1.2f;
     
     // Shadow clones for Quad Shadow skill
     private final java.util.List<Vec3> shadowClones = new java.util.ArrayList<>();
+    private final java.util.Set<Integer> usedShadowClones = new java.util.HashSet<>(); // Track which shadows have been used
     private int shadowCloneDuration = 0;
     private static final int SHADOW_CLONE_DURATION = 200; // 10 seconds
+    private static final double SHADOW_CLONE_DISTANCE = 10.0; // 10 blocks dari tengah (seperti Hayabusa)
 
     public ShadowZombieNinja(EntityType<? extends Zombie> entityType, Level level) {
         super(entityType, level);
-        this.xpReward = 50;
-        this.setHealth(this.getMaxHealth());
     }
 
     @Override
     protected void registerGoals() {
         this.goalSelector.addGoal(1, new PhantomShurikenGoal(this));
         this.goalSelector.addGoal(2, new QuadShadowGoal(this));
-        this.goalSelector.addGoal(3, new ShadowKillGoal(this));
-        this.goalSelector.addGoal(4, new MeleeAttackGoal(this, 1.2D, false));
-        this.goalSelector.addGoal(5, new MoveTowardsTargetGoal(this, 1.2D, 32.0F));
-        this.goalSelector.addGoal(6, new RandomStrollGoal(this, 1.0D));
-        this.goalSelector.addGoal(7, new RandomLookAroundGoal(this));
+        this.goalSelector.addGoal(3, new ShadowTeleportGoal(this)); // NEW: Teleport between clones (NO cooldown)
+        this.goalSelector.addGoal(4, new ShadowKillGoal(this));
+        this.goalSelector.addGoal(5, new MeleeAttackGoal(this, 1.2D, false));
+        this.goalSelector.addGoal(6, new MoveTowardsTargetGoal(this, 1.2D, 32.0F));
+        this.goalSelector.addGoal(7, new RandomStrollGoal(this, 1.0D));
+        this.goalSelector.addGoal(8, new RandomLookAroundGoal(this));
 
         this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
-        this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, Player.class, true));
+        this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, ServerPlayer.class, true));
         this.targetSelector.addGoal(3, new NearestAttackableTargetGoal<>(this, Villager.class, true));
     }
 
@@ -92,43 +92,59 @@ public class ShadowZombieNinja extends Zombie {
         if (shadowCloneDuration > 0) {
             shadowCloneDuration--;
             
-            // Continuous particle effects for active shadow clones
+            // Check if server side
+            boolean isServerSide = this.level() instanceof net.minecraft.server.level.ServerLevel;
+            net.minecraft.server.level.ServerLevel serverLevel = isServerSide ? 
+                (net.minecraft.server.level.ServerLevel) this.level() : null;
+            
+            // Continuous particle effects for active shadow clones with SERVER-SIDE sync
             for (Vec3 clonePos : shadowClones) {
-                // Add particles every tick to make clones visible
-                for (int i = 0; i < 3; i++) {
-                    double offsetX = (this.random.nextDouble() - 0.5) * 0.5;
-                    double offsetY = this.random.nextDouble() * 2.0;
-                    double offsetZ = (this.random.nextDouble() - 0.5) * 0.5;
+                // Add particles every tick to make clones HIGHLY visible
+                if (serverLevel != null) {
+                    for (int i = 0; i < 5; i++) { // Increased from 3 to 5 for more visibility
+                        double offsetX = (this.random.nextDouble() - 0.5) * 0.5;
+                        double offsetY = this.random.nextDouble() * 2.0;
+                        double offsetZ = (this.random.nextDouble() - 0.5) * 0.5;
+                        
+                        serverLevel.sendParticles(ParticleTypes.PORTAL, 
+                            clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
+                            1, 0.0D, 0.0D, 0.0D, 0.0);
+                        serverLevel.sendParticles(ParticleTypes.WITCH, 
+                            clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
+                            1, 0.0D, 0.0D, 0.0D, 0.0);
+                        serverLevel.sendParticles(ParticleTypes.ENCHANT, 
+                            clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
+                            1, 0.0D, 0.0D, 0.0D, 0.0);
+                    }
                     
-                    this.level().addParticle(ParticleTypes.PORTAL, 
-                        clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ, 
-                        0.0D, 0.0D, 0.0D);
-                    this.level().addParticle(ParticleTypes.WITCH, 
-                        clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ, 
-                        0.0D, 0.0D, 0.0D);
-                }
-                
-                // Occasional flash effect
-                if (this.tickCount % 10 == 0) {
-                    this.level().addParticle(ParticleTypes.ENCHANTED_HIT, 
-                        clonePos.x, clonePos.y + 1, clonePos.z, 
-                        0.0D, 0.0D, 0.0D);
+                    // Occasional flash effect - more frequent
+                    if (this.tickCount % 5 == 0) { // Changed from 10 to 5
+                        serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT, 
+                            clonePos.x, clonePos.y + 1, clonePos.z,
+                            3, 0.2D, 0.2D, 0.2D, 0.0);
+                        serverLevel.sendParticles(ParticleTypes.GLOW, 
+                            clonePos.x, clonePos.y + 1, clonePos.z,
+                            2, 0.3D, 0.3D, 0.3D, 0.0);
+                    }
                 }
             }
             
             if (shadowCloneDuration <= 0) {
                 // Fade out effect when clones disappear
-                for (Vec3 clonePos : shadowClones) {
-                    for (int i = 0; i < 15; i++) {
-                        double offsetX = (this.random.nextDouble() - 0.5) * 1.0;
-                        double offsetY = this.random.nextDouble() * 2.0;
-                        double offsetZ = (this.random.nextDouble() - 0.5) * 1.0;
-                        this.level().addParticle(ParticleTypes.SMOKE, 
-                            clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ, 
-                            0.0D, 0.05D, 0.0D);
+                if (serverLevel != null) {
+                    for (Vec3 clonePos : shadowClones) {
+                        for (int i = 0; i < 15; i++) {
+                            double offsetX = (this.random.nextDouble() - 0.5) * 1.0;
+                            double offsetY = this.random.nextDouble() * 2.0;
+                            double offsetZ = (this.random.nextDouble() - 0.5) * 1.0;
+                            serverLevel.sendParticles(ParticleTypes.SMOKE, 
+                                clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
+                                1, 0.0D, 0.05D, 0.0D, 0.0);
+                        }
                     }
                 }
                 shadowClones.clear();
+                usedShadowClones.clear(); // Reset used shadows
             }
         }
         
@@ -303,54 +319,70 @@ public class ShadowZombieNinja extends Zombie {
 
         Vec3 currentPos = this.position();
         
-        // Massive visual effect at starting position
-        for (int i = 0; i < 30; i++) {
-            double offsetX = (this.random.nextDouble() - 0.5) * 2.0;
-            double offsetY = this.random.nextDouble() * 2.0;
-            double offsetZ = (this.random.nextDouble() - 0.5) * 2.0;
-            this.level().addParticle(ParticleTypes.PORTAL, 
-                currentPos.x + offsetX, currentPos.y + offsetY, currentPos.z + offsetZ, 
-                0.0D, 0.1D, 0.0D);
-            this.level().addParticle(ParticleTypes.SMOKE, 
-                currentPos.x + offsetX, currentPos.y + offsetY, currentPos.z + offsetZ, 
-                0.0D, 0.05D, 0.0D);
+        // Check if server side for particle spawning
+        boolean isServerSide = this.level() instanceof net.minecraft.server.level.ServerLevel;
+        net.minecraft.server.level.ServerLevel serverLevel = isServerSide ? 
+            (net.minecraft.server.level.ServerLevel) this.level() : null;
+        
+        // Massive visual effect at starting position with SERVER-SIDE particles
+        if (serverLevel != null) {
+            for (int i = 0; i < 30; i++) {
+                double offsetX = (this.random.nextDouble() - 0.5) * 2.0;
+                double offsetY = this.random.nextDouble() * 2.0;
+                double offsetZ = (this.random.nextDouble() - 0.5) * 2.0;
+                serverLevel.sendParticles(ParticleTypes.PORTAL, 
+                    currentPos.x + offsetX, currentPos.y + offsetY, currentPos.z + offsetZ,
+                    1, 0.0D, 0.1D, 0.0D, 0.0);
+                serverLevel.sendParticles(ParticleTypes.SMOKE, 
+                    currentPos.x + offsetX, currentPos.y + offsetY, currentPos.z + offsetZ,
+                    1, 0.0D, 0.05D, 0.0D, 0.0);
+            }
         }
         
         // Use Rust optimization for shadow clone positions
         double[][] clonePositions = OptimizationInjector.calculateQuadShadowPositions(
-            currentPos.x, currentPos.y, currentPos.z, 3.0
+            currentPos.x, currentPos.y, currentPos.z, SHADOW_CLONE_DISTANCE // 10 blocks dari tengah
         );
         
         // Create 4 shadow clones around the ninja with massive effects
         shadowClones.clear();
+        usedShadowClones.clear(); // Reset used shadows tracker
         for (int i = 0; i < 4; i++) {
             Vec3 clonePos = new Vec3(clonePositions[i][0], clonePositions[i][1], clonePositions[i][2]);
             shadowClones.add(clonePos);
             
-            // Multiple particle effects for each clone
-            for (int j = 0; j < 20; j++) {
-                double offsetX = (this.random.nextDouble() - 0.5) * 1.0;
-                double offsetY = this.random.nextDouble() * 2.0;
-                double offsetZ = (this.random.nextDouble() - 0.5) * 1.0;
+            // SERVER-SIDE particle effects for each clone for visibility
+            if (serverLevel != null) {
+                // Multiple particle effects for each clone
+                for (int j = 0; j < 20; j++) {
+                    double offsetX = (this.random.nextDouble() - 0.5) * 1.0;
+                    double offsetY = this.random.nextDouble() * 2.0;
+                    double offsetZ = (this.random.nextDouble() - 0.5) * 1.0;
+                    
+                    serverLevel.sendParticles(ParticleTypes.PORTAL, 
+                        clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
+                        1, 0.0D, 0.0D, 0.0D, 0.0);
+                    serverLevel.sendParticles(ParticleTypes.ENCHANT, 
+                        clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
+                        1, 0.0D, 0.0D, 0.0D, 0.0);
+                    serverLevel.sendParticles(ParticleTypes.WITCH, 
+                        clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
+                        1, 0.0D, 0.0D, 0.0D, 0.0);
+                }
                 
-                this.level().addParticle(ParticleTypes.PORTAL, 
-                    clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ, 
-                    0.0D, 0.0D, 0.0D);
-                this.level().addParticle(ParticleTypes.ENCHANT, 
-                    clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ, 
-                    0.0D, 0.0D, 0.0D);
-                this.level().addParticle(ParticleTypes.WITCH, 
-                    clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ, 
-                    0.0D, 0.0D, 0.0D);
+                // Big explosion-like effect at clone position
+                serverLevel.sendParticles(ParticleTypes.EXPLOSION, 
+                    clonePos.x, clonePos.y + 1, clonePos.z,
+                    3, 0.0D, 0.0D, 0.0D, 0.0);
+                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, 
+                    clonePos.x, clonePos.y + 1, clonePos.z,
+                    2, 0.0D, 0.1D, 0.0D, 0.0);
+                    
+                // Add sonic boom effect for ultra visibility
+                serverLevel.sendParticles(ParticleTypes.SONIC_BOOM, 
+                    clonePos.x, clonePos.y + 1, clonePos.z,
+                    1, 0.0D, 0.0D, 0.0D, 0.0);
             }
-            
-            // Big explosion-like effect at clone position
-            this.level().addParticle(ParticleTypes.EXPLOSION, 
-                clonePos.x, clonePos.y + 1, clonePos.z, 
-                0.0D, 0.0D, 0.0D);
-            this.level().addParticle(ParticleTypes.SOUL_FIRE_FLAME, 
-                clonePos.x, clonePos.y + 1, clonePos.z, 
-                0.0D, 0.1D, 0.0D);
         }
         
         shadowCloneDuration = SHADOW_CLONE_DURATION;
@@ -363,42 +395,60 @@ public class ShadowZombieNinja extends Zombie {
     private void teleportToShadowClone(int cloneIndex) {
         if (cloneIndex < 0 || cloneIndex >= shadowClones.size()) return;
         
+        // Check if this shadow has already been used (seperti Hayabusa - tiap shadow cuma bisa sekali)
+        if (usedShadowClones.contains(cloneIndex)) {
+            return; // Shadow sudah dipakai, tidak bisa teleport lagi
+        }
+        
         Vec3 oldPos = this.position();
         Vec3 clonePos = shadowClones.get(cloneIndex);
         
-        // Massive effects at departure position
-        for (int i = 0; i < 25; i++) {
-            double offsetX = (this.random.nextDouble() - 0.5) * 1.5;
-            double offsetY = this.random.nextDouble() * 2.0;
-            double offsetZ = (this.random.nextDouble() - 0.5) * 1.5;
-            this.level().addParticle(ParticleTypes.EXPLOSION, 
-                oldPos.x + offsetX, oldPos.y + offsetY, oldPos.z + offsetZ, 
-                0.0D, 0.0D, 0.0D);
-            this.level().addParticle(ParticleTypes.LARGE_SMOKE, 
-                oldPos.x + offsetX, oldPos.y + offsetY, oldPos.z + offsetZ, 
-                0.0D, 0.1D, 0.0D);
-            this.level().addParticle(ParticleTypes.SOUL_FIRE_FLAME, 
-                oldPos.x + offsetX, oldPos.y + offsetY, oldPos.z + offsetZ, 
-                0.0D, 0.0D, 0.0D);
-        }
+        // Mark this shadow as used
+        usedShadowClones.add(cloneIndex);
         
-        // Teleport
+        // Force immediate teleport using multiple methods for reliability
+        // Method 1: Direct position set
+        this.setPos(clonePos.x, clonePos.y, clonePos.z);
+        
+        // Method 2: Also try teleportTo for compatibility
         this.teleportTo(clonePos.x, clonePos.y, clonePos.z);
         
-        // Massive effects at arrival position
-        for (int i = 0; i < 25; i++) {
-            double offsetX = (this.random.nextDouble() - 0.5) * 1.5;
-            double offsetY = this.random.nextDouble() * 2.0;
-            double offsetZ = (this.random.nextDouble() - 0.5) * 1.5;
-            this.level().addParticle(ParticleTypes.EXPLOSION, 
-                this.getX() + offsetX, this.getY() + offsetY, this.getZ() + offsetZ, 
-                0.0D, 0.0D, 0.0D);
-            this.level().addParticle(ParticleTypes.PORTAL, 
-                this.getX() + offsetX, this.getY() + offsetY, this.getZ() + offsetZ, 
-                0.0D, 0.0D, 0.0D);
-            this.level().addParticle(ParticleTypes.ENCHANTED_HIT, 
-                this.getX() + offsetX, this.getY() + offsetY, this.getZ() + offsetZ, 
-                0.0D, 0.0D, 0.0D);
+        // Method 3: Reset delta movement to prevent rubber-banding
+        this.setDeltaMovement(0, 0, 0);
+        
+        // Force position update on client side
+        if (this.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+            // Massive effects at departure position (SERVER SIDE - will sync to client)
+            for (int i = 0; i < 25; i++) {
+                double offsetX = (this.random.nextDouble() - 0.5) * 1.5;
+                double offsetY = this.random.nextDouble() * 2.0;
+                double offsetZ = (this.random.nextDouble() - 0.5) * 1.5;
+                serverLevel.sendParticles(ParticleTypes.EXPLOSION, 
+                    oldPos.x + offsetX, oldPos.y + offsetY, oldPos.z + offsetZ,
+                    1, 0.0D, 0.0D, 0.0D, 0.0);
+                serverLevel.sendParticles(ParticleTypes.LARGE_SMOKE, 
+                    oldPos.x + offsetX, oldPos.y + offsetY, oldPos.z + offsetZ,
+                    1, 0.0D, 0.1D, 0.0D, 0.0);
+                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, 
+                    oldPos.x + offsetX, oldPos.y + offsetY, oldPos.z + offsetZ,
+                    1, 0.0D, 0.0D, 0.0D, 0.0);
+            }
+            
+            // Massive effects at arrival position (SERVER SIDE - will sync to client)
+            for (int i = 0; i < 25; i++) {
+                double offsetX = (this.random.nextDouble() - 0.5) * 1.5;
+                double offsetY = this.random.nextDouble() * 2.0;
+                double offsetZ = (this.random.nextDouble() - 0.5) * 1.5;
+                serverLevel.sendParticles(ParticleTypes.EXPLOSION, 
+                    this.getX() + offsetX, this.getY() + offsetY, this.getZ() + offsetZ,
+                    1, 0.0D, 0.0D, 0.0D, 0.0);
+                serverLevel.sendParticles(ParticleTypes.PORTAL, 
+                    this.getX() + offsetX, this.getY() + offsetY, this.getZ() + offsetZ,
+                    1, 0.0D, 0.0D, 0.0D, 0.0);
+                serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT, 
+                    this.getX() + offsetX, this.getY() + offsetY, this.getZ() + offsetZ,
+                    1, 0.0D, 0.0D, 0.0D, 0.0);
+            }
         }
         
         // Multiple sound effects
@@ -406,9 +456,26 @@ public class ShadowZombieNinja extends Zombie {
         this.playSound(SoundEvents.ENDER_DRAGON_FLAP, 1.0F, 1.5F);
         this.playSound(SoundEvents.LIGHTNING_BOLT_IMPACT, 0.5F, 1.8F);
         
-        // Clear clones after teleport
-        shadowClones.clear();
-        shadowCloneDuration = 0;
+        // JANGAN clear semua clones - biarkan shadow lain masih bisa dipakai
+        // Remove hanya shadow yang sudah dipakai dari list
+        shadowClones.remove(cloneIndex);
+        
+        // Adjust indices in usedShadowClones after removal
+        java.util.Set<Integer> newUsed = new java.util.HashSet<>();
+        for (Integer used : usedShadowClones) {
+            if (used < cloneIndex) {
+                newUsed.add(used);
+            } else if (used > cloneIndex) {
+                newUsed.add(used - 1);
+            }
+        }
+        usedShadowClones.clear();
+        usedShadowClones.addAll(newUsed);
+        
+        // Jika semua shadow sudah dipakai, baru clear semua
+        if (shadowClones.isEmpty()) {
+            shadowCloneDuration = 0;
+        }
     }
     
     private void performShadowKill(LivingEntity target) {
@@ -516,12 +583,90 @@ public class ShadowZombieNinja extends Zombie {
 
         @Override
         public void start() {
-            // Instant teleport - no timer
+            // Only summon clones - NO teleport here
             ninja.performQuadShadow();
-            // Randomly teleport to one of the clones immediately
+            this.stop();
+        }
+
+        @Override
+        public void tick() {
+            // Goal completes instantly in start()
+        }
+
+        @Override
+        public boolean canContinueToUse() {
+            return false; // Always complete immediately
+        }
+    }
+    
+    // NEW: Teleport between shadow clones (NO COOLDOWN - like Hayabusa shadow teleport)
+    private static class ShadowTeleportGoal extends Goal {
+        private final ShadowZombieNinja ninja;
+        private int teleportDelay = 0;
+        private static final int MIN_TELEPORT_DELAY = 10; // 0.5 second minimum between teleports (faster)
+
+        public ShadowTeleportGoal(ShadowZombieNinja ninja) {
+            this.ninja = ninja;
+            this.setFlags(EnumSet.of(Goal.Flag.MOVE, Goal.Flag.LOOK));
+        }
+
+        @Override
+        public boolean canUse() {
+            // Can teleport if:
+            // 1. Shadow clones exist
+            // 2. Has a target
+            // 3. Minimum delay passed (to prevent spam)
+            // 4. Ada shadow yang belum dipakai
+            if (ninja.shadowClones.isEmpty() || ninja.getTarget() == null) {
+                return false;
+            }
+            
+            if (teleportDelay > 0) {
+                teleportDelay--;
+                return false;
+            }
+            
+            // Teleport untuk positioning atau dodging
+            LivingEntity target = ninja.getTarget();
+            if (target == null) return false;
+            double distToTarget = ninja.distanceToSqr(target);
+            
+            // Teleport jika terlalu dekat (untuk dodge) atau terlalu jauh (untuk reposition)
+            return distToTarget < 4.0D || distToTarget > 64.0D;
+        }
+
+        @Override
+        public void start() {
+            // Instant teleport to best clone position
             if (!ninja.shadowClones.isEmpty()) {
-                int randomClone = ninja.random.nextInt(ninja.shadowClones.size());
-                ninja.teleportToShadowClone(randomClone);
+                LivingEntity target = ninja.getTarget();
+                if (target == null) {
+                    this.stop();
+                    return;
+                }
+                int bestClone = -1;
+                double bestDistance = Double.MAX_VALUE;
+                
+                // Find unused clone closest to target for aggressive repositioning
+                for (int i = 0; i < ninja.shadowClones.size(); i++) {
+                    // Skip jika shadow ini sudah dipakai
+                    if (ninja.usedShadowClones.contains(i)) {
+                        continue;
+                    }
+                    
+                    Vec3 clonePos = ninja.shadowClones.get(i);
+                    double dist = clonePos.distanceToSqr(target.position());
+                    if (dist < bestDistance) {
+                        bestDistance = dist;
+                        bestClone = i;
+                    }
+                }
+                
+                // Teleport hanya jika ada unused shadow
+                if (bestClone >= 0) {
+                    ninja.teleportToShadowClone(bestClone);
+                    teleportDelay = MIN_TELEPORT_DELAY; // Reset delay
+                }
             }
             this.stop();
         }
