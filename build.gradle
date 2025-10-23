@@ -57,12 +57,20 @@ neoForge {
 
             // Comma-separated list of namespaces to load gametests from. Empty = all namespaces.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            
+            // Explicitly force PRODUCTION mode for client run configuration
+            // This prevents false positive test mode detection in development
+            systemProperty 'kneaf.core.forceProduction', 'true'
         }
 
         server {
             server()
             programArgument '--nogui'
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            
+            // Explicitly force PRODUCTION mode for server run configuration
+            // This prevents false positive test mode detection in development
+            systemProperty 'kneaf.core.forceProduction', 'true'
         }
 
         // This run config launches GameTestServer and runs all registered gametests, then exits.

@@ -3,9 +3,12 @@ package com.kneaf.core;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * Proper mode detection system for distinguishing between test and production environments.
  * Prevents test logic from interfering with production runtime.
+ * Uses explicit configuration priority system to avoid false positives.
  */
 public final class ModeDetector {
     private static final Logger LOGGER = LoggerFactory.getLogger(ModeDetector.class);
@@ -14,15 +17,35 @@ public final class ModeDetector {
     public static final String TEST_MODE = "TEST";
     
     private static final String[] TEST_ENVIRONMENT_INDICATORS = {
-        "test", "mock", "unit-test", "integration-test", "dev", "development"
+        "test", "mock", "unit-test", "integration-test", "test-classes"
     };
     
     private static final String[] PRODUCTION_ENVIRONMENT_INDICATORS = {
-        "prod", "production", "live", "release", "server", "game"
+        "prod", "production", "live", "release", "server", "game", "client"
     };
     
-    private static String currentMode = determineRuntimeMode();
-    private static boolean isTestMode = currentMode.equals(TEST_MODE);
+    // Explicit configuration properties that take highest priority
+    private static final String FORCE_PRODUCTION_PROPERTY = "kneaf.core.forceProduction";
+    private static final String FORCE_TEST_PROPERTY = "kneaf.core.forceTest";
+    
+    private static String currentMode;
+    private static boolean isTestMode;
+    
+    // Initialize mode detection in a thread-safe manner
+    static {
+        try {
+            currentMode = determineRuntimeMode();
+            isTestMode = TEST_MODE.equals(currentMode);
+        } catch (Throwable t) {
+            // ALWAYS fallback to PRODUCTION mode on any error during initialization
+            // This is a critical safety feature - never allow test mode by accident
+            currentMode = PRODUCTION_MODE;
+            isTestMode = false;
+        }
+    }
+    
+    // Configuration cache for performance
+    private static final ConcurrentHashMap<String, Boolean> detectionCache = new ConcurrentHashMap<>();
     
     private ModeDetector() {}
     
@@ -31,64 +54,91 @@ public final class ModeDetector {
      * @return PRODUCTION_MODE or TEST_MODE
      */
     private static String determineRuntimeMode() {
-        LOGGER.info("Starting runtime mode detection...");
+        // Use cache for performance with simplified key
+        String cacheKey = "runtimeMode:" + System.currentTimeMillis(); // Use full timestamp for uniqueness
+        if (detectionCache.containsKey(cacheKey)) {
+            return detectionCache.get(cacheKey) ? TEST_MODE : PRODUCTION_MODE;
+        }
         
-        // Check system properties first
+        
+        // PRIORITY 1: Explicit force properties (highest priority)
+        String forceProduction = System.getProperty(FORCE_PRODUCTION_PROPERTY);
+        String forceTest = System.getProperty(FORCE_TEST_PROPERTY);
+        
+        if (forceProduction != null && Boolean.parseBoolean(forceProduction)) {
+            detectionCache.put(cacheKey, false);
+            return PRODUCTION_MODE;
+        }
+        
+        if (forceTest != null && Boolean.parseBoolean(forceTest)) {
+            detectionCache.put(cacheKey, true);
+            return TEST_MODE;
+        }
+        
+        // PRIORITY 2: Explicit mode properties
         String modeFromSystem = System.getProperty("kneaf.core.mode");
         if (modeFromSystem != null) {
             String normalizedMode = modeFromSystem.trim().toLowerCase();
             if (isTestIndicator(normalizedMode)) {
-                LOGGER.info("Detected TEST mode from system property: kneaf.core.mode={}", modeFromSystem);
+                detectionCache.put(cacheKey, true);
                 return TEST_MODE;
             } else if (isProductionIndicator(normalizedMode)) {
-                LOGGER.info("Detected PRODUCTION mode from system property: kneaf.core.mode={}", modeFromSystem);
+                detectionCache.put(cacheKey, false);
                 return PRODUCTION_MODE;
             }
         }
         
-        // Check environment variables
+        // PRIORITY 3: Environment variables
         String modeFromEnv = System.getenv("KNEAF_CORE_MODE");
         if (modeFromEnv != null) {
             String normalizedMode = modeFromEnv.trim().toLowerCase();
             if (isTestIndicator(normalizedMode)) {
-                LOGGER.info("Detected TEST mode from environment variable: KNEAF_CORE_MODE={}", modeFromEnv);
+                detectionCache.put(cacheKey, true);
                 return TEST_MODE;
             } else if (isProductionIndicator(normalizedMode)) {
-                LOGGER.info("Detected PRODUCTION mode from environment variable: KNEAF_CORE_MODE={}", modeFromEnv);
+                detectionCache.put(cacheKey, false);
                 return PRODUCTION_MODE;
             }
         }
         
-        // Check classpath for test indicators
+        // PRIORITY 4: Classpath analysis (more conservative)
         String classpath = System.getProperty("java.class.path");
         if (classpath != null) {
             String normalizedClasspath = classpath.toLowerCase();
-            if (containsTestIndicator(normalizedClasspath)) {
-                LOGGER.info("Detected TEST mode from classpath: contains test indicators");
+            
+            // Only consider strong test indicators, not weak ones like "dev"
+            boolean hasStrongTestIndicators = normalizedClasspath.contains("test-classes") ||
+                                           normalizedClasspath.contains("junit") ||
+                                           normalizedClasspath.contains("testng") ||
+                                           normalizedClasspath.matches(".*[\\\\/]test[\\\\/].*");
+            
+            if (hasStrongTestIndicators) {
+                detectionCache.put(cacheKey, true);
                 return TEST_MODE;
             }
         }
         
-        // Check for test classes in context
+        // PRIORITY 5: Test library detection (conservative approach)
         try {
             ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
             if (classLoader != null) {
-                // Check for common test libraries
+                // Only consider explicit test frameworks, not just any test-related classes
                 if (classLoader.getResource("org/junit/") != null) {
-                    LOGGER.info("Detected TEST mode: JUnit classes found in classpath");
+                    detectionCache.put(cacheKey, true);
                     return TEST_MODE;
                 }
                 if (classLoader.getResource("org/testng/") != null) {
-                    LOGGER.info("Detected TEST mode: TestNG classes found in classpath");
+                    detectionCache.put(cacheKey, true);
                     return TEST_MODE;
                 }
             }
         } catch (SecurityException e) {
-            LOGGER.debug("Security restriction prevented classpath inspection for test detection", e);
         }
         
-        // Default to PRODUCTION if no clear test indicators found
-        LOGGER.info("No test indicators found - defaulting to PRODUCTION mode");
+        // ALWAYS default to PRODUCTION mode when in doubt
+        // This is the SAFEST default for production environments - NEVER change this!
+        // Production should always be the default unless explicitly configured otherwise
+        detectionCache.put(cacheKey, false);
         return PRODUCTION_MODE;
     }
     
@@ -154,6 +204,5 @@ public final class ModeDetector {
         
         currentMode = mode;
         isTestMode = ModeDetector.TEST_MODE.equals(mode);
-        LOGGER.warn("MODE FORCED FOR TESTING: {}", currentMode);
     }
 }

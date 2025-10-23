@@ -223,14 +223,14 @@ public final class OptimizationInjector {
             
             // Only skip Minecraft-specific checks in test mode
             if (ModeDetector.isTestMode()) {
-                LOGGER.debug("Processing entity in test mode: {}", entity);
+                // Silent in test mode
             } else {
                 // Perform strict Minecraft-specific validation in production
                 if (!isValidMinecraftEntity(entity)) {
                     recordOptimizationMiss("Entity failed Minecraft-specific validation");
                     return;
                 }
-                LOGGER.debug("Processing valid Minecraft entity: {}", entity);
+                // Silent success - no logging for valid entities
             }
 
             double x = 0.0;
@@ -256,7 +256,7 @@ public final class OptimizationInjector {
                     x = 0.1;
                     y = -0.2;
                     z = 0.05;
-                    LOGGER.debug("Using mock movement values for entity processing", e);
+                    // Silent in test mode
                 } else {
                     recordOptimizationMiss("Failed to get entity movement data in production");
                     return;
@@ -326,12 +326,11 @@ public final class OptimizationInjector {
                 
                 // Apply actual movement in production, mock only in test
                 if (ModeDetector.isTestMode()) {
-                    LOGGER.debug("Mock setDeltaMovement: x={}, y={}, z={}",
-                        resultData[0], processedY * (1 - verticalDamping), resultData[2]);
+                    // Silent in test mode
                 } else {
                     applyEntityMovement(entity, resultData[0], processedY * (1 - verticalDamping), resultData[2]);
                 }
-                recordOptimizationHit("Native vector calculation applied");
+                // Silent success - no logging for applied calculations
             } else {
                 recordOptimizationMiss("Using original movement (native fallback)");
             }
@@ -348,7 +347,7 @@ public final class OptimizationInjector {
         if (PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
             try {
                 int entityCount = ModeDetector.isTestMode() ? 200 : getActualEntityCount(event);
-                recordOptimizationHit(String.format("Server tick processed with %d entities", entityCount));
+                // Silent success - no logging, just metrics
             } catch (Throwable t) {
                 recordOptimizationMiss("Server tick processing failed: " + t.getMessage());
             }
@@ -362,7 +361,7 @@ public final class OptimizationInjector {
                 var level = event.getLevel();
                 int entityCount = ModeDetector.isTestMode() ? 100 : getActualEntityCount(event);
                 String dimension = level.dimension().location().toString();
-                recordOptimizationHit(String.format("Level tick processed with %d entities in %s", entityCount, dimension));
+                // Silent success - no logging, just metrics
             } catch (Throwable t) {
                 recordOptimizationMiss("Level tick processing failed: " + t.getMessage());
             }
@@ -403,6 +402,7 @@ public final class OptimizationInjector {
 
     private static void recordOptimizationHit(String details) {
         optimizationHits.incrementAndGet();
+        // Silent success - no logging for successful operations
     }
 
     static double calculateEntitySpecificDamping(Object entity) {

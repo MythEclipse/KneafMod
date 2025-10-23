@@ -1,29 +1,32 @@
 package com.kneaf.core;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.kneaf.core.performance.PerformanceMonitoringSystem;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.event.tick.EntityTickEvent;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
-import net.neoforged.neoforge.event.tick.LevelTickEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
+import net.neoforged.neoforge.event.tick.EntityTickEvent;
+import net.neoforged.neoforge.event.tick.LevelTickEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.util.Map;
+import java.lang.management.ManagementFactory;
+import com.sun.management.OperatingSystemMXBean;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.kneaf.core.performance.PerformanceMonitoringSystem;
-
 /**
  * Optimized entity processing injector with async processing, parallel library loading,
  * and hash-based entity type lookup for maximum performance.
- * 
+ *
  * Key optimizations:
  * - Async entity processing using CompletableFuture and ExecutorService
  * - Parallel native library loading with dependency resolution
@@ -49,7 +52,7 @@ public final class OptimizedOptimizationInjector {
     private static final AtomicLong totalEntitiesProcessedAsync = new AtomicLong(0);
     private static final AtomicLong totalProcessingTimeNs = new AtomicLong(0);
     
-    // Library loading state - uses OptimizationInjector's loading status
+    // Library loading state
     private static volatile boolean isLibraryLoading = false;
     private static CompletableFuture<ParallelLibraryLoader.LibraryLoadResult> libraryLoadFuture;
     
@@ -58,15 +61,20 @@ public final class OptimizedOptimizationInjector {
     private static final int MAX_CONCURRENT_ENTITIES = 1000;
     private static final int MIN_ASYNC_TIMEOUT_MS = 25;   // Minimum timeout for critical entities
     private static final int MAX_ASYNC_TIMEOUT_MS = 200;  // Maximum timeout for complex entities
-    // Knockback protection - track entities that recently took damage
+    
+    // Knockback protection
     private static final Map<Integer, Integer> recentlyDamagedEntities = new HashMap<>();
-    private static final int KNOCKBACK_PROTECTION_TICKS = 6; // 0.3 seconds at 20 TPS (reduced from 10)
-    private static boolean isTestMode = false;
+    private static final int KNOCKBACK_PROTECTION_TICKS = 6;
+    
+    // Server Instance
+    private static MinecraftServer serverInstance;
+    
+    // CPU Load Bean
+    private static final OperatingSystemMXBean OS_BEAN = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
+
     
     static {
-        if (!isTestMode) {
-            initializeAsyncLibraryLoading();
-        }
+        initializeAsyncLibraryLoading();
     }
     
     /**
@@ -74,7 +82,6 @@ public final class OptimizedOptimizationInjector {
      */
     private static void initializeAsyncLibraryLoading() {
         isLibraryLoading = true;
-        
         // Use OptimizationInjector's synchronous loading status
         isLibraryLoading = false; // Not actually loading async anymore
         LOGGER.info("Using OptimizationInjector's native library loading status");
@@ -90,7 +97,6 @@ public final class OptimizedOptimizationInjector {
         // Mark entity as recently damaged to skip optimization temporarily
         recentlyDamagedEntities.put(event.getEntity().getId(), KNOCKBACK_PROTECTION_TICKS);
         
-        // Log at trace level to reduce noise - this is expected behavior
         LOGGER.trace("Entity {} marked for knockback protection after taking damage",
             event.getEntity().getId());
     }
@@ -103,9 +109,8 @@ public final class OptimizedOptimizationInjector {
         long startTime = System.nanoTime();
         
         try {
-            Object entity = event.getEntity();
+            Entity entity = event.getEntity();
             if (entity == null) {
-                recordAsyncOptimizationMiss("Entity is null");
                 return;
             }
             
@@ -114,29 +119,36 @@ public final class OptimizedOptimizationInjector {
                 return;
             }
             
-            // Mock entity validation for tests - skip complex Minecraft-specific checks
-            try {
-                // For tests, we assume entities are valid and skip client-side/player checks
-                LOGGER.debug("Entity processing: skipping Minecraft-specific validation for tests");
-            } catch (Exception e) {
-                LOGGER.debug("Entity validation failed, continuing with processing", e);
+            // --- Real Entity Validation ---
+            if (entity.level().isClientSide() || entity.isRemoved()) {
+                return;
             }
+
+            // Check for knockback protection
+            Integer protectionTicks = recentlyDamagedEntities.get(entity.getId());
+            if (protectionTicks != null) {
+                if (protectionTicks > 0) {
+                    recentlyDamagedEntities.put(entity.getId(), protectionTicks - 1);
+                    return; // Skip async processing this tick
+                } else {
+                    recentlyDamagedEntities.remove(entity.getId()); // Protection expired
+                }
+            }
+            // --- End Validation ---
             
-            // Check if library is ready using OptimizationInjector's status
+            // Check if library is ready
             if (!OptimizationInjector.isNativeLibraryLoaded()) {
-                recordAsyncOptimizationMiss("Native library not loaded");
                 return;
             }
             
-            // Extract physics data with fallback for tests
+            // Extract physics data
             EntityProcessingService.EntityPhysicsData physicsData = extractPhysicsData(entity);
             if (physicsData == null) {
-                recordAsyncOptimizationMiss("Invalid physics data");
                 return;
             }
             
-            // Calculate adaptive timeout (use default for tests)
-            int adaptiveTimeoutMs = BASE_ASYNC_TIMEOUT_MS;
+            // Calculate adaptive timeout
+            int adaptiveTimeoutMs = calculateAdaptiveTimeout(entity);
             
             // Submit for async processing with adaptive timeout
             CompletableFuture<EntityProcessingService.EntityProcessingResult> future =
@@ -147,9 +159,7 @@ public final class OptimizedOptimizationInjector {
                 long processingTime = System.nanoTime() - startTime;
                 if (result.success) {
                     applyPhysicsResult(entity, result);
-                    recordAsyncOptimizationHit("Async processing successful");
-                    
-                    // Record successful processing metrics
+                    // Record successful processing metrics silently
                     Map<String, Object> context = new HashMap<>();
                     context.put("operation", "entity_processing");
                     context.put("result", "success");
@@ -182,11 +192,10 @@ public final class OptimizedOptimizationInjector {
                 return null;
             });
             
-            // Timeout handling with adaptive timeout - fallback to synchronous if async takes too long
+            // Timeout handling with adaptive timeout
             future.orTimeout(adaptiveTimeoutMs, TimeUnit.MILLISECONDS).exceptionally(throwable -> {
                 // Fallback to synchronous processing for timeout
                 performSynchronousFallback(entity, physicsData);
-                recordAsyncOptimizationMiss("Adaptive timeout (" + adaptiveTimeoutMs + "ms) exceeded");
                 return null;
             });
             
@@ -203,51 +212,35 @@ public final class OptimizedOptimizationInjector {
     }
     
     /**
-     * Extract physics data from entity (test-friendly)
+     * Extract physics data from entity
      */
-    private static EntityProcessingService.EntityPhysicsData extractPhysicsData(Object entity) {
+    private static EntityProcessingService.EntityPhysicsData extractPhysicsData(Entity entity) {
         try {
-            // Try to get delta movement using reflection, fallback to mock values
-            double x = 0.1, y = -0.2, z = 0.05; // Default mock values
-            
-            try {
-                java.lang.reflect.Method getDeltaMovement = entity.getClass().getMethod("getDeltaMovement");
-                if (getDeltaMovement != null) {
-                    Object vec3 = getDeltaMovement.invoke(entity);
-                    if (vec3 != null) {
-                        java.lang.reflect.Method getX = vec3.getClass().getMethod("x");
-                        java.lang.reflect.Method getY = vec3.getClass().getMethod("y");
-                        java.lang.reflect.Method getZ = vec3.getClass().getMethod("z");
-                        if (getX != null && getY != null && getZ != null) {
-                            x = ((Number) getX.invoke(vec3)).doubleValue();
-                            y = ((Number) getY.invoke(vec3)).doubleValue();
-                            z = ((Number) getZ.invoke(vec3)).doubleValue();
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                LOGGER.debug("Using mock movement values for entity: {}", e.getMessage());
-            }
+            Vec3 deltaMovement = entity.getDeltaMovement();
+            double x = deltaMovement.x();
+            double y = deltaMovement.y();
+            double z = deltaMovement.z();
             
             // Validate motion values
             if (Double.isNaN(x) || Double.isInfinite(x) ||
                 Double.isNaN(y) || Double.isInfinite(y) ||
                 Double.isNaN(z) || Double.isInfinite(z)) {
+                LOGGER.warn("Invalid delta movement for entity {}: [{}, {}, {}]", entity.getId(), x, y, z);
                 return null;
             }
             
             return new EntityProcessingService.EntityPhysicsData(x, y, z);
         } catch (Exception e) {
-            LOGGER.error("Error extracting physics data: {}", e.getMessage());
+            LOGGER.error("Error extracting physics data for entity {}: {}", entity.getId(), e.getMessage(), e);
             return null;
         }
     }
     
     /**
-     * Apply physics result to entity (test-friendly)
+     * Apply physics result to entity
      */
-    private static void applyPhysicsResult(Object entity,
-                                          EntityProcessingService.EntityProcessingResult result) {
+    private static void applyPhysicsResult(Entity entity,
+                                           EntityProcessingService.EntityProcessingResult result) {
         if (!result.success || result.processedData == null) {
             return;
         }
@@ -256,80 +249,60 @@ public final class OptimizedOptimizationInjector {
             EntityProcessingService.EntityPhysicsData data = result.processedData;
             
             // Apply the processed physics with safety checks
-            try {
-                java.lang.reflect.Method setDeltaMovement = entity.getClass().getMethod("setDeltaMovement", double.class, double.class, double.class);
-                if (setDeltaMovement != null) {
-                    setDeltaMovement.invoke(entity, data.motionX, data.motionY, data.motionZ);
-                } else {
-                    LOGGER.debug("setDeltaMovement method not found, skipping physics application");
-                }
-            } catch (Exception e) {
-                LOGGER.debug("Physics application failed, using mock: {}", e.getMessage());
-                // For tests, just log the values instead of applying
-                LOGGER.debug("Mock physics applied: x={}, y={}, z={}", data.motionX, data.motionY, data.motionZ);
+            if (Double.isNaN(data.motionX) || Double.isInfinite(data.motionX) ||
+                Double.isNaN(data.motionY) || Double.isInfinite(data.motionY) ||
+                Double.isNaN(data.motionZ) || Double.isInfinite(data.motionZ)) {
+                LOGGER.warn("Invalid processed physics data from async service for entity {}: [{}, {}, {}]",
+                            entity.getId(), data.motionX, data.motionY, data.motionZ);
+                return;
             }
+            
+            entity.setDeltaMovement(data.motionX, data.motionY, data.motionZ);
             
             totalEntitiesProcessedAsync.incrementAndGet();
             
         } catch (Exception e) {
-            LOGGER.error("Error applying physics result: {}", e.getMessage());
+            LOGGER.error("Error applying physics result to entity {}: {}", entity.getId(), e.getMessage(), e);
         }
     }
     
     /**
-     * Synchronous fallback for timeout scenarios (test-friendly)
+     * Synchronous fallback for timeout scenarios
      */
-    private static void performSynchronousFallback(Object entity,
-                                                  EntityProcessingService.EntityPhysicsData physicsData) {
+    private static void performSynchronousFallback(Entity entity,
+                                                   EntityProcessingService.EntityPhysicsData physicsData) {
         try {
             // Quick synchronous fallback using optimized entity type lookup
             EntityTypeEnum entityType = EntityTypeEnum.fromEntity(entity);
             double dampingFactor = entityType.getDampingFactor();
             
-            // TRUE vanilla knockback - NO damping for horizontal movement
-            // Only apply damping to vertical (gravity) for stability
-            double verticalDamping = 0.015;   // Standard damping for vertical movement only
+            double verticalDamping = 0.015; // Standard damping for vertical movement only
             
-            // Improved gravity handling - allow natural gravity while preserving external effects
             double processedY = physicsData.motionY;
             
-            // Only preserve external gravity modifications if they are significant (knockback, explosions)
-            // Allow natural gravity to work normally
+            // NOTE: Original logic `if (Math.abs(physicsData.motionY - physicsData.motionY) > 0.5)` is always false.
+            // Preserving original logic as requested.
             if (Math.abs(physicsData.motionY - physicsData.motionY) > 0.5) {
-                // Significant external effect detected (explosion, strong knockback)
+                // Significant external effect detected
                 processedY = physicsData.motionY;
             } else if (physicsData.motionY < -0.1) {
-                // Natural falling - apply enhanced gravity for better feel
+                // Natural falling
                 processedY = Math.min(physicsData.motionY * 1.1, physicsData.motionY);
             }
             
-            // Apply physics with fallback for tests
-            try {
-                java.lang.reflect.Method setDeltaMovement = entity.getClass().getMethod("setDeltaMovement", double.class, double.class, double.class);
-                if (setDeltaMovement != null) {
-                    setDeltaMovement.invoke(entity,
-                        physicsData.motionX * dampingFactor,           // NO damping for horizontal X - pure vanilla knockback
-                        processedY * (1 - verticalDamping),           // Apply damping only to gravity (Y)
-                        physicsData.motionZ * dampingFactor            // NO damping for horizontal Z - pure vanilla knockback
-                    );
-                } else {
-                    LOGGER.debug("setDeltaMovement method not found, using mock");
-                    // For tests, just log the values
-                    LOGGER.debug("Mock synchronous fallback applied: x={}, y={}, z={}",
-                        physicsData.motionX * dampingFactor,
-                        processedY * (1 - verticalDamping),
-                        physicsData.motionZ * dampingFactor);
-                }
-            } catch (Exception e) {
-                LOGGER.debug("Synchronous fallback physics application failed, using mock: {}", e.getMessage());
-                // For tests, just log the values instead of applying
-                LOGGER.debug("Mock synchronous fallback: x={}, y={}, z={}",
-                    physicsData.motionX * dampingFactor,
-                    processedY * (1 - verticalDamping),
-                    physicsData.motionZ * dampingFactor);
+            double newX = physicsData.motionX * dampingFactor;
+            double newY = processedY * (1 - verticalDamping);
+            double newZ = physicsData.motionZ * dampingFactor;
+
+            // Apply physics with fallback
+            if (Double.isNaN(newX) || Double.isInfinite(newX) ||
+                Double.isNaN(newY) || Double.isInfinite(newY) ||
+                Double.isNaN(newZ) || Double.isInfinite(newZ)) {
+                LOGGER.warn("Invalid fallback physics data for entity {}: [{}, {}, {}]", entity.getId(), newX, newY, newZ);
+                return;
             }
-            
-            recordAsyncOptimizationHit("Synchronous fallback");
+
+            entity.setDeltaMovement(newX, newY, newZ);
             
         } catch (Exception e) {
             recordAsyncOptimizationMiss("Synchronous fallback failed: " + e.getMessage());
@@ -341,10 +314,14 @@ public final class OptimizedOptimizationInjector {
      */
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Pre event) {
+        if (serverInstance == null) {
+            serverInstance = event.getServer(); // Cache server instance
+        }
+
         if (performanceManager.isEntityThrottlingEnabled()) {
             try {
-                int entityCount = 200; // Approximate entity count
-                recordAsyncOptimizationHit(String.format("Server tick processed with %d entities (async)", entityCount));
+                // Silent success - no logging
+                PerformanceMonitoringSystem.getInstance().getMetricAggregator().incrementCounter("optimization_injector.server_tick");
 
             } catch (Exception e) {
                 recordAsyncOptimizationError("Server tick async processing failed: " + e.getMessage());
@@ -360,11 +337,10 @@ public final class OptimizedOptimizationInjector {
         if (performanceManager.isEntityThrottlingEnabled()) {
             try {
                 var level = event.getLevel();
-                int entityCount = 100; // Approximate entity count
                 String dimension = level.dimension().location().toString();
                 
-                recordAsyncOptimizationHit(String.format(
-                    "Level tick processed with %d entities in %s (async)", entityCount, dimension));
+                // Silent success - no logging, just metrics
+                PerformanceMonitoringSystem.getInstance().getMetricAggregator().incrementCounter("optimization_injector.level_tick");
                 
             } catch (Exception e) {
                 recordAsyncOptimizationError("Level tick async processing failed: " + e.getMessage());
@@ -373,12 +349,11 @@ public final class OptimizedOptimizationInjector {
     }
     
     /**
-     * Record async optimization hit
+     * Record async optimization hit - silently without logging
      */
     private static void recordAsyncOptimizationHit(String details) {
         asyncOptimizationHits.incrementAndGet();
-
-        // Record performance metrics
+        // No logging for successful operations
         Map<String, Object> context = new HashMap<>();
         context.put("operation", "async_optimization");
         context.put("result", "hit");
@@ -387,12 +362,11 @@ public final class OptimizedOptimizationInjector {
     }
     
     /**
-     * Record async optimization miss
+     * Record async optimization miss - only log if it's a real error
      */
     private static void recordAsyncOptimizationMiss(String details) {
         asyncOptimizationMisses.incrementAndGet();
         
-        // Record performance metrics but NOT as an error for expected misses
         Map<String, Object> context = new HashMap<>();
         context.put("operation", "async_optimization");
         context.put("result", "miss");
@@ -400,11 +374,10 @@ public final class OptimizedOptimizationInjector {
         
         PerformanceMonitoringSystem.getInstance().getMetricAggregator().incrementCounter("optimization_injector.async_misses");
         
-        // Only track as error if it's not a knockback protection miss (expected behavior)
-        if (!details.contains("knockback protection")) {
+        // Only log errors, not normal misses like client-side entities or throttling
+        if (details.contains("error") || details.contains("failed") || details.contains("exception")) {
             PerformanceMonitoringSystem.getInstance().getErrorTracker().recordError("OptimizedOptimizationInjector",
                 new RuntimeException("Async optimization miss: " + details), context);
-            LOGGER.debug("Async optimization miss: {}", details);
         }
     }
     
@@ -414,7 +387,6 @@ public final class OptimizedOptimizationInjector {
     private static void recordAsyncOptimizationError(String details) {
         asyncOptimizationErrors.incrementAndGet();
         
-        // Record performance metrics and error
         Map<String, Object> context = new HashMap<>();
         context.put("operation", "async_optimization");
         context.put("result", "error");
@@ -433,7 +405,7 @@ public final class OptimizedOptimizationInjector {
     private static void logAsyncPerformanceStats() {
         long totalOps = asyncOptimizationHits.get() + asyncOptimizationMisses.get();
         double hitRate = totalOps > 0 ? (double) asyncOptimizationHits.get() / totalOps * 100 : 0.0;
-        double avgProcessingTime = totalEntitiesProcessedAsync.get() > 0 ? 
+        double avgProcessingTime = totalEntitiesProcessedAsync.get() > 0 ?
             (double) totalProcessingTimeNs.get() / totalEntitiesProcessedAsync.get() / 1_000_000.0 : 0.0;
         
         LOGGER.info("Async Optimization Metrics - Hits: {}, Misses: {}, Errors: {}, Total: {}, HitRate: {:.2f}%, AvgTime: {:.2f}ms, LibraryLoaded: {}",
@@ -453,7 +425,7 @@ public final class OptimizedOptimizationInjector {
     public static String getAsyncOptimizationMetrics() {
         long totalOps = asyncOptimizationHits.get() + asyncOptimizationMisses.get();
         double hitRate = totalOps > 0 ? (double) asyncOptimizationHits.get() / totalOps * 100 : 0.0;
-        double avgProcessingTime = totalEntitiesProcessedAsync.get() > 0 ? 
+        double avgProcessingTime = totalEntitiesProcessedAsync.get() > 0 ?
             (double) totalProcessingTimeNs.get() / totalEntitiesProcessedAsync.get() / 1_000_000.0 : 0.0;
         
         return String.format(
@@ -490,8 +462,6 @@ public final class OptimizedOptimizationInjector {
      * Reload native library asynchronously
      */
     public static synchronized void reloadNativeLibraryAsync() {
-        isLibraryLoading = false;
-
         // Shutdown existing services
         entityProcessingService.shutdown();
 
@@ -514,17 +484,7 @@ public final class OptimizedOptimizationInjector {
     public static Map<String, ParallelLibraryLoader.LibraryLoadResult> getLibraryLoadingStatistics() {
         return libraryLoader.getLoadedLibraries();
     }
-    
-    /**
-     * Enable test mode
-     */
-    public static void enableTestMode(boolean enabled) {
-        isTestMode = enabled;
-        if (!enabled) {
-            initializeAsyncLibraryLoading();
-        }
-    }
-    
+
     /**
      * Reset async optimization metrics
      */
@@ -544,21 +504,7 @@ public final class OptimizedOptimizationInjector {
         libraryLoader.shutdown();
         LOGGER.info("Async optimization services shutdown completed");
     }
-    
-    /**
-     * Check if entity is performance-critical and should be exempt from throttling (test-friendly)
-     */
-    private static boolean isPerformanceCriticalEntity(Object entity) {
-        try {
-            // For tests, we assume most entities are not performance-critical
-            // This makes tests run faster and avoids complex Minecraft-specific checks
-            return false;
-        } catch (Exception e) {
-            LOGGER.debug("Performance critical check failed, assuming not critical: {}", e.getMessage());
-            return false;
-        }
-    }
-    
+
     /**
      * Calculate adaptive timeout based on entity type and server performance
      */
@@ -573,31 +519,29 @@ public final class OptimizedOptimizationInjector {
             entityType.contains("dragon") ||
             entityType.contains("wither") ||
             entityType.contains("warden")) {
-            baseTimeout = Math.min(baseTimeout * 3, MAX_ASYNC_TIMEOUT_MS); // Boss entities: 150ms max
+            baseTimeout = Math.min(baseTimeout * 3, MAX_ASYNC_TIMEOUT_MS);
         }
         // Player entities get moderate timeout
         else if (entity instanceof Player) {
-            baseTimeout = Math.min(baseTimeout * 2, MAX_ASYNC_TIMEOUT_MS); // Players: 100ms max
+            baseTimeout = Math.min(baseTimeout * 2, MAX_ASYNC_TIMEOUT_MS);
         }
         // Simple entities get standard timeout
         else if (entityType.contains("zombie") ||
                  entityType.contains("skeleton") ||
                  entityType.contains("cow") ||
                  entityType.contains("sheep")) {
-            baseTimeout = baseTimeout; // Standard: 50ms
+            // Standard: 50ms
         }
         // Very simple entities get reduced timeout
         else {
-            baseTimeout = Math.max(baseTimeout / 2, MIN_ASYNC_TIMEOUT_MS); // Simple: 25ms min
+            baseTimeout = Math.max(baseTimeout / 2, MIN_ASYNC_TIMEOUT_MS);
         }
         
         // Adjust based on server performance (CPU load)
         double cpuLoad = getCurrentCpuLoad();
         if (cpuLoad > 0.8) {
-            // High CPU load - reduce timeout to prevent overload
             baseTimeout = Math.max(baseTimeout / 2, MIN_ASYNC_TIMEOUT_MS);
         } else if (cpuLoad < 0.3) {
-            // Low CPU load - can afford longer timeouts
             baseTimeout = Math.min(baseTimeout * 2, MAX_ASYNC_TIMEOUT_MS);
         }
         
@@ -608,12 +552,20 @@ public final class OptimizedOptimizationInjector {
      * Get current CPU load estimate
      */
     private static double getCurrentCpuLoad() {
-        // Simple CPU load estimation based on available processors and active thread count
+        if (OS_BEAN != null) {
+            double load = OS_BEAN.getCpuLoad(); // Returns 0.0-1.0
+            if (load >= 0) {
+                return load;
+            }
+        }
+        
+        // Fallback to the original (less accurate) method
         int availableProcessors = Runtime.getRuntime().availableProcessors();
         int activeThreadCount = Thread.activeCount();
         
         // Estimate load as ratio of active threads to available processors
-        return Math.min(1.0, (double) activeThreadCount / availableProcessors);
+        // Adjusted heuristic to be slightly more realistic than original
+        return Math.min(1.0, (double) activeThreadCount / (availableProcessors * 2.0));
     }
     
     /**
@@ -625,7 +577,7 @@ public final class OptimizedOptimizationInjector {
             asyncOptimizationMisses.get(),
             asyncOptimizationErrors.get(),
             totalEntitiesProcessedAsync.get(),
-            OptimizationInjector.isNativeLibraryLoaded() && !isTestMode
+            OptimizationInjector.isNativeLibraryLoaded()
         );
     }
     

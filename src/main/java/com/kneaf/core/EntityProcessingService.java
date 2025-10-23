@@ -241,7 +241,7 @@ public final class EntityProcessingService {
         
         // Perform entity validation appropriate for current runtime mode
         if (ModeDetector.isTestMode()) {
-            LOGGER.debug("Entity processing: skipping Minecraft-specific validation for tests");
+            // Silent in test mode
         } else {
             // Perform strict validation for production entities
             if (!isValidProductionEntity(entity)) {
@@ -249,7 +249,7 @@ public final class EntityProcessingService {
                     new EntityProcessingResult(false, "Entity failed production validation", physicsData)
                 );
             }
-            LOGGER.debug("Validated production entity: {}", entity);
+            // Silent success - no logging for valid entities
         }
         
         // Get entity adapter (handles both EntityInterface and reflection for other objects)
