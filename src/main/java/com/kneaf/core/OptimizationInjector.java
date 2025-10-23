@@ -8,7 +8,9 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
+import java.io.File;
 import java.net.URL;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -27,20 +29,31 @@ public final class OptimizationInjector {
 
     private static final String RUST_PERF_LIBRARY_NAME = "rustperf";
     private static final String[] RUST_PERF_LIBRARY_PATHS = {
-        "natives/rustperf.dll",
-        "rustperf.dll",
-        "src/main/resources/natives/rustperf.dll",
-        "build/resources/main/natives/rustperf.dll",
-        "run/natives/rustperf.dll",
-        "target/natives/rustperf.dll",
-        "target/debug/rustperf.dll",
-        "target/release/rustperf.dll",
-        "%USERPROFILE%/.minecraft/mods/natives/rustperf.dll",
-        "%APPDATA%/.minecraft/mods/natives/rustperf.dll"
-    };
+            "natives/rustperf.dll",
+            "rustperf.dll",
+            "src/main/resources/natives/rustperf.dll",
+            "build/resources/main/natives/rustperf.dll",
+            "run/natives/rustperf.dll",
+            "target/natives/rustperf.dll",
+            "target/debug/rustperf.dll",
+            "target/release/rustperf.dll",
+            "%USERPROFILE%/.minecraft/mods/natives/rustperf.dll",
+            "%APPDATA%/.minecraft/mods/natives/rustperf.dll",
+            "D:/KneafMod/src/main/resources/natives/rustperf.dll",
+            "D:/KneafMod/build/resources/main/natives/rustperf.dll",
+            "D:/KneafMod/run/natives/rustperf.dll",
+            "D:/KneafMod/target/natives/rustperf.dll"
+        };
     private static boolean isNativeLibraryLoaded = false;
     private static final Object nativeLibraryLock = new Object();
     private static boolean isTestMode = false;
+
+    // Track if we've already logged warnings for each native method to avoid spam
+    private static boolean phantomShurikenWarningLogged = false;
+    private static boolean quadShadowWarningLogged = false;
+    private static boolean shadowKillDamageWarningLogged = false;
+    private static boolean passiveStacksWarningLogged = false;
+    private static boolean vectorDampWarningLogged = false;
 
     private static String getOSErrorMessage(Throwable t) {
         String os = System.getProperty("os.name").toLowerCase();
@@ -63,82 +76,299 @@ public final class OptimizationInjector {
     static { if (!isTestMode) loadNativeLibrary(); }
 
     private static void loadNativeLibrary() {
-        synchronized (nativeLibraryLock) {
-            if (isNativeLibraryLoaded) return;
-
-            try {
-                String os = System.getProperty("os.name").toLowerCase();
-                String libExtension = os.contains("win") ? "dll" : os.contains("mac") ? "dylib" : "so";
-                String libName = RUST_PERF_LIBRARY_NAME + "." + libExtension;
-                String userDir = System.getProperty("user.dir");
-
-                LOGGER.info("Starting native library search (OS: {}, Arch: {}, Java: {})", os, System.getProperty("os.arch"), System.getProperty("java.version"));
-
-                String[] classpathPaths = {
-                    "natives/" + libName, libName, "src/main/resources/natives/" + libName,
-                    "build/resources/main/natives/" + libName, "run/natives/" + libName,
-                    "target/natives/" + libName, "target/debug/" + libName, "target/release/" + libName
-                };
-
-                for (String path : classpathPaths) { if (tryLoadFromClasspath(path)) return; }
-
-                String[] absolutePaths = new String[] {
-                    userDir + "\\src\\main\\resources\\natives\\" + libName, userDir + "\\build\\resources\\main\\natives\\" + libName,
-                    userDir + "\\run\\natives\\" + libName, userDir + "\\target\\natives\\" + libName,
-                    userDir + "\\target\\debug\\" + libName, userDir + "\\target\\release\\" + libName, userDir + "\\" + libName,
-                    getUserProfilePath() + "\\.minecraft\\mods\\natives\\" + libName, getUserProfilePath() + "\\.minecraft\\" + libName,
-                    getAppDataPath() + "\\.minecraft\\mods\\natives\\" + libName, getAppDataPath() + "\\.minecraft\\" + libName
-                };
-
-                for (String absPath : absolutePaths) { if (tryLoadFromAbsolutePath(absPath)) return; }
-
-                if (tryLoadFromJavaLibraryPath(libName)) return;
-
-                logLibraryNotFoundError(classpathPaths, absolutePaths);
-                isNativeLibraryLoaded = false;
-
-            } catch (SecurityException e) {
-                LOGGER.error("Security exception prevented native library loading: {}", e.getMessage(), e);
-                isNativeLibraryLoaded = false;
-            } catch (UnsatisfiedLinkError ule) {
-                LOGGER.error("Unsatisfied link error in native library loading: {} ({})", ule.getMessage(), getOSErrorMessage(ule), ule);
-                isNativeLibraryLoaded = false;
-            } catch (Throwable t) {
-                LOGGER.error("Critical error in native library loading system: {} ({})", t.getMessage(), getDetailedErrorMessage(t), t);
-                isNativeLibraryLoaded = false;
+                synchronized (nativeLibraryLock) {
+                    if (isNativeLibraryLoaded) return;
+        
+                    try {
+                        String os = System.getProperty("os.name").toLowerCase();
+                        String arch = System.getProperty("os.arch").toLowerCase();
+                        String libExtension = os.contains("win") ? "dll" : os.contains("mac") ? "dylib" : "so";
+                        String libName = RUST_PERF_LIBRARY_NAME + "." + libExtension;
+                        String userDir = System.getProperty("user.dir");
+        
+                        LOGGER.info("Starting native library search (OS: {}, Arch: {}, Java: {})", os, arch, System.getProperty("java.version"));
+                        LOGGER.info("Working directory: {}", userDir);
+        
+                        // First, try classpath locations (most reliable)
+                        String[] classpathPaths = {
+                            "natives/" + libName, 
+                            libName, 
+                            "src/main/resources/natives/" + libName,
+                            "build/resources/main/natives/" + libName, 
+                            "run/natives/" + libName,
+                            "target/natives/" + libName, 
+                            "target/debug/" + libName, 
+                            "target/release/" + libName,
+                            "rust/target/release/" + libName,
+                            "rust/target/debug/" + libName
+                        };
+        
+                        LOGGER.info("Attempting to load from classpath...");
+                        for (String path : classpathPaths) {
+                            if (tryLoadFromClasspath(path)) {
+                                LOGGER.info("✅ Successfully loaded from classpath: {}", path);
+                                return;
+                            }
+                        }
+        
+                        // Try absolute paths with fallback to common development locations
+                        String sep = File.separator;
+                        String[] absolutePaths = new String[] {
+                            userDir + sep + "src" + sep + "main" + sep + "resources" + sep + "natives" + sep + libName,
+                            userDir + sep + "build" + sep + "resources" + sep + "main" + sep + "natives" + sep + libName,
+                            userDir + sep + "run" + sep + "natives" + sep + libName,
+                            userDir + sep + "target" + sep + "natives" + sep + libName,
+                            userDir + sep + "target" + sep + "debug" + sep + libName,
+                            userDir + sep + "target" + sep + "release" + sep + libName,
+                            userDir + sep + libName,
+                            
+                            // Rust build output directory (prioritize release, then debug)
+                            userDir + sep + "rust" + sep + "target" + sep + "release" + sep + libName,
+                            userDir + sep + "rust" + sep + "target" + sep + "debug" + sep + libName,
+                            
+                            // Common Minecraft mod development paths
+                            getUserProfilePath() + sep + ".minecraft" + sep + "mods" + sep + "natives" + sep + libName,
+                            getUserProfilePath() + sep + ".minecraft" + sep + libName,
+                            getAppDataPath() + sep + ".minecraft" + sep + "mods" + sep + "natives" + sep + libName,
+                            getAppDataPath() + sep + ".minecraft" + sep + libName,
+                            
+                            // Architecture-specific paths
+                            userDir + sep + "target" + sep + arch + sep + "natives" + sep + libName,
+                            userDir + sep + "target" + sep + arch + sep + libName
+                        };
+        
+                        LOGGER.info("Attempting to load from absolute paths...");
+                        for (String absPath : absolutePaths) {
+                            if (tryLoadFromAbsolutePath(absPath)) {
+                                LOGGER.info("✅ Successfully loaded from absolute path: {}", absPath);
+                                return;
+                            }
+                        }
+        
+                        // Try Java library path as last resort
+                        if (tryLoadFromJavaLibraryPath(libName)) {
+                            LOGGER.info("✅ Successfully loaded from java.library.path");
+                            return;
+                        }
+        
+                        // Try to build the library if not found (development only)
+                        if (tryBuildRustLibrary()) {
+                            LOGGER.info("✅ Successfully built and loaded Rust library");
+                            return;
+                        }
+        
+                        // If all else fails, log comprehensive error and enable safe mode
+                        logLibraryNotFoundError(classpathPaths, absolutePaths);
+                        isNativeLibraryLoaded = false;
+                        enableSafeMode();
+        
+                    } catch (SecurityException e) {
+                        LOGGER.error("Security exception prevented native library loading: {}", e.getMessage(), e);
+                        isNativeLibraryLoaded = false;
+                        enableSafeMode();
+                    } catch (UnsatisfiedLinkError ule) {
+                        LOGGER.error("Unsatisfied link error in native library loading: {} ({})", ule.getMessage(), getOSErrorMessage(ule), ule);
+                        isNativeLibraryLoaded = false;
+                        enableSafeMode();
+                    } catch (Throwable t) {
+                        LOGGER.error("Critical error in native library loading system: {} ({})", t.getMessage(), getDetailedErrorMessage(t), t);
+                        isNativeLibraryLoaded = false;
+                        enableSafeMode();
+                    }
+                }
             }
+            
+            private static boolean tryBuildRustLibrary() {
+                if (ModeDetector.isTestMode() || !isDevelopmentEnvironment()) {
+                    LOGGER.debug("Skipping Rust auto-build (TestMode: {}, DevEnv: {})", 
+                        ModeDetector.isTestMode(), isDevelopmentEnvironment());
+                    return false;
+                }
+                
+                LOGGER.info("🔨 Attempting to build Rust library automatically...");
+                
+                try {
+                    File rustDir = new File("rust");
+                    if (!rustDir.exists() || !rustDir.isDirectory()) {
+                        LOGGER.warn("Rust directory not found at: {}", rustDir.getAbsolutePath());
+                        return false;
+                    }
+                    
+                    // Check if cargo is available
+                    ProcessBuilder cargoCheck = new ProcessBuilder("cargo", "--version");
+                    try {
+                        Process checkProcess = cargoCheck.start();
+                        int checkCode = checkProcess.waitFor();
+                        if (checkCode != 0) {
+                            LOGGER.warn("Cargo not found. Install Rust from https://rustup.rs/");
+                            return false;
+                        }
+                    } catch (Exception e) {
+                        LOGGER.warn("Cargo not available: {}", e.getMessage());
+                        return false;
+                    }
+                    
+                    // Build the library
+                    LOGGER.info("Building Rust library in: {}", rustDir.getAbsolutePath());
+                    ProcessBuilder pb = new ProcessBuilder("cargo", "build", "--release");
+                    pb.directory(rustDir);
+                    pb.redirectErrorStream(true);
+                    
+                    Process process = pb.start();
+                    
+                    // Read output
+                    try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(process.getInputStream()))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            LOGGER.info("[Cargo] {}", line);
+                        }
+                    }
+                    
+                    int exitCode = process.waitFor();
+                    
+                    if (exitCode == 0) {
+                        LOGGER.info("✅ Rust library built successfully");
+                        
+                        // Try to load the newly built library
+                        String os = System.getProperty("os.name").toLowerCase();
+                        String libExtension = os.contains("win") ? "dll" : os.contains("mac") ? "dylib" : "so";
+                        String sep = File.separator;
+                        String libPath = rustDir.getAbsolutePath() + sep + "target" + sep + "release" + sep + RUST_PERF_LIBRARY_NAME + "." + libExtension;
+                        
+                        LOGGER.info("Attempting to load built library from: {}", libPath);
+                        return tryLoadFromAbsolutePath(libPath);
+                    } else {
+                        LOGGER.error("❌ Failed to build Rust library (exit code: {})", exitCode);
+                        return false;
+                    }
+                } catch (Exception e) {
+                    LOGGER.error("❌ Failed to build Rust library: {}", e.getMessage(), e);
+                    return false;
+                }
+            }
+            
+            private static boolean isDevelopmentEnvironment() {
+                // Check for common development indicators
+                File gradlew = new File("gradlew");
+                File buildGradle = new File("build.gradle");
+                File cargoToml = new File("rust/Cargo.toml");
+                
+                return gradlew.exists() && buildGradle.exists() && cargoToml.exists();
+            }
+    
+        private static void enableSafeMode() {
+            LOGGER.warn("🔧 Entering safe mode: Native optimizations disabled");
+            LOGGER.warn("   - Performance will be reduced but game will remain functional");
+            LOGGER.warn("   - To resolve: Build Rust library with 'cargo build --release' and place in natives/ directory");
+            LOGGER.warn("   - Current search paths: {}", Arrays.toString(RUST_PERF_LIBRARY_PATHS));
         }
-    }
 
     private static boolean tryLoadFromClasspath(String path) {
-        URL resource = ClassLoader.getSystemClassLoader().getResource(path);
-        if (resource != null) {
-            try {
-                System.load(resource.getPath());
-                LOGGER.info("✅ SUCCESS: Loaded native library from classpath: {}", path);
-                isNativeLibraryLoaded = true;
-                return true;
-            } catch (UnsatisfiedLinkError e) {
-                LOGGER.warn("❌ Classpath load failed for {}: {} ({})", path, e.getMessage(), getOSErrorMessage(e));
+        try {
+            // Try to load from classpath (works for development and packaged JAR)
+            URL resource = OptimizationInjector.class.getClassLoader().getResource(path);
+            
+            if (resource == null) {
+                // Fallback to system classloader
+                resource = ClassLoader.getSystemClassLoader().getResource(path);
             }
-        } else LOGGER.debug("ℹ️ Classpath resource not found: {}", path);
+            
+            if (resource != null) {
+                String protocol = resource.getProtocol();
+                
+                // Handle jar:file: protocol (when library is inside JAR)
+                if ("jar".equals(protocol)) {
+                    return extractAndLoadFromJar(resource, path);
+                }
+                
+                // Handle file: protocol (when library is in filesystem)
+                if ("file".equals(protocol)) {
+                    String filePath = resource.getPath();
+                    // Remove leading slash on Windows (e.g., /D:/path becomes D:/path)
+                    if (filePath.startsWith("/") && filePath.length() > 2 && filePath.charAt(2) == ':') {
+                        filePath = filePath.substring(1);
+                    }
+                    System.load(filePath);
+                    LOGGER.info("✅ SUCCESS: Loaded native library from classpath: {}", path);
+                    isNativeLibraryLoaded = true;
+                    return true;
+                }
+            } else {
+                LOGGER.debug("ℹ️ Classpath resource not found: {}", path);
+            }
+        } catch (UnsatisfiedLinkError e) {
+            LOGGER.debug("❌ Classpath load failed for {}: {}", path, e.getMessage());
+        } catch (Exception e) {
+            LOGGER.debug("❌ Classpath load error for {}: {}", path, e.getMessage());
+        }
         return false;
+    }
+    
+    /**
+     * Extract native library from JAR and load it from temporary directory
+     */
+    private static boolean extractAndLoadFromJar(URL resource, String resourcePath) {
+        try {
+            // Create temp directory for native libraries with unique name to avoid conflicts
+            File tempDir = new File(System.getProperty("java.io.tmpdir"), "kneaf-natives-" + System.currentTimeMillis());
+            if (!tempDir.exists()) {
+                tempDir.mkdirs();
+            }
+            
+            // Extract library to temp directory
+            String libName = new File(resourcePath).getName();
+            File tempLib = new File(tempDir, libName);
+            
+            // Always extract to ensure we have the latest version
+            LOGGER.info("Extracting native library from JAR: {} -> {}", resourcePath, tempLib.getAbsolutePath());
+            
+            try (java.io.InputStream in = resource.openStream();
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(tempLib)) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                }
+            }
+            
+            LOGGER.info("Extracted native library to: {} (size: {} bytes)", tempLib.getAbsolutePath(), tempLib.length());
+            
+            // Delete temp file on exit
+            tempLib.deleteOnExit();
+            tempDir.deleteOnExit();
+            
+            // Load the extracted library
+            System.load(tempLib.getAbsolutePath());
+            LOGGER.info("✅ SUCCESS: Loaded native library from JAR: {}", resourcePath);
+            isNativeLibraryLoaded = true;
+            return true;
+            
+        } catch (UnsatisfiedLinkError e) {
+            LOGGER.error("❌ Failed to load extracted library: {} ({})", e.getMessage(), getOSErrorMessage(e));
+            return false;
+        } catch (Exception e) {
+            LOGGER.warn("Failed to extract/load library from JAR: {}", e.getMessage());
+            return false;
+        }
     }
 
     private static boolean tryLoadFromAbsolutePath(String absPath) {
         java.io.File libFile = new java.io.File(absPath);
         if (libFile.exists()) {
+            LOGGER.info("Found library file at: {} (size: {} bytes)", absPath, libFile.length());
             try {
-                System.load(absPath);
+                System.load(libFile.getAbsolutePath());
                 LOGGER.info("✅ SUCCESS: Loaded native library from absolute path: {}", absPath);
                 isNativeLibraryLoaded = true;
                 return true;
             } catch (UnsatisfiedLinkError e) {
-                LOGGER.warn("❌ Absolute path load failed for {}: {} ({})", absPath, e.getMessage(), getOSErrorMessage(e));
+                LOGGER.error("❌ Absolute path load failed for {}: {} ({})", absPath, e.getMessage(), getOSErrorMessage(e));
+                LOGGER.error("   This usually means the DLL exists but has missing dependencies or wrong architecture");
             } catch (SecurityException e) {
-                LOGGER.warn("❌ Security restriction prevented loading from {}: {}", absPath, e.getMessage());
+                LOGGER.error("❌ Security restriction prevented loading from {}: {}", absPath, e.getMessage());
             }
-        } else LOGGER.trace("ℹ️ File not found (ignored): {}", absPath);
+        }
         return false;
     }
 
@@ -207,152 +437,216 @@ public final class OptimizationInjector {
     private OptimizationInjector() {}
 
     @SubscribeEvent
-    public static void onEntityTick(EntityTickEvent.Pre event) {
-        if (!PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) return;
-        if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isRustIntegrationEnabled()) {
-            recordOptimizationMiss("Native library not loaded or integration disabled");
-            return;
-        }
-        
-        try {
-            Object entity = event.getEntity();
-            if (entity == null) {
-                recordOptimizationMiss("Entity is null");
-                return;
-            }
+        public static void onEntityTick(EntityTickEvent.Pre event) {
+            if (!PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) return;
             
-            // Only skip Minecraft-specific checks in test mode
-            if (ModeDetector.isTestMode()) {
-                // Silent in test mode
-            } else {
-                // Perform strict Minecraft-specific validation in production
-                if (!isValidMinecraftEntity(entity)) {
+            // Fast path: Skip expensive processing if native optimizations are not available
+                        if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isRustIntegrationEnabled()) {
+                            // Only log once per minute to avoid spam
+                            if (totalEntitiesProcessed.get() % 1000 == 0) {
+                                recordOptimizationMiss("Native library not loaded or integration disabled");
+                            }
+                            return;
+                        }
+            
+            try {
+                Object entity = event.getEntity();
+                if (entity == null) {
+                    recordOptimizationMiss("Entity is null");
+                    return;
+                }
+                
+                // Perform strict validation only when needed
+                if (!ModeDetector.isTestMode() && !isValidMinecraftEntity(entity)) {
                     recordOptimizationMiss("Entity failed Minecraft-specific validation");
                     return;
                 }
-                // Silent success - no logging for valid entities
-            }
-
-            double x = 0.0;
-            double y = 0.0;
-            double z = 0.0;
-            
-            // Try to get actual movement data, fallback to mock values only in test mode
-            try {
-                // Use reflection to access entity methods if available
-                java.lang.reflect.Method getDeltaMovement = entity.getClass().getMethod("getDeltaMovement");
-                Object vec3 = getDeltaMovement.invoke(entity);
-                if (vec3 != null) {
-                    java.lang.reflect.Method getX = vec3.getClass().getMethod("x");
-                    java.lang.reflect.Method getY = vec3.getClass().getMethod("y");
-                    java.lang.reflect.Method getZ = vec3.getClass().getMethod("z");
-                    x = ((Number) getX.invoke(vec3)).doubleValue();
-                    y = ((Number) getY.invoke(vec3)).doubleValue();
-                    z = ((Number) getZ.invoke(vec3)).doubleValue();
-                }
-            } catch (Exception e) {
-                if (ModeDetector.isTestMode()) {
-                    // Use mock values if reflection fails in test mode
-                    x = 0.1;
-                    y = -0.2;
-                    z = 0.05;
-                    // Silent in test mode
-                } else {
-                    recordOptimizationMiss("Failed to get entity movement data in production");
+    
+                double[] movementData = getEntityMovementData(entity);
+                if (movementData == null) {
+                    recordOptimizationMiss("Failed to get entity movement data");
                     return;
                 }
-            }
-            if (Double.isNaN(x) || Double.isInfinite(x) || Double.isNaN(y) || Double.isInfinite(y) || Double.isNaN(z) || Double.isInfinite(z)) {
-                recordOptimizationMiss("Native physics calculation skipped - invalid input values");
-                return;
-            }
-
-            double originalX = x;
-            double originalY = y;
-            double originalZ = z;
-            double[] resultData = null;
-            boolean useNativeResult = false;
-            double dampingFactor = 0.980;
-
-            try {
-                // Use proper entity-specific damping calculation
-                dampingFactor = calculateEntitySpecificDamping(entity);
-                resultData = rustperf_vector_damp(x, y, z, dampingFactor);
                 
-                if (resultData != null && resultData.length == 3 && isNaturalMovement(resultData, originalX, originalY, originalZ)) {
-                    useNativeResult = true;
-                    recordOptimizationHit("Native vector calculation succeeded");
-                } else {
-                    resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
-                    if (isNaturalMovement(resultData, originalX, originalY, originalZ)) {
-                        useNativeResult = true;
-                        recordOptimizationHit("Java fallback vector calculation succeeded");
-                    } else {
-                        recordOptimizationMiss("Both Rust and Java fallback failed - using original");
-                    }
+                double x = movementData[0];
+                double y = movementData[1];
+                double z = movementData[2];
+                
+                if (hasInvalidMovementValues(x, y, z)) {
+                    recordOptimizationMiss("Invalid movement values detected");
+                    return;
                 }
-            } catch (UnsatisfiedLinkError ule) {
-                LOGGER.error("JNI link error in rustperf_vector_damp: {}", ule.getMessage());
-                resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
-                if (isNaturalMovement(resultData, originalX, originalY, originalZ)) {
-                    useNativeResult = true;
-                    recordOptimizationHit("Java fallback used due to JNI error");
+    
+                double originalX = x;
+                double originalY = y;
+                double originalZ = z;
+                double[] resultData = null;
+                boolean useOptimizedResult = false;
+                double dampingFactor = calculateEntitySpecificDamping(entity);
+    
+                try {
+                    // Optimized path with validation
+                    resultData = rustperf_vector_damp(x, y, z, dampingFactor);
+                    
+                    if (isValidOptimizationResult(resultData, originalX, originalY, originalZ)) {
+                        useOptimizedResult = true;
+                        recordOptimizationHit("Native vector optimization applied");
+                    } else {
+                        // Fallback to Java implementation with same validation
+                        resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
+                        if (isValidOptimizationResult(resultData, originalX, originalY, originalZ)) {
+                            useOptimizedResult = true;
+                            recordOptimizationHit("Java fallback optimization applied");
+                        }
+                    }
+                } catch (UnsatisfiedLinkError ule) {
+                    if (!vectorDampWarningLogged) {
+                        LOGGER.warn("JNI error in native optimization: {}", ule.getMessage());
+                        LOGGER.warn("Falling back to Java implementation. This will only be logged once.");
+                        vectorDampWarningLogged = true;
+                    }
+                    resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
+                    if (isValidOptimizationResult(resultData, originalX, originalY, originalZ)) {
+                        useOptimizedResult = true;
+                        recordOptimizationHit("Java fallback used due to JNI error");
+                    }
+                } catch (Throwable t) {
+                    LOGGER.debug("Optimization calculation failed: {}", t.getMessage());
+                    // Don't spam logs for expected fallback cases
+                }
+    
+                if (useOptimizedResult) {
+                    applyOptimizedMovement(entity, resultData, originalY);
                 } else {
-                    recordOptimizationMiss("Native library JNI error and Java fallback failed");
+                    // Silent: No need to log when using original movement
                 }
             } catch (Throwable t) {
-                LOGGER.error("Error in rustperf_vector_damp: {}", t.getMessage());
-                resultData = java_vector_damp(x, y, z, dampingFactor, originalY);
-                if (isNaturalMovement(resultData, originalX, originalY, originalZ)) {
-                    useNativeResult = true;
-                    recordOptimizationHit("Java fallback used due to error");
-                } else {
-                    recordOptimizationMiss("Native calculation error and Java fallback failed - " + t.getMessage());
-                }
+                LOGGER.debug("Entity optimization failed: {}", t.getMessage());
+            } finally {
+                totalEntitiesProcessed.incrementAndGet();
             }
-
-            if (useNativeResult) {
+        }
+    
+        private static double[] getEntityMovementData(Object entity) {
+            try {
+                java.lang.reflect.Method getDeltaMovement = entity.getClass().getMethod("getDeltaMovement");
+                Object vec3 = getDeltaMovement.invoke(entity);
+                
+                if (vec3 == null) return null;
+                
+                java.lang.reflect.Method getX = vec3.getClass().getMethod("x");
+                java.lang.reflect.Method getY = vec3.getClass().getMethod("y");
+                java.lang.reflect.Method getZ = vec3.getClass().getMethod("z");
+                
+                return new double[] {
+                    ((Number) getX.invoke(vec3)).doubleValue(),
+                    ((Number) getY.invoke(vec3)).doubleValue(),
+                    ((Number) getZ.invoke(vec3)).doubleValue()
+                };
+            } catch (Exception e) {
+                if (ModeDetector.isTestMode()) {
+                    return new double[] {0.1, -0.2, 0.05}; // Mock realistic movement
+                }
+                return null;
+            }
+        }
+    
+        private static boolean hasInvalidMovementValues(double x, double y, double z) {
+            return Double.isNaN(x) || Double.isInfinite(x) ||
+                   Double.isNaN(y) || Double.isInfinite(y) ||
+                   Double.isNaN(z) || Double.isInfinite(z);
+        }
+    
+        private static boolean isValidOptimizationResult(double[] result, double originalX, double originalY, double originalZ) {
+            if (result == null || result.length != 3) return false;
+            
+            for (double val : result) {
+                if (Double.isNaN(val) || Double.isInfinite(val)) return false;
+            }
+    
+            // More robust validation with reasonable thresholds
+            final double HORIZONTAL_THRESHOLD = 10.0;
+            final double VERTICAL_THRESHOLD = 15.0;
+    
+            boolean xDirectionReversed = (originalX > 0 && result[0] < 0) || (originalX < 0 && result[0] > 0);
+            boolean zDirectionReversed = (originalZ > 0 && result[2] < 0) || (originalZ < 0 && result[2] > 0);
+    
+            double horizontalThreshold = xDirectionReversed || zDirectionReversed ? HORIZONTAL_THRESHOLD * 2 : HORIZONTAL_THRESHOLD;
+    
+            return Math.abs(result[0]) <= Math.abs(originalX) * horizontalThreshold &&
+                   Math.abs(result[2]) <= Math.abs(originalZ) * horizontalThreshold &&
+                   Math.abs(result[1]) <= Math.abs(originalY) * VERTICAL_THRESHOLD;
+        }
+    
+        private static void applyOptimizedMovement(Object entity, double[] resultData, double originalY) {
+            try {
                 double processedY = resultData[1];
                 
-                // External effect detection
-                if (Math.abs(resultData[1] - originalY) > 0.5) {
-                    processedY = resultData[1];
-                    recordOptimizationHit("Strong external effect preserved");
-                } else if (originalY < -0.1) {
-                    processedY = Math.min(originalY * 1.1, resultData[1]);
+                // More sophisticated vertical movement handling
+                if (Math.abs(processedY - originalY) > 0.7) {
+                    processedY = applyVerticalDamping(processedY, originalY);
+                } else if (originalY < -0.15) {
+                    processedY = Math.max(originalY * 0.9, processedY); // More conservative falling
                 }
+    
+                applyEntityMovement(entity, resultData[0], processedY, resultData[2]);
                 
-                double verticalDamping = 0.015;
-                
-                // Apply actual movement in production, mock only in test
-                if (ModeDetector.isTestMode()) {
-                    // Silent in test mode
-                } else {
-                    applyEntityMovement(entity, resultData[0], processedY * (1 - verticalDamping), resultData[2]);
-                }
-                // Silent success - no logging for applied calculations
-            } else {
-                recordOptimizationMiss("Using original movement (native fallback)");
+            } catch (Exception e) {
+                LOGGER.debug("Failed to apply optimized movement: {}", e.getMessage());
+                // Don't spam logs for expected reflection failures
             }
-        } catch (Throwable t) {
-            LOGGER.error("Error during native vector calculation: {}", t.getMessage());
-            recordOptimizationMiss("Native vector calculation failed - " + t.getMessage());
-        } finally {
-            totalEntitiesProcessed.incrementAndGet();
         }
-    }
+    
+        private static double applyVerticalDamping(double processedY, double originalY) {
+            double verticalDampingFactor = 0.985;
+            if (originalY < -0.5) {
+                return processedY * verticalDampingFactor * 0.9; // More damping for steep falls
+            } else if (originalY > 0.3) {
+                return processedY * verticalDampingFactor * 1.1; // Less damping for jumps
+            }
+            return processedY * verticalDampingFactor;
+        }
 
     @SubscribeEvent
-    public static void onServerTick(ServerTickEvent.Pre event) {
-        if (PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
-            try {
-                int entityCount = ModeDetector.isTestMode() ? 200 : getActualEntityCount(event);
-                // Silent success - no logging, just metrics
-            } catch (Throwable t) {
-                recordOptimizationMiss("Server tick processing failed: " + t.getMessage());
+        public static void onServerTick(ServerTickEvent.Pre event) {
+            if (PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
+                try {
+                    int entityCount = ModeDetector.isTestMode() ? 200 : getActualEntityCount(event);
+                    // Silent success - no logging, just metrics
+                    
+                    // Implement server-side throttling when native optimizations are unavailable
+                    if (!isNativeLibraryLoaded && totalEntitiesProcessed.get() % 1000 == 0) {
+                        LOGGER.warn("Server tick lag detected - throttling entity processing (native optimizations unavailable)");
+                    }
+                } catch (Throwable t) {
+                    recordOptimizationMiss("Server tick processing failed: " + t.getMessage());
+                }
             }
         }
-    }
+        
+        /**
+         * Throttle entity processing to prevent server overload when native optimizations are unavailable
+         */
+        private static final AtomicInteger entityProcessingCounter = new AtomicInteger(0);
+        private static final int ENTITY_PROCESSING_THROTTLE = 5; // Process 1 in every N entities
+        
+        @SubscribeEvent
+        public static void onEntityTickThrottle(EntityTickEvent.Pre event) {
+            if (!PERFORMANCE_MANAGER.isEntityThrottlingEnabled() || isNativeLibraryLoaded) {
+                return;
+            }
+            
+            // Throttle entity processing when native optimizations are unavailable
+            int count = entityProcessingCounter.incrementAndGet();
+            
+            if (count > ENTITY_PROCESSING_THROTTLE) {
+                entityProcessingCounter.set(0);
+                
+                // Skip processing this entity to reduce server load
+                event.setCanceled(true);
+                LOGGER.trace("Throttled entity processing (native optimizations unavailable)");
+            }
+        }
 
     @SubscribeEvent
     public static void onLevelTick(LevelTickEvent.Pre event) {
@@ -381,22 +675,25 @@ public final class OptimizationInjector {
     static native int rustperf_hayabusa_calculate_passive_stacks(int currentStacks, boolean successfulHit, int maxStacks);
 
     private static double[] java_vector_damp(double x, double y, double z, double dampingFactor, double originalY) {
-        double verticalDamping = 0.015;
-        
-        double processedY = y;
-        
-        if (Math.abs(y - originalY) > 0.5) {
-            processedY = y;
-        } else if (y < -0.1) {
-            processedY = Math.min(y * 1.1, y);
+            double verticalDamping = 0.015;
+            
+            double processedY = y;
+            
+            // More consistent vertical damping logic
+            if (Math.abs(y - originalY) > 0.5) {
+                processedY = y * 0.98; // Apply slight damping even for large changes
+            } else if (y < -0.1) {
+                processedY = Math.max(y * 0.9, -0.5); // More controlled falling
+            } else if (y > 0.3) {
+                processedY = Math.min(y * 0.95, 0.5); // More controlled jumping
+            }
+            
+            return new double[] {
+                x * dampingFactor,
+                processedY * (1 - verticalDamping),
+                z * dampingFactor
+            };
         }
-        
-        return new double[] {
-            x * dampingFactor,           
-            processedY * (1 - verticalDamping), 
-            z * dampingFactor            
-        };
-    }
 
     private static double[] java_vector_multiply(double x, double y, double z, double scalar) {
         return new double[] { x * scalar, y * scalar, z * scalar };
@@ -538,88 +835,136 @@ public final class OptimizationInjector {
     public static double[] calculatePhantomShurikenTrajectory(double startX, double startY, double startZ,
                                                              double targetX, double targetY, double targetZ, double speed) {
         if (!isNativeLibraryLoaded) {
-            LOGGER.debug("Phantom shuriken calculation using Java fallback");
+            if (!phantomShurikenWarningLogged) {
+                LOGGER.info("Phantom shuriken calculation using Java fallback (native library not loaded)");
+                phantomShurikenWarningLogged = true;
+            }
             return java_phantom_shuriken_trajectory(startX, startY, startZ, targetX, targetY, targetZ, speed);
         }
         
         try {
             double[] result = rustperf_hayabusa_phantom_shuriken(startX, startY, startZ, targetX, targetY, targetZ, speed);
             if (result == null || result.length != 3) {
-                LOGGER.warn("Phantom shuriken Rust returned invalid result, using fallback");
+                if (!phantomShurikenWarningLogged) {
+                    LOGGER.warn("Phantom shuriken Rust returned invalid result, using fallback");
+                    phantomShurikenWarningLogged = true;
+                }
                 return java_phantom_shuriken_trajectory(startX, startY, startZ, targetX, targetY, targetZ, speed);
             }
             return result;
         } catch (UnsatisfiedLinkError e) {
-            LOGGER.warn("Phantom shuriken native method not found, using fallback: {}", e.getMessage());
+            if (!phantomShurikenWarningLogged) {
+                LOGGER.warn("Phantom shuriken native method not found, using fallback: {}", e.getMessage());
+                phantomShurikenWarningLogged = true;
+            }
             return java_phantom_shuriken_trajectory(startX, startY, startZ, targetX, targetY, targetZ, speed);
         } catch (Exception e) {
-            LOGGER.warn("Phantom shuriken Rust calculation failed, using fallback: {}", e.getMessage());
+            if (!phantomShurikenWarningLogged) {
+                LOGGER.warn("Phantom shuriken Rust calculation failed, using fallback: {}", e.getMessage());
+                phantomShurikenWarningLogged = true;
+            }
             return java_phantom_shuriken_trajectory(startX, startY, startZ, targetX, targetY, targetZ, speed);
         }
     }
     
     public static double[][] calculateQuadShadowPositions(double centerX, double centerY, double centerZ, double radius) {
         if (!isNativeLibraryLoaded) {
-            LOGGER.debug("Quad shadow calculation using Java fallback");
+            if (!quadShadowWarningLogged) {
+                LOGGER.info("Quad shadow calculation using Java fallback (native library not loaded)");
+                quadShadowWarningLogged = true;
+            }
             return java_quad_shadow_positions(centerX, centerY, centerZ, radius);
         }
         
         try {
             double[][] result = rustperf_hayabusa_quad_shadow(centerX, centerY, centerZ, radius);
             if (result == null || result.length != 4 || result[0].length != 3) {
-                LOGGER.warn("Quad shadow Rust returned invalid result, using fallback");
+                if (!quadShadowWarningLogged) {
+                    LOGGER.warn("Quad shadow Rust returned invalid result, using fallback");
+                    quadShadowWarningLogged = true;
+                }
                 return java_quad_shadow_positions(centerX, centerY, centerZ, radius);
             }
             return result;
         } catch (UnsatisfiedLinkError e) {
-            LOGGER.warn("Quad shadow native method not found, using fallback: {}", e.getMessage());
+            if (!quadShadowWarningLogged) {
+                LOGGER.warn("Quad shadow native method not found, using fallback: {}", e.getMessage());
+                quadShadowWarningLogged = true;
+            }
             return java_quad_shadow_positions(centerX, centerY, centerZ, radius);
         } catch (Exception e) {
-            LOGGER.warn("Quad shadow Rust calculation failed, using fallback: {}", e.getMessage());
+            if (!quadShadowWarningLogged) {
+                LOGGER.warn("Quad shadow Rust calculation failed, using fallback: {}", e.getMessage());
+                quadShadowWarningLogged = true;
+            }
             return java_quad_shadow_positions(centerX, centerY, centerZ, radius);
         }
     }
     
     public static double calculateShadowKillDamage(int passiveStacks, double baseDamage) {
         if (!isNativeLibraryLoaded) {
-            LOGGER.debug("Shadow kill damage calculation using Java fallback");
+            if (!shadowKillDamageWarningLogged) {
+                LOGGER.info("Shadow kill damage calculation using Java fallback (native library not loaded)");
+                shadowKillDamageWarningLogged = true;
+            }
             return java_shadow_kill_damage(passiveStacks, baseDamage);
         }
         
         try {
             double result = rustperf_hayabusa_shadow_kill_damage(passiveStacks, baseDamage);
             if (result <= 0 || Double.isNaN(result) || Double.isInfinite(result)) {
-                LOGGER.warn("Shadow kill damage Rust returned invalid result, using fallback");
+                if (!shadowKillDamageWarningLogged) {
+                    LOGGER.warn("Shadow kill damage Rust returned invalid result, using fallback");
+                    shadowKillDamageWarningLogged = true;
+                }
                 return java_shadow_kill_damage(passiveStacks, baseDamage);
             }
             return result;
         } catch (UnsatisfiedLinkError e) {
-            LOGGER.warn("Shadow kill damage native method not found, using fallback: {}", e.getMessage());
+            if (!shadowKillDamageWarningLogged) {
+                LOGGER.warn("Shadow kill damage native method not found, using fallback: {}", e.getMessage());
+                shadowKillDamageWarningLogged = true;
+            }
             return java_shadow_kill_damage(passiveStacks, baseDamage);
         } catch (Exception e) {
-            LOGGER.warn("Shadow kill damage Rust calculation failed, using fallback: {}", e.getMessage());
+            if (!shadowKillDamageWarningLogged) {
+                LOGGER.warn("Shadow kill damage Rust calculation failed, using fallback: {}", e.getMessage());
+                shadowKillDamageWarningLogged = true;
+            }
             return java_shadow_kill_damage(passiveStacks, baseDamage);
         }
     }
     
     public static int calculatePassiveStacks(int currentStacks, boolean successfulHit, int maxStacks) {
         if (!isNativeLibraryLoaded) {
-            LOGGER.debug("Passive stacks calculation using Java fallback");
+            if (!passiveStacksWarningLogged) {
+                LOGGER.info("Passive stacks calculation using Java fallback (native library not loaded)");
+                passiveStacksWarningLogged = true;
+            }
             return java_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
         }
         
         try {
             int result = rustperf_hayabusa_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
             if (result < 0 || result > maxStacks) {
-                LOGGER.warn("Passive stacks Rust returned invalid result {}, using fallback", result);
+                if (!passiveStacksWarningLogged) {
+                    LOGGER.warn("Passive stacks Rust returned invalid result {}, using fallback", result);
+                    passiveStacksWarningLogged = true;
+                }
                 return java_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
             }
             return result;
         } catch (UnsatisfiedLinkError e) {
-            LOGGER.warn("Passive stacks native method not found, using fallback: {}", e.getMessage());
+            if (!passiveStacksWarningLogged) {
+                LOGGER.warn("Passive stacks native method not found, using fallback: {}", e.getMessage());
+                passiveStacksWarningLogged = true;
+            }
             return java_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
         } catch (Exception e) {
-            LOGGER.warn("Passive stacks Rust calculation failed, using fallback: {}", e.getMessage());
+            if (!passiveStacksWarningLogged) {
+                LOGGER.warn("Passive stacks Rust calculation failed, using fallback: {}", e.getMessage());
+                passiveStacksWarningLogged = true;
+            }
             return java_calculate_passive_stacks(currentStacks, successfulHit, maxStacks);
         }
     }

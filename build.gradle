@@ -477,6 +477,35 @@ task copyRustToSrc(type: Copy) {
     }
 }
 
+// Copy Rust libraries to run directory for development
+task copyRustToRun(type: Copy) {
+    group = 'build'
+    description = 'Copy built Rust native libraries to run directory for development'
+    dependsOn 'buildRust'
+    
+    into file('run')
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE  // Always overwrite
+    
+    // Windows libraries
+    from('rust/target/release') {
+        include 'rustperf.dll', 'librustperf.dll'
+    }
+    
+    // Linux libraries
+    from('rust/target/release') {
+        include 'librustperf.so'
+    }
+    
+    // macOS libraries
+    from('rust/target/release') {
+        include 'librustperf.dylib'
+    }
+    
+    doLast {
+        println "Successfully copied Rust native libraries to run directory"
+    }
+}
+
 // Ensure compile and resource processing use the fresh natives in src/main/resources
 tasks.named('compileJava').configure { dependsOn(copyRustToSrc) }
 tasks.named('processResources').configure {
@@ -486,8 +515,14 @@ tasks.named('processResources').configure {
 
 // Ensure run tasks pick up fresh natives before launching the game in a dev environment
 // Use string-based dependsOn to remain configuration-cache friendly.
-tasks.named('runClient').configure { dependsOn 'copyRustToSrc' }
-tasks.named('runServer').configure { dependsOn 'copyRustToSrc' }
+tasks.named('runClient').configure { 
+    dependsOn 'copyRustToSrc'
+    dependsOn 'copyRustToRun'
+}
+tasks.named('runServer').configure { 
+    dependsOn 'copyRustToSrc'
+    dependsOn 'copyRustToRun'
+}
 
 // Task to run RustPerformanceTest directly with proper classpath
 tasks.register('runRustTest', JavaExec) {

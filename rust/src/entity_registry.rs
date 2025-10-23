@@ -309,6 +309,14 @@ impl EntityRegistry {
         EntityId(current_id)
     }
 
+    /// Get the entity type for a given entity ID
+    pub fn get_entity_type(&self, entity_id: EntityId) -> Result<EntityType, String> {
+        let entities = self.entities.read().unwrap();
+        entities.get(&entity_id)
+            .map(|entity| entity.entity_type.clone())
+            .ok_or_else(|| format!("Entity {} not found", entity_id.0))
+    }
+
     /// Get registry statistics
     pub fn get_statistics(&self) -> EntityRegistryStats {
         let entities = self.entities.read().unwrap();

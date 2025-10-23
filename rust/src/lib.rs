@@ -1147,3 +1147,101 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_calculateLimitedStack
 ) -> jint {
     std::cmp::min(current_stacks + increment, max_stacks)
 }
+
+/// JNI functions for Hayabusa skill optimizations - ShadowZombieNinja specific
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_phantom_shuriken<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    start_x: jdouble,
+    start_y: jdouble,
+    start_z: jdouble,
+    target_x: jdouble,
+    target_y: jdouble,
+    target_z: jdouble,
+    speed: jdouble,
+) -> JDoubleArray<'a> {
+    let dx = target_x - start_x;
+    let dy = target_y - start_y;
+    let dz = target_z - start_z;
+    let distance = (dx*dx + dy*dy + dz*dz).sqrt();
+    
+    if distance == 0.0 {
+        let result = [start_x, start_y, start_z];
+        let output = env.new_double_array(3).expect("Failed to create output array");
+        env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+        return output;
+    }
+    
+    let normalized_x = dx / distance;
+    let normalized_y = dy / distance;
+    let normalized_z = dz / distance;
+    
+    // Apply speed and add slight acceleration for projectile behavior
+    let result = [
+        start_x + normalized_x * speed * 0.15,
+        start_y + normalized_y * speed * 0.15,
+        start_z + normalized_z * speed * 0.15
+    ];
+    
+    let output = env.new_double_array(3).expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_quad_shadow<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass,
+    center_x: jdouble,
+    center_y: jdouble,
+    center_z: jdouble,
+    radius: jdouble,
+) -> JObjectArray<'a> {
+    let mut positions = Vec::new();
+    
+    // Create 4 quadrant positions in a perfect square pattern
+    positions.push([center_x + radius, center_y, center_z]);      // Right
+    positions.push([center_x - radius, center_y, center_z]);      // Left
+    positions.push([center_x, center_y, center_z + radius]);      // Forward
+    positions.push([center_x, center_y, center_z - radius]);      // Backward
+    
+    // Create 2D array: double[4][3]
+    let double_array_class = env.find_class("[D").expect("Failed to find double array class");
+    let result_array = env.new_object_array(4, double_array_class, JObject::null()).expect("Failed to create object array");
+    
+    for (i, pos) in positions.iter().enumerate() {
+        let pos_array = env.new_double_array(3).expect("Failed to create position array");
+        env.set_double_array_region(&pos_array, 0, pos).expect("Failed to set position array");
+        env.set_object_array_element(&result_array, i as i32, pos_array).expect("Failed to set array element");
+    }
+    
+    result_array
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_shadow_kill_damage(
+    _env: JNIEnv,
+    _class: JClass,
+    passive_stacks: jint,
+    base_damage: jdouble,
+) -> jdouble {
+    let multiplier = 1.0 + (passive_stacks as f64 * 0.30); // More aggressive scaling
+    base_damage * multiplier
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_hayabusa_calculate_passive_stacks(
+    _env: JNIEnv,
+    _class: JClass,
+    current_stacks: jint,
+    successful_hit: jboolean,
+    max_stacks: jint,
+) -> jint {
+    if successful_hit != jni::sys::JNI_TRUE {
+        return current_stacks;
+    }
+    
+    let new_stacks = current_stacks + 2; // Faster stacking for more dynamic combat
+    std::cmp::min(new_stacks, max_stacks)
+}

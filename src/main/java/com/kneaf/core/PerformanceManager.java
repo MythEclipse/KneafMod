@@ -86,7 +86,7 @@ public final class PerformanceManager {
             // Load optimization flags with fallback defaults
             isEntityThrottlingEnabled.set(parseBooleanProperty(properties, "entityThrottlingEnabled", true));
             isAiPathfindingOptimized.set(parseBooleanProperty(properties, "aiPathfindingOptimized", true));
-            isRustIntegrationEnabled.set(parseBooleanProperty(properties, "rustIntegrationEnabled", false));
+            isRustIntegrationEnabled.set(parseBooleanProperty(properties, "rustIntegrationEnabled", true));
             isHorizontalPhysicsOnly.set(parseBooleanProperty(properties, "horizontalPhysicsOnly", false));
             
             // Load combat system optimization flags
