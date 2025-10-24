@@ -356,11 +356,11 @@ public final class OptimizedOptimizationInjector {
                         physicsData.motionZ
                     );
                     
-                    // Preserve magnitude
-                    double magnitude = Math.sqrt(
-                        physicsData.motionX * physicsData.motionX +
-                        physicsData.motionY * physicsData.motionY +
-                        physicsData.motionZ * physicsData.motionZ
+                    // Preserve magnitude using Rust (FULL RUST CALCULATION)
+                    double magnitude = RustNativeLoader.vectorLength(
+                        physicsData.motionX,
+                        physicsData.motionY,
+                        physicsData.motionZ
                     );
                     
                     double newX = rustOptimized[0] * magnitude;

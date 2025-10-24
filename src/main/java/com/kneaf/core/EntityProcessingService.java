@@ -1136,10 +1136,11 @@ public final class EntityProcessingService {
                     );
                     
                     // Rust normalization returns unit vector, so we need to preserve magnitude
-                    double magnitude = Math.sqrt(
-                        data.motionX * data.motionX + 
-                        data.motionY * data.motionY + 
-                        data.motionZ * data.motionZ
+                    // FULL RUST CALCULATION: Use Rust vectorLength instead of Math.sqrt
+                    double magnitude = RustNativeLoader.vectorLength(
+                        data.motionX,
+                        data.motionY,
+                        data.motionZ
                     );
                     
                     // Apply magnitude back to normalized vector for smooth physics

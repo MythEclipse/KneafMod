@@ -517,8 +517,8 @@ public final class OptimizationInjector {
                         // Use Rust for fast vector normalization on all axes (horizontal + vertical)
                         double[] rustOptimized = RustNativeLoader.vectorNormalize(x, y, z);
                         
-                        // Preserve magnitude for accurate physics
-                        double magnitude = Math.sqrt(x * x + y * y + z * z);
+                        // Preserve magnitude using Rust (FULL RUST CALCULATION)
+                        double magnitude = RustNativeLoader.vectorLength(x, y, z);
                         
                         double optimizedX = rustOptimized[0] * magnitude;
                         double optimizedY = rustOptimized[1] * magnitude;
