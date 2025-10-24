@@ -31,7 +31,7 @@ public final class PerformanceManager {
     private final AtomicBoolean isEntityThrottlingEnabled = new AtomicBoolean(false);
     private final AtomicBoolean isAiPathfindingOptimized = new AtomicBoolean(false);
     private final AtomicBoolean isRustIntegrationEnabled = new AtomicBoolean(false);
-    private final AtomicBoolean isHorizontalPhysicsOnly = new AtomicBoolean(false);
+    private final AtomicBoolean isAdvancedPhysicsOptimized = new AtomicBoolean(true);
     
     // Combat system optimization flags
     private final AtomicBoolean isCombatSimdOptimized = new AtomicBoolean(true);
@@ -87,7 +87,7 @@ public final class PerformanceManager {
             isEntityThrottlingEnabled.set(parseBooleanProperty(properties, "entityThrottlingEnabled", true));
             isAiPathfindingOptimized.set(parseBooleanProperty(properties, "aiPathfindingOptimized", true));
             isRustIntegrationEnabled.set(parseBooleanProperty(properties, "rustIntegrationEnabled", true));
-            isHorizontalPhysicsOnly.set(parseBooleanProperty(properties, "horizontalPhysicsOnly", false));
+            isAdvancedPhysicsOptimized.set(parseBooleanProperty(properties, "advancedPhysicsOptimized", true));
             
             // Load combat system optimization flags
             isCombatSimdOptimized.set(parseBooleanProperty(properties, "combatSimdOptimized", true));
@@ -111,8 +111,8 @@ public final class PerformanceManager {
     public void resetToDefaults() {
         isEntityThrottlingEnabled.set(true);
         isAiPathfindingOptimized.set(true);
-        isRustIntegrationEnabled.set(false);
-        isHorizontalPhysicsOnly.set(false);
+        isRustIntegrationEnabled.set(true);
+        isAdvancedPhysicsOptimized.set(true);
         
         // Combat system defaults
         isCombatSimdOptimized.set(true);
@@ -186,11 +186,12 @@ public final class PerformanceManager {
     }
     
     /**
-     * Check if horizontal-only physics is enabled.
-     * @return true if horizontal-only physics is enabled, false otherwise
+     * Check if advanced physics optimization is enabled.
+     * Advanced physics optimization includes comprehensive optimizations on both horizontal and vertical axes.
+     * @return true if advanced physics optimization is enabled, false otherwise
      */
-    public boolean isHorizontalPhysicsOnly() {
-        return isHorizontalPhysicsOnly.get();
+    public boolean isAdvancedPhysicsOptimized() {
+        return isAdvancedPhysicsOptimized.get();
     }
     
     // ------------------------------ Setter Methods (Thread-Safe) ------------------------------
@@ -250,11 +251,12 @@ public final class PerformanceManager {
     }
     
     /**
-     * Set horizontal-only physics state.
-     * @param enabled true to enable horizontal-only physics, false to disable
+     * Set advanced physics optimization state.
+     * Advanced physics optimization includes comprehensive optimizations on both horizontal and vertical axes.
+     * @param enabled true to enable advanced physics optimization, false to disable
      */
-    public void setHorizontalPhysicsOnly(boolean enabled) {
-        isHorizontalPhysicsOnly.set(enabled);
+    public void setAdvancedPhysicsOptimized(boolean enabled) {
+        isAdvancedPhysicsOptimized.set(enabled);
     }
     
     // ------------------------------ Combat System Optimization Methods ------------------------------
@@ -365,7 +367,7 @@ public final class PerformanceManager {
         metrics.put("entity_throttling_enabled", isEntityThrottlingEnabled.get());
         metrics.put("ai_pathfinding_optimized", isAiPathfindingOptimized.get());
         metrics.put("rust_integration_enabled", isRustIntegrationEnabled.get());
-        metrics.put("horizontal_physics_only", isHorizontalPhysicsOnly.get());
+        metrics.put("advanced_physics_optimized", isAdvancedPhysicsOptimized.get());
         
         // Combat system optimizations
         metrics.put("combat_simd_optimized", isCombatSimdOptimized.get());

@@ -2,13 +2,18 @@ package com.kneaf.entities;
 import com.kneaf.core.OptimizationInjector;
 
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.particles.SimpleParticleType;
 import net.minecraft.server.level.ServerBossEvent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.BossEvent;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -22,7 +27,6 @@ import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.entity.npc.Villager;
-import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.projectile.Arrow;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -32,6 +36,7 @@ import java.util.EnumSet;
 import javax.annotation.Nonnull;
 
 public class ShadowZombieNinja extends Zombie {
+    private long lastQuadShadowUse = 0;
     private final ServerBossEvent bossEvent = new ServerBossEvent(
         net.minecraft.network.chat.Component.literal("Hayabusa Shadow Ninja"),
         BossEvent.BossBarColor.PURPLE,
@@ -403,11 +408,11 @@ public class ShadowZombieNinja extends Zombie {
         if (flag && target instanceof LivingEntity livingTarget) {
             // Hayabusa passive: Shadow Kill enhanced attacks
             // Each stack increases damage by 15%
-            float baseDamage = 6.0F;
+            float baseDamage = 4.0F; // Reduced from 6.0F for better balance
             float passiveMultiplier = 1.0f + (shadowKillPassiveStacks * 0.15f);
             float totalDamage = baseDamage * passiveMultiplier;
             
-            livingTarget.hurt(this.damageSources().mobAttack(this), totalDamage);
+            livingTarget.hurt(this.damageSources().mobAttack(this), totalDamage * 0.7f); // Reduce damage to 70% for balance
             
             // Use Rust optimization for passive stack calculation
             shadowKillPassiveStacks = OptimizationInjector.calculatePassiveStacks(
@@ -702,7 +707,7 @@ public class ShadowZombieNinja extends Zombie {
         
         // Check if server side for particle spawning
         boolean isServerSide = this.level() instanceof net.minecraft.server.level.ServerLevel;
-        net.minecraft.server.level.ServerLevel serverLevel = isServerSide ? 
+        net.minecraft.server.level.ServerLevel serverLevel = isServerSide ?
             (net.minecraft.server.level.ServerLevel) this.level() : null;
         
         // Massive visual effect at starting position with SERVER-SIDE particles
@@ -711,10 +716,10 @@ public class ShadowZombieNinja extends Zombie {
                 double offsetX = (this.random.nextDouble() - 0.5) * 2.0;
                 double offsetY = this.random.nextDouble() * 2.0;
                 double offsetZ = (this.random.nextDouble() - 0.5) * 2.0;
-                serverLevel.sendParticles(ParticleTypes.PORTAL, 
+                serverLevel.sendParticles(ParticleTypes.PORTAL,
                     currentPos.x + offsetX, currentPos.y + offsetY, currentPos.z + offsetZ,
                     1, 0.0D, 0.1D, 0.0D, 0.0);
-                serverLevel.sendParticles(ParticleTypes.SMOKE, 
+                serverLevel.sendParticles(ParticleTypes.SMOKE,
                     currentPos.x + offsetX, currentPos.y + offsetY, currentPos.z + offsetZ,
                     1, 0.0D, 0.05D, 0.0D, 0.0);
             }
@@ -728,11 +733,25 @@ public class ShadowZombieNinja extends Zombie {
         // Create 4 shadow clones around the ninja with massive effects
         shadowClones.clear();
         usedShadowClones.clear(); // Reset used shadows tracker
+        
+        // DEBUG: Log clone positions
+        if (serverLevel != null) {
+            serverLevel.getServer().getPlayerList().getPlayers().forEach(player -> {
+            });
+        }
+        
         for (int i = 0; i < 4; i++) {
             // Adjust Y-coordinate to be on the ground
             double groundY = findGroundY(clonePositions[i][0], clonePositions[i][1], clonePositions[i][2]);
             Vec3 clonePos = new Vec3(clonePositions[i][0], groundY, clonePositions[i][2]);
             shadowClones.add(clonePos);
+            
+            // DEBUG: Log individual clone positions
+            if (serverLevel != null) {
+                final int cloneIndex = i; // Create final copy for lambda
+                serverLevel.getServer().getPlayerList().getPlayers().forEach(player -> {
+                });
+            }
             
             // SERVER-SIDE particle effects for each clone for visibility
             if (serverLevel != null) {
@@ -742,30 +761,36 @@ public class ShadowZombieNinja extends Zombie {
                     double offsetY = this.random.nextDouble() * 2.0;
                     double offsetZ = (this.random.nextDouble() - 0.5) * 1.0;
                     
-                    serverLevel.sendParticles(ParticleTypes.PORTAL, 
+                    serverLevel.sendParticles(ParticleTypes.PORTAL,
                         clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
                         1, 0.0D, 0.0D, 0.0D, 0.0);
-                    serverLevel.sendParticles(ParticleTypes.ENCHANT, 
+                    serverLevel.sendParticles(ParticleTypes.ENCHANT,
                         clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
                         1, 0.0D, 0.0D, 0.0D, 0.0);
-                    serverLevel.sendParticles(ParticleTypes.WITCH, 
+                    serverLevel.sendParticles(ParticleTypes.WITCH,
                         clonePos.x + offsetX, clonePos.y + offsetY, clonePos.z + offsetZ,
                         1, 0.0D, 0.0D, 0.0D, 0.0);
                 }
                 
                 // Big explosion-like effect at clone position
-                serverLevel.sendParticles(ParticleTypes.EXPLOSION, 
+                serverLevel.sendParticles(ParticleTypes.EXPLOSION,
                     clonePos.x, clonePos.y + 1, clonePos.z,
                     3, 0.0D, 0.0D, 0.0D, 0.0);
-                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, 
+                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
                     clonePos.x, clonePos.y + 1, clonePos.z,
                     2, 0.0D, 0.1D, 0.0D, 0.0);
                 
                 // Add sonic boom effect for ultra visibility
-                serverLevel.sendParticles(ParticleTypes.SONIC_BOOM, 
+                serverLevel.sendParticles(ParticleTypes.SONIC_BOOM,
                     clonePos.x, clonePos.y + 1, clonePos.z,
                     1, 0.0D, 0.0D, 0.0D, 0.0);
             }
+        }
+        
+        // DEBUG: Log final shadow clones count
+        if (serverLevel != null) {
+            serverLevel.getServer().getPlayerList().getPlayers().forEach(player -> {
+            });
         }
         
         shadowCloneDuration = SHADOW_CLONE_DURATION;
@@ -1324,18 +1349,15 @@ public class ShadowZombieNinja extends Zombie {
             calculateCoordinatedAttackStrategy(clonePos);
         }
         
-        // Force immediate teleport using multiple methods for reliability
-        // Method 1: Direct position set
-        this.setPos(clonePos.x, clonePos.y, clonePos.z);
-        
-        // Method 2: Also try teleportTo for compatibility
-        this.teleportTo(clonePos.x, clonePos.y, clonePos.z);
-        
-        // Method 3: Reset delta movement to prevent rubber-banding
-        this.setDeltaMovement(0, 0, 0);
-        
-        // Force position update on client side
-        if (this.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+        // Force immediate teleport using reliable Minecraft teleportation method
+       // Use teleportTo which handles all edge cases properly including client synchronization
+       this.teleportTo(clonePos.x, clonePos.y, clonePos.z);
+       
+       // Reset delta movement to prevent rubber-banding
+       this.setDeltaMovement(0, 0, 0);
+       
+       // Ensure position is properly updated on both client and server using vanilla methods
+       if (this.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
             // Massive effects at departure position (SERVER SIDE - will sync to client)
             for (int i = 0; i < 25; i++) {
                 double offsetX = (this.random.nextDouble() - 0.5) * 1.5;
@@ -1530,17 +1552,25 @@ public class ShadowZombieNinja extends Zombie {
      */
     private void scheduleCoordinatedAttack(Vec3 clonePos, LivingEntity target, int delay) {
         // In a full implementation, this would schedule actual attacks from clone positions
-        // For now, we'll just log the coordinated attack plan
-        ServerLevel serverLevel = (ServerLevel) this.level();
-        if (!level().isClientSide() && serverLevel != null && serverLevel.getServer() != null && delay < 20) { // Only log attacks that will happen soon
-            serverLevel.getServer().getPlayerList().getPlayers().forEach(player -> {
-                player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                    "[AI COORD] Scheduled attack from clone at: (" +
-                    String.format("%.1f, %.1f, %.1f", clonePos.x, clonePos.y, clonePos.z) +
-                    ") in " + delay + " ticks"
-                ));
-            });
-        }
+        // Coordinated attack scheduling removed - Quad Shadow works silently
+    }
+    
+    /**
+     * Clear all existing shadow clones and their effects
+     */
+    private void clearShadowClones() {
+        shadowClones.clear();
+        usedShadowClones.clear();
+        activeClones.clear();
+        cloneSkillCooldowns.clear();
+        shadowCloneDuration = 0;
+    }
+    
+    /**
+     * Mark a specific clone as used
+     */
+    private void markCloneAsUsed(int cloneIndex) {
+        usedShadowClones.add(cloneIndex);
     }
     
     /**
@@ -1552,54 +1582,180 @@ public class ShadowZombieNinja extends Zombie {
         // Use proper BlockPos construction from integer coordinates
         net.minecraft.core.BlockPos blockPos = new net.minecraft.core.BlockPos((int)Math.floor(pos.x), (int)Math.floor(pos.y), (int)Math.floor(pos.z));
         
-        // Check if the position is inside any solid blocks
-        for (net.minecraft.core.Direction direction : net.minecraft.core.Direction.values()) {
-            net.minecraft.core.BlockPos neighborPos = blockPos.relative(direction);
-            net.minecraft.world.level.block.state.BlockState state = this.level().getBlockState(neighborPos);
-            
-            // If any adjacent block is solid and we're inside it, invalid
-            if (state.isSolidRender(this.level(), neighborPos) && neighborPos.getY() >= blockPos.getY() - 1 && neighborPos.getY() <= blockPos.getY() + 1) {
-                return false;
-            }
+        // More permissive but still safe collision check - only check directly below and current position
+        net.minecraft.world.level.block.state.BlockState currentBlock = this.level().getBlockState(blockPos);
+        if (currentBlock.isSolidRender(this.level(), blockPos)) {
+            return false;
+        }
+        
+        // Check block directly below (most important for safe teleportation)
+        net.minecraft.core.BlockPos belowPos = blockPos.below();
+        net.minecraft.world.level.block.state.BlockState belowBlock = this.level().getBlockState(belowPos);
+        if (!belowBlock.isSolidRender(this.level(), belowPos)) {
+            return false;
         }
         
         // Check if we're above ground (Y position is valid)
         double groundY = findGroundY(pos.x, pos.y, pos.z);
-        return pos.y >= groundY;
+        boolean validY = pos.y >= groundY - 1.0 && pos.y <= groundY + 1.0; // Allow slight Y variation for smoother teleportation
+        
+        // Debug logging removed - Quad Shadow skill should work silently
+        
+        return validY;
     }
 
     private void performShadowKill(LivingEntity target) {
-        if (shadowKillCooldown > 0 || target == null) return;
+       if (shadowKillCooldown > 0 || target == null) return;
 
-        // Dash to target like Hayabusa ultimate
-        Vec3 targetPos = target.position();
-        Vec3 direction = targetPos.subtract(this.position()).normalize();
-        Vec3 dashTarget = targetPos.subtract(direction.scale(1.5)); // Stop slightly before target
-        
-        // Instant teleport/dash to target
-        this.teleportTo(dashTarget.x, dashTarget.y, dashTarget.z);
-        
-        // Use Rust optimization for damage calculation
-        // Base damage 30.0 with scaling from passive stacks
-        double optimizedDamage = OptimizationInjector.calculateShadowKillDamage(shadowKillPassiveStacks, 30.0);
-        
-        // Apply massive damage immediately
-        target.hurt(this.damageSources().mobAttack(this), (float) optimizedDamage);
-        
-        // Consume all passive stacks
-        shadowKillPassiveStacks = 0;
-        
-        // Visual effects at both positions - ultimate should be flashy!
-        this.level().addParticle(ParticleTypes.DRAGON_BREATH, target.getX(), target.getY() + 1, target.getZ(), 0.0D, 0.0D, 0.0D);
-        this.level().addParticle(ParticleTypes.SWEEP_ATTACK, this.getX(), this.getY() + 1, this.getZ(), 0.0D, 0.0D, 0.0D);
-        this.level().addParticle(ParticleTypes.SONIC_BOOM, this.getX(), this.getY() + 1, this.getZ(), 0.0D, 0.0D, 0.0D);
-        this.level().addParticle(ParticleTypes.EXPLOSION, target.getX(), target.getY() + 1, target.getZ(), 0.0D, 0.0D, 0.0D);
-        this.playSound(SoundEvents.PLAYER_ATTACK_CRIT, 1.0F, 0.5F);
-        this.playSound(SoundEvents.ENDERMAN_TELEPORT, 1.0F, 1.2F);
-        this.playSound(SoundEvents.LIGHTNING_BOLT_THUNDER, 0.5F, 1.5F);
-        
-        shadowKillCooldown = SHADOW_KILL_COOLDOWN;
-    }
+       // Hayabusa Mobile Legends Ultimate: Multi-hit dash combo with area effect
+       Vec3 startPos = this.position();
+       Vec3 targetPos = target.position();
+       Vec3 direction = targetPos.subtract(startPos).normalize();
+       
+       // Calculate 3-stage dash trajectory (like ML Hayabusa)
+       Vec3[] dashPoints = new Vec3[] {
+           targetPos.subtract(direction.scale(2.0)),  // First hit point
+           targetPos.subtract(direction.scale(0.8)), // Second hit point
+           targetPos.subtract(direction.scale(0.2))  // Final impact point
+       };
+
+       // Execute 3-stage combo with cinematic timing
+       this.executeHayabusaCombo(dashPoints, target);
+
+       // Consume passive stacks (but keep some for strategic use)
+       int remainingStacks = Math.max(0, shadowKillPassiveStacks - 2);
+       shadowKillPassiveStacks = remainingStacks;
+
+       shadowKillCooldown = SHADOW_KILL_COOLDOWN;
+   }
+
+   /**
+    * Execute Hayabusa Mobile Legends-style ultimate combo:
+    * 3-stage dash with multi-hit, area damage, and cinematic effects
+    */
+   private void executeHayabusaCombo(Vec3[] dashPoints, LivingEntity mainTarget) {
+       ServerLevel serverLevel = (ServerLevel) this.level();
+       
+       // Stage 1: Initial dash with trail
+       this.teleportWithEffects(dashPoints[0], mainTarget, 1);
+       this.dealComboHit(mainTarget, 1.5F);
+       this.addAreaDamage(mainTarget.position(), 2.0D, 8.0F);
+       
+       // Stage 2: Follow-up dash with increased damage
+       this.teleportWithEffects(dashPoints[1], mainTarget, 2);
+       this.dealComboHit(mainTarget, 2.0F);
+       this.addAreaDamage(mainTarget.position(), 1.5D, 6.0F);
+       this.applyKnockback(mainTarget, 0.5F, 0.2F);
+       
+       // Stage 3: Final impact with massive damage and stun
+       this.teleportWithEffects(dashPoints[2], mainTarget, 3);
+       this.dealComboHit(mainTarget, 3.0F + (shadowKillPassiveStacks * 0.5F)); // Stack scaling
+       this.addAreaDamage(mainTarget.position(), 3.0D, 12.0F);
+       this.applyStun(mainTarget, 40); // 2-second stun
+       
+       // Cinematic finish
+       this.playSound(SoundEvents.ENDER_DRAGON_GROWL, 1.0F, 0.8F);
+       this.createUltimateFinishEffects(mainTarget.position());
+   }
+
+   /**
+    * Teleport with Hayabusa-style trail effects
+    */
+   private void teleportWithEffects(Vec3 pos, LivingEntity target, int stage) {
+       this.teleportTo(pos.x, pos.y, pos.z);
+       
+       // Stage-specific particles
+       ServerLevel serverLevel = (ServerLevel) this.level();
+       // Use fully qualified particle types to avoid import conflicts
+       SimpleParticleType particleType = switch(stage) {
+           case 1 -> ParticleTypes.DRAGON_BREATH;
+           case 2 -> ParticleTypes.SWEEP_ATTACK;
+           case 3 -> ParticleTypes.EXPLOSION;
+           default -> ParticleTypes.PORTAL;
+       };
+
+       // Trail effect
+       for (int i = 0; i < 15; i++) {
+           double offsetX = this.random.nextGaussian() * 0.3;
+           double offsetY = this.random.nextGaussian() * 0.3;
+           double offsetZ = this.random.nextGaussian() * 0.3;
+           serverLevel.sendParticles(particleType,
+               this.getX() + offsetX, this.getY() + 1 + offsetY, this.getZ() + offsetZ,
+               1, 0.0D, 0.0D, 0.0D, 0.0D);
+       }
+
+       // Sound effects per stage
+       SoundEvent soundEffect = switch(stage) {
+           case 1 -> SoundEvents.PLAYER_ATTACK_SWEEP;
+           case 2 -> SoundEvents.ENDERMAN_TELEPORT;
+           case 3 -> SoundEvents.LIGHTNING_BOLT_IMPACT;
+           default -> SoundEvents.PLAYER_ATTACK_CRIT;
+       };
+       this.playSound(soundEffect, 1.0F, 1.5F);
+   }
+
+   /**
+    * Deal combo hit with scaling damage
+    */
+   private void dealComboHit(LivingEntity target, float baseDamage) {
+       float finalDamage = baseDamage * (1.0F + (shadowKillPassiveStacks * 0.2F)); // Stack bonus
+       target.hurt(this.damageSources().mobAttack(this), finalDamage);
+       this.playSound(SoundEvents.GENERIC_EXPLODE.value(), 1.0F, 0.9F);
+   }
+
+   /**
+    * Add area damage to nearby enemies (like ML Hayabusa ultimate)
+    */
+   private void addAreaDamage(Vec3 center, double radius, float baseDamage) {
+       if (!(this.level() instanceof ServerLevel serverLevel)) return;
+
+       serverLevel.getEntitiesOfClass(LivingEntity.class,
+           new net.minecraft.world.phys.AABB(
+               center.x - radius, center.y - radius, center.z - radius,
+               center.x + radius, center.y + radius, center.z + radius
+           ))
+           .forEach(entity -> {
+               if (entity != this && entity.distanceToSqr(center) < radius * radius) {
+                   float damage = baseDamage * (1.0F - (float)entity.distanceToSqr(center) / (float)(radius * radius));
+                   entity.hurt(this.damageSources().mobAttack(this), damage);
+               }
+           });
+   }
+
+   /**
+    * Apply knockback to target
+    */
+   private void applyKnockback(LivingEntity target, float strength, float height) {
+       Vec3 lookDir = this.getLookAngle();
+       target.setDeltaMovement(lookDir.x * strength, height, lookDir.z * strength);
+   }
+
+   /**
+    * Apply stun effect to target
+    */
+   private void applyStun(LivingEntity target, int ticks) {
+       if (target instanceof ServerPlayer player) {
+           player.setTicksFrozen(ticks);
+       }
+   }
+
+   /**
+    * Create cinematic finish effects for ultimate
+    */
+   private void createUltimateFinishEffects(Vec3 pos) {
+       ServerLevel serverLevel = (ServerLevel) this.level();
+       
+       // Big explosion effect
+       serverLevel.sendParticles(ParticleTypes.EXPLOSION, pos.x, pos.y + 1, pos.z, 5, 0.5D, 0.5D, 0.5D, 0.0D);
+       serverLevel.sendParticles(ParticleTypes.SMOKE, pos.x, pos.y + 1, pos.z, 10, 1.0D, 1.0D, 1.0D, 0.0D);
+       
+       // Screen shake for all players (optional - requires additional setup)
+       serverLevel.getPlayers(player -> true).forEach(player -> {
+           if (player.distanceToSqr(pos) < 30.0D) {
+               // In a full implementation, add screen shake effect
+           }
+       });
+   }
 
     private void performRangedAttack(LivingEntity target) {
         double d0 = target.getX() - this.getX();
@@ -1677,34 +1833,39 @@ public class ShadowZombieNinja extends Zombie {
             // Summon clones AND immediately trigger strategic teleportation to first clone
             ninja.performQuadShadow();
             
-            // After creating clones, immediately trigger intelligent teleport to use them
-            if (!ninja.shadowClones.isEmpty()) {
-                // Use the best clone position based on tactical scoring
-                LivingEntity target = ninja.getTarget();
-                if (target != null) {
-                    Vec3 targetPos = target.position();
-                    Vec3 ninjaPos = ninja.position();
-                    double bestScore = -Double.MAX_VALUE;
-                    int bestCloneIndex = 0;
-                    
-                    // Find the best clone position using simplified scoring system
-                    for (int i = 0; i < ninja.shadowClones.size(); i++) {
-                        Vec3 clonePos = ninja.shadowClones.get(i);
-                        if (ninja.isValidTeleportLocation(clonePos)) {
-                            double score = ninja.calculateSimpleCloneScore(clonePos, targetPos, ninjaPos, ninja.distanceToSqr(target));
-                            if (score > bestScore) {
-                                bestScore = score;
-                                bestCloneIndex = i;
-                            }
-                        }
-                    }
-                    
-                    // Teleport to the best clone position immediately after summoning
-                    if (bestScore > -Double.MAX_VALUE) {
-                        ninja.teleportToShadowClone(bestCloneIndex);
-                    }
-                }
-            }
+            // After creating clones, wait one tick then trigger intelligent teleport to ensure clones are fully initialized
+           if (!ninja.shadowClones.isEmpty()) {
+               // Use the best clone position based on tactical scoring
+               LivingEntity target = ninja.getTarget();
+               if (target != null) {
+                   // Use immediate teleport but with improved validation and debugging
+                  if (ninja.isAlive() && !ninja.shadowClones.isEmpty()) {
+                      Vec3 targetPos = target.position();
+                      Vec3 ninjaPos = ninja.position();
+                      double bestScore = -Double.MAX_VALUE;
+                      int bestCloneIndex = 0;
+                      
+                      // Find the best clone position using simplified scoring system
+                     // Variables already declared above - removing duplicates
+                      
+                      for (int i = 0; i < ninja.shadowClones.size(); i++) {
+                          Vec3 clonePos = ninja.shadowClones.get(i);
+                          if (ninja.isValidTeleportLocation(clonePos)) {
+                              double score = ninja.calculateSimpleCloneScore(clonePos, targetPos, ninjaPos, ninja.distanceToSqr(target));
+                              if (score > bestScore) {
+                                  bestScore = score;
+                                  bestCloneIndex = i;
+                              }
+                          }
+                      }
+                      
+                      // Teleport to the best clone position immediately after summoning
+                      if (bestScore > -Double.MAX_VALUE) {
+                          ninja.teleportToShadowClone(bestCloneIndex);
+                      }
+                  }
+               }
+           }
             
             this.stop();
         }

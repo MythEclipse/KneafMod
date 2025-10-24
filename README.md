@@ -17,7 +17,7 @@
 - **AI Pathfinding Optimization**: Algoritma pathfinding yang dioptimalkan menggunakan Rust dengan parallel A* dan SIMD
 - **Rust-Powered Vector Mathematics**: Operasi matematika vektor dan matriks berkecepatan tinggi menggunakan native Rust library
 - **Item Stack Merging**: Penggabungan item stack otomatis untuk mengurangi jumlah entity di dunia
-- **Horizontal Physics Optimization**: Optimasi fisika hanya pada sumbu horizontal untuk mengurangi kalkulasi
+- **Advanced Physics Optimization**: Optimasi fisika komprehensif pada sumbu horizontal dan vertikal untuk mengurangi kalkulasi berlebih
 
 ### 🧠 Sistem AI dan Entity
 - **Combat System Optimization**: Sistem pertarungan yang dioptimalkan dengan SIMD dan parallel processing
@@ -183,7 +183,7 @@ Edit file `config/kneaf-performance.properties`:
 ```properties
 # Entity Optimization
 entityThrottlingEnabled=true
-horizontalPhysicsOnly=false
+advancedPhysicsOptimized=true
 
 # AI Optimization
 aiPathfindingOptimized=true

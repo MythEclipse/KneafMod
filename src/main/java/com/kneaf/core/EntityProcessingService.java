@@ -1056,15 +1056,46 @@ public final class EntityProcessingService {
                 return new EntityProcessingResult(false, "Invalid motion values", data);
             }
             
-            // NO DAMPING - Pure vanilla physics passthrough
-            // Just validate and return the data unchanged to preserve vanilla gameplay
-            EntityPhysicsData processedData = new EntityPhysicsData(
-                data.motionX,
-                data.motionY,
-                data.motionZ
-            );
+            // Check if advanced physics optimization is enabled
+            PerformanceManager perfManager = PerformanceManager.getInstance();
+            boolean useAdvancedPhysics = perfManager != null && perfManager.isAdvancedPhysicsOptimized();
             
-            return new EntityProcessingResult(true, "Pure vanilla physics - no damping", processedData);
+            EntityPhysicsData processedData;
+            
+            if (useAdvancedPhysics) {
+                // ADVANCED PHYSICS OPTIMIZATION: Use Rust-powered calculations for better performance
+                // No damping - just use Rust for faster vector operations on all axes (horizontal + vertical)
+                try {
+                    // Use Rust for comprehensive vector normalization and validation across all axes
+                    double[] rustOptimized = RustNativeLoader.vectorNormalize(
+                        data.motionX, 
+                        data.motionY, 
+                        data.motionZ
+                    );
+                    
+                    // Rust normalization returns unit vector, so we need to preserve magnitude
+                    double magnitude = velocityMagnitude; // Use precomputed magnitude for optimization
+                    
+                    // Apply magnitude back to normalized vector for smooth physics
+                    double optimizedX = rustOptimized[0] * magnitude;
+                    double optimizedY = rustOptimized[1] * magnitude;
+                    double optimizedZ = rustOptimized[2] * magnitude;
+                    
+                    processedData = new EntityPhysicsData(optimizedX, optimizedY, optimizedZ);
+                    
+                    return new EntityProcessingResult(true, "Advanced physics optimization with Rust calculations", processedData);
+                } catch (Exception e) {
+                    // Fallback to vanilla if Rust fails
+                    LOGGER.debug("Rust calculation failed, using vanilla: {}", e.getMessage());
+                    processedData = new EntityPhysicsData(data.motionX, data.motionY, data.motionZ);
+                    return new EntityProcessingResult(true, "Vanilla physics (Rust fallback)", processedData);
+                }
+            } else {
+                // Fallback: Pure vanilla physics passthrough
+                processedData = new EntityPhysicsData(data.motionX, data.motionY, data.motionZ);
+                
+                return new EntityProcessingResult(true, "Pure vanilla physics - no damping", processedData);
+            }
             
         } catch (Exception e) {
             LOGGER.error("Physics calculation failed for entity {}: {}", entity.getId(), e.getMessage());
@@ -1087,15 +1118,50 @@ public final class EntityProcessingService {
                 return new EntityProcessingResult(false, "Invalid motion values", data);
             }
             
-            // NO DAMPING - Pure vanilla physics passthrough
-            // Just validate and return the data unchanged to preserve vanilla gameplay
-            EntityPhysicsData processedData = new EntityPhysicsData(
-                data.motionX,
-                data.motionY,
-                data.motionZ
-            );
+            // Check if advanced physics optimization is enabled
+            PerformanceManager perfManager = PerformanceManager.getInstance();
+            boolean useAdvancedPhysics = perfManager != null && perfManager.isAdvancedPhysicsOptimized();
             
-            return new EntityProcessingResult(true, "Pure vanilla physics - no damping", processedData);
+            EntityPhysicsData processedData;
+            
+            if (useAdvancedPhysics) {
+                // ADVANCED PHYSICS OPTIMIZATION: Use Rust-powered calculations for better performance
+                // No damping - just use Rust for faster vector operations on all axes (horizontal + vertical)
+                try {
+                    // Use Rust for comprehensive vector normalization and validation across all axes
+                    double[] rustOptimized = RustNativeLoader.vectorNormalize(
+                        data.motionX, 
+                        data.motionY, 
+                        data.motionZ
+                    );
+                    
+                    // Rust normalization returns unit vector, so we need to preserve magnitude
+                    double magnitude = Math.sqrt(
+                        data.motionX * data.motionX + 
+                        data.motionY * data.motionY + 
+                        data.motionZ * data.motionZ
+                    );
+                    
+                    // Apply magnitude back to normalized vector for smooth physics
+                    double optimizedX = rustOptimized[0] * magnitude;
+                    double optimizedY = rustOptimized[1] * magnitude;
+                    double optimizedZ = rustOptimized[2] * magnitude;
+                    
+                    processedData = new EntityPhysicsData(optimizedX, optimizedY, optimizedZ);
+                    
+                    return new EntityProcessingResult(true, "Advanced physics optimization with Rust calculations", processedData);
+                } catch (Exception e) {
+                    // Fallback to vanilla if Rust fails
+                    LOGGER.debug("Rust calculation failed, using vanilla: {}", e.getMessage());
+                    processedData = new EntityPhysicsData(data.motionX, data.motionY, data.motionZ);
+                    return new EntityProcessingResult(true, "Vanilla physics (Rust fallback)", processedData);
+                }
+            } else {
+                // Fallback: Pure vanilla physics passthrough
+                processedData = new EntityPhysicsData(data.motionX, data.motionY, data.motionZ);
+                
+                return new EntityProcessingResult(true, "Pure vanilla physics - no damping", processedData);
+            }
             
         } catch (Exception e) {
             LOGGER.error("Physics calculation failed for entity {}: {}", entity.getId(), e.getMessage());

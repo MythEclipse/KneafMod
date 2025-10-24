@@ -342,37 +342,49 @@ public final class OptimizedOptimizationInjector {
     private static void performSynchronousFallback(Entity entity,
                                                    EntityProcessingService.EntityPhysicsData physicsData) {
         try {
-            // Quick synchronous fallback using optimized entity type lookup
-            EntityTypeEnum entityType = EntityTypeEnum.fromEntity(entity);
-            double dampingFactor = entityType.getDampingFactor();
+            // Check if advanced physics optimization is enabled
+            PerformanceManager perfManager = PerformanceManager.getInstance();
+            boolean useAdvancedPhysics = perfManager != null && perfManager.isAdvancedPhysicsOptimized();
             
-            double verticalDamping = 0.015; // Standard damping for vertical movement only
-            
-            double processedY = physicsData.motionY;
-            
-            // NOTE: Original logic `if (Math.abs(physicsData.motionY - physicsData.motionY) > 0.5)` is always false.
-            // Preserving original logic as requested.
-            if (Math.abs(physicsData.motionY - physicsData.motionY) > 0.5) {
-                // Significant external effect detected
-                processedY = physicsData.motionY;
-            } else if (physicsData.motionY < -0.1) {
-                // Natural falling
-                processedY = Math.min(physicsData.motionY * 1.1, physicsData.motionY);
-            }
-            
-            double newX = physicsData.motionX * dampingFactor;
-            double newY = processedY * (1 - verticalDamping);
-            double newZ = physicsData.motionZ * dampingFactor;
+            if (useAdvancedPhysics) {
+                // ADVANCED PHYSICS OPTIMIZATION: Use Rust calculations without damping
+                try {
+                    // Use Rust for fast vector normalization across all axes
+                    double[] rustOptimized = RustNativeLoader.vectorNormalize(
+                        physicsData.motionX,
+                        physicsData.motionY,
+                        physicsData.motionZ
+                    );
+                    
+                    // Preserve magnitude
+                    double magnitude = Math.sqrt(
+                        physicsData.motionX * physicsData.motionX +
+                        physicsData.motionY * physicsData.motionY +
+                        physicsData.motionZ * physicsData.motionZ
+                    );
+                    
+                    double newX = rustOptimized[0] * magnitude;
+                    double newY = rustOptimized[1] * magnitude;
+                    double newZ = rustOptimized[2] * magnitude;
 
-            // Apply physics with fallback
-            if (Double.isNaN(newX) || Double.isInfinite(newX) ||
-                Double.isNaN(newY) || Double.isInfinite(newY) ||
-                Double.isNaN(newZ) || Double.isInfinite(newZ)) {
-                LOGGER.warn("Invalid fallback physics data for entity {}: [{}, {}, {}]", entity.getId(), newX, newY, newZ);
-                return;
-            }
+                    // Validate before applying
+                    if (Double.isNaN(newX) || Double.isInfinite(newX) ||
+                        Double.isNaN(newY) || Double.isInfinite(newY) ||
+                        Double.isNaN(newZ) || Double.isInfinite(newZ)) {
+                        LOGGER.warn("Invalid Rust physics data for entity {}: [{}, {}, {}]", entity.getId(), newX, newY, newZ);
+                        return;
+                    }
 
-            entity.setDeltaMovement(newX, newY, newZ);
+                    entity.setDeltaMovement(newX, newY, newZ);
+                } catch (Exception e) {
+                    // Fallback to vanilla if Rust fails
+                    LOGGER.debug("Rust calculation failed in fallback, using vanilla: {}", e.getMessage());
+                    entity.setDeltaMovement(physicsData.motionX, physicsData.motionY, physicsData.motionZ);
+                }
+            } else {
+                // Vanilla fallback: no damping
+                entity.setDeltaMovement(physicsData.motionX, physicsData.motionY, physicsData.motionZ);
+            }
             
         } catch (Exception e) {
             recordAsyncOptimizationMiss("Synchronous fallback failed: " + e.getMessage());

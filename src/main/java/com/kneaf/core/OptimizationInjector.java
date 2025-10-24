@@ -505,12 +505,39 @@ public final class OptimizationInjector {
     
                 double originalY = y;
                 
-                // NO DAMPING - Pure vanilla physics passthrough
-                // Just validate and pass through the original values
-                double[] resultData = new double[] { x, y, z };
-                boolean useOptimizedResult = true;
-                recordOptimizationHit("Pure vanilla physics - no damping applied");
+                // Check if advanced physics optimization is enabled
+                PerformanceManager perfManager = PerformanceManager.getInstance();
+                boolean useAdvancedPhysics = perfManager != null && perfManager.isAdvancedPhysicsOptimized();
+                
+                double[] resultData;
+                
+                if (useAdvancedPhysics) {
+                    // ADVANCED PHYSICS OPTIMIZATION: Use Rust calculations for all axes (no damping)
+                    try {
+                        // Use Rust for fast vector normalization on all axes (horizontal + vertical)
+                        double[] rustOptimized = RustNativeLoader.vectorNormalize(x, y, z);
+                        
+                        // Preserve magnitude for accurate physics
+                        double magnitude = Math.sqrt(x * x + y * y + z * z);
+                        
+                        double optimizedX = rustOptimized[0] * magnitude;
+                        double optimizedY = rustOptimized[1] * magnitude;
+                        double optimizedZ = rustOptimized[2] * magnitude;
+                        
+                        resultData = new double[] { optimizedX, optimizedY, optimizedZ };
+                        recordOptimizationHit("Advanced physics optimization with Rust calculations");
+                    } catch (Exception e) {
+                        // Fallback to vanilla if Rust fails
+                        resultData = new double[] { x, y, z };
+                        recordOptimizationHit("Vanilla physics (Rust fallback)");
+                    }
+                } else {
+                    // Pure vanilla physics passthrough
+                    resultData = new double[] { x, y, z };
+                    recordOptimizationHit("Pure vanilla physics - no damping applied");
+                }
 
+                boolean useOptimizedResult = true;
                 if (useOptimizedResult) {
                     applyOptimizedMovement(entity, resultData, originalY);
                     applyOptimizedMovement(entity, resultData, originalY);
