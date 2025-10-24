@@ -8,12 +8,10 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
-import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.BossEvent;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -23,7 +21,6 @@ import net.minecraft.world.entity.ai.goal.MoveTowardsTargetGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.ai.goal.RandomStrollGoal;
 import net.minecraft.world.entity.ai.goal.target.HurtByTargetGoal;
-import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.entity.npc.Villager;
@@ -36,6 +33,89 @@ import java.util.EnumSet;
 import javax.annotation.Nonnull;
 
 public class ShadowZombieNinja extends Zombie {
+    
+    // ============= SKILL SYSTEM ENUMS & CLASSES =============
+    
+    /**
+     * Enum for skill types with their properties
+     */
+    public enum SkillType {
+        PHANTOM_SHURIKEN(40, 3.0D, true),      // 2 seconds - Skill 1 (faster for close combat)
+        QUAD_SHADOW(360, 20.0D, false),        // 18 seconds - Skill 2 (diperpanjang)
+        SHADOW_KILL(600, 15.0D, false);        // 30 seconds - Ultimate
+        
+        private final int baseCooldown;
+        private final double maxRange;
+        private final boolean canCastWhileMoving;
+        
+        SkillType(int baseCooldown, double maxRange, boolean canCastWhileMoving) {
+            this.baseCooldown = baseCooldown;
+            this.maxRange = maxRange;
+            this.canCastWhileMoving = canCastWhileMoving;
+        }
+        
+        public int getBaseCooldown() { return baseCooldown; }
+        public double getMaxRange() { return maxRange; }
+        public boolean canCastWhileMoving() { return canCastWhileMoving; }
+    }
+    
+    /**
+     * Enum for AI state tracking
+     */
+    public enum AIState {
+        IDLE,
+        HUNTING,
+        ENGAGING,
+        DODGING,
+        COMBO_ATTACKING,
+        COORDINATED_ATTACK
+    }
+    
+    /**
+     * Enhanced skill cooldown manager
+     */
+    private static class SkillManager {
+        private final java.util.Map<SkillType, Integer> cooldowns = new java.util.EnumMap<>(SkillType.class);
+        private final java.util.Map<SkillType, Long> lastUseTimes = new java.util.EnumMap<>(SkillType.class);
+        
+        public SkillManager() {
+            for (SkillType skill : SkillType.values()) {
+                cooldowns.put(skill, 0);
+                lastUseTimes.put(skill, 0L);
+            }
+        }
+        
+        public boolean isReady(SkillType skill) {
+            return cooldowns.getOrDefault(skill, 0) <= 0;
+        }
+        
+        public void use(SkillType skill, long currentTime) {
+            cooldowns.put(skill, skill.getBaseCooldown());
+            lastUseTimes.put(skill, currentTime);
+        }
+        
+        public void tick() {
+            for (SkillType skill : SkillType.values()) {
+                int current = cooldowns.getOrDefault(skill, 0);
+                if (current > 0) {
+                    cooldowns.put(skill, current - 1);
+                }
+            }
+        }
+        
+        public int getCooldown(SkillType skill) {
+            return cooldowns.getOrDefault(skill, 0);
+        }
+        
+        public double getCooldownProgress(SkillType skill) {
+            int current = getCooldown(skill);
+            int max = skill.getBaseCooldown();
+            return max > 0 ? (double)current / max : 0.0;
+        }
+    }
+    
+    // ============= INSTANCE VARIABLES =============
+    
     private long lastQuadShadowUse = 0;
     private final ServerBossEvent bossEvent = new ServerBossEvent(
         net.minecraft.network.chat.Component.literal("Hayabusa Shadow Ninja"),
@@ -43,20 +123,28 @@ public class ShadowZombieNinja extends Zombie {
         BossEvent.BossBarOverlay.PROGRESS
     );
 
-    // Hayabusa skill cooldowns
-    private int phantomShurikenCooldown = 0;
-    private int quadShadowCooldown = 0;
-    private int shadowKillCooldown = 0;
+    // Enhanced skill management system
+    private final SkillManager skillManager = new SkillManager();
+    private AIState currentAIState = AIState.IDLE;
     private int shadowKillPassiveStacks = 0;
+    private long lastPassiveStackTime = 0;
      
     // Skill constants (balanced like Hayabusa)
-    private static final int PHANTOM_SHURIKEN_COOLDOWN = 40; // 2 seconds - Skill 1 (faster for close combat)
     private static final int PHANTOM_SHURIKEN_COUNT = 3; // 3 shurikens like boomerang
     private static final double PHANTOM_SHURIKEN_MAX_RANGE = 3.0D; // Max 3 blocks range
-    private static final int QUAD_SHADOW_COOLDOWN = 360; // 18 seconds - Skill 2 (diperpanjang)
-    private static final int SHADOW_KILL_COOLDOWN = 600; // 30 seconds - Ultimate
     private static final int MAX_PASSIVE_STACKS = 4;
     private static final float PASSIVE_DAMAGE_MULTIPLIER = 1.2f;
+    private static final long PASSIVE_STACK_DECAY_TIME = 2000; // 2 seconds in milliseconds
+    
+    // ============= BACKWARD COMPATIBILITY PROPERTIES =============
+    // These provide compatibility with existing Goal classes that reference cooldowns directly
+    // Deprecated - use skillManager.isReady() instead
+    @Deprecated
+    public int phantomShurikenCooldown = 0;
+    @Deprecated
+    public int quadShadowCooldown = 0;
+    @Deprecated
+    public int shadowKillCooldown = 0;
      
     // Shadow clones for Quad Shadow skill
     private final java.util.List<Vec3> shadowClones = new java.util.ArrayList<>();
@@ -65,7 +153,7 @@ public class ShadowZombieNinja extends Zombie {
     private final java.util.Map<Integer, Integer> cloneSkillCooldowns = new java.util.HashMap<>(); // Track skill cooldowns per clone
     private int shadowCloneDuration = 0;
     private static final int SHADOW_CLONE_DURATION = 200; // 10 seconds
-    private static final double SHADOW_CLONE_DISTANCE = 10.0; // 10 blocks dari tengah (seperti Hayabusa)
+    private static final double SHADOW_CLONE_DISTANCE = 20.0; // 20 blocks dari tengah - wider spread for better tactical coverage
     private static final int MAX_COORDINATED_CLONES = 3; // Maximum clones that can act in coordination
     private static final double CLONE_COORDINATION_RADIUS = 15.0; // Maximum distance for clone coordination
     private static final int CLONE_SKILL_COOLDOWN = 60; // 3 seconds cooldown per clone skill use
@@ -172,8 +260,175 @@ public class ShadowZombieNinja extends Zombie {
         this.goalSelector.addGoal(7, new RandomStrollGoal(this, 1.0D)); // Terrain awareness
         this.goalSelector.addGoal(8, new RandomLookAroundGoal(this));
 
-        this.targetSelector.addGoal(1, new NearestAttackableTargetGoal<>(this, LivingEntity.class, true)); // Enhanced target selection
+        this.targetSelector.addGoal(1, new SmartTargetSelectionGoal(this)); // Enhanced dynamic target selection
         this.targetSelector.addGoal(2, new HurtByTargetGoal(this));
+    }
+    
+    // ============= ENHANCED TARGET SELECTION =============
+    
+    /**
+     * Smart target selection goal that prioritizes based on multiple factors
+     */
+    private static class SmartTargetSelectionGoal extends Goal {
+        private final ShadowZombieNinja ninja;
+        private LivingEntity selectedTarget;
+        private int retargetCooldown = 0;
+        
+        public SmartTargetSelectionGoal(ShadowZombieNinja ninja) {
+            this.ninja = ninja;
+            this.setFlags(EnumSet.of(Goal.Flag.TARGET));
+        }
+        
+        @Override
+        public boolean canUse() {
+            if (retargetCooldown > 0) {
+                retargetCooldown--;
+                return false;
+            }
+            
+            LivingEntity currentTarget = ninja.getTarget();
+            LivingEntity bestTarget = findBestTarget();
+            
+            // Retarget if we found a significantly better target
+            if (bestTarget != null && (currentTarget == null || shouldSwitchTarget(currentTarget, bestTarget))) {
+                selectedTarget = bestTarget;
+                return true;
+            }
+            
+            return false;
+        }
+        
+        @Override
+        public void start() {
+            ninja.setTarget(selectedTarget);
+            ninja.currentHighPriorityTarget = selectedTarget;
+            retargetCooldown = 40; // Retarget every 2 seconds
+        }
+        
+        /**
+         * Find the best target based on multiple weighted factors
+         */
+        private LivingEntity findBestTarget() {
+            java.util.List<LivingEntity> potentialTargets = ninja.level().getEntitiesOfClass(
+                LivingEntity.class,
+                ninja.getBoundingBox().inflate(TARGET_SELECTION_RADIUS),
+                entity -> isValidTarget(entity)
+            );
+            
+            if (potentialTargets.isEmpty()) {
+                return null;
+            }
+            
+            LivingEntity bestTarget = null;
+            double bestScore = Double.NEGATIVE_INFINITY;
+            
+            for (LivingEntity target : potentialTargets) {
+                double score = calculateTargetScore(target);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestTarget = target;
+                }
+            }
+            
+            return bestTarget;
+        }
+        
+        /**
+         * Calculate comprehensive target priority score
+         */
+        private double calculateTargetScore(LivingEntity target) {
+            double score = 0.0;
+            
+            // 1. Distance factor (closer = better, but not too close if we're low HP)
+            double distance = ninja.distanceTo(target);
+            double distanceScore = Math.max(0, 1.0 - (distance / TARGET_SELECTION_RADIUS));
+            if (ninja.getHealth() < ninja.getMaxHealth() * 0.3 && distance < 5.0) {
+                distanceScore *= 0.5; // Penalty for being too close when low HP
+            }
+            score += distanceScore * TARGET_PRIORITY_DISTANCE_WEIGHT * 100;
+            
+            // 2. Health/Threat factor (prioritize low HP targets or high threat targets)
+            double healthRatio = target.getHealth() / target.getMaxHealth();
+            double healthScore;
+            if (healthRatio < 0.3) {
+                healthScore = 1.5; // High priority for low HP targets (easy kills)
+            } else if (healthRatio > 0.8 && target.getMaxHealth() > 40) {
+                healthScore = 1.2; // High priority for high HP threats (eliminate early)
+            } else {
+                healthScore = 1.0 - healthRatio; // Prefer damaged targets
+            }
+            score += healthScore * TARGET_PRIORITY_THREAT_WEIGHT * 100;
+            
+            // 3. Armor factor (less armored = higher priority)
+            double armorScore = 1.0;
+            if (target instanceof net.minecraft.world.entity.player.Player player) {
+                int armorValue = player.getArmorValue();
+                armorScore = Math.max(0.3, 1.0 - (armorValue / 20.0));
+            }
+            score += armorScore * TARGET_PRIORITY_THREAT_WEIGHT * 50;
+            
+            // 4. Recent attack history (prioritize targets that recently attacked us)
+            java.util.List<Long> attackHistory = ninja.attackPatterns.get(target);
+            if (attackHistory != null && !attackHistory.isEmpty()) {
+                long lastAttack = attackHistory.get(attackHistory.size() - 1);
+                long timeSinceAttack = ninja.tickCount - lastAttack;
+                if (timeSinceAttack < 100) { // Within last 5 seconds
+                    double recentAttackScore = 1.0 - (timeSinceAttack / 100.0);
+                    score += recentAttackScore * TARGET_PRIORITY_RECENT_ATTACK_WEIGHT * 100;
+                }
+            }
+            
+            // 5. Line of sight bonus
+            if (ninja.hasLineOfSight(target)) {
+                score += 50.0;
+            }
+            
+            // 6. Environmental advantage
+            double heightDiff = ninja.getY() - target.getY();
+            if (heightDiff > 2.0) {
+                score += 30.0; // Bonus for height advantage
+            } else if (heightDiff < -2.0) {
+                score -= 20.0; // Penalty for height disadvantage
+            }
+            
+            // 7. Skill combo potential
+            if (ninja.isSkillReady(SkillType.SHADOW_KILL) && healthRatio < 0.5) {
+                score += 100.0; // High priority if we can finish with ultimate
+            }
+            
+            // 8. Pattern-based scoring (predictable targets are easier to hit)
+            if (ninja.isTargetMovingPredictably && ninja.lastKnownTargetPosition.distanceTo(target.position()) < 1.0) {
+                score += TARGET_PRIORITY_PATTERN_RECOGNITION_WEIGHT * 80;
+            }
+            
+            return score;
+        }
+        
+        /**
+         * Determine if we should switch from current target to new target
+         */
+        private boolean shouldSwitchTarget(LivingEntity currentTarget, LivingEntity newTarget) {
+            if (!currentTarget.isAlive()) {
+                return true;
+            }
+            
+            double currentScore = calculateTargetScore(currentTarget);
+            double newScore = calculateTargetScore(newTarget);
+            
+            // Only switch if new target is significantly better (20% threshold)
+            return newScore > currentScore * 1.2;
+        }
+        
+        /**
+         * Check if entity is a valid target
+         */
+        private boolean isValidTarget(LivingEntity entity) {
+            return entity != ninja && 
+                   entity.isAlive() && 
+                   !entity.isInvulnerable() &&
+                   ninja.canAttack(entity) &&
+                   !(entity instanceof Zombie); // Don't attack other zombies
+        }
     }
 
     @Override
@@ -192,16 +447,21 @@ public class ShadowZombieNinja extends Zombie {
             }
         }
           
-        // Update skill cooldowns
-        if (phantomShurikenCooldown > 0) {
-            phantomShurikenCooldown--;
+        // Update skill cooldowns with enhanced manager
+        skillManager.tick();
+        
+        // Sync backward compatibility properties
+        phantomShurikenCooldown = skillManager.getCooldown(SkillType.PHANTOM_SHURIKEN);
+        quadShadowCooldown = skillManager.getCooldown(SkillType.QUAD_SHADOW);
+        shadowKillCooldown = skillManager.getCooldown(SkillType.SHADOW_KILL);
+        
+        // Update passive stacks decay dengan timestamp yang lebih akurat
+        long currentTime = System.currentTimeMillis();
+        if (shadowKillPassiveStacks > 0 && currentTime - lastPassiveStackTime > PASSIVE_STACK_DECAY_TIME) {
+            shadowKillPassiveStacks--;
+            lastPassiveStackTime = currentTime;
         }
-        if (quadShadowCooldown > 0) {
-            quadShadowCooldown--;
-        }
-        if (shadowKillCooldown > 0) {
-            shadowKillCooldown--;
-        }
+        
         if (shadowCloneDuration > 0) {
             shadowCloneDuration--;
              
@@ -269,34 +529,35 @@ public class ShadowZombieNinja extends Zombie {
         // Update target prediction and pattern recognition
         updateTargetPrediction();
         updatePatternRecognition();
+        
+        // Environmental awareness (check every 20 ticks)
+        if (this.tickCount % 20 == 0) {
+            avoidHazards();
+            useTerrainAdvantage(this.getTarget());
+        }
           
-        // Ninja movement trail effect
-        if (this.getDeltaMovement().lengthSqr() > 0.01) {
+        // Optimized state-based particle effects
+        spawnStateBasedParticles();
+        
+        // Ninja movement trail effect (optimized)
+        if (this.getDeltaMovement().lengthSqr() > 0.01 && this.tickCount % 2 == 0) {
             this.level().addParticle(ParticleTypes.SMOKE,
                 this.getX(), this.getY() + 0.1, this.getZ(),
                 0.0D, 0.0D, 0.0D);
              
             // Extra effects when moving fast
-            if (this.getDeltaMovement().lengthSqr() > 0.1) {
-                this.level().addParticle(ParticleTypes.PORTAL,
+            if (this.getDeltaMovement().lengthSqr() > 0.1 && this.tickCount % 3 == 0) {
+                SimpleParticleType trailType = currentAIState == AIState.DODGING ? 
+                    ParticleTypes.POOF : ParticleTypes.PORTAL;
+                this.level().addParticle(trailType,
                     this.getX(), this.getY() + 0.5, this.getZ(),
                     0.0D, 0.0D, 0.0D);
             }
         }
-          
-        // Ambient particle effects for boss aura
-        if (this.tickCount % 5 == 0) {
-            double offsetX = (this.random.nextDouble() - 0.5) * 2.0;
-            double offsetY = this.random.nextDouble() * 2.0;
-            double offsetZ = (this.random.nextDouble() - 0.5) * 2.0;
-            this.level().addParticle(ParticleTypes.PORTAL,
-                this.getX() + offsetX, this.getY() + offsetY, this.getZ() + offsetZ,
-                0.0D, 0.0D, 0.0D);
-        }
     }
     
     /**
-     * Update target prediction based on movement patterns
+     * Update target prediction based on movement patterns with moving average
      */
     private void updateTargetPrediction() {
         LivingEntity target = this.getTarget();
@@ -306,21 +567,59 @@ public class ShadowZombieNinja extends Zombie {
         previousTargetPosition = lastKnownTargetPosition;
         lastKnownTargetPosition = target.position();
         
-        // Calculate movement vector
-        Vec3 movementVector = lastKnownTargetPosition.subtract(previousTargetPosition);
+        // Add to movement pattern for moving average
+        java.util.List<Vec3> targetMovement = movementPatterns.computeIfAbsent(target, k -> new java.util.ArrayList<>());
+        targetMovement.add(target.position());
+        
+        // Keep only last 10 positions for moving average
+        if (targetMovement.size() > 10) {
+            targetMovement.remove(0);
+        }
+        
+        // Calculate movement vector with exponential moving average (EMA)
+        Vec3 movementVector = Vec3.ZERO;
+        if (targetMovement.size() >= 2) {
+            // Use EMA for smoother prediction (gives more weight to recent movements)
+            double alpha = 0.3; // Smoothing factor (0.3 = 30% new data, 70% historical)
+            Vec3 emaVelocity = Vec3.ZERO;
+            
+            for (int i = 1; i < targetMovement.size(); i++) {
+                Vec3 velocity = targetMovement.get(i).subtract(targetMovement.get(i-1));
+                emaVelocity = emaVelocity.scale(1 - alpha).add(velocity.scale(alpha));
+            }
+            
+            movementVector = emaVelocity;
+        } else {
+            movementVector = lastKnownTargetPosition.subtract(previousTargetPosition);
+        }
+        
         double movementSpeed = movementVector.length();
         
-        // Update prediction
+        // Update prediction with Kalman-like filtering
         if (movementSpeed > 0.01) {
             isTargetMovingPredictably = true;
             consecutivePredictions++;
             
-            // Improve prediction accuracy based on consecutive predictions
-            predictionAccuracy = Math.min(predictionAccuracy + 0.1, 0.9);
+            // Adaptive prediction accuracy based on pattern consistency
+            double consistencyScore = calculateMovementConsistency(targetMovement);
+            predictionAccuracy = Math.min(0.95, 0.5 + (consistencyScore * 0.45));
             
-            // Predict future position (look 0.5-2 seconds ahead)
-            double predictionTime = Math.max(0.5, Math.min(2.0, 3.0 / movementSpeed));
-            predictedTargetPosition = lastKnownTargetPosition.add(movementVector.scale(predictionTime));
+            // Adaptive prediction time based on movement speed and consistency
+            double basePredictionTime = Math.max(0.5, Math.min(2.0, 3.0 / Math.max(movementSpeed, 0.1)));
+            double adaptivePredictionTime = basePredictionTime * (0.7 + 0.3 * consistencyScore);
+            
+            // Predict future position with uncertainty compensation
+            Vec3 basePrediction = lastKnownTargetPosition.add(movementVector.scale(adaptivePredictionTime * 20)); // 20 ticks per second
+            
+            // Add slight randomness based on prediction uncertainty
+            double uncertainty = 1.0 - predictionAccuracy;
+            Vec3 uncertaintyOffset = new Vec3(
+                (this.random.nextDouble() - 0.5) * uncertainty * 2.0,
+                0,
+                (this.random.nextDouble() - 0.5) * uncertainty * 2.0
+            );
+            
+            predictedTargetPosition = basePrediction.add(uncertaintyOffset);
         } else {
             isTargetMovingPredictably = false;
             consecutivePredictions = 0;
@@ -328,14 +627,56 @@ public class ShadowZombieNinja extends Zombie {
             predictedTargetPosition = lastKnownTargetPosition;
         }
         
-        // Check for pattern changes
-        if (previousTargetPosition != Vec3.ZERO && lastKnownTargetPosition != Vec3.ZERO) {
-            Vec3 oldDirection = previousTargetPosition.subtract(lastKnownTargetPosition).normalize();
-            Vec3 newDirection = lastKnownTargetPosition.subtract(previousTargetPosition).normalize();
-            double directionChange = 1.0 - oldDirection.dot(newDirection);
+        // Check for pattern changes with improved detection
+        if (previousTargetPosition != Vec3.ZERO && lastKnownTargetPosition != Vec3.ZERO && targetMovement.size() >= 3) {
+            Vec3 oldDirection = targetMovement.get(targetMovement.size() - 3)
+                .subtract(targetMovement.get(targetMovement.size() - 2)).normalize();
+            Vec3 newDirection = targetMovement.get(targetMovement.size() - 2)
+                .subtract(targetMovement.get(targetMovement.size() - 1)).normalize();
             
-            isTargetChangingPattern = directionChange > 0.3;
+            if (oldDirection.length() > 0 && newDirection.length() > 0) {
+                double directionChange = 1.0 - oldDirection.dot(newDirection);
+                isTargetChangingPattern = directionChange > 0.3;
+                
+                // Reduce prediction accuracy when pattern is changing
+                if (isTargetChangingPattern) {
+                    predictionAccuracy *= 0.7;
+                }
+            }
         }
+    }
+    
+    /**
+     * Calculate movement consistency score (0.0 = random, 1.0 = perfectly consistent)
+     */
+    private double calculateMovementConsistency(java.util.List<Vec3> positions) {
+        if (positions.size() < 3) return 0.5;
+        
+        // Calculate variance in velocity directions
+        java.util.List<Vec3> velocities = new java.util.ArrayList<>();
+        for (int i = 1; i < positions.size(); i++) {
+            Vec3 vel = positions.get(i).subtract(positions.get(i-1));
+            if (vel.length() > 0.01) {
+                velocities.add(vel.normalize());
+            }
+        }
+        
+        if (velocities.size() < 2) return 0.5;
+        
+        // Calculate average direction
+        Vec3 avgDirection = Vec3.ZERO;
+        for (Vec3 vel : velocities) {
+            avgDirection = avgDirection.add(vel);
+        }
+        avgDirection = avgDirection.scale(1.0 / velocities.size());
+        
+        // Calculate consistency as average dot product with mean direction
+        double totalDot = 0.0;
+        for (Vec3 vel : velocities) {
+            totalDot += Math.abs(vel.dot(avgDirection));
+        }
+        
+        return totalDot / velocities.size();
     }
     
     /**
@@ -372,10 +713,722 @@ public class ShadowZombieNinja extends Zombie {
                 }
             }
         }
+        
+        // Check for combo opportunities
+        checkAndExecuteCombo();
+    }
+    
+    // ============= SKILL COMBO SYSTEM =============
+    
+    /**
+     * Enum for combo types
+     */
+    public enum ComboType {
+        TELEPORT_ULTIMATE,      // Teleport to clone -> Shadow Kill
+        SHURIKEN_TELEPORT,      // Phantom Shuriken -> Teleport to dodge
+        CLONE_SURROUND_KILL,    // Quad Shadow -> Surround -> Shadow Kill
+        HIT_AND_RUN,            // Attack -> Quad Shadow -> Teleport away
+        EXECUTE_COMBO           // Low HP target -> Shuriken -> Ultimate finish
+    }
+    
+    private ComboType pendingCombo = null;
+    private int comboStep = 0;
+    private long lastComboTime = 0;
+    
+    /**
+     * Check for combo opportunities and execute them
+     */
+    private void checkAndExecuteCombo() {
+        LivingEntity target = getTarget();
+        if (target == null || !target.isAlive()) {
+            pendingCombo = null;
+            comboStep = 0;
+            return;
+        }
+        
+        long currentTime = System.currentTimeMillis();
+        
+        // Don't spam combos - wait at least 10 seconds between combos
+        if (currentTime - lastComboTime < 10000 && pendingCombo == null) {
+            return;
+        }
+        
+        // Continue pending combo if exists
+        if (pendingCombo != null) {
+            executePendingCombo(target);
+            return;
+        }
+        
+        // Evaluate new combo opportunities
+        ComboType bestCombo = evaluateBestCombo(target);
+        if (bestCombo != null) {
+            initiateCombo(bestCombo, target);
+        }
     }
     
     /**
-     * Get prediction accuracy for target movement
+     * Evaluate and select the best combo for current situation
+     */
+    private ComboType evaluateBestCombo(LivingEntity target) {
+        double healthRatio = target.getHealth() / target.getMaxHealth();
+        double distance = this.distanceTo(target);
+        boolean hasClones = !shadowClones.isEmpty();
+        
+        // Execute Combo: Target is low HP, we have ultimate and shuriken ready
+        if (healthRatio < 0.3 && 
+            skillManager.isReady(SkillType.SHADOW_KILL) && 
+            skillManager.isReady(SkillType.PHANTOM_SHURIKEN) &&
+            distance < 15.0) {
+            return ComboType.EXECUTE_COMBO;
+        }
+        
+        // Teleport Ultimate: We have clones and ultimate ready, target is medium HP
+        if (hasClones && 
+            skillManager.isReady(SkillType.SHADOW_KILL) && 
+            healthRatio < 0.6 &&
+            !usedShadowClones.isEmpty()) {
+            return ComboType.TELEPORT_ULTIMATE;
+        }
+        
+        // Clone Surround Kill: Can use quad shadow and ultimate
+        if (skillManager.isReady(SkillType.QUAD_SHADOW) && 
+            skillManager.isReady(SkillType.SHADOW_KILL) &&
+            healthRatio < 0.7 &&
+            distance < 20.0) {
+            return ComboType.CLONE_SURROUND_KILL;
+        }
+        
+        // Hit and Run: We're low HP, have quad shadow ready
+        if (this.getHealth() < this.getMaxHealth() * 0.4 &&
+            skillManager.isReady(SkillType.QUAD_SHADOW) &&
+            distance < 10.0) {
+            return ComboType.HIT_AND_RUN;
+        }
+        
+        // Shuriken Teleport: Being chased, have both skills
+        if (hasClones &&
+            skillManager.isReady(SkillType.PHANTOM_SHURIKEN) &&
+            distance < 8.0 &&
+            this.getHealth() < this.getMaxHealth() * 0.6) {
+            return ComboType.SHURIKEN_TELEPORT;
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Initiate a combo sequence
+     */
+    private void initiateCombo(ComboType combo, LivingEntity target) {
+        pendingCombo = combo;
+        comboStep = 0;
+        lastComboTime = System.currentTimeMillis();
+        setAIState(AIState.COMBO_ATTACKING);
+        
+        // Visual/audio feedback for combo start
+        if (this.level() instanceof ServerLevel serverLevel) {
+            serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT,
+                this.getX(), this.getY() + 1, this.getZ(),
+                15, 0.5D, 0.5D, 0.5D, 0.1D);
+        }
+        this.playSound(SoundEvents.ENDER_EYE_LAUNCH, 1.0F, 0.8F);
+    }
+    
+    /**
+     * Execute the current pending combo
+     */
+    private void executePendingCombo(LivingEntity target) {
+        if (pendingCombo == null) return;
+        
+        switch (pendingCombo) {
+            case EXECUTE_COMBO:
+                executeExecuteCombo(target);
+                break;
+            case TELEPORT_ULTIMATE:
+                executeTeleportUltimate(target);
+                break;
+            case CLONE_SURROUND_KILL:
+                executeCloneSurroundKill(target);
+                break;
+            case HIT_AND_RUN:
+                executeHitAndRun(target);
+                break;
+            case SHURIKEN_TELEPORT:
+                executeShurikenTeleport(target);
+                break;
+        }
+    }
+    
+    /**
+     * Execute Combo: Shuriken -> Wait -> Ultimate finish
+     */
+    private void executeExecuteCombo(LivingEntity target) {
+        switch (comboStep) {
+            case 0: // Step 1: Throw shurikens
+                performPhantomShuriken(target);
+                comboStep++;
+                break;
+            case 1: // Step 2: Wait for shurikens to hit (40 ticks = 2 seconds)
+                if (this.tickCount % 40 == 0) {
+                    comboStep++;
+                }
+                break;
+            case 2: // Step 3: Execute with ultimate
+                if (skillManager.isReady(SkillType.SHADOW_KILL)) {
+                    performShadowKill(target);
+                }
+                finishCombo();
+                break;
+        }
+    }
+    
+    /**
+     * Teleport Ultimate: Teleport to best clone -> Ultimate
+     */
+    private void executeTeleportUltimate(LivingEntity target) {
+        switch (comboStep) {
+            case 0: // Step 1: Find and teleport to best clone
+                int bestCloneIndex = findBestCloneForTeleport(target);
+                if (bestCloneIndex >= 0) {
+                    teleportToShadowClone(bestCloneIndex);
+                    comboStep++;
+                } else {
+                    finishCombo(); // No valid clone
+                }
+                break;
+            case 1: // Step 2: Brief pause for positioning
+                if (this.tickCount % 10 == 0) {
+                    comboStep++;
+                }
+                break;
+            case 2: // Step 3: Ultimate
+                performShadowKill(target);
+                finishCombo();
+                break;
+        }
+    }
+    
+    /**
+     * Clone Surround Kill: Quad Shadow -> Wait -> Ultimate
+     */
+    private void executeCloneSurroundKill(LivingEntity target) {
+        switch (comboStep) {
+            case 0: // Step 1: Create clones
+                performQuadShadow();
+                comboStep++;
+                break;
+            case 1: // Step 2: Wait for clones to settle (20 ticks = 1 second)
+                if (this.tickCount % 20 == 0) {
+                    comboStep++;
+                }
+                break;
+            case 2: // Step 3: Ultimate
+                performShadowKill(target);
+                finishCombo();
+                break;
+        }
+    }
+    
+    /**
+     * Hit and Run: Attack -> Clone -> Teleport away
+     */
+    private void executeHitAndRun(LivingEntity target) {
+        switch (comboStep) {
+            case 0: // Step 1: Melee attack
+                this.doHurtTarget(target);
+                comboStep++;
+                break;
+            case 1: // Step 2: Create escape clones
+                performQuadShadow();
+                comboStep++;
+                break;
+            case 2: // Step 3: Wait a bit
+                if (this.tickCount % 10 == 0) {
+                    comboStep++;
+                }
+                break;
+            case 3: // Step 4: Teleport to farthest clone
+                int farthestClone = findFarthestClone(target);
+                if (farthestClone >= 0) {
+                    teleportToShadowClone(farthestClone);
+                }
+                finishCombo();
+                break;
+        }
+    }
+    
+    /**
+     * Shuriken Teleport: Shuriken -> Teleport to dodge
+     */
+    private void executeShurikenTeleport(LivingEntity target) {
+        switch (comboStep) {
+            case 0: // Step 1: Throw shurikens
+                performPhantomShuriken(target);
+                comboStep++;
+                break;
+            case 1: // Step 2: Immediately teleport
+                int safeClone = findSafestClone(target);
+                if (safeClone >= 0) {
+                    teleportToShadowClone(safeClone);
+                }
+                finishCombo();
+                break;
+        }
+    }
+    
+    /**
+     * Find best clone for teleport (closest to target, behind target)
+     */
+    private int findBestCloneForTeleport(LivingEntity target) {
+        int bestIndex = -1;
+        double bestScore = Double.NEGATIVE_INFINITY;
+        
+        for (int i = 0; i < shadowClones.size(); i++) {
+            if (usedShadowClones.contains(i)) continue;
+            
+            Vec3 clonePos = shadowClones.get(i);
+            double distToTarget = clonePos.distanceTo(target.position());
+            
+            // Prefer clones behind target
+            Vec3 targetLook = target.getLookAngle();
+            Vec3 toClone = clonePos.subtract(target.position()).normalize();
+            double behindScore = -targetLook.dot(toClone); // Negative dot = behind
+            
+            double score = (20.0 - distToTarget) + (behindScore * 10.0);
+            
+            if (score > bestScore) {
+                bestScore = score;
+                bestIndex = i;
+            }
+        }
+        
+        return bestIndex;
+    }
+    
+    /**
+     * Find farthest clone from target
+     */
+    private int findFarthestClone(LivingEntity target) {
+        int farthestIndex = -1;
+        double maxDist = 0;
+        
+        for (int i = 0; i < shadowClones.size(); i++) {
+            if (usedShadowClones.contains(i)) continue;
+            
+            double dist = shadowClones.get(i).distanceTo(target.position());
+            if (dist > maxDist) {
+                maxDist = dist;
+                farthestIndex = i;
+            }
+        }
+        
+        return farthestIndex;
+    }
+    
+    /**
+     * Find safest clone (farthest from target, with cover)
+     */
+    private int findSafestClone(LivingEntity target) {
+        int safestIndex = -1;
+        double bestSafetyScore = Double.NEGATIVE_INFINITY;
+        
+        for (int i = 0; i < shadowClones.size(); i++) {
+            if (usedShadowClones.contains(i)) continue;
+            
+            Vec3 clonePos = shadowClones.get(i);
+            double dist = clonePos.distanceTo(target.position());
+            double coverScore = calculateEnhancedCoverScore(clonePos);
+            
+            double safetyScore = dist * 2.0 + coverScore;
+            
+            if (safetyScore > bestSafetyScore) {
+                bestSafetyScore = safetyScore;
+                safestIndex = i;
+            }
+        }
+        
+        return safestIndex;
+    }
+    
+    /**
+     * Finish current combo
+     */
+    private void finishCombo() {
+        pendingCombo = null;
+        comboStep = 0;
+        setAIState(AIState.HUNTING);
+        
+        // Combo complete effects
+        if (this.level() instanceof ServerLevel serverLevel) {
+            serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
+                this.getX(), this.getY() + 1, this.getZ(),
+                10, 0.3D, 0.3D, 0.3D, 0.05D);
+        }
+        this.playSound(SoundEvents.PLAYER_LEVELUP, 0.5F, 1.5F);
+    }
+    
+    // ============= PARTICLE EFFECT OPTIMIZATION =============
+    
+    /**
+     * Batch particle spawner for better performance
+     */
+    private static class ParticleBatch {
+        private final java.util.List<ParticleSpawnData> particles = new java.util.ArrayList<>();
+        
+        public void add(SimpleParticleType type, double x, double y, double z, double velX, double velY, double velZ, int count) {
+            particles.add(new ParticleSpawnData(type, x, y, z, velX, velY, velZ, count));
+        }
+        
+        public void spawn(ServerLevel level) {
+            for (ParticleSpawnData data : particles) {
+                level.sendParticles(data.type, data.x, data.y, data.z, data.count, data.velX, data.velY, data.velZ, 0.0);
+            }
+            particles.clear();
+        }
+        
+        public void clear() {
+            particles.clear();
+        }
+        
+        private static class ParticleSpawnData {
+            final SimpleParticleType type;
+            final double x, y, z, velX, velY, velZ;
+            final int count;
+            
+            ParticleSpawnData(SimpleParticleType type, double x, double y, double z, double velX, double velY, double velZ, int count) {
+                this.type = type;
+                this.x = x;
+                this.y = y;
+                this.z = z;
+                this.velX = velX;
+                this.velY = velY;
+                this.velZ = velZ;
+                this.count = count;
+            }
+        }
+    }
+    
+    /**
+     * Spawn optimized particles around a position with variation
+     */
+    private void spawnOptimizedParticles(Vec3 pos, SimpleParticleType type, int count, double spread, double speedVariation) {
+        if (!(this.level() instanceof ServerLevel serverLevel)) return;
+        
+        // Use batch spawning for better performance
+        ParticleBatch batch = new ParticleBatch();
+        
+        for (int i = 0; i < count; i++) {
+            double offsetX = (this.random.nextDouble() - 0.5) * spread;
+            double offsetY = this.random.nextDouble() * spread;
+            double offsetZ = (this.random.nextDouble() - 0.5) * spread;
+            
+            double velX = (this.random.nextDouble() - 0.5) * speedVariation;
+            double velY = this.random.nextDouble() * speedVariation * 0.5;
+            double velZ = (this.random.nextDouble() - 0.5) * speedVariation;
+            
+            batch.add(type, pos.x + offsetX, pos.y + offsetY, pos.z + offsetZ, velX, velY, velZ, 1);
+        }
+        
+        batch.spawn(serverLevel);
+    }
+    
+    /**
+     * Spawn mixed particle effects efficiently
+     */
+    private void spawnMixedParticles(Vec3 pos, SimpleParticleType[] types, int countPerType, double spread) {
+        if (!(this.level() instanceof ServerLevel serverLevel)) return;
+        
+        ParticleBatch batch = new ParticleBatch();
+        
+        for (SimpleParticleType type : types) {
+            for (int i = 0; i < countPerType; i++) {
+                double offsetX = (this.random.nextDouble() - 0.5) * spread;
+                double offsetY = this.random.nextDouble() * spread * 0.8;
+                double offsetZ = (this.random.nextDouble() - 0.5) * spread;
+                
+                batch.add(type, pos.x + offsetX, pos.y + offsetY, pos.z + offsetZ, 0, 0, 0, 1);
+            }
+        }
+        
+        batch.spawn(serverLevel);
+    }
+    
+    /**
+     * Spawn particles with state-based variation
+     */
+    private void spawnStateBasedParticles() {
+        if (this.tickCount % 5 != 0) return; // Only every 5 ticks for performance
+        
+        SimpleParticleType[] particleTypes;
+        double intensity;
+        
+        // Vary effects based on AI state and passive stacks
+        switch (currentAIState) {
+            case COMBO_ATTACKING:
+                particleTypes = new SimpleParticleType[]{ParticleTypes.ENCHANTED_HIT, ParticleTypes.CRIT};
+                intensity = 2.0;
+                break;
+            case DODGING:
+                particleTypes = new SimpleParticleType[]{ParticleTypes.POOF, ParticleTypes.SMOKE};
+                intensity = 1.5;
+                break;
+            case ENGAGING:
+                particleTypes = new SimpleParticleType[]{ParticleTypes.PORTAL, ParticleTypes.ENCHANT};
+                intensity = 1.2;
+                break;
+            default:
+                particleTypes = new SimpleParticleType[]{ParticleTypes.PORTAL};
+                intensity = 1.0;
+                break;
+        }
+        
+        // Add intensity based on passive stacks
+        if (shadowKillPassiveStacks > 0) {
+            intensity *= (1.0 + shadowKillPassiveStacks * 0.2);
+        }
+        
+        spawnMixedParticles(this.position(), particleTypes, Math.min(3, (int)intensity), intensity);
+    }
+    
+    // ============= ENVIRONMENTAL AWARENESS =============
+    
+    /**
+     * Check if position is dangerous (lava, void, fire, etc.)
+     */
+    private boolean isDangerousPosition(Vec3 pos) {
+        net.minecraft.core.BlockPos blockPos = new net.minecraft.core.BlockPos(
+            (int)Math.floor(pos.x),
+            (int)Math.floor(pos.y),
+            (int)Math.floor(pos.z)
+        );
+        
+        // Check for void
+        if (blockPos.getY() < this.level().getMinBuildHeight() + 5) {
+            return true;
+        }
+        
+        // Check for lava
+        net.minecraft.world.level.block.state.BlockState state = this.level().getBlockState(blockPos);
+        if (state.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock) {
+            if (state.getFluidState().is(net.minecraft.world.level.material.Fluids.LAVA)) {
+                return true;
+            }
+        }
+        
+        // Check for fire
+        if (state.getBlock() instanceof net.minecraft.world.level.block.FireBlock) {
+            return true;
+        }
+        
+        // Check for cactus
+        if (state.getBlock() instanceof net.minecraft.world.level.block.CactusBlock) {
+            return true;
+        }
+        
+        // Check for dangerous blocks below (within 3 blocks)
+        for (int y = 1; y <= 3; y++) {
+            net.minecraft.core.BlockPos belowPos = blockPos.below(y);
+            net.minecraft.world.level.block.state.BlockState belowState = this.level().getBlockState(belowPos);
+            
+            if (belowState.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock &&
+                belowState.getFluidState().is(net.minecraft.world.level.material.Fluids.LAVA)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Get terrain advantage score for position
+     */
+    private double getTerrainAdvantage(Vec3 pos, LivingEntity target) {
+        double score = 0.0;
+        
+        // Height advantage
+        double heightDiff = pos.y - target.getY();
+        if (heightDiff > 2.0) {
+            score += 50.0;
+        } else if (heightDiff < -2.0) {
+            score -= 30.0;
+        }
+        
+        // Cover availability
+        double coverScore = calculateEnhancedCoverScore(pos);
+        score += coverScore * 0.5;
+        
+        // Mobility (open space around)
+        int clearRadius = findClearRadius(3.0);
+        if (clearRadius > 15) {
+            score += 30.0; // Good mobility
+        } else if (clearRadius < 5) {
+            score -= 20.0; // Cramped space
+        }
+        
+        // Environmental bonuses
+        if (isInForest()) {
+            score += 20.0; // Forest provides stealth
+        }
+        
+        if (isInCave()) {
+            score += 15.0; // Caves provide cover
+        }
+        
+        // Lighting (prefer shadows for ninja)
+        int lightLevel = this.level().getBrightness(net.minecraft.world.level.LightLayer.BLOCK, this.blockPosition());
+        if (lightLevel < 8) {
+            score += 25.0; // Dark areas are advantageous
+        }
+        
+        return score;
+    }
+    
+    /**
+     * Find safe position near current location
+     */
+    private Vec3 findSafePosition(double radius) {
+        Vec3 currentPos = this.position();
+        Vec3 bestPos = currentPos;
+        double bestScore = Double.NEGATIVE_INFINITY;
+        
+        // Sample positions in a circle
+        for (double angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
+            for (double dist = 2.0; dist <= radius; dist += 2.0) {
+                double x = currentPos.x + Math.cos(angle) * dist;
+                double z = currentPos.z + Math.sin(angle) * dist;
+                double y = findGroundY(x, currentPos.y, z);
+                
+                Vec3 testPos = new Vec3(x, y, z);
+                
+                // Skip dangerous positions
+                if (isDangerousPosition(testPos)) {
+                    continue;
+                }
+                
+                // Calculate safety score
+                double score = 0.0;
+                
+                // Distance from danger
+                if (!isDangerousPosition(testPos)) {
+                    score += 100.0;
+                }
+                
+                // Cover score
+                score += calculateEnhancedCoverScore(testPos);
+                
+                // Distance from current position (prefer not too far)
+                double moveDist = testPos.distanceTo(currentPos);
+                score += (radius - moveDist) * 5.0;
+                
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestPos = testPos;
+                }
+            }
+        }
+        
+        return bestPos;
+    }
+    
+    /**
+     * Intelligently avoid hazards during movement
+     */
+    private void avoidHazards() {
+        Vec3 currentPos = this.position();
+        
+        // Check if current position or nearby is dangerous
+        if (isDangerousPosition(currentPos) || 
+            isDangerousPosition(currentPos.add(this.getDeltaMovement().scale(5)))) {
+            
+            // Find safe position
+            Vec3 safePos = findSafePosition(10.0);
+            
+            // Move towards safe position
+            Vec3 toSafe = safePos.subtract(currentPos).normalize();
+            this.setDeltaMovement(toSafe.scale(0.3));
+            
+            // Visual warning
+            if (this.level() instanceof ServerLevel serverLevel) {
+                serverLevel.sendParticles(ParticleTypes.LAVA,
+                    currentPos.x, currentPos.y + 1, currentPos.z,
+                    5, 0.2D, 0.2D, 0.2D, 0.0D);
+            }
+            
+            setAIState(AIState.DODGING);
+        }
+    }
+    
+    /**
+     * Use terrain for tactical advantage
+     */
+    private void useTerrainAdvantage(LivingEntity target) {
+        if (target == null) return;
+        
+        Vec3 currentPos = this.position();
+        double currentAdvantage = getTerrainAdvantage(currentPos, target);
+        
+        // If current position has poor advantage, look for better position
+        if (currentAdvantage < 0 && this.tickCount % 40 == 0) {
+            Vec3 betterPos = findBetterTacticalPosition(target, 15.0);
+            
+            if (betterPos != null && betterPos != currentPos) {
+                // Set navigation target
+                this.getNavigation().moveTo(betterPos.x, betterPos.y, betterPos.z, 1.2);
+            }
+        }
+    }
+    
+    /**
+     * Find better tactical position relative to target
+     */
+    private Vec3 findBetterTacticalPosition(LivingEntity target, double searchRadius) {
+        Vec3 currentPos = this.position();
+        Vec3 bestPos = null;
+        double bestScore = getTerrainAdvantage(currentPos, target);
+        
+        // Sample positions
+        for (double angle = 0; angle < Math.PI * 2; angle += Math.PI / 6) {
+            for (double dist = 5.0; dist <= searchRadius; dist += 5.0) {
+                double x = currentPos.x + Math.cos(angle) * dist;
+                double z = currentPos.z + Math.sin(angle) * dist;
+                double y = findGroundY(x, currentPos.y, z);
+                
+                Vec3 testPos = new Vec3(x, y, z);
+                
+                // Skip dangerous or invalid positions
+                if (isDangerousPosition(testPos) || !isValidTeleportLocation(testPos)) {
+                    continue;
+                }
+                
+                // Calculate tactical score
+                double tacticalScore = getTerrainAdvantage(testPos, target);
+                
+                // Prefer positions with line of sight
+                if (isLineOfSightClear(testPos, target.position())) {
+                    tacticalScore += 30.0;
+                }
+                
+                // Prefer flanking positions
+                Vec3 targetLook = target.getLookAngle();
+                Vec3 toPos = testPos.subtract(target.position()).normalize();
+                double behindScore = -targetLook.dot(toPos);
+                if (behindScore > 0) {
+                    tacticalScore += behindScore * 40.0;
+                }
+                
+                if (tacticalScore > bestScore) {
+                    bestScore = tacticalScore;
+                    bestPos = testPos;
+                }
+            }
+        }
+        
+        return bestPos;
+    }
+    
+    /**
+
+```     * Get prediction accuracy for target movement
      */
     public double getPredictionAccuracy() {
         return predictionAccuracy;
@@ -464,6 +1517,59 @@ public class ShadowZombieNinja extends Zombie {
         super.customServerAiStep();
         this.bossEvent.setProgress(this.getHealth() / this.getMaxHealth());
     }
+    
+    // ============= SKILL MANAGEMENT HELPERS =============
+    
+    /**
+     * Get skill manager for external access
+     */
+    public SkillManager getSkillManager() {
+        return skillManager;
+    }
+    
+    /**
+     * Check if skill is ready
+     */
+    public boolean isSkillReady(SkillType skill) {
+        return skillManager.isReady(skill);
+    }
+    
+    /**
+     * Get current AI state
+     */
+    public AIState getCurrentAIState() {
+        return currentAIState;
+    }
+    
+    /**
+     * Set AI state with transition logic
+     */
+    public void setAIState(AIState newState) {
+        if (this.currentAIState != newState) {
+            this.currentAIState = newState;
+            onAIStateChanged(newState);
+        }
+    }
+    
+    /**
+     * Handle AI state transitions
+     */
+    private void onAIStateChanged(AIState newState) {
+        // Add state transition logic here
+        switch (newState) {
+            case COMBO_ATTACKING:
+                // Prepare for combo
+                break;
+            case DODGING:
+                // Boost movement speed temporarily
+                break;
+            case COORDINATED_ATTACK:
+                // Coordinate with clones
+                break;
+            default:
+                break;
+        }
+    }
 
 
     public static AttributeSupplier.Builder createAttributes() {
@@ -480,7 +1586,7 @@ public class ShadowZombieNinja extends Zombie {
     // Hayabusa Skills Implementation with Rust Optimization
 
     private void performPhantomShuriken(LivingEntity target) {
-       if (phantomShurikenCooldown > 0 || target == null) return;
+       if (!skillManager.isReady(SkillType.PHANTOM_SHURIKEN) || target == null) return;
 
        Vec3 targetPos = target.position();
        Vec3 currentPos = this.position();
@@ -509,7 +1615,7 @@ public class ShadowZombieNinja extends Zombie {
        this.playSound(SoundEvents.PLAYER_ATTACK_SWEEP, 1.0F, 1.5F);
        this.playSound(SoundEvents.ENDER_DRAGON_FLAP, 1.0F, 1.8F);
 
-       phantomShurikenCooldown = PHANTOM_SHURIKEN_COOLDOWN;
+       skillManager.use(SkillType.PHANTOM_SHURIKEN, System.currentTimeMillis());
    }
    
     /**
@@ -701,7 +1807,7 @@ public class ShadowZombieNinja extends Zombie {
    }
     
     private void performQuadShadow() {
-        if (quadShadowCooldown > 0) return;
+        if (!skillManager.isReady(SkillType.QUAD_SHADOW)) return;
 
         Vec3 currentPos = this.position();
         
@@ -727,7 +1833,7 @@ public class ShadowZombieNinja extends Zombie {
         
         // Use Rust optimization for shadow clone positions
         double[][] clonePositions = OptimizationInjector.calculateQuadShadowPositions(
-            currentPos.x, currentPos.y, currentPos.z, SHADOW_CLONE_DISTANCE // 10 blocks dari tengah
+            currentPos.x, currentPos.y, currentPos.z, SHADOW_CLONE_DISTANCE // 20 blocks dari tengah - wider tactical spread
         );
         
         // Create 4 shadow clones around the ninja with massive effects
@@ -745,13 +1851,6 @@ public class ShadowZombieNinja extends Zombie {
             double groundY = findGroundY(clonePositions[i][0], clonePositions[i][1], clonePositions[i][2]);
             Vec3 clonePos = new Vec3(clonePositions[i][0], groundY, clonePositions[i][2]);
             shadowClones.add(clonePos);
-            
-            // DEBUG: Log individual clone positions
-            if (serverLevel != null) {
-                final int cloneIndex = i; // Create final copy for lambda
-                serverLevel.getServer().getPlayerList().getPlayers().forEach(player -> {
-                });
-            }
             
             // SERVER-SIDE particle effects for each clone for visibility
             if (serverLevel != null) {
@@ -794,7 +1893,7 @@ public class ShadowZombieNinja extends Zombie {
         }
         
         shadowCloneDuration = SHADOW_CLONE_DURATION;
-        quadShadowCooldown = QUAD_SHADOW_COOLDOWN;
+        skillManager.use(SkillType.QUAD_SHADOW, System.currentTimeMillis());
         this.playSound(SoundEvents.ILLUSIONER_MIRROR_MOVE, 1.0F, 1.0F);
         this.playSound(SoundEvents.ENDER_DRAGON_FLAP, 1.0F, 0.8F);
         this.playSound(SoundEvents.WITHER_SPAWN, 0.3F, 2.0F);
@@ -1605,7 +2704,7 @@ public class ShadowZombieNinja extends Zombie {
     }
 
     private void performShadowKill(LivingEntity target) {
-       if (shadowKillCooldown > 0 || target == null) return;
+       if (!skillManager.isReady(SkillType.SHADOW_KILL) || target == null) return;
 
        // Hayabusa Mobile Legends Ultimate: Multi-hit dash combo with area effect
        Vec3 startPos = this.position();
@@ -1626,7 +2725,7 @@ public class ShadowZombieNinja extends Zombie {
        int remainingStacks = Math.max(0, shadowKillPassiveStacks - 2);
        shadowKillPassiveStacks = remainingStacks;
 
-       shadowKillCooldown = SHADOW_KILL_COOLDOWN;
+       skillManager.use(SkillType.SHADOW_KILL, System.currentTimeMillis());
    }
 
    /**
@@ -1634,8 +2733,6 @@ public class ShadowZombieNinja extends Zombie {
     * 3-stage dash with multi-hit, area damage, and cinematic effects
     */
    private void executeHayabusaCombo(Vec3[] dashPoints, LivingEntity mainTarget) {
-       ServerLevel serverLevel = (ServerLevel) this.level();
-       
        // Stage 1: Initial dash with trail
        this.teleportWithEffects(dashPoints[0], mainTarget, 1);
        this.dealComboHit(mainTarget, 1.5F);
@@ -1815,8 +2912,25 @@ public class ShadowZombieNinja extends Zombie {
         }
     }
     
+    /**
+     * INTELLIGENT Quad Shadow Goal - Uses shadow clones ONLY when tactically beneficial
+     * 
+     * Smart activation conditions:
+     * 1. EMERGENCY MODE: Low health (<50%) + target close (<10 blocks) → Need dodge/reposition
+     * 2. CHASE MODE: Target at 10-50 blocks AND (moving fast OR at optimal 20+ blocks) → Efficient pursuit
+     * 3. SURROUNDED MODE: 2+ enemies within 12 blocks → Need tactical positioning options
+     * 
+     * This prevents wasteful Quad Shadow usage and ensures maximum chase efficiency.
+     * Clone spread: 20 blocks radius for wider tactical coverage.
+     */
     private static class QuadShadowGoal extends Goal {
         private final ShadowZombieNinja ninja;
+        // Smart usage thresholds for efficient chasing (adjusted for 20 block clone spread)
+        private static final double MIN_CHASE_DISTANCE_SQR = 100.0D; // 10 blocks - too close, no need for clones
+        private static final double MAX_CHASE_DISTANCE_SQR = 2500.0D; // 50 blocks - extended range for 20-block clones
+        private static final double OPTIMAL_CHASE_DISTANCE_SQR = 400.0D; // 20 blocks - ideal for 20-block clone spread
+        private static final double HEALTH_THRESHOLD = 0.5D; // Use when below 50% HP for tactical escape/reposition
+        private static final double SURROUNDED_CHECK_RADIUS = 12.0D; // Check for enemies in 12 block radius
 
         public QuadShadowGoal(ShadowZombieNinja ninja) {
             this.ninja = ninja;
@@ -1825,7 +2939,48 @@ public class ShadowZombieNinja extends Zombie {
 
         @Override
         public boolean canUse() {
-            return ninja.getTarget() != null && ninja.quadShadowCooldown == 0;
+            // Basic requirements
+            LivingEntity target = ninja.getTarget();
+            if (target == null || ninja.quadShadowCooldown > 0) {
+                return false;
+            }
+            
+            double distanceSqr = ninja.distanceToSqr(target);
+            
+            // SMART DECISION: Only use Quad Shadow when tactically beneficial
+            
+            // 1. Emergency mode: Low health and target is close (dodge/reposition)
+            if (ninja.getHealth() / ninja.getMaxHealth() < HEALTH_THRESHOLD && distanceSqr < MIN_CHASE_DISTANCE_SQR) {
+                return true; // Need to escape/reposition
+            }
+            
+            // 2. Chase mode: Target is in optimal range for clone deployment
+            if (distanceSqr >= MIN_CHASE_DISTANCE_SQR && distanceSqr <= MAX_CHASE_DISTANCE_SQR) {
+                // Check if target is moving away (harder to catch without clones)
+                Vec3 targetVel = target.getDeltaMovement();
+                double targetSpeed = Math.sqrt(targetVel.x * targetVel.x + targetVel.z * targetVel.z);
+                
+                // Use clones if target is moving fast OR at optimal distance
+                if (targetSpeed > 0.15D || distanceSqr > OPTIMAL_CHASE_DISTANCE_SQR) {
+                    return true; // Target escaping or at ideal clone distance
+                }
+            }
+            
+            // 3. Surrounded mode: Multiple enemies nearby (need tactical positioning)
+            if (ninja.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+                long nearbyEnemies = serverLevel.getEntitiesOfClass(
+                    LivingEntity.class,
+                    ninja.getBoundingBox().inflate(SURROUNDED_CHECK_RADIUS),
+                    entity -> entity != ninja && entity.isAlive() && ninja.canAttack(entity)
+                ).size();
+                
+                if (nearbyEnemies >= 2) {
+                    return true; // Multiple threats - need clone options
+                }
+            }
+            
+            // Otherwise, don't waste Quad Shadow
+            return false;
         }
 
         @Override
