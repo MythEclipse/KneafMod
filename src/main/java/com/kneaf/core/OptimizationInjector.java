@@ -13,6 +13,7 @@ import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CompletableFuture;
@@ -88,6 +89,36 @@ public final class OptimizationInjector {
         }, BATCH_TIMEOUT_MS, BATCH_TIMEOUT_MS, TimeUnit.MILLISECONDS);
     }
 
+    // ========== ASYNC-STYLE ENTITY BLACKLIST SYSTEM ==========
+    // Entities that failed async processing are blacklisted and tick synchronously
+    private static final Set<UUID> blacklistedEntities = ConcurrentHashMap.newKeySet();
+    private static final AtomicInteger syncFallbackCount = new AtomicInteger(0);
+    private static final AtomicInteger asyncSuccessCount = new AtomicInteger(0);
+
+    // Entity types that MUST tick synchronously (from Async mod patterns)
+    // These have critical state or collision detection requirements
+    private static final Set<String> SYNC_ONLY_ENTITY_TYPES = Set.of(
+            "minecraft:player", // Player state critical
+            "minecraft:arrow", // Projectile collision
+            "minecraft:spectral_arrow", // Projectile collision
+            "minecraft:trident", // Projectile collision
+            "minecraft:fireball", // Projectile collision
+            "minecraft:small_fireball", // Projectile collision
+            "minecraft:dragon_fireball", // Projectile collision
+            "minecraft:wither_skull", // Projectile collision
+            "minecraft:minecart", // Rail physics
+            "minecraft:chest_minecart", // Rail physics
+            "minecraft:hopper_minecart", // Rail physics
+            "minecraft:tnt_minecart", // Rail physics + explosion
+            "minecraft:falling_block", // Block placement critical
+            "minecraft:tnt", // Explosion timing critical
+            "minecraft:ender_dragon", // Boss fight mechanics
+            "minecraft:wither" // Boss fight mechanics
+    );
+
+    // Pending async tasks for post-tick barrier
+    private static final ConcurrentLinkedQueue<CompletableFuture<?>> pendingAsyncTasks = new ConcurrentLinkedQueue<>();
+
     // Cache to track which entity classes have been logged to prevent spam
     private static final Set<String> loggedEntityClasses = ConcurrentHashMap.newKeySet();
 
@@ -111,6 +142,9 @@ public final class OptimizationInjector {
     private static boolean isNativeLibraryLoaded = false;
     private static final Object nativeLibraryLock = new Object();
     private static boolean isTestMode = false;
+
+    // Native method declarations
+    public static native double[] rustperf_batch_entity_physics(double[] velocities, int entityCount, double damping);
 
     // Track if we've already logged warnings for each native method to avoid spam
     private static boolean phantomShurikenWarningLogged = false;
@@ -531,20 +565,17 @@ public final class OptimizationInjector {
     }
 
     /**
-     * MULTI-THREADED ENTITY TICK PROCESSING
-     * Instead of processing each entity synchronously, we buffer entities and
-     * process them in parallel batches using the EntityProcessingService thread
-     * pool.
+     * MULTI-THREADED ENTITY TICK PROCESSING (Async mod pattern)
+     * Entities are categorized into sync-only (players, projectiles) and async-safe.
+     * Async-safe entities are buffered and processed in parallel batches.
      */
     @SubscribeEvent
     public static void onEntityTick(EntityTickEvent.Pre event) {
         if (!PERFORMANCE_MANAGER.isEntityThrottlingEnabled())
             return;
 
-        // Fast path: Skip expensive processing if native optimizations are not
-        // available
+        // Fast path: Skip expensive processing if native optimizations are not available
         if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isRustIntegrationEnabled()) {
-            // Only log once per minute to avoid spam
             if (totalEntitiesProcessed.get() % 1000 == 0) {
                 recordOptimizationMiss("Native library not loaded or integration disabled");
             }
@@ -562,13 +593,22 @@ public final class OptimizationInjector {
                 return;
             }
 
+            // ASYNC MOD PATTERN: Check if entity should tick synchronously
+            // Players, projectiles, minecarts, and blacklisted entities skip async processing
+            if (shouldTickSynchronously(entity)) {
+                syncFallbackCount.incrementAndGet();
+                // Let vanilla handle this entity - don't buffer it
+                return;
+            }
+
             double[] movementData = getEntityMovementData(entity);
             if (movementData == null || hasInvalidMovementValues(movementData[0], movementData[1], movementData[2])) {
                 return;
             }
 
-            // Buffer entity for batch processing instead of immediate processing
+            // Buffer entity for async batch processing
             entityTickBuffer.add(new EntityTickData(entity, movementData));
+            asyncSuccessCount.incrementAndGet();
 
             // Trigger batch processing if buffer is full
             if (entityTickBuffer.size() >= BATCH_SIZE) {
@@ -584,7 +624,8 @@ public final class OptimizationInjector {
 
     /**
      * Process buffered entities in parallel using EntityProcessingService
-     * This method drains the buffer and submits entities for async processing
+     * This method drains the buffer and submits entities for async processing.
+     * Failed entities are blacklisted for sync fallback (Async mod pattern).
      */
     private static void processEntityBatchAsync() {
         if (entityTickBuffer.isEmpty())
@@ -618,7 +659,7 @@ public final class OptimizationInjector {
                 .processEntityBatch(entities, physicsDataList);
 
         // Handle results asynchronously (don't block game thread)
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+        CompletableFuture<Void> batchFuture = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .thenRun(() -> {
                     int processed = futures.size();
                     entitiesProcessedParallel.addAndGet(processed);
@@ -638,27 +679,133 @@ public final class OptimizationInjector {
                                 recordOptimizationHit("Parallel batch processing");
                             }
                         } catch (Exception e) {
+                            // ASYNC MOD PATTERN: Blacklist entity on failure
+                            EntityTickData tickData = batch.get(i);
+                            blacklistEntity(tickData.entity, "Async processing failed: " + e.getMessage());
                             LOGGER.debug("Failed to apply batch result: {}", e.getMessage());
                         }
                     }
                 })
                 .exceptionally(e -> {
+                    // Batch-level failure: blacklist all entities in batch
+                    for (EntityTickData tickData : batch) {
+                        blacklistEntity(tickData.entity, "Batch processing failed: " + e.getMessage());
+                    }
                     LOGGER.debug("Batch processing failed: {}", e.getMessage());
                     return null;
                 });
 
+        // Track pending task for post-tick barrier
+        pendingAsyncTasks.add(batchFuture);
         lastBatchProcessTime.set(System.currentTimeMillis());
     }
 
     /**
-     * Get parallel processing statistics
+     * Get parallel processing statistics including async/sync breakdown
      */
     public static String getParallelProcessingStats() {
-        return String.format("ParallelStats{batches=%d, entitiesParallel=%d, bufferSize=%d, totalProcessed=%d}",
+        return String.format("ParallelStats{batches=%d, entitiesParallel=%d, asyncSuccess=%d, syncFallback=%d, blacklisted=%d, bufferSize=%d}",
                 batchesProcessed.get(),
                 entitiesProcessedParallel.get(),
-                entityTickBuffer.size(),
-                totalEntitiesProcessed.get());
+                asyncSuccessCount.get(),
+                syncFallbackCount.get(),
+                blacklistedEntities.size(),
+                entityTickBuffer.size());
+    }
+    
+    /**
+     * Check if entity should tick synchronously (Async mod pattern)
+     * Returns true for entities that have critical state or collision requirements
+     */
+    private static boolean shouldTickSynchronously(Object entity) {
+        // Check blacklist first (entities that failed async processing)
+        UUID entityUUID = getEntityUUID(entity);
+        if (entityUUID != null && blacklistedEntities.contains(entityUUID)) {
+            return true;
+        }
+        
+        // Check entity type against sync-only list
+        String entityTypeId = getEntityTypeId(entity);
+        if (entityTypeId != null && SYNC_ONLY_ENTITY_TYPES.contains(entityTypeId)) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Extract entity UUID via reflection
+     */
+    private static UUID getEntityUUID(Object entity) {
+        try {
+            java.lang.reflect.Method getUUID = entity.getClass().getMethod("getUUID");
+            return (UUID) getUUID.invoke(entity);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    
+    /**
+     * Extract entity type ID via reflection (e.g., "minecraft:zombie")
+     */
+    private static String getEntityTypeId(Object entity) {
+        try {
+            java.lang.reflect.Method getType = entity.getClass().getMethod("getType");
+            Object entityType = getType.invoke(entity);
+            if (entityType != null) {
+                // Try to get the registry name
+                java.lang.reflect.Method toString = entityType.getClass().getMethod("toString");
+                String typeStr = (String) toString.invoke(entityType);
+                // Parse "entity minecraft.zombie" -> "minecraft:zombie"
+                if (typeStr.contains(".")) {
+                    typeStr = typeStr.replace("entity ", "").replace(".", ":");
+                }
+                return typeStr;
+            }
+        } catch (Exception e) {
+            // Fallback to class name check
+        }
+        return null;
+    }
+    
+    /**
+     * Add entity to blacklist (called when async processing fails)
+     */
+    private static void blacklistEntity(Object entity, String reason) {
+        UUID uuid = getEntityUUID(entity);
+        if (uuid != null) {
+            blacklistedEntities.add(uuid);
+            syncFallbackCount.incrementAndGet();
+            LOGGER.debug("Blacklisted entity {} for async processing: {}", uuid, reason);
+        }
+    }
+    
+    /**
+     * Post-tick synchronization barrier (awaits all pending async tasks)
+     * Called at end of server tick to ensure all entity processing completes
+     */
+    @SubscribeEvent
+    public static void onServerTickPost(ServerTickEvent.Post event) {
+        // Await all pending async entity tasks before next tick
+        CompletableFuture<?> task;
+        List<CompletableFuture<?>> tasks = new ArrayList<>();
+        while ((task = pendingAsyncTasks.poll()) != null) {
+            tasks.add(task);
+        }
+        
+        if (!tasks.isEmpty()) {
+            try {
+                CompletableFuture.allOf(tasks.toArray(new CompletableFuture[0]))
+                    .orTimeout(100, TimeUnit.MILLISECONDS) // 100ms max wait
+                    .exceptionally(e -> {
+                        LOGGER.debug("Post-tick barrier timeout: {}", e.getMessage());
+                        return null;
+                    })
+                    .join();
+            } catch (Exception e) {
+                LOGGER.debug("Post-tick barrier error: {}", e.getMessage());
+            }
+        }
     }
 
     private static double[] getEntityMovementData(Object entity) {

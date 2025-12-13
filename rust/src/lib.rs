@@ -2045,3 +2045,158 @@ pub extern "system" fn Java_com_kneaf_core_RustNativeLoader_calculateCircularPos
         .expect("Failed to set output array");
     output.into_raw()
 }
+
+// ============================================================================
+// PHASE 3: BATCH ENTITY PHYSICS & CHUNK ANALYSIS
+// High-performance batch processing for multi-threaded entity/chunk systems
+// ============================================================================
+
+/// Batch process entity velocities with SIMD optimization
+/// Input: flat array of [vx0, vy0, vz0, vx1, vy1, vz1, ...]
+/// Output: optimized velocities with damping and normalization applied
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_1entity_1physics<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    velocities: JDoubleArray<'local>,
+    entity_count: jint,
+    damping: jdouble,
+) -> jdoubleArray {
+    let count = entity_count as usize;
+    let array_size = count * 3;
+    
+    let mut vel_buf = vec![0.0f64; array_size];
+    if let Err(_) = env.get_double_array_region(&velocities, 0, &mut vel_buf) {
+        return env.new_double_array(0).unwrap().into_raw();
+    }
+    
+    // Process entities in parallel using rayon
+    use rayon::prelude::*;
+    
+    let results: Vec<f64> = (0..count)
+        .into_par_iter()
+        .flat_map(|i| {
+            let idx = i * 3;
+            let vx = vel_buf[idx];
+            let vy = vel_buf[idx + 1];
+            let vz = vel_buf[idx + 2];
+            
+            // Apply damping (horizontal only, preserve gravity)
+            let damped_x = vx * damping;
+            let damped_z = vz * damping;
+            
+            // Normalize for stability (prevent extreme velocities)
+            let speed_sq = damped_x * damped_x + vy * vy + damped_z * damped_z;
+            let max_speed = 10.0; // Minecraft max entity speed
+            
+            if speed_sq > max_speed * max_speed {
+                let scale = max_speed / speed_sq.sqrt();
+                vec![damped_x * scale, vy * scale, damped_z * scale]
+            } else {
+                vec![damped_x, vy, damped_z]
+            }
+        })
+        .collect();
+    
+    let output = env
+        .new_double_array(array_size as i32)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &results)
+        .expect("Failed to set output array");
+    output.into_raw()
+}
+
+/// Analyze chunk section complexity for LOD decisions
+/// Returns complexity scores per section [section0_score, section1_score, ...]
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_ChunkProcessor_rustperf_1analyze_1chunk_1sections<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    section_block_counts: JDoubleArray<'local>,
+    section_count: jint,
+) -> jdoubleArray {
+    let count = section_count as usize;
+    
+    let mut block_counts = vec![0.0f64; count];
+    if let Err(_) = env.get_double_array_region(&section_block_counts, 0, &mut block_counts) {
+        return env.new_double_array(0).unwrap().into_raw();
+    }
+    
+    use rayon::prelude::*;
+    
+    // Calculate complexity scores based on block counts and variety
+    let complexity_scores: Vec<f64> = block_counts
+        .par_iter()
+        .enumerate()
+        .map(|(i, &block_count)| {
+            // Higher sections (y > 64) typically have less detail
+            let height_factor = if i < 4 { 1.5 } else if i < 8 { 1.0 } else { 0.7 };
+            
+            // Complexity based on block count (more blocks = more complex)
+            let base_complexity = (block_count / 4096.0).min(1.0); // 4096 = 16^3 blocks per section
+            
+            base_complexity * height_factor * 100.0
+        })
+        .collect();
+    
+    let output = env
+        .new_double_array(count as i32)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &complexity_scores)
+        .expect("Failed to set output array");
+    output.into_raw()
+}
+
+/// Batch distance calculation for spatial partitioning
+/// Takes entity positions and returns distances to all other entities
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1batch_1distance_1matrix<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    positions: JDoubleArray<'local>,
+    entity_count: jint,
+) -> jdoubleArray {
+    let count = entity_count as usize;
+    let pos_size = count * 3;
+    
+    let mut pos_buf = vec![0.0f64; pos_size];
+    if let Err(_) = env.get_double_array_region(&positions, 0, &mut pos_buf) {
+        return env.new_double_array(0).unwrap().into_raw();
+    }
+    
+    use rayon::prelude::*;
+    
+    // Calculate N x N distance matrix (flattened)
+    let distances: Vec<f64> = (0..count)
+        .into_par_iter()
+        .flat_map(|i| {
+            let ix = i * 3;
+            let x1 = pos_buf[ix];
+            let y1 = pos_buf[ix + 1];
+            let z1 = pos_buf[ix + 2];
+            
+            (0..count)
+                .map(|j| {
+                    if i == j {
+                        0.0
+                    } else {
+                        let jx = j * 3;
+                        let dx = pos_buf[jx] - x1;
+                        let dy = pos_buf[jx + 1] - y1;
+                        let dz = pos_buf[jx + 2] - z1;
+                        (dx * dx + dy * dy + dz * dz).sqrt()
+                    }
+                })
+                .collect::<Vec<f64>>()
+        })
+        .collect();
+    
+    let matrix_size = (count * count) as i32;
+    let output = env
+        .new_double_array(matrix_size)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &distances)
+        .expect("Failed to set output array");
+    output.into_raw()
+}
+
