@@ -1,15 +1,15 @@
 //! Entity Registry System for KneafMod ECS
-//! 
+//!
 //! This module provides a comprehensive entity registration and management system
 //! that replaces the Java-based entity system with a native Rust implementation.
 //! Features include component-based architecture, efficient entity lookup,
 //! and integration with the performance monitoring system.
 
+use crate::performance_monitor::PerformanceMonitor;
+use rayon::prelude::*;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::any::{Any, TypeId};
-use rayon::prelude::*;
-use crate::performance_monitor::PerformanceMonitor;
 
 /// Unique identifier for entities in the ECS
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -49,6 +49,12 @@ pub struct ComponentStorage {
     components: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
+impl Default for ComponentStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ComponentStorage {
     pub fn new() -> Self {
         Self {
@@ -58,7 +64,8 @@ impl ComponentStorage {
 
     /// Insert a component into storage
     pub fn insert<T: Component>(&mut self, component: T) {
-        self.components.insert(TypeId::of::<T>(), Box::new(component));
+        self.components
+            .insert(TypeId::of::<T>(), Box::new(component));
     }
 
     /// Get a component by type
@@ -106,7 +113,7 @@ impl EntityRegistry {
     /// Register a new entity with the given type
     pub fn create_entity(&self, entity_type: EntityType) -> EntityId {
         let start_time = std::time::Instant::now();
-        
+
         let entity_id = self.generate_entity_id();
         // clone the entity_type for insertion into the Entity struct so we can still use
         // the original parameter below when updating the entity_type_map
@@ -118,24 +125,29 @@ impl EntityRegistry {
         };
 
         // Add to main entity storage
-        self.entities.write().unwrap().insert(entity_id, entity.clone());
-        
+        self.entities
+            .write()
+            .unwrap()
+            .insert(entity_id, entity.clone());
+
         // Add to type-specific storage
-        self.entity_type_map.write().unwrap()
+        self.entity_type_map
+            .write()
+            .unwrap()
             .entry(entity_type.clone())
             .or_default()
             .push(entity_id);
 
         // Create component storage for this entity
-        self.component_storages.write().unwrap()
+        self.component_storages
+            .write()
+            .unwrap()
             .insert(entity_id, ComponentStorage::new());
 
         // Record performance metrics
         let duration = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "entity_creation_time",
-            duration.as_secs_f64(),
-        );
+        self.performance_monitor
+            .record_metric("entity_creation_time", duration.as_secs_f64());
 
         entity_id
     }
@@ -143,22 +155,26 @@ impl EntityRegistry {
     /// Remove an entity and all its components
     pub fn remove_entity(&self, entity_id: EntityId) -> bool {
         let start_time = std::time::Instant::now();
-        
+
         // Remove from main storage
         if let Some(entity) = self.entities.write().unwrap().remove(&entity_id) {
             // Remove from type-specific storage
-            if let Some(vec) = self.entity_type_map.write().unwrap()
-                .get_mut(&entity.entity_type) { vec.retain(|&id| id != entity_id) }
+            if let Some(vec) = self
+                .entity_type_map
+                .write()
+                .unwrap()
+                .get_mut(&entity.entity_type)
+            {
+                vec.retain(|&id| id != entity_id)
+            }
 
             // Remove component storage
             self.component_storages.write().unwrap().remove(&entity_id);
 
             // Record performance metrics
             let duration = start_time.elapsed();
-            self.performance_monitor.record_metric(
-                "entity_removal_time",
-                duration.as_secs_f64(),
-            );
+            self.performance_monitor
+                .record_metric("entity_removal_time", duration.as_secs_f64());
 
             true
         } else {
@@ -175,12 +191,10 @@ impl EntityRegistry {
     pub fn add_component<T: Component>(&self, entity_id: EntityId, component: T) -> bool {
         if let Some(storage) = self.component_storages.write().unwrap().get_mut(&entity_id) {
             storage.insert(component);
-            
-            self.performance_monitor.record_metric(
-                "component_add_count",
-                1.0,
-            );
-            
+
+            self.performance_monitor
+                .record_metric("component_add_count", 1.0);
+
             true
         } else {
             false
@@ -189,7 +203,9 @@ impl EntityRegistry {
 
     /// Get component from an entity
     pub fn get_component<T: Component + Clone>(&self, entity_id: EntityId) -> Option<Arc<T>> {
-        self.component_storages.read().unwrap()
+        self.component_storages
+            .read()
+            .unwrap()
             .get(&entity_id)?
             .get::<T>()
             .map(|component| Arc::new(component.clone()))
@@ -199,14 +215,12 @@ impl EntityRegistry {
     pub fn remove_component<T: Component>(&self, entity_id: EntityId) -> bool {
         if let Some(storage) = self.component_storages.write().unwrap().get_mut(&entity_id) {
             let removed = storage.remove::<T>().is_some();
-            
+
             if removed {
-                self.performance_monitor.record_metric(
-                    "component_remove_count",
-                    1.0,
-                );
+                self.performance_monitor
+                    .record_metric("component_remove_count", 1.0);
             }
-            
+
             removed
         } else {
             false
@@ -215,26 +229,30 @@ impl EntityRegistry {
 
     /// Get all entities of a specific type
     pub fn get_entities_by_type(&self, entity_type: EntityType) -> Vec<EntityId> {
-        self.entity_type_map.read().unwrap()
+        self.entity_type_map
+            .read()
+            .unwrap()
             .get(&entity_type)
             .cloned()
             .unwrap_or_default()
     }
 
     /// Process entities in parallel using Rayon
-    pub fn process_entities_parallel<F>(&self, processor: F) 
-    where 
-        F: Fn(EntityId, &Entity, &ComponentStorage) + Send + Sync
+    pub fn process_entities_parallel<F>(&self, processor: F)
+    where
+        F: Fn(EntityId, &Entity, &ComponentStorage) + Send + Sync,
     {
         let start_time = std::time::Instant::now();
-        
+
         let entities = self.entities.read().unwrap();
         let storages = self.component_storages.read().unwrap();
-        
+
         let entity_data: Vec<_> = entities
             .iter()
             .filter_map(|(id, entity)| {
-                storages.get(id).map(|storage| (*id, entity.clone(), storage))
+                storages
+                    .get(id)
+                    .map(|storage| (*id, entity.clone(), storage))
             })
             .collect();
 
@@ -243,24 +261,21 @@ impl EntityRegistry {
         });
 
         let duration = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "parallel_entity_processing_time",
-            duration.as_secs_f64(),
-        );
+        self.performance_monitor
+            .record_metric("parallel_entity_processing_time", duration.as_secs_f64());
     }
 
     /// Get entity count by type
     pub fn get_entity_count(&self, entity_type: Option<EntityType>) -> usize {
         match entity_type {
-            Some(entity_type) => {
-                self.entity_type_map.read().unwrap()
-                    .get(&entity_type)
-                    .map(|vec| vec.len())
-                    .unwrap_or(0)
-            }
-            None => {
-                self.entities.read().unwrap().len()
-            }
+            Some(entity_type) => self
+                .entity_type_map
+                .read()
+                .unwrap()
+                .get(&entity_type)
+                .map(|vec| vec.len())
+                .unwrap_or(0),
+            None => self.entities.read().unwrap().len(),
         }
     }
 
@@ -273,12 +288,10 @@ impl EntityRegistry {
     pub fn deactivate_entity(&self, entity_id: EntityId) -> bool {
         if let Some(entity) = self.entities.write().unwrap().get_mut(&entity_id) {
             entity.active = false;
-            
-            self.performance_monitor.record_metric(
-                "entity_deactivation_count",
-                1.0,
-            );
-            
+
+            self.performance_monitor
+                .record_metric("entity_deactivation_count", 1.0);
+
             true
         } else {
             false
@@ -289,12 +302,10 @@ impl EntityRegistry {
     pub fn reactivate_entity(&self, entity_id: EntityId) -> bool {
         if let Some(entity) = self.entities.write().unwrap().get_mut(&entity_id) {
             entity.active = true;
-            
-            self.performance_monitor.record_metric(
-                "entity_reactivation_count",
-                1.0,
-            );
-            
+
+            self.performance_monitor
+                .record_metric("entity_reactivation_count", 1.0);
+
             true
         } else {
             false
@@ -312,7 +323,8 @@ impl EntityRegistry {
     /// Get the entity type for a given entity ID
     pub fn get_entity_type(&self, entity_id: EntityId) -> Result<EntityType, String> {
         let entities = self.entities.read().unwrap();
-        entities.get(&entity_id)
+        entities
+            .get(&entity_id)
             .map(|entity| entity.entity_type.clone())
             .ok_or_else(|| format!("Entity {} not found", entity_id.0))
     }
@@ -321,11 +333,12 @@ impl EntityRegistry {
     pub fn get_statistics(&self) -> EntityRegistryStats {
         let entities = self.entities.read().unwrap();
         let type_map = self.entity_type_map.read().unwrap();
-        
+
         EntityRegistryStats {
             total_entities: entities.len(),
             active_entities: entities.values().filter(|e| e.active).count(),
-            entities_by_type: type_map.iter()
+            entities_by_type: type_map
+                .iter()
                 .map(|(entity_type, ids)| (entity_type.clone(), ids.len()))
                 .collect(),
         }
@@ -344,7 +357,7 @@ pub struct EntityRegistryStats {
 pub trait EntitySystem: Send + Sync {
     /// Update the system for a single frame/tick
     fn update(&mut self, registry: &EntityRegistry, delta_time: f64);
-    
+
     /// Get the system name for debugging and monitoring
     fn name(&self) -> &str;
 }

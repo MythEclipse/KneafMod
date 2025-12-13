@@ -34,14 +34,14 @@ impl SimdDetector {
             detection_done: Once::new(),
         }
     }
-    
+
     /// Detect available SIMD instructions
     pub fn detect_capabilities(&self) -> SimdLevel {
         self.detection_done.call_once(|| {
             let level = self.perform_detection();
             self.detected_level.store(level, Ordering::Relaxed);
         });
-        
+
         match self.detected_level.load(Ordering::Relaxed) {
             0 => SimdLevel::None,
             1 => SimdLevel::SSE2,
@@ -57,54 +57,57 @@ impl SimdDetector {
             _ => SimdLevel::None,
         }
     }
-    
+
     fn perform_detection(&self) -> usize {
         #[cfg(target_arch = "x86_64")]
         {
             // Check for AVX512 support
-            if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") && is_x86_feature_detected!("avx512dq") {
+            if is_x86_feature_detected!("avx512f")
+                && is_x86_feature_detected!("avx512bw")
+                && is_x86_feature_detected!("avx512dq")
+            {
                 return 10;
             }
             if is_x86_feature_detected!("avx512f") {
                 return 8;
             }
-            
+
             // Check for AVX2 support
             if is_x86_feature_detected!("avx2") {
                 return 7;
             }
-            
+
             // Check for AVX support
             if is_x86_feature_detected!("avx") {
                 return 6;
             }
-            
+
             // Check for SSE4.2 support
             if is_x86_feature_detected!("sse4.2") {
                 return 5;
             }
-            
+
             // Check for SSE4.1 support
             if is_x86_feature_detected!("sse4.1") {
                 return 4;
             }
-            
+
             // Check for SSSE3 support
             if is_x86_feature_detected!("ssse3") {
                 return 3;
             }
-            
+
             // Check for SSE3 support
             if is_x86_feature_detected!("sse3") {
                 return 2;
             }
-            
+
             // Check for SSE2 support (minimum requirement)
             if is_x86_feature_detected!("sse2") {
                 return 1;
             }
         }
-        
+
         0 // No SIMD support
     }
 }
@@ -114,22 +117,22 @@ lazy_static::lazy_static! {
 }
 
 /// Runtime-selected SIMD matrix multiplication
-pub fn runtime_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_cols: usize) -> Vec<f32> {
+pub fn runtime_matrix_multiply(
+    a: &[f32],
+    b: &[f32],
+    a_rows: usize,
+    a_cols: usize,
+    b_cols: usize,
+) -> Vec<f32> {
     let simd_level = SIMD_DETECTOR.detect_capabilities();
-    
+
     match simd_level {
         SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
             avx512_matrix_multiply(a, b, a_rows, a_cols, b_cols)
         }
-        SimdLevel::Avx2 => {
-            avx2_matrix_multiply(a, b, a_rows, a_cols, b_cols)
-        }
-        SimdLevel::Avx => {
-            avx_matrix_multiply(a, b, a_rows, a_cols, b_cols)
-        }
-        SimdLevel::SSE41 | SimdLevel::SSE42 => {
-            sse41_matrix_multiply(a, b, a_rows, a_cols, b_cols)
-        }
+        SimdLevel::Avx2 => avx2_matrix_multiply(a, b, a_rows, a_cols, b_cols),
+        SimdLevel::Avx => avx_matrix_multiply(a, b, a_rows, a_cols, b_cols),
+        SimdLevel::SSE41 | SimdLevel::SSE42 => sse41_matrix_multiply(a, b, a_rows, a_cols, b_cols),
         _ => {
             // Fallback to scalar implementation
             scalar_matrix_multiply(a, b, a_rows, a_cols, b_cols)
@@ -138,9 +141,15 @@ pub fn runtime_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usiz
 }
 
 /// Scalar fallback implementation
-fn scalar_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_cols: usize) -> Vec<f32> {
+fn scalar_matrix_multiply(
+    a: &[f32],
+    b: &[f32],
+    a_rows: usize,
+    a_cols: usize,
+    b_cols: usize,
+) -> Vec<f32> {
     let mut result = vec![0.0; a_rows * b_cols];
-    
+
     for i in 0..a_rows {
         for j in 0..b_cols {
             let mut sum = 0.0;
@@ -150,19 +159,25 @@ fn scalar_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_
             result[i * b_cols + j] = sum;
         }
     }
-    
+
     result
 }
 
 /// AVX-optimized matrix multiplication (256-bit SIMD)
-fn avx_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_cols: usize) -> Vec<f32> {
+fn avx_matrix_multiply(
+    a: &[f32],
+    b: &[f32],
+    a_rows: usize,
+    a_cols: usize,
+    b_cols: usize,
+) -> Vec<f32> {
     let mut result = vec![0.0; a_rows * b_cols];
-    
+
     unsafe {
         for i in 0..a_rows {
             for j in 0..b_cols {
                 let mut sum = _mm256_setzero_ps();
-                
+
                 // Process 8 elements at a time
                 let k_end = a_cols - (a_cols % 8);
                 for k in (0..k_end).step_by(8) {
@@ -179,34 +194,40 @@ fn avx_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_col
                     );
                     sum = _mm256_fmadd_ps(a_vec, b_vec, sum);
                 }
-                
+
                 // Horizontal sum
                 let mut temp = [0.0f32; 8];
                 _mm256_storeu_ps(&mut temp[0], sum);
                 let mut scalar_sum = temp.iter().sum::<f32>();
-                
+
                 // Handle remaining elements
                 for k in k_end..a_cols {
                     scalar_sum += a[i * a_cols + k] * b[k * b_cols + j];
                 }
-                
+
                 result[i * b_cols + j] = scalar_sum;
             }
         }
     }
-    
+
     result
 }
 
 /// AVX2-optimized matrix multiplication with FMA
-fn avx2_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_cols: usize) -> Vec<f32> {
+fn avx2_matrix_multiply(
+    a: &[f32],
+    b: &[f32],
+    a_rows: usize,
+    a_cols: usize,
+    b_cols: usize,
+) -> Vec<f32> {
     let mut result = vec![0.0; a_rows * b_cols];
-    
+
     unsafe {
         for i in 0..a_rows {
             for j in 0..b_cols {
                 let mut sum = _mm256_setzero_ps();
-                
+
                 // Process 8 elements at a time using FMA
                 let k_end = a_cols - (a_cols % 8);
                 for k in (0..k_end).step_by(8) {
@@ -223,35 +244,41 @@ fn avx2_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_co
                     );
                     sum = _mm256_fmadd_ps(a_vec, b_vec, sum);
                 }
-                
+
                 // Horizontal sum
                 let mut temp = [0.0f32; 8];
                 _mm256_storeu_ps(&mut temp[0], sum);
                 let mut scalar_sum = temp.iter().sum::<f32>();
-                
+
                 // Handle remaining elements
                 for k in k_end..a_cols {
                     scalar_sum += a[i * a_cols + k] * b[k * b_cols + j];
                 }
-                
+
                 result[i * b_cols + j] = scalar_sum;
             }
         }
     }
-    
+
     result
 }
 
 /// AVX512-optimized matrix multiplication (512-bit SIMD)
 #[cfg(target_arch = "x86_64")]
-fn avx512_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_cols: usize) -> Vec<f32> {
+fn avx512_matrix_multiply(
+    a: &[f32],
+    b: &[f32],
+    a_rows: usize,
+    a_cols: usize,
+    b_cols: usize,
+) -> Vec<f32> {
     let mut result = vec![0.0; a_rows * b_cols];
-    
+
     unsafe {
         for i in 0..a_rows {
             for j in 0..b_cols {
                 let mut sum = _mm512_setzero_ps();
-                
+
                 // Process 16 elements at a time
                 let k_end = a_cols - (a_cols % 16);
                 for k in (0..k_end).step_by(16) {
@@ -276,10 +303,10 @@ fn avx512_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_
                     );
                     sum = _mm512_fmadd_ps(a_vec, b_vec, sum);
                 }
-                
+
                 // Horizontal sum
                 result[i * b_cols + j] = _mm512_reduce_add_ps(sum);
-                
+
                 // Handle remaining elements
                 for k in k_end..a_cols {
                     result[i * b_cols + j] += a[i * a_cols + k] * b[k * b_cols + j];
@@ -287,19 +314,25 @@ fn avx512_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_
             }
         }
     }
-    
+
     result
 }
 
 /// SSE4.1 optimized matrix multiplication
-fn sse41_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_cols: usize) -> Vec<f32> {
+fn sse41_matrix_multiply(
+    a: &[f32],
+    b: &[f32],
+    a_rows: usize,
+    a_cols: usize,
+    b_cols: usize,
+) -> Vec<f32> {
     let mut result = vec![0.0; a_rows * b_cols];
-    
+
     unsafe {
         for i in 0..a_rows {
             for j in 0..b_cols {
                 let mut sum = _mm_setzero_ps();
-                
+
                 // Process 4 elements at a time
                 let k_end = a_cols - (a_cols % 4);
                 for k in (0..k_end).step_by(4) {
@@ -312,42 +345,36 @@ fn sse41_matrix_multiply(a: &[f32], b: &[f32], a_rows: usize, a_cols: usize, b_c
                     );
                     sum = _mm_add_ps(_mm_mul_ps(a_vec, b_vec), sum);
                 }
-                
+
                 // Horizontal sum
                 let mut temp = [0.0f32; 4];
                 _mm_storeu_ps(&mut temp[0], sum);
                 let mut scalar_sum = temp.iter().sum::<f32>();
-                
+
                 // Handle remaining elements
                 for k in k_end..a_cols {
                     scalar_sum += a[i * a_cols + k] * b[k * b_cols + j];
                 }
-                
+
                 result[i * b_cols + j] = scalar_sum;
             }
         }
     }
-    
+
     result
 }
 
 /// Runtime-selected SIMD vector operations
 pub fn runtime_vector_dot_product(a: &[f32], b: &[f32]) -> f32 {
     let simd_level = SIMD_DETECTOR.detect_capabilities();
-    
+
     match simd_level {
         SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
             avx512_vector_dot_product(a, b)
         }
-        SimdLevel::Avx2 | SimdLevel::Avx => {
-            avx_vector_dot_product(a, b)
-        }
-        SimdLevel::SSE41 | SimdLevel::SSE42 => {
-            sse41_vector_dot_product(a, b)
-        }
-        _ => {
-            scalar_vector_dot_product(a, b)
-        }
+        SimdLevel::Avx2 | SimdLevel::Avx => avx_vector_dot_product(a, b),
+        SimdLevel::SSE41 | SimdLevel::SSE42 => sse41_vector_dot_product(a, b),
+        _ => scalar_vector_dot_product(a, b),
     }
 }
 
@@ -360,29 +387,29 @@ fn scalar_vector_dot_product(a: &[f32], b: &[f32]) -> f32 {
 /// AVX vector dot product
 fn avx_vector_dot_product(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
-    
+
     unsafe {
         let mut sum = _mm256_setzero_ps();
         let len = a.len();
         let simd_len = len - (len % 8);
-        
+
         // Process 8 elements at a time
         for i in (0..simd_len).step_by(8) {
             let a_vec = _mm256_loadu_ps(&a[i]);
             let b_vec = _mm256_loadu_ps(&b[i]);
             sum = _mm256_fmadd_ps(a_vec, b_vec, sum);
         }
-        
+
         // Horizontal sum
         let mut temp = [0.0f32; 8];
         _mm256_storeu_ps(&mut temp[0], sum);
         let mut result = temp.iter().sum::<f32>();
-        
+
         // Handle remaining elements
         for i in simd_len..len {
             result += a[i] * b[i];
         }
-        
+
         result
     }
 }
@@ -391,27 +418,27 @@ fn avx_vector_dot_product(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 fn avx512_vector_dot_product(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
-    
+
     unsafe {
         let mut sum = _mm512_setzero_ps();
         let len = a.len();
         let simd_len = len - (len % 16);
-        
+
         // Process 16 elements at a time
         for i in (0..simd_len).step_by(16) {
             let a_vec = _mm512_loadu_ps(&a[i]);
             let b_vec = _mm512_loadu_ps(&b[i]);
             sum = _mm512_fmadd_ps(a_vec, b_vec, sum);
         }
-        
+
         // Horizontal sum
         let mut result = _mm512_reduce_add_ps(sum);
-        
+
         // Handle remaining elements
         for i in simd_len..len {
             result += a[i] * b[i];
         }
-        
+
         result
     }
 }
@@ -419,29 +446,29 @@ fn avx512_vector_dot_product(a: &[f32], b: &[f32]) -> f32 {
 /// SSE4.1 vector dot product
 fn sse41_vector_dot_product(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
-    
+
     unsafe {
         let mut sum = _mm_setzero_ps();
         let len = a.len();
         let simd_len = len - (len % 4);
-        
+
         // Process 4 elements at a time
         for i in (0..simd_len).step_by(4) {
             let a_vec = _mm_loadu_ps(&a[i]);
             let b_vec = _mm_loadu_ps(&b[i]);
             sum = _mm_add_ps(_mm_mul_ps(a_vec, b_vec), sum);
         }
-        
+
         // Horizontal sum
         let mut temp = [0.0f32; 4];
         _mm_storeu_ps(&mut temp[0], sum);
         let mut result = temp.iter().sum::<f32>();
-        
+
         // Handle remaining elements
         for i in simd_len..len {
             result += a[i] * b[i];
         }
-        
+
         result
     }
 }
@@ -449,20 +476,12 @@ fn sse41_vector_dot_product(a: &[f32], b: &[f32]) -> f32 {
 /// Runtime-selected SIMD vector addition
 pub fn runtime_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
     let simd_level = SIMD_DETECTOR.detect_capabilities();
-    
+
     match simd_level {
-        SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
-            avx512_vector_add(a, b)
-        }
-        SimdLevel::Avx2 | SimdLevel::Avx => {
-            avx_vector_add(a, b)
-        }
-        SimdLevel::SSE41 | SimdLevel::SSE42 => {
-            sse41_vector_add(a, b)
-        }
-        _ => {
-            scalar_vector_add(a, b)
-        }
+        SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => avx512_vector_add(a, b),
+        SimdLevel::Avx2 | SimdLevel::Avx => avx_vector_add(a, b),
+        SimdLevel::SSE41 | SimdLevel::SSE42 => sse41_vector_add(a, b),
+        _ => scalar_vector_add(a, b),
     }
 }
 
@@ -475,13 +494,13 @@ fn scalar_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
 /// AVX vector addition
 fn avx_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
     assert_eq!(a.len(), b.len());
-    
+
     let mut result = vec![0.0; a.len()];
-    
+
     unsafe {
         let len = a.len();
         let simd_len = len - (len % 8);
-        
+
         // Process 8 elements at a time
         for i in (0..simd_len).step_by(8) {
             let a_vec = _mm256_loadu_ps(&a[i]);
@@ -489,13 +508,13 @@ fn avx_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
             let sum = _mm256_add_ps(a_vec, b_vec);
             _mm256_storeu_ps(&mut result[i], sum);
         }
-        
+
         // Handle remaining elements
         for i in simd_len..len {
             result[i] = a[i] + b[i];
         }
     }
-    
+
     result
 }
 
@@ -503,13 +522,13 @@ fn avx_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
 #[cfg(target_arch = "x86_64")]
 fn avx512_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
     assert_eq!(a.len(), b.len());
-    
+
     let mut result = vec![0.0; a.len()];
-    
+
     unsafe {
         let len = a.len();
         let simd_len = len - (len % 16);
-        
+
         // Process 16 elements at a time
         for i in (0..simd_len).step_by(16) {
             let a_vec = _mm512_loadu_ps(&a[i]);
@@ -517,26 +536,26 @@ fn avx512_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
             let sum = _mm512_add_ps(a_vec, b_vec);
             _mm512_storeu_ps(&mut result[i], sum);
         }
-        
+
         // Handle remaining elements
         for i in simd_len..len {
             result[i] = a[i] + b[i];
         }
     }
-    
+
     result
 }
 
 /// SSE4.1 vector addition
 fn sse41_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
     assert_eq!(a.len(), b.len());
-    
+
     let mut result = vec![0.0; a.len()];
-    
+
     unsafe {
         let len = a.len();
         let simd_len = len - (len % 4);
-        
+
         // Process 4 elements at a time
         for i in (0..simd_len).step_by(4) {
             let a_vec = _mm_loadu_ps(&a[i]);
@@ -544,40 +563,34 @@ fn sse41_vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
             let sum = _mm_add_ps(a_vec, b_vec);
             _mm_storeu_ps(&mut result[i], sum);
         }
-        
+
         // Handle remaining elements
         for i in simd_len..len {
             result[i] = a[i] + b[i];
         }
     }
-    
+
     result
 }
 
 /// Runtime-selected SIMD 4x4 matrix operations
 pub fn runtime_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     let simd_level = SIMD_DETECTOR.detect_capabilities();
-    
+
     match simd_level {
         SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
             avx512_matrix4x4_multiply(a, b)
         }
-        SimdLevel::Avx2 | SimdLevel::Avx => {
-            avx_matrix4x4_multiply(a, b)
-        }
-        SimdLevel::SSE41 | SimdLevel::SSE42 => {
-            sse41_matrix4x4_multiply(a, b)
-        }
-        _ => {
-            scalar_matrix4x4_multiply(a, b)
-        }
+        SimdLevel::Avx2 | SimdLevel::Avx => avx_matrix4x4_multiply(a, b),
+        SimdLevel::SSE41 | SimdLevel::SSE42 => sse41_matrix4x4_multiply(a, b),
+        _ => scalar_matrix4x4_multiply(a, b),
     }
 }
 
 /// Scalar 4x4 matrix multiplication
 fn scalar_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     let mut result = [0.0; 16];
-    
+
     for i in 0..4 {
         for j in 0..4 {
             let mut sum = 0.0;
@@ -587,39 +600,39 @@ fn scalar_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
             result[i * 4 + j] = sum;
         }
     }
-    
+
     result
 }
 
 /// AVX 4x4 matrix multiplication
 fn avx_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     let mut result = [0.0; 16];
-    
+
     unsafe {
         for i in 0..4 {
             let row_offset = i * 4;
-            
+
             // Load row from matrix A
             let a_row = _mm_loadu_ps(&a[row_offset]);
-            
+
             // Calculate each element of the result row
             for j in 0..4 {
                 // Load column from matrix B using broadcast
                 let b_col = _mm_set1_ps(b[j]);
-                
+
                 // Multiply and accumulate
                 let prod = _mm_mul_ps(a_row, b_col);
-                
+
                 // Horizontal sum
                 let sum = _mm_hadd_ps(prod, prod);
                 let sum = _mm_hadd_ps(sum, sum);
-                
+
                 // Store result
                 result[row_offset + j] = _mm_cvtss_f32(sum);
             }
         }
     }
-    
+
     result
 }
 
@@ -627,32 +640,32 @@ fn avx_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
 #[cfg(target_arch = "x86_64")]
 fn avx512_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     let mut result = [0.0; 16];
-    
+
     unsafe {
         for i in 0..4 {
             let row_offset = i * 4;
-            
+
             // Load row from matrix A and broadcast
             let a_row0 = _mm512_set1_ps(a[row_offset]);
             let a_row1 = _mm512_set1_ps(a[row_offset + 1]);
             let a_row2 = _mm512_set1_ps(a[row_offset + 2]);
             let a_row3 = _mm512_set1_ps(a[row_offset + 3]);
-            
+
             // Process matrix B in 4x4 blocks
             let b_vec = _mm512_loadu_ps(b.as_ptr());
-            
+
             // Multiply and accumulate
             let prod0 = _mm512_mul_ps(a_row0, b_vec);
             let prod1 = _mm512_mul_ps(a_row1, b_vec);
             let prod2 = _mm512_mul_ps(a_row2, b_vec);
             let prod3 = _mm512_mul_ps(a_row3, b_vec);
-            
+
             // Extract results
             let temp0 = _mm512_extractf32x4_ps(prod0, 0);
             let temp1 = _mm512_extractf32x4_ps(prod1, 0);
             let temp2 = _mm512_extractf32x4_ps(prod2, 0);
             let temp3 = _mm512_extractf32x4_ps(prod3, 0);
-            
+
             // Horizontal sums
             let sum0 = _mm_hadd_ps(temp0, temp0);
             let sum0 = _mm_hadd_ps(sum0, sum0);
@@ -662,46 +675,46 @@ fn avx512_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
             let sum2 = _mm_hadd_ps(sum2, sum2);
             let sum3 = _mm_hadd_ps(temp3, temp3);
             let sum3 = _mm_hadd_ps(sum3, sum3);
-            
+
             result[row_offset] = _mm_cvtss_f32(sum0);
             result[row_offset + 1] = _mm_cvtss_f32(sum1);
             result[row_offset + 2] = _mm_cvtss_f32(sum2);
             result[row_offset + 3] = _mm_cvtss_f32(sum3);
         }
     }
-    
+
     result
 }
 
 /// SSE4.1 4x4 matrix multiplication
 fn sse41_matrix4x4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     let mut result = [0.0; 16];
-    
+
     unsafe {
         for i in 0..4 {
             let row_offset = i * 4;
-            
+
             // Load row from matrix A
             let a_row = _mm_loadu_ps(&a[row_offset]);
-            
+
             // Calculate each element of the result row
             for j in 0..4 {
                 // Load column from matrix B using broadcast
                 let b_col = _mm_set1_ps(b[j]);
-                
+
                 // Multiply and accumulate
                 let prod = _mm_mul_ps(a_row, b_col);
-                
+
                 // Horizontal sum
                 let sum = _mm_hadd_ps(prod, prod);
                 let sum = _mm_hadd_ps(sum, sum);
-                
+
                 // Store result
                 result[row_offset + j] = _mm_cvtss_f32(sum);
             }
         }
     }
-    
+
     result
 }
 
@@ -726,10 +739,10 @@ impl SimdStats {
             total_operations: AtomicUsize::new(0),
         }
     }
-    
+
     pub fn record_operation(&self, simd_level: SimdLevel) {
         self.total_operations.fetch_add(1, Ordering::Relaxed);
-        
+
         match simd_level {
             SimdLevel::Avx512f | SimdLevel::Avx512bw | SimdLevel::Avx512dq => {
                 self.avx512_operations.fetch_add(1, Ordering::Relaxed);
@@ -740,7 +753,11 @@ impl SimdStats {
             SimdLevel::Avx => {
                 self.avx_operations.fetch_add(1, Ordering::Relaxed);
             }
-            SimdLevel::SSE41 | SimdLevel::SSE42 | SimdLevel::SSSE3 | SimdLevel::SSE3 | SimdLevel::SSE2 => {
+            SimdLevel::SSE41
+            | SimdLevel::SSE42
+            | SimdLevel::SSSE3
+            | SimdLevel::SSE3
+            | SimdLevel::SSE2 => {
                 self.sse_operations.fetch_add(1, Ordering::Relaxed);
             }
             _ => {
@@ -748,7 +765,7 @@ impl SimdStats {
             }
         }
     }
-    
+
     pub fn get_summary(&self) -> String {
         format!(
             "SimdStats{{total:{}, avx512:{}, avx2:{}, avx:{}, sse:{}, scalar:{}}}",
@@ -778,18 +795,24 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrixMultiply<'a>
 ) -> jni::objects::JFloatArray<'a> {
     let a_size = (a_rows * a_cols) as usize;
     let b_size = (a_cols * b_cols) as usize;
-    
+
     let mut a_data = vec![0.0f32; a_size];
     let mut b_data = vec![0.0f32; b_size];
-    
+
     env.get_float_array_region(&a, 0, &mut a_data).unwrap();
     env.get_float_array_region(&b, 0, &mut b_data).unwrap();
-    
-    let result = runtime_matrix_multiply(&a_data, &b_data, a_rows as usize, a_cols as usize, b_cols as usize);
-    
+
+    let result = runtime_matrix_multiply(
+        &a_data,
+        &b_data,
+        a_rows as usize,
+        a_cols as usize,
+        b_cols as usize,
+    );
+
     let output = env.new_float_array(result.len() as i32).unwrap();
     env.set_float_array_region(&output, 0, &result).unwrap();
-    
+
     output
 }
 
@@ -800,13 +823,13 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorDotProduct(
     b: jni::objects::JFloatArray,
 ) -> f32 {
     let len = env.get_array_length(&a).unwrap() as usize;
-    
+
     let mut a_data = vec![0.0f32; len];
     let mut b_data = vec![0.0f32; len];
-    
+
     env.get_float_array_region(&a, 0, &mut a_data).unwrap();
     env.get_float_array_region(&b, 0, &mut b_data).unwrap();
-    
+
     runtime_vector_dot_product(&a_data, &b_data)
 }
 
@@ -817,18 +840,18 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorAdd<'a>(
     b: jni::objects::JFloatArray<'a>,
 ) -> jni::objects::JFloatArray<'a> {
     let len = env.get_array_length(&a).unwrap() as usize;
-    
+
     let mut a_data = vec![0.0f32; len];
     let mut b_data = vec![0.0f32; len];
-    
+
     env.get_float_array_region(&a, 0, &mut a_data).unwrap();
     env.get_float_array_region(&b, 0, &mut b_data).unwrap();
-    
+
     let result = runtime_vector_add(&a_data, &b_data);
-    
+
     let output = env.new_float_array(result.len() as i32).unwrap();
     env.set_float_array_region(&output, 0, &result).unwrap();
-    
+
     output
 }
 
@@ -840,15 +863,15 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrix4x4Multiply<
 ) -> jni::objects::JFloatArray<'a> {
     let mut a_data = [0.0f32; 16];
     let mut b_data = [0.0f32; 16];
-    
+
     env.get_float_array_region(&a, 0, &mut a_data).unwrap();
     env.get_float_array_region(&b, 0, &mut b_data).unwrap();
-    
+
     let result = runtime_matrix4x4_multiply(&a_data, &b_data);
-    
+
     let output = env.new_float_array(16).unwrap();
     env.set_float_array_region(&output, 0, &result).unwrap();
-    
+
     output
 }
 
@@ -870,7 +893,7 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getSimdCapabilities<'a>(
         SimdLevel::Avx512bw => "AVX512BW",
         SimdLevel::Avx512dq => "AVX512DQ",
     };
-    
+
     env.new_string(level_str).unwrap()
 }
 

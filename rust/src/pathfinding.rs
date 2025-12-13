@@ -4,16 +4,16 @@
 //! with async support, multi-threading capabilities, and integration with the entity system.
 //! Replaces the Java implementation in KneafCore.java with better performance and memory safety.
 
+use crate::entity_registry::EntityId;
+use crate::performance_monitor::PerformanceMonitor;
+use glam::Vec3;
+use log::{debug, info, warn};
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use glam::Vec3;
-use serde::{Deserialize, Serialize};
-use log::{debug, info, warn};
 use tokio::task::JoinHandle;
-use rayon::prelude::*;
-use crate::entity_registry::EntityId;
-use crate::performance_monitor::PerformanceMonitor;
 
 /// Configuration for pathfinding behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,14 +75,19 @@ impl PathfindingGrid {
 #[derive(Debug, Clone, PartialEq)]
 struct PathNode {
     position: (usize, usize),
-    g_cost: f32,      // Cost from start to this node
-    h_cost: f32,      // Heuristic cost from this node to goal
-    f_cost: f32,      // Total cost (g + h)
+    g_cost: f32, // Cost from start to this node
+    h_cost: f32, // Heuristic cost from this node to goal
+    f_cost: f32, // Total cost (g + h)
     parent: Option<(usize, usize)>,
 }
 
 impl PathNode {
-    fn new(position: (usize, usize), g_cost: f32, h_cost: f32, parent: Option<(usize, usize)>) -> Self {
+    fn new(
+        position: (usize, usize),
+        g_cost: f32,
+        h_cost: f32,
+        parent: Option<(usize, usize)>,
+    ) -> Self {
         Self {
             position,
             g_cost,
@@ -99,7 +104,9 @@ impl Eq for PathNode {}
 // Reverse ordering for BinaryHeap (min-heap)
 impl Ord for PathNode {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.f_cost.partial_cmp(&self.f_cost)
+        other
+            .f_cost
+            .partial_cmp(&self.f_cost)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| other.position.cmp(&self.position))
     }
@@ -148,11 +155,12 @@ impl PathfindingSystem {
         goal: (usize, usize),
     ) -> PathfindingResult {
         let start_time = Instant::now();
-        
+
         debug!("Starting A* pathfinding from {:?} to {:?}", start, goal);
-        
+
         // Validate inputs
-        if !grid.is_valid_coordinate(start.0, start.1) || !grid.is_valid_coordinate(goal.0, goal.1) {
+        if !grid.is_valid_coordinate(start.0, start.1) || !grid.is_valid_coordinate(goal.0, goal.1)
+        {
             return PathfindingResult {
                 success: false,
                 path: vec![],
@@ -203,7 +211,10 @@ impl PathfindingSystem {
 
             // Check timeout
             if start_time.elapsed() > timeout_duration {
-                warn!("A* pathfinding timed out after {}ms", self.config.timeout_ms);
+                warn!(
+                    "A* pathfinding timed out after {}ms",
+                    self.config.timeout_ms
+                );
                 return PathfindingResult {
                     success: false,
                     path: vec![],
@@ -220,9 +231,13 @@ impl PathfindingSystem {
             if current_pos == goal {
                 let path = self.reconstruct_path(&came_from, current_pos);
                 let path_length = self.calculate_path_length(&path);
-                
-                debug!("Pathfinding successful: {} nodes, length: {:.2}", path.len(), path_length);
-                
+
+                debug!(
+                    "Pathfinding successful: {} nodes, length: {:.2}",
+                    path.len(),
+                    path_length
+                );
+
                 return PathfindingResult {
                     success: true,
                     path,
@@ -242,7 +257,7 @@ impl PathfindingSystem {
 
             // Explore neighbors
             let neighbors = self.get_neighbors(&current_pos, grid);
-            
+
             for neighbor_pos in neighbors {
                 if closed_set.contains_key(&neighbor_pos) {
                     continue;
@@ -255,7 +270,8 @@ impl PathfindingSystem {
                     g_score.insert(neighbor_pos, tentative_g);
 
                     let h_cost = self.heuristic(neighbor_pos, goal) * self.config.heuristic_weight;
-                    let neighbor_node = PathNode::new(neighbor_pos, tentative_g, h_cost, Some(current_pos));
+                    let neighbor_node =
+                        PathNode::new(neighbor_pos, tentative_g, h_cost, Some(current_pos));
 
                     open_set.push(neighbor_node);
                 }
@@ -264,7 +280,7 @@ impl PathfindingSystem {
 
         // No path found
         debug!("No path found from {:?} to {:?}", start, goal);
-        
+
         PathfindingResult {
             success: false,
             path: vec![],
@@ -283,17 +299,17 @@ impl PathfindingSystem {
         goal: (usize, usize),
     ) -> PathfindingResult {
         let start_time = Instant::now();
-        
+
         // Use tokio spawn for async execution
         let config_clone = self.config.clone();
         let performance_monitor_clone = self.performance_monitor.clone();
         let grid_clone = grid.clone();
-        
+
         let handle: JoinHandle<PathfindingResult> = tokio::spawn(async move {
-             // Create a new pathfinding system for the async task
-             let temp_system = PathfindingSystem::new(config_clone, performance_monitor_clone);
-             temp_system.find_path(&grid_clone, start, goal)
-         });
+            // Create a new pathfinding system for the async task
+            let temp_system = PathfindingSystem::new(config_clone, performance_monitor_clone);
+            temp_system.find_path(&grid_clone, start, goal)
+        });
 
         match handle.await {
             Ok(result) => {
@@ -316,24 +332,26 @@ impl PathfindingSystem {
     }
 
     /// Perform parallel A* pathfinding for multiple requests
-    pub fn find_paths_parallel(
-        &self,
-        requests: Vec<PathfindingRequest>,
-    ) -> Vec<PathfindingResult> {
+    pub fn find_paths_parallel(&self, requests: Vec<PathfindingRequest>) -> Vec<PathfindingResult> {
         let start_time = Instant::now();
-        
-        debug!("Processing {} pathfinding requests in parallel", requests.len());
-        
+
+        debug!(
+            "Processing {} pathfinding requests in parallel",
+            requests.len()
+        );
+
         let results: Vec<PathfindingResult> = requests
             .into_par_iter()
-            .map(|(grid, start, goal)| {
-                self.find_path(&grid, start, goal)
-            })
+            .map(|(grid, start, goal)| self.find_path(&grid, start, goal))
             .collect();
 
         let total_time = start_time.elapsed().as_millis() as u64;
-        debug!("Parallel pathfinding completed {} requests in {}ms", results.len(), total_time);
-        
+        debug!(
+            "Parallel pathfinding completed {} requests in {}ms",
+            results.len(),
+            total_time
+        );
+
         results
     }
 
@@ -354,7 +372,11 @@ impl PathfindingSystem {
     }
 
     /// Smooth a path using line of sight optimization
-    pub fn smooth_path(&self, path: &[(usize, usize)], grid: &PathfindingGrid) -> Vec<(usize, usize)> {
+    pub fn smooth_path(
+        &self,
+        path: &[(usize, usize)],
+        grid: &PathfindingGrid,
+    ) -> Vec<(usize, usize)> {
         if path.len() <= 2 {
             return path.to_vec();
         }
@@ -387,7 +409,7 @@ impl PathfindingSystem {
         // Manhattan distance
         let dx = (pos.0 as f32 - goal.0 as f32).abs();
         let dy = (pos.1 as f32 - goal.1 as f32).abs();
-        
+
         if self.config.allow_diagonal_movement {
             // Diagonal distance
             let min_dist = dx.min(dy);
@@ -401,7 +423,7 @@ impl PathfindingSystem {
     fn distance(&self, a: (usize, usize), b: (usize, usize)) -> f32 {
         let dx = (a.0 as f32 - b.0 as f32).abs();
         let dy = (a.1 as f32 - b.1 as f32).abs();
-        
+
         if self.config.allow_diagonal_movement {
             let min_dist = dx.min(dy);
             let max_dist = dx.max(dy);
@@ -418,8 +440,14 @@ impl PathfindingSystem {
         // 4-connected or 8-connected grid
         let directions = if self.config.allow_diagonal_movement {
             vec![
-                (1, 0), (-1, 0), (0, 1), (0, -1),  // Cardinal directions
-                (1, 1), (-1, 1), (1, -1), (-1, -1), // Diagonal directions
+                (1, 0),
+                (-1, 0),
+                (0, 1),
+                (0, -1), // Cardinal directions
+                (1, 1),
+                (-1, 1),
+                (1, -1),
+                (-1, -1), // Diagonal directions
             ]
         } else {
             vec![(1, 0), (-1, 0), (0, 1), (0, -1)]
@@ -442,7 +470,11 @@ impl PathfindingSystem {
         neighbors
     }
 
-    fn reconstruct_path(&self, came_from: &HashMap<(usize, usize), (usize, usize)>, goal: (usize, usize)) -> Vec<(usize, usize)> {
+    fn reconstruct_path(
+        &self,
+        came_from: &HashMap<(usize, usize), (usize, usize)>,
+        goal: (usize, usize),
+    ) -> Vec<(usize, usize)> {
         let mut path = vec![goal];
         let mut current = goal;
 
@@ -467,7 +499,12 @@ impl PathfindingSystem {
         length
     }
 
-    fn has_line_of_sight(&self, start: (usize, usize), end: (usize, usize), grid: &PathfindingGrid) -> bool {
+    fn has_line_of_sight(
+        &self,
+        start: (usize, usize),
+        end: (usize, usize),
+        grid: &PathfindingGrid,
+    ) -> bool {
         // Bresenham's line algorithm for line of sight
         let mut x = start.0 as isize;
         let mut y = start.1 as isize;
@@ -510,7 +547,7 @@ pub struct EntityPathfindingSystem {
 impl EntityPathfindingSystem {
     pub fn new(config: PathfindingConfig, performance_monitor: Arc<PerformanceMonitor>) -> Self {
         let pathfinding_system = PathfindingSystem::new(config, performance_monitor);
-        
+
         Self {
             pathfinding_system,
             entity_paths: HashMap::new(),
@@ -530,8 +567,10 @@ impl EntityPathfindingSystem {
         let start_grid = PathfindingSystem::world_to_grid(start_pos, grid_size);
         let target_grid = PathfindingSystem::world_to_grid(target_pos, grid_size);
 
-        let result = self.pathfinding_system.find_path(grid, start_grid, target_grid);
-        
+        let result = self
+            .pathfinding_system
+            .find_path(grid, start_grid, target_grid);
+
         if result.success {
             self.entity_paths.insert(entity_id, result.path.clone());
             self.current_path_index.insert(entity_id, 0);
@@ -541,20 +580,16 @@ impl EntityPathfindingSystem {
     }
 
     /// Get the next position in the entity's path
-    pub fn get_next_path_position(
-        &mut self,
-        entity_id: EntityId,
-        grid_size: f32,
-    ) -> Option<Vec3> {
+    pub fn get_next_path_position(&mut self, entity_id: EntityId, grid_size: f32) -> Option<Vec3> {
         if let Some(path) = self.entity_paths.get(&entity_id) {
             if let Some(&current_index) = self.current_path_index.get(&entity_id) {
                 if current_index < path.len() {
                     let next_grid_pos = path[current_index];
                     let world_pos = PathfindingSystem::grid_to_world(next_grid_pos, grid_size);
-                    
+
                     // Move to next position
                     self.current_path_index.insert(entity_id, current_index + 1);
-                    
+
                     Some(world_pos)
                 } else {
                     // Path completed

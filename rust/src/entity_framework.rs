@@ -5,29 +5,29 @@
 //! ShadowZombieNinja implementation with a generic system that can handle any
 //! entity type through composition and traits.
 
-use std::sync::{Arc, RwLock};
-use std::collections::HashMap;
-use std::any::{Any, TypeId};
-use glam::Vec3;
 use crate::entity_registry::{Component, EntityId};
+use glam::Vec3;
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// Trait that defines the basic interface for any entity in the framework
 pub trait Entity: Send + Sync {
     /// Get the unique identifier for this entity
     fn get_id(&self) -> EntityId;
-    
+
     /// Update the entity state
     fn update(&mut self, delta_time: f32);
-    
+
     /// Check if the entity is still active/alive
     fn is_active(&self) -> bool;
-    
+
     /// Get the entity's current position
     fn get_position(&self) -> Vec3;
-    
+
     /// Set the entity's position
     fn set_position(&mut self, position: Vec3);
-    
+
     /// Get debug information about the entity
     fn get_debug_info(&self) -> String;
 }
@@ -36,13 +36,13 @@ pub trait Entity: Send + Sync {
 pub trait ComponentEntity: Entity {
     /// Get a reference to a component by type
     fn get_component<T: Component + 'static>(&self) -> Option<&T>;
-    
+
     /// Get a mutable reference to a component by type
     fn get_component_mut<T: Component + 'static>(&mut self) -> Option<&mut T>;
-    
+
     /// Add or replace a component
     fn add_component<T: Component + 'static>(&mut self, component: T);
-    
+
     /// Remove a component by type
     fn remove_component<T: Component + 'static>(&mut self) -> Option<T>;
 }
@@ -53,36 +53,43 @@ pub struct ComponentContainer {
     components: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
+impl Default for ComponentContainer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ComponentContainer {
     pub fn new() -> Self {
         Self {
             components: HashMap::new(),
         }
     }
-    
+
     pub fn get<T: Component + 'static>(&self) -> Option<&T> {
         self.components
             .get(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast_ref::<T>())
     }
-    
+
     pub fn get_mut<T: Component + 'static>(&mut self) -> Option<&mut T> {
         self.components
             .get_mut(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast_mut::<T>())
     }
-    
+
     pub fn insert<T: Component + 'static>(&mut self, component: T) {
-        self.components.insert(TypeId::of::<T>(), Box::new(component));
+        self.components
+            .insert(TypeId::of::<T>(), Box::new(component));
     }
-    
+
     pub fn remove<T: Component + 'static>(&mut self) -> Option<T> {
         self.components
             .remove(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast::<T>().ok())
             .map(|boxed| *boxed)
     }
-    
+
     pub fn has<T: Component + 'static>(&self) -> bool {
         self.components.contains_key(&TypeId::of::<T>())
     }
@@ -115,7 +122,7 @@ impl GenericEntity {
             last_update: std::time::Instant::now(),
         }
     }
-    
+
     pub fn with_component<T: Component + 'static>(mut self, component: T) -> Self {
         self.components.insert(component);
         self
@@ -126,25 +133,25 @@ impl Entity for GenericEntity {
     fn get_id(&self) -> EntityId {
         self.entity_id
     }
-    
+
     fn update(&mut self, delta_time: f32) {
         // Update position based on velocity
         self.position += self.velocity * delta_time;
         self.last_update = std::time::Instant::now();
     }
-    
+
     fn is_active(&self) -> bool {
         self.active
     }
-    
+
     fn get_position(&self) -> Vec3 {
         self.position
     }
-    
+
     fn set_position(&mut self, position: Vec3) {
         self.position = position;
     }
-    
+
     fn get_debug_info(&self) -> String {
         format!(
             "GenericEntity[{}] - Position: {:.2}, {:.2}, {:.2}, Active: {}, Components: {}",
@@ -162,15 +169,15 @@ impl ComponentEntity for GenericEntity {
     fn get_component<T: Component + 'static>(&self) -> Option<&T> {
         self.components.get::<T>()
     }
-    
+
     fn get_component_mut<T: Component + 'static>(&mut self) -> Option<&mut T> {
         self.components.get_mut::<T>()
     }
-    
+
     fn add_component<T: Component + 'static>(&mut self, component: T) {
         self.components.insert(component);
     }
-    
+
     fn remove_component<T: Component + 'static>(&mut self) -> Option<T> {
         self.components.remove::<T>()
     }
@@ -191,57 +198,57 @@ impl EntityBuilder {
             components: Vec::new(),
         }
     }
-    
+
     pub fn with_health(mut self, max_health: f32) -> Self {
         self.components.push(Box::new(move |entity| {
             entity.add_component(HealthComponent::new(max_health));
         }));
         self
     }
-    
+
     pub fn with_movement(mut self, speed: f32) -> Self {
         self.components.push(Box::new(move |entity| {
             entity.add_component(MovementComponent::new(speed));
         }));
         self
     }
-    
+
     pub fn with_combat(mut self, attack_damage: f32, attack_range: f32) -> Self {
         self.components.push(Box::new(move |entity| {
             entity.add_component(CombatComponent::new(attack_damage, attack_range));
         }));
         self
     }
-    
+
     pub fn with_ai(mut self, ai_type: AIType, detection_range: f32, aggression_range: f32) -> Self {
         self.components.push(Box::new(move |entity| {
             entity.add_component(AIComponent::new(ai_type, detection_range, aggression_range));
         }));
         self
     }
-    
+
     pub fn with_animation(mut self) -> Self {
         self.components.push(Box::new(move |entity| {
             entity.add_component(AnimationComponent::new());
         }));
         self
     }
-    
+
     pub fn with_skills(mut self) -> Self {
         self.components.push(Box::new(move |entity| {
             entity.add_component(SkillComponent::new());
         }));
         self
     }
-    
+
     pub fn build(self) -> GenericEntity {
         let mut entity = GenericEntity::new(self.entity_id, self.position);
-        
+
         // Apply all component builders
         for component_builder in self.components {
             component_builder(&mut entity);
         }
-        
+
         entity
     }
 }
@@ -257,23 +264,23 @@ impl EntityFactory {
             performance_monitor,
         }
     }
-    
+
     /// Create a basic entity with minimal components
     pub fn create_basic_entity(&self, entity_id: EntityId, position: Vec3) -> GenericEntity {
         let start_time = std::time::Instant::now();
-        
+
         let entity = GenericEntity::new(entity_id, position);
-        
+
         // Record performance metrics
         let creation_duration = start_time.elapsed();
         self.performance_monitor.record_metric(
             "basic_entity_creation_time",
             creation_duration.as_secs_f64(),
         );
-        
+
         entity
     }
-    
+
     /// Create a combat-ready entity
     pub fn create_combat_entity(
         &self,
@@ -284,21 +291,21 @@ impl EntityFactory {
         movement_speed: f32,
     ) -> GenericEntity {
         let start_time = std::time::Instant::now();
-        
+
         let entity = EntityBuilder::new(entity_id, position)
             .with_health(health)
             .with_combat(attack_damage, 2.0)
             .with_movement(movement_speed)
             .with_animation()
             .build();
-        
+
         // Record performance metrics
         let creation_duration = start_time.elapsed();
         self.performance_monitor.record_metric(
             "combat_entity_creation_time",
             creation_duration.as_secs_f64(),
         );
-        
+
         entity
     }
 
@@ -312,26 +319,24 @@ impl EntityFactory {
         aggression_range: f32,
     ) -> GenericEntity {
         let start_time = std::time::Instant::now();
-        
+
         let entity = EntityBuilder::new(entity_id, position)
             .with_ai(ai_type, detection_range, aggression_range)
             .with_animation()
             .build();
-        
+
         // Record performance metrics
         let creation_duration = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "ai_entity_creation_time",
-            creation_duration.as_secs_f64(),
-        );
-        
+        self.performance_monitor
+            .record_metric("ai_entity_creation_time", creation_duration.as_secs_f64());
+
         entity
     }
-    
+
     /// Create a Hayabusa-style ninja entity (preserving original functionality)
     pub fn create_hayabusa_ninja(&self, entity_id: EntityId, position: Vec3) -> GenericEntity {
         let start_time = std::time::Instant::now();
-        
+
         let entity = EntityBuilder::new(entity_id, position)
             .with_health(200.0)
             .with_combat(15.0, 2.0)
@@ -340,14 +345,14 @@ impl EntityFactory {
             .with_animation()
             .with_skills()
             .build();
-        
+
         // Record performance metrics
         let creation_duration = start_time.elapsed();
         self.performance_monitor.record_metric(
             "hayabusa_ninja_creation_time",
             creation_duration.as_secs_f64(),
         );
-        
+
         entity
     }
 }
@@ -375,7 +380,7 @@ impl HealthComponent {
 
     pub fn take_damage(&mut self, amount: f32) -> bool {
         let now = std::time::Instant::now();
-        
+
         // Check invulnerability
         if let Some(last_damage) = self.last_damage_time {
             if now.duration_since(last_damage) < self.invulnerability_duration {
@@ -385,7 +390,7 @@ impl HealthComponent {
 
         self.current_health = (self.current_health - amount).max(0.0);
         self.last_damage_time = Some(now);
-        
+
         true
     }
 
@@ -526,6 +531,12 @@ pub enum AnimationState {
     Dying,
 }
 
+impl Default for AnimationComponent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AnimationComponent {
     pub fn new() -> Self {
         Self {
@@ -545,7 +556,7 @@ impl AnimationComponent {
 
     pub fn update(&mut self, delta_time: f32) {
         self.animation_timer += delta_time * self.animation_speed;
-        
+
         // Loop animation
         if self.animation_timer >= self.frame_duration {
             self.animation_timer = 0.0;
@@ -566,6 +577,12 @@ pub struct SkillComponent {
     pub skill_data: HashMap<String, f32>,
 }
 
+impl Default for SkillComponent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SkillComponent {
     pub fn new() -> Self {
         Self {
@@ -573,7 +590,7 @@ impl SkillComponent {
             skill_data: HashMap::new(),
         }
     }
-    
+
     pub fn update_cooldowns(&mut self, delta_time: f32) {
         for cooldown in self.skill_cooldowns.values_mut() {
             if *cooldown > 0.0 {
@@ -581,15 +598,16 @@ impl SkillComponent {
             }
         }
     }
-    
+
     pub fn set_cooldown(&mut self, skill_name: &str, cooldown: f32) {
-        self.skill_cooldowns.insert(skill_name.to_string(), cooldown);
+        self.skill_cooldowns
+            .insert(skill_name.to_string(), cooldown);
     }
-    
+
     pub fn get_cooldown(&self, skill_name: &str) -> f32 {
         *self.skill_cooldowns.get(skill_name).unwrap_or(&0.0)
     }
-    
+
     pub fn is_ready(&self, skill_name: &str) -> bool {
         self.get_cooldown(skill_name) <= 0.0
     }
@@ -702,7 +720,7 @@ impl BoundingBox {
         let half_width = width / 2.0;
         let half_height = height / 2.0;
         let half_depth = depth / 2.0;
-        
+
         Self {
             min: center - Vec3::new(half_width, half_height, half_depth),
             max: center + Vec3::new(half_width, half_height, half_depth),
@@ -710,15 +728,21 @@ impl BoundingBox {
     }
 
     pub fn intersects(&self, other: &BoundingBox) -> bool {
-        self.min.x <= other.max.x && self.max.x >= other.min.x &&
-        self.min.y <= other.max.y && self.max.y >= other.min.y &&
-        self.min.z <= other.max.z && self.max.z >= other.min.z
+        self.min.x <= other.max.x
+            && self.max.x >= other.min.x
+            && self.min.y <= other.max.y
+            && self.max.y >= other.min.y
+            && self.min.z <= other.max.z
+            && self.max.z >= other.min.z
     }
 
     pub fn contains(&self, point: Vec3) -> bool {
-        point.x >= self.min.x && point.x <= self.max.x &&
-        point.y >= self.min.y && point.y <= self.max.y &&
-        point.z >= self.min.z && point.z <= self.max.z
+        point.x >= self.min.x
+            && point.x <= self.max.x
+            && point.y >= self.min.y
+            && point.y <= self.max.y
+            && point.z >= self.min.z
+            && point.z <= self.max.z
     }
 }
 
@@ -747,7 +771,10 @@ impl CombatComponent {
 
     pub fn can_attack(&self) -> bool {
         if let Some(last_attack) = self.last_attack_time {
-            std::time::Instant::now().duration_since(last_attack).as_secs_f32() >= self.attack_cooldown
+            std::time::Instant::now()
+                .duration_since(last_attack)
+                .as_secs_f32()
+                >= self.attack_cooldown
         } else {
             true
         }
@@ -760,7 +787,7 @@ impl CombatComponent {
 
         self.is_attacking = true;
         self.last_attack_time = Some(std::time::Instant::now());
-        
+
         true
     }
 
@@ -784,30 +811,30 @@ impl EntityManager {
             performance_monitor,
         }
     }
-    
+
     pub fn add_entity(&mut self, entity: GenericEntity) {
         self.entities.insert(entity.get_id(), entity);
     }
-    
+
     pub fn remove_entity(&mut self, entity_id: EntityId) -> Option<GenericEntity> {
         self.entities.remove(&entity_id)
     }
-    
+
     pub fn get_entity(&self, entity_id: EntityId) -> Option<&GenericEntity> {
         self.entities.get(&entity_id)
     }
-    
+
     pub fn get_entity_mut(&mut self, entity_id: EntityId) -> Option<&mut GenericEntity> {
         self.entities.get_mut(&entity_id)
     }
-    
+
     pub fn update_all(&mut self, delta_time: f32) {
         let start_time = std::time::Instant::now();
-        
+
         for entity in self.entities.values_mut() {
             entity.update(delta_time);
         }
-        
+
         // Remove inactive entities
         let mut inactive_entities = Vec::new();
         for (id, entity) in &self.entities {
@@ -815,23 +842,19 @@ impl EntityManager {
                 inactive_entities.push(*id);
             }
         }
-        
+
         for id in inactive_entities {
             self.entities.remove(&id);
         }
-        
+
         // Record performance metrics
         let update_duration = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "entity_manager_update_time",
-            update_duration.as_secs_f64(),
-        );
-        self.performance_monitor.record_metric(
-            "active_entities_count",
-            self.entities.len() as f64,
-        );
+        self.performance_monitor
+            .record_metric("entity_manager_update_time", update_duration.as_secs_f64());
+        self.performance_monitor
+            .record_metric("active_entities_count", self.entities.len() as f64);
     }
-    
+
     pub fn get_entities_in_radius(&self, center: Vec3, radius: f32) -> Vec<EntityId> {
         self.entities
             .values()
@@ -842,11 +865,11 @@ impl EntityManager {
             .map(|entity| entity.get_id())
             .collect()
     }
-    
+
     pub fn count(&self) -> usize {
         self.entities.len()
     }
-    
+
     // Public method to access entities for testing purposes
     pub fn get_all_entities(&self) -> Vec<&GenericEntity> {
         self.entities.values().collect()

@@ -1,13 +1,13 @@
 //! Rust-side performance monitoring integration for KneafMod
 //! Provides lock-free performance monitoring dengan sampling dan streaming aggregation
 
-use std::sync::atomic::{AtomicU64, AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, RwLock};
-use std::collections::HashMap;
-use std::time::{Instant, Duration};
-use lazy_static::lazy_static;
-use serde::{Serialize, Deserialize};
 use crossbeam::queue::ArrayQueue;
+use lazy_static::lazy_static;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 // Global performance metrics collector dengan lock-free design
 lazy_static! {
@@ -55,48 +55,66 @@ impl StreamingPerformanceMetrics {
             recent_operations: Arc::new(ArrayQueue::new(1000)), // Ring buffer untuk 1000 operasi terakhir
         }
     }
-    
+
     /// Record operation dengan lock-free atomic operations
     pub fn record_operation(&self, duration_ns: u64, success: bool) {
         // Atomic increment untuk total operations
         self.total_operations.fetch_add(1, Ordering::Relaxed);
-        self.total_duration_ns.fetch_add(duration_ns, Ordering::Relaxed);
-        
+        self.total_duration_ns
+            .fetch_add(duration_ns, Ordering::Relaxed);
+
         if success {
             self.successful_operations.fetch_add(1, Ordering::Relaxed);
         } else {
             self.failed_operations.fetch_add(1, Ordering::Relaxed);
         }
-        
+
         // Update min/max dengan compare-and-swap
         let current_min = self.min_duration_ns.load(Ordering::Relaxed);
         if duration_ns < current_min {
-            self.min_duration_ns.compare_exchange(current_min, duration_ns, Ordering::Relaxed, Ordering::Relaxed).ok();
+            self.min_duration_ns
+                .compare_exchange(
+                    current_min,
+                    duration_ns,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .ok();
         }
-        
+
         let current_max = self.max_duration_ns.load(Ordering::Relaxed);
         if duration_ns > current_max {
-            self.max_duration_ns.compare_exchange(current_max, duration_ns, Ordering::Relaxed, Ordering::Relaxed).ok();
+            self.max_duration_ns
+                .compare_exchange(
+                    current_max,
+                    duration_ns,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .ok();
         }
-        
+
         // Update last operation time
-        self.last_operation_time_ms.store(Instant::now().elapsed().as_millis() as u64, Ordering::Relaxed);
-        
+        self.last_operation_time_ms.store(
+            Instant::now().elapsed().as_millis() as u64,
+            Ordering::Relaxed,
+        );
+
         // Simpan ke ring buffer untuk streaming analysis
         let record = OperationRecord {
             duration_ns,
             success,
             timestamp: Instant::now(),
         };
-        
+
         // Force push (overwrite oldest jika penuh)
         self.recent_operations.push(record).ok();
     }
-    
+
     pub fn record_error(&self) {
         self.error_count.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn get_success_rate(&self) -> f64 {
         let total = self.total_operations.load(Ordering::Relaxed);
         if total == 0 {
@@ -105,7 +123,7 @@ impl StreamingPerformanceMetrics {
         let successful = self.successful_operations.load(Ordering::Relaxed);
         (successful as f64) / (total as f64)
     }
-    
+
     pub fn get_error_rate(&self) -> f64 {
         let total = self.total_operations.load(Ordering::Relaxed);
         if total == 0 {
@@ -114,31 +132,31 @@ impl StreamingPerformanceMetrics {
         let failed = self.failed_operations.load(Ordering::Relaxed);
         (failed as f64) / (total as f64)
     }
-    
+
     /// Get streaming throughput dengan exponential decay
     pub fn get_streaming_throughput_ops_per_sec(&self) -> f64 {
         let total = self.total_operations.load(Ordering::Relaxed);
         if total == 0 {
             return 0.0;
         }
-        
+
         // Gunakan recent operations untuk perhitungan yang lebih akurat
         let recent_ops = self.recent_operations.len();
         if recent_ops == 0 {
             return 0.0;
         }
-        
+
         // Hitung throughput berdasarkan 1000 operasi terakhir
         (recent_ops as f64) / 10.0 // Asumsi: 1000 operasi = 10 detik window
     }
-    
+
     /// Get average duration dengan streaming calculation
     pub fn get_streaming_average_duration_ns(&self) -> u64 {
         let total = self.total_operations.load(Ordering::Relaxed);
         if total == 0 {
             return 0;
         }
-        
+
         let total_duration = self.total_duration_ns.load(Ordering::Relaxed);
         total_duration / total
     }
@@ -160,11 +178,11 @@ impl ComponentMetrics {
             custom_metrics: HashMap::new(),
         }
     }
-    
+
     pub fn record_custom_metric(&mut self, name: String, value: f64) {
         self.custom_metrics.insert(name, value);
     }
-    
+
     pub fn get_custom_metric(&self, name: &str) -> Option<f64> {
         self.custom_metrics.get(name).copied()
     }
@@ -185,41 +203,42 @@ impl PerformanceMonitor {
             start_time: Instant::now(),
         }
     }
-    
+
     pub fn get_component_metrics(&mut self, component_name: &str) -> &mut ComponentMetrics {
-        self.components.entry(component_name.to_string())
+        self.components
+            .entry(component_name.to_string())
             .or_insert_with(|| ComponentMetrics::new(component_name.to_string()))
     }
-    
+
     pub fn record_operation(&mut self, component_name: &str, duration_ns: u64, success: bool) {
         // Record in component-specific metrics
         let component = self.get_component_metrics(component_name);
         component.metrics.record_operation(duration_ns, success);
-        
+
         // Record in global metrics
         self.global_metrics.record_operation(duration_ns, success);
     }
-    
+
     pub fn record_error(&mut self, component_name: &str) {
         // Record in component-specific metrics
         let component = self.get_component_metrics(component_name);
         component.metrics.record_error();
-        
+
         // Record in global metrics
         self.global_metrics.record_error();
     }
-    
+
     pub fn record_custom_metric(&mut self, component_name: &str, metric_name: &str, value: f64) {
         let component = self.get_component_metrics(component_name);
         component.record_custom_metric(metric_name.to_string(), value);
     }
-    
+
     pub fn get_summary(&self) -> String {
         let uptime = Instant::now() - self.start_time;
         let global_throughput = self.global_metrics.get_streaming_throughput_ops_per_sec();
         let success_rate = self.global_metrics.get_success_rate();
         let error_rate = self.global_metrics.get_error_rate();
-        
+
         format!(
             "LockFreePerformanceMonitor{{uptime_ms={}, total_ops={}, success_rate={:.2}%, error_rate={:.2}%, throughput_ops_per_sec={:.2}}}",
             uptime.as_millis(),
@@ -229,7 +248,7 @@ impl PerformanceMonitor {
             global_throughput
         )
     }
-    
+
     pub fn get_component_summary(&self, component_name: &str) -> Option<String> {
         self.components.get(component_name).map(|component| {
             let total_ops = component.metrics.total_operations.load(Ordering::Relaxed);
@@ -247,43 +266,49 @@ impl PerformanceMonitor {
             )
         })
     }
-    
+
     pub fn get_all_metrics(&self) -> HashMap<String, f64> {
         let mut all_metrics = HashMap::new();
-        
+
         // Global metrics dengan atomic reads
         let total_ops = self.global_metrics.total_operations.load(Ordering::Relaxed);
         let success_rate = self.global_metrics.get_success_rate();
         let error_rate = self.global_metrics.get_error_rate();
         let avg_duration = self.global_metrics.get_streaming_average_duration_ns();
         let uptime = (Instant::now() - self.start_time).as_secs_f64();
-        
+
         all_metrics.insert("rust_total_operations".to_string(), total_ops as f64);
         all_metrics.insert("rust_success_rate".to_string(), success_rate);
         all_metrics.insert("rust_error_rate".to_string(), error_rate);
         all_metrics.insert("rust_average_duration_ns".to_string(), avg_duration as f64);
         all_metrics.insert("rust_uptime_seconds".to_string(), uptime);
-        
+
         // Component metrics
         for (component_name, component) in self.components.iter() {
             let prefix = format!("rust_{}_", component_name.to_lowercase().replace(" ", "_"));
-            
+
             let comp_total = component.metrics.total_operations.load(Ordering::Relaxed);
             let comp_success_rate = component.metrics.get_success_rate();
             let comp_error_rate = component.metrics.get_error_rate();
             let comp_avg_duration = component.metrics.get_streaming_average_duration_ns();
-            
+
             all_metrics.insert(format!("{}total_operations", prefix), comp_total as f64);
             all_metrics.insert(format!("{}success_rate", prefix), comp_success_rate);
             all_metrics.insert(format!("{}error_rate", prefix), comp_error_rate);
-            all_metrics.insert(format!("{}average_duration_ns", prefix), comp_avg_duration as f64);
-            
+            all_metrics.insert(
+                format!("{}average_duration_ns", prefix),
+                comp_avg_duration as f64,
+            );
+
             // Custom metrics
             for (metric_name, value) in component.custom_metrics.iter() {
-                all_metrics.insert(format!("{}{}", prefix, metric_name.to_lowercase().replace(" ", "_")), *value);
+                all_metrics.insert(
+                    format!("{}{}", prefix, metric_name.to_lowercase().replace(" ", "_")),
+                    *value,
+                );
             }
         }
-        
+
         all_metrics
     }
 }
@@ -327,32 +352,40 @@ impl PerformanceMonitorUtils {
         let mut monitor_write = monitor.write().unwrap();
         monitor_write.record_custom_metric(component_name, metric_name, value);
     }
-    
+
     /// Get performance summary
     pub fn get_performance_summary() -> String {
         let monitor = PERFORMANCE_MONITOR.clone();
-        let x = monitor.read().unwrap().get_summary(); x
+        let x = monitor.read().unwrap().get_summary();
+        x
     }
-    
+
     /// Get component summary
     pub fn get_component_summary(component_name: &str) -> Option<String> {
         let monitor = PERFORMANCE_MONITOR.clone();
-        let x = monitor.read().unwrap().get_component_summary(component_name);
+        let x = monitor
+            .read()
+            .unwrap()
+            .get_component_summary(component_name);
         x
     }
-    
+
     /// Get all metrics as JSON string
     pub fn get_all_metrics_json() -> String {
         let monitor = PERFORMANCE_MONITOR.clone();
         let metrics = monitor.read().unwrap().get_all_metrics();
         serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string())
     }
-    
+
     /// Get actual Rust version
     pub fn get_rust_version() -> String {
-        format!("{}.{}", env!("CARGO_PKG_VERSION_MAJOR"), env!("CARGO_PKG_VERSION_MINOR"))
+        format!(
+            "{}.{}",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR")
+        )
     }
-    
+
     /// Get initialization timestamp
     pub fn get_initialization_timestamp() -> u64 {
         std::time::SystemTime::now()
@@ -368,9 +401,9 @@ pub fn Java_com_kneaf_core_performance_DistributedTracer_getRustPerformanceStats
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
     let summary = PerformanceMonitorUtils::get_performance_summary();
-    env.new_string(summary).unwrap_or_else(|_| env.new_string("Error getting performance summary").unwrap())
+    env.new_string(summary)
+        .unwrap_or_else(|_| env.new_string("Error getting performance summary").unwrap())
 }
-
 
 pub fn Java_com_kneaf_core_performance_DistributedTracer_recordRustOperation(
     mut env: jni::JNIEnv,
@@ -391,7 +424,8 @@ pub fn Java_com_kneaf_core_performance_DistributedTracer_getRustMetricsJson<'a>(
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
     let json = PerformanceMonitorUtils::get_all_metrics_json();
-    env.new_string(json).unwrap_or_else(|_| env.new_string("{}").unwrap())
+    env.new_string(json)
+        .unwrap_or_else(|_| env.new_string("{}").unwrap())
 }
 
 pub fn Java_com_kneaf_core_performance_DistributedTracer_recordRustError(
@@ -407,80 +441,105 @@ pub fn Java_com_kneaf_core_performance_DistributedTracer_recordRustError(
 }
 
 /// Performance monitoring for specific operations
-pub fn monitor_matrix_operation<F, R>(operation_type: &str, operation: F) -> Result<R, Box<dyn std::error::Error>>
+pub fn monitor_matrix_operation<F, R>(
+    operation_type: &str,
+    operation: F,
+) -> Result<R, Box<dyn std::error::Error>>
 where
     F: FnOnce() -> Result<R, Box<dyn std::error::Error>>,
 {
     let start = Instant::now();
     let result = operation();
     let duration = start.elapsed().as_nanos() as u64;
-    
+
     let success = result.is_ok();
     PerformanceMonitorUtils::record_matrix_operation(operation_type, duration, success);
-    
+
     if let Err(ref e) = result {
         PerformanceMonitorUtils::record_error(operation_type);
         log::error!("Matrix operation '{}' failed: {}", operation_type, e);
     }
-    
+
     result
 }
 
-pub fn monitor_vector_operation<F, R>(operation_type: &str, operation: F) -> Result<R, Box<dyn std::error::Error>>
+pub fn monitor_vector_operation<F, R>(
+    operation_type: &str,
+    operation: F,
+) -> Result<R, Box<dyn std::error::Error>>
 where
     F: FnOnce() -> Result<R, Box<dyn std::error::Error>>,
 {
     let start = Instant::now();
     let result = operation();
     let duration = start.elapsed().as_nanos() as u64;
-    
+
     let success = result.is_ok();
     PerformanceMonitorUtils::record_vector_operation(operation_type, duration, success);
-    
+
     if let Err(ref e) = result {
         PerformanceMonitorUtils::record_error(operation_type);
         log::error!("Vector operation '{}' failed: {}", operation_type, e);
     }
-    
+
     result
 }
 
-pub fn monitor_parallel_operation<F, R>(operation_type: &str, operation: F) -> Result<R, Box<dyn std::error::Error>>
+pub fn monitor_parallel_operation<F, R>(
+    operation_type: &str,
+    operation: F,
+) -> Result<R, Box<dyn std::error::Error>>
 where
     F: FnOnce() -> Result<R, Box<dyn std::error::Error>>,
 {
     let start = Instant::now();
     let result = operation();
     let duration = start.elapsed().as_nanos() as u64;
-    
+
     let success = result.is_ok();
     PerformanceMonitorUtils::record_parallel_operation(operation_type, duration, success);
-    
+
     if let Err(ref e) = result {
         PerformanceMonitorUtils::record_error(operation_type);
         log::error!("Parallel operation '{}' failed: {}", operation_type, e);
     }
-    
+
     result
 }
 
 /// Integration with existing Rust modules
 pub fn initialize_performance_monitoring() {
     log::info!("Initializing Rust performance monitoring");
-    
+
     // Record actual initialization time
     let start_time = std::time::Instant::now();
-    
+
     // Record actual Rust version
-    let rust_version = format!("{}.{}", env!("CARGO_PKG_VERSION_MAJOR"), env!("CARGO_PKG_VERSION_MINOR"));
+    let rust_version = format!(
+        "{}.{}",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR")
+    );
     let rust_version_num = rust_version.parse::<f64>().unwrap_or(1.70);
-    
-    PerformanceMonitorUtils::record_custom_metric("system", "initialization_time", start_time.elapsed().as_secs_f64());
+
+    PerformanceMonitorUtils::record_custom_metric(
+        "system",
+        "initialization_time",
+        start_time.elapsed().as_secs_f64(),
+    );
     PerformanceMonitorUtils::record_custom_metric("system", "rust_version", rust_version_num);
-    
+
     // Record additional system metrics
-    PerformanceMonitorUtils::record_custom_metric("system", "available_threads", num_cpus::get() as f64);
-    PerformanceMonitorUtils::record_custom_metric("system", "memory_page_size", page_size::get() as f64);
+    PerformanceMonitorUtils::record_custom_metric(
+        "system",
+        "available_threads",
+        num_cpus::get() as f64,
+    );
+    PerformanceMonitorUtils::record_custom_metric(
+        "system",
+        "memory_page_size",
+        page_size::get() as f64,
+    );
 }
 
 #[cfg(test)]
@@ -492,12 +551,12 @@ mod tests {
     #[test]
     fn test_streaming_performance_metrics() {
         let metrics = StreamingPerformanceMetrics::new();
-        
+
         // Record successful operations dengan lock-free atomic operations
         metrics.record_operation(1000, true);
         metrics.record_operation(2000, true);
         metrics.record_operation(3000, false); // Failed operation
-        
+
         assert_eq!(metrics.total_operations.load(Ordering::Relaxed), 3);
         assert_eq!(metrics.successful_operations.load(Ordering::Relaxed), 2);
         assert_eq!(metrics.failed_operations.load(Ordering::Relaxed), 1);
@@ -505,63 +564,67 @@ mod tests {
         assert_eq!(metrics.get_error_rate(), 1.0 / 3.0);
         assert_eq!(metrics.get_streaming_average_duration_ns(), 6000 / 3);
     }
-    
+
     #[test]
     fn test_sampling_strategy() {
         // Test sampling strategy menggunakan GLOBAL_SAMPLING_RATE
         GLOBAL_SAMPLING_RATE.store(100, Ordering::Relaxed);
-        
+
         // Test dengan low system load
         SYSTEM_LOAD.store(20, Ordering::Relaxed);
         let should_sample = GLOBAL_SAMPLING_RATE.load(Ordering::Relaxed) >= 50;
         assert!(should_sample); // Should sample dengan rate 100%
-        
+
         // Test dengan high system load
         SYSTEM_LOAD.store(90, Ordering::Relaxed);
         GLOBAL_SAMPLING_RATE.store(10, Ordering::Relaxed); // 10% sampling
         let mut sampled_count = 0;
-        
+
         // Use a more controlled approach for test reliability
         // Use a deterministic approach for testing
         for i in 0..100 {
             let rate = GLOBAL_SAMPLING_RATE.load(Ordering::Relaxed);
             // Use a simple deterministic sampling based on loop counter
-            if rate > 0 && (i % 10 == 0) { // This gives exactly 10% sampling
+            if rate > 0 && (i % 10 == 0) {
+                // This gives exactly 10% sampling
                 sampled_count += 1;
             }
         }
-        
+
         // With 10% sampling, we should get exactly 10 samples
-        assert_eq!(sampled_count, 10,
-            "Expected exactly 10 samples with 10% deterministic sampling, got {}", sampled_count);
+        assert_eq!(
+            sampled_count, 10,
+            "Expected exactly 10 samples with 10% deterministic sampling, got {}",
+            sampled_count
+        );
     }
-    
+
     #[test]
     fn test_lock_free_performance_monitor() {
         let mut monitor = PerformanceMonitor::new();
-        
+
         // Record operations untuk different components
         monitor.record_operation("matrix_mul", 1000, true);
         monitor.record_operation("vector_add", 2000, true);
         monitor.record_operation("matrix_mul", 1500, false);
-        
+
         // Record custom metrics
         monitor.record_custom_metric("matrix_mul", "cache_hits", 95.0);
         monitor.record_custom_metric("vector_add", "simd_usage", 1.0);
-        
+
         let summary = monitor.get_summary();
         assert!(summary.contains("total_ops=3"));
         assert!(summary.contains("success_rate=66.67"));
-        
+
         let matrix_summary = monitor.get_component_summary("matrix_mul").unwrap();
         assert!(matrix_summary.contains("total_ops=2"));
     }
-    
+
     #[test]
     fn test_concurrent_access() {
         // Use separate monitors for each thread to avoid Arc mutation issues
         let mut handles = vec![];
-        
+
         // Test concurrent access dari multiple threads
         for i in 0..10 {
             let handle = thread::spawn(move || {
@@ -570,14 +633,14 @@ mod tests {
                     monitor.record_operation(
                         &format!("thread_{}", i),
                         (j * 100) as u64,
-                        j % 2 == 0
+                        j % 2 == 0,
                     );
                 }
                 monitor.get_summary()
             });
             handles.push(handle);
         }
-        
+
         // Tunggu semua threads selesai
         let mut total_ops = 0;
         for handle in handles {
@@ -587,20 +650,20 @@ mod tests {
                 total_ops += 100; // Each thread did 100 operations
             }
         }
-        
+
         assert_eq!(total_ops, 1000); // 10 threads * 100 operations
     }
-    
+
     #[test]
     fn test_performance_monitoring_utils() {
         // Test utility functions dengan sampling
         GLOBAL_SAMPLING_RATE.store(100, Ordering::Relaxed); // 100% sampling untuk test
-        SYSTEM_LOAD.store(20, Ordering::Relaxed);    // Low load
-        
+        SYSTEM_LOAD.store(20, Ordering::Relaxed); // Low load
+
         PerformanceMonitorUtils::record_matrix_operation("test_mul", 1000, true);
         PerformanceMonitorUtils::record_vector_operation("test_add", 2000, false);
         PerformanceMonitorUtils::record_error("test_component");
-        
+
         let summary = PerformanceMonitorUtils::get_performance_summary();
         assert!(summary.contains("total_ops=2"));
         // Note: sampling rate tidak ditampilkan di summary, jadi kita skip assert untuk sampling_rate

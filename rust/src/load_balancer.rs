@@ -1,15 +1,18 @@
 //! Adaptive load balancing system with work-stealing scheduler
 //! Provides dynamic work distribution and load balancing across CPU cores
 
-use std::sync::{Arc, atomic::{AtomicUsize, AtomicU64, AtomicBool, Ordering}};
+use crate::parallel_matrix::enhanced_parallel_matrix_multiply_block as parallel_matrix_multiply;
+use crossbeam::deque::{Injector, Stealer};
+use jni::objects::{JClass, JFloatArray, JString};
+use rayon::prelude::*;
+use std::collections::{HashMap, VecDeque};
+use std::sync::RwLock;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
-use crossbeam::deque::{Injector, Stealer};
-use jni::objects::{JString, JFloatArray, JClass};
-use std::collections::{VecDeque, HashMap};
-use std::sync::RwLock;
-use rayon::prelude::*;
-use crate::parallel_matrix::enhanced_parallel_matrix_multiply_block as parallel_matrix_multiply;
 
 /// Task priority levels
 #[allow(dead_code)]
@@ -36,9 +39,21 @@ pub struct Task {
 #[allow(dead_code)]
 #[derive(Clone)]
 pub enum Workload {
-    MatrixMultiply { a: Vec<f32>, b: Vec<f32>, rows: usize, cols: usize },
-    VectorOperation { data: Vec<f32>, operation: String },
-    Pathfinding { grid: Vec<Vec<bool>>, start: (i32, i32), goal: (i32, i32) },
+    MatrixMultiply {
+        a: Vec<f32>,
+        b: Vec<f32>,
+        rows: usize,
+        cols: usize,
+    },
+    VectorOperation {
+        data: Vec<f32>,
+        operation: String,
+    },
+    Pathfinding {
+        grid: Vec<Vec<bool>>,
+        start: (i32, i32),
+        goal: (i32, i32),
+    },
     Custom(Arc<dyn Fn() + Send + Sync + 'static>),
 }
 
@@ -79,7 +94,7 @@ pub struct WorkerState {
     pub active_tasks: AtomicUsize,
     pub total_tasks: AtomicUsize,
     pub processing_time: AtomicU64, // nanoseconds
-    pub idle_time: AtomicU64, // nanoseconds
+    pub idle_time: AtomicU64,       // nanoseconds
     pub is_active: AtomicBool,
     pub predictive_metrics: Arc<RwLock<PredictiveMetrics>>,
     pub task_history: Arc<RwLock<VecDeque<Instant>>>,
@@ -89,7 +104,7 @@ pub struct WorkerState {
 impl WorkerState {
     pub fn new(id: usize) -> Self {
         let injector = Arc::new(Injector::new());
-        
+
         let predictive_metrics = PredictiveMetrics {
             task_arrival_rate: 0.0,
             average_task_duration: 0.0,
@@ -97,7 +112,7 @@ impl WorkerState {
             confidence: 1.0,
             last_update: Instant::now(),
         };
-        
+
         Self {
             id,
             queue: injector,
@@ -110,55 +125,59 @@ impl WorkerState {
             task_history: Arc::new(RwLock::new(VecDeque::new())),
         }
     }
-    
+
     pub fn get_load_factor(&self) -> f64 {
         let active = self.active_tasks.load(Ordering::Relaxed) as f64;
         let total = self.total_tasks.load(Ordering::Relaxed) as f64;
-        
+
         if total > 0.0 {
             active / total
         } else {
             0.0
         }
     }
-    
+
     pub fn get_efficiency(&self) -> f64 {
         let processing = self.processing_time.load(Ordering::Relaxed) as f64;
         let idle = self.idle_time.load(Ordering::Relaxed) as f64;
         let total = processing + idle;
-        
+
         if total > 0.0 {
             processing / total
         } else {
             0.0
         }
     }
-    
+
     /// Predictive load calculation based on task history and arrival patterns
     pub fn get_predicted_load(&self) -> f64 {
         let metrics = self.predictive_metrics.read().unwrap();
         metrics.predicted_load
     }
-    
+
     /// Update predictive metrics based on recent task completion
     pub fn update_predictive_metrics(&self, task_duration: Duration) {
         let mut metrics = self.predictive_metrics.write().unwrap();
         let mut history = self.task_history.write().unwrap();
-        
+
         // Add current task completion time
         history.push_back(Instant::now());
-        
+
         // Keep only recent history (last 100 tasks)
         while history.len() > 100 {
             history.pop_front();
         }
-        
+
         // Calculate arrival rate
         if history.len() >= 2 {
-            let time_span = history.back().unwrap().duration_since(*history.front().unwrap()).as_secs_f64();
+            let time_span = history
+                .back()
+                .unwrap()
+                .duration_since(*history.front().unwrap())
+                .as_secs_f64();
             metrics.task_arrival_rate = (history.len() as f64 - 1.0) / time_span.max(0.001);
         }
-        
+
         // Update average task duration with exponential moving average
         let duration_ms = task_duration.as_millis() as f64;
         metrics.average_task_duration = if metrics.average_task_duration == 0.0 {
@@ -166,7 +185,7 @@ impl WorkerState {
         } else {
             metrics.average_task_duration * 0.8 + duration_ms * 0.2
         };
-        
+
         // Predict future load based on arrival rate and average duration
         let predicted_tasks = metrics.task_arrival_rate * metrics.average_task_duration / 1000.0;
         metrics.predicted_load = predicted_tasks.clamp(0.0, 1.0);
@@ -212,7 +231,7 @@ impl LoadBalancerMetrics {
             total_idle_time: AtomicU64::new(0),
         }
     }
-    
+
     pub fn get_summary(&self) -> String {
         format!(
             "LoadBalancerMetrics{{total:{}, completed:{}, stolen:{}, failed:{}, avg_duration:{:.2}ms, imbalance:{:.2}}}",
@@ -230,11 +249,11 @@ impl LoadBalancerMetrics {
 impl AdaptiveLoadBalancer {
     pub fn new(num_threads: usize, max_queue_size: usize) -> Self {
         let mut workers = Vec::new();
-        
+
         for i in 0..num_threads {
             workers.push(Arc::new(WorkerState::new(i)));
         }
-        
+
         Self {
             workers,
             global_queue: Arc::new(Injector::new()),
@@ -245,18 +264,18 @@ impl AdaptiveLoadBalancer {
             shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
-    
+
     /// Submit a task to the load balancer
     pub fn submit_task(&self, task: Task) -> Result<(), String> {
         if self.metrics.total_tasks.load(Ordering::Relaxed) >= self.max_queue_size {
             return Err("Queue full".to_string());
         }
-        
+
         self.metrics.total_tasks.fetch_add(1, Ordering::Relaxed);
         self.global_queue.push(task);
         Ok(())
     }
-    
+
     /// Start the load balancer with worker threads
     pub fn start(&self) {
         for worker in &self.workers {
@@ -264,7 +283,7 @@ impl AdaptiveLoadBalancer {
             let global_queue = Arc::clone(&self.global_queue);
             let metrics = Arc::clone(&self.metrics);
             let shutdown = Arc::clone(&self.shutdown);
-            
+
             thread::spawn({
                 let worker = worker.clone();
                 let global_queue = global_queue.clone();
@@ -275,17 +294,17 @@ impl AdaptiveLoadBalancer {
                 }
             });
         }
-        
+
         // Start load balancing monitor
         let workers = self.workers.clone();
         let metrics = Arc::clone(&self.metrics);
         let shutdown = Arc::clone(&self.shutdown);
-        
+
         thread::spawn(move || {
             Self::load_balancing_monitor(workers, metrics, shutdown);
         });
     }
-    
+
     fn worker_thread(
         worker: Arc<WorkerState>,
         global_queue: Arc<Injector<Task>>,
@@ -294,10 +313,10 @@ impl AdaptiveLoadBalancer {
     ) {
         while !shutdown.load(Ordering::Relaxed) {
             let start_time = Instant::now();
-            
+
             // Try to get task from local queue with predictive optimization
             let mut task = None;
-            
+
             // Try local queue first with exponential backoff
             let mut backoff_attempts = 0;
             loop {
@@ -305,7 +324,7 @@ impl AdaptiveLoadBalancer {
                     crossbeam::deque::Steal::Success(t) => {
                         task = Some(t);
                         break;
-                    },
+                    }
                     crossbeam::deque::Steal::Empty => break,
                     crossbeam::deque::Steal::Retry => {
                         backoff_attempts += 1;
@@ -313,15 +332,15 @@ impl AdaptiveLoadBalancer {
                             break; // Avoid excessive retrying
                         }
                         continue;
-                    },
+                    }
                 }
             }
-            
+
             // Try to steal from other workers if local queue is empty
             if task.is_none() {
                 task = Self::steal_task_with_prediction(&worker);
             }
-            
+
             // Try global queue if still empty
             if task.is_none() {
                 let mut backoff_attempts = 0;
@@ -330,7 +349,7 @@ impl AdaptiveLoadBalancer {
                         crossbeam::deque::Steal::Success(t) => {
                             task = Some(t);
                             break;
-                        },
+                        }
                         crossbeam::deque::Steal::Empty => break,
                         crossbeam::deque::Steal::Retry => {
                             backoff_attempts += 1;
@@ -338,36 +357,38 @@ impl AdaptiveLoadBalancer {
                                 break; // Avoid excessive retrying
                             }
                             continue;
-                        },
+                        }
                     }
                 }
             }
-            
+
             if let Some(task) = task {
                 worker.active_tasks.fetch_add(1, Ordering::Relaxed);
                 worker.total_tasks.fetch_add(1, Ordering::Relaxed);
-                
+
                 // Process task with performance monitoring
                 let task_start = Instant::now();
                 let success = Self::process_task_optimized(&task);
                 let task_duration = task_start.elapsed();
-                
+
                 worker.active_tasks.fetch_sub(1, Ordering::Relaxed);
-                
+
                 if success {
                     metrics.completed_tasks.fetch_add(1, Ordering::Relaxed);
                 } else {
                     metrics.failed_tasks.fetch_add(1, Ordering::Relaxed);
                 }
-                
+
                 // Update processing time
                 let nanos = task_duration.as_nanos() as u64;
                 worker.processing_time.fetch_add(nanos, Ordering::Relaxed);
-                metrics.total_processing_time.fetch_add(nanos, Ordering::Relaxed);
-                
+                metrics
+                    .total_processing_time
+                    .fetch_add(nanos, Ordering::Relaxed);
+
                 // Update predictive metrics
                 worker.update_predictive_metrics(task_duration);
-                
+
                 // Update average task duration with weighted moving average
                 let current_avg = metrics.average_task_duration.load(Ordering::Relaxed) as f64;
                 let total_tasks = metrics.completed_tasks.load(Ordering::Relaxed) as f64;
@@ -377,52 +398,54 @@ impl AdaptiveLoadBalancer {
                 } else {
                     current_avg * (1.0 - weight) + task_duration.as_millis() as f64 * weight
                 };
-                metrics.average_task_duration.store(new_avg as u64, Ordering::Relaxed);
+                metrics
+                    .average_task_duration
+                    .store(new_avg as u64, Ordering::Relaxed);
             } else {
                 // No task available, record idle time with adaptive sleep
                 let idle_duration = start_time.elapsed();
                 let nanos = idle_duration.as_nanos() as u64;
                 worker.idle_time.fetch_add(nanos, Ordering::Relaxed);
                 metrics.total_idle_time.fetch_add(nanos, Ordering::Relaxed);
-                
+
                 // Adaptive sleep based on predicted load
                 let predicted_load = worker.get_predicted_load();
                 let sleep_duration = if predicted_load > 0.8 {
-                    Duration::from_micros(1)  // High load, minimal sleep
+                    Duration::from_micros(1) // High load, minimal sleep
                 } else if predicted_load > 0.5 {
                     Duration::from_micros(10) // Medium load, short sleep
                 } else {
                     Duration::from_micros(100) // Low load, longer sleep
                 };
-                
+
                 thread::sleep(sleep_duration);
             }
         }
-        
+
         worker.is_active.store(false, Ordering::Relaxed);
     }
-    
+
     /// Intelligent task stealing with predictive load balancing
     fn steal_task_with_prediction(worker: &Arc<WorkerState>) -> Option<Task> {
         // Get current load balancer instance for access to other workers
         // This is a simplified implementation - in production, you'd have proper access to the load balancer
-        
+
         // Use predictive metrics to find the best worker to steal from
         let current_load = worker.get_predicted_load();
-        
+
         // Only steal if we're significantly underloaded
         if current_load > 0.3 {
             return None;
         }
-        
+
         // Try random stealing with bias toward overloaded workers
         let mut rng = fastrand::Rng::new();
-        
+
         // Simulate finding a victim worker (in production, this would iterate through actual workers)
         for _ in 0..5 {
             // Simulate checking if a worker has high predicted load
             let victim_load = rng.f64() * 0.8 + 0.2; // Random load between 0.2 and 1.0
-            
+
             if victim_load > current_load + 0.3 {
                 // This worker is significantly more loaded, try to steal
                 // In production, you'd actually steal from the victim's queue
@@ -441,10 +464,10 @@ impl AdaptiveLoadBalancer {
                 }
             }
         }
-        
+
         None
     }
-    
+
     /// Optimized task processing with parallel processing
     fn process_task_optimized(task: &Task) -> bool {
         match &task.workload {
@@ -473,7 +496,7 @@ impl AdaptiveLoadBalancer {
                 let dx = (goal.0 - start.0).abs();
                 let dy = (goal.1 - start.1).abs();
                 let manhattan_distance = dx + dy;
-                
+
                 // Check if path is feasible (simplified)
                 manhattan_distance < (grid.len() + grid[0].len()) as i32
             }
@@ -487,25 +510,25 @@ impl AdaptiveLoadBalancer {
             }
         }
     }
-    
+
     /// Parallel A* pathfinding with optimized heuristics
     fn parallel_a_star_pathfind(grid: &[Vec<bool>], start: (i32, i32), goal: (i32, i32)) -> bool {
         use rayon::prelude::*;
-        
+
         if start == goal {
             return true;
         }
-        
+
         let rows = grid.len();
         let cols = if rows > 0 { grid[0].len() } else { 0 };
-        
+
         // Parallel search with multiple starting points
         let search_points = vec![
             start,
             ((start.0 + goal.0) / 2, (start.1 + goal.1) / 2),
             goal,
         ];
-        
+
         // Parallel search from multiple points
         let results: Vec<bool> = search_points
             .par_iter()
@@ -514,16 +537,16 @@ impl AdaptiveLoadBalancer {
                 let dx = (goal.0 - point.0).abs();
                 let dy = (goal.1 - point.1).abs();
                 let manhattan_distance = dx + dy;
-                
+
                 // Check if path is feasible (simplified)
                 manhattan_distance < (rows + cols) as i32
             })
             .collect();
-        
+
         // Return true if any search point finds a feasible path
         results.iter().any(|&result| result)
     }
-    
+
     fn load_balancing_monitor(
         workers: Vec<Arc<WorkerState>>,
         metrics: Arc<LoadBalancerMetrics>,
@@ -531,17 +554,18 @@ impl AdaptiveLoadBalancer {
     ) {
         while !shutdown.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));
-            
+
             // Calculate load imbalance
-            let load_factors: Vec<f64> = workers.iter()
-                .map(|w| w.get_load_factor())
-                .collect();
-            
+            let load_factors: Vec<f64> = workers.iter().map(|w| w.get_load_factor()).collect();
+
             if let Some(max_load) = load_factors.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
-                if let Some(min_load) = load_factors.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+                if let Some(min_load) = load_factors.iter().min_by(|a, b| a.partial_cmp(b).unwrap())
+                {
                     let imbalance = (*max_load - *min_load) * 100.0; // Scale to percentage
-                    metrics.load_imbalance.store(imbalance as u64, Ordering::Relaxed);
-                    
+                    metrics
+                        .load_imbalance
+                        .store(imbalance as u64, Ordering::Relaxed);
+
                     // Trigger load balancing if imbalance is too high (30%)
                     if imbalance > 30.0 {
                         Self::trigger_load_balancing(&workers);
@@ -550,14 +574,14 @@ impl AdaptiveLoadBalancer {
             }
         }
     }
-    
+
     fn trigger_load_balancing(workers: &[Arc<WorkerState>]) {
         // Find most loaded and least loaded workers
         let mut _max_load_idx = 0;
         let mut _min_load_idx = 0;
         let mut max_load = 0.0;
         let mut min_load = 1.0;
-        
+
         for (i, worker) in workers.iter().enumerate() {
             let load = worker.get_load_factor();
             if load > max_load {
@@ -569,18 +593,18 @@ impl AdaptiveLoadBalancer {
                 _min_load_idx = i;
             }
         }
-        
+
         // Transfer tasks from overloaded to underloaded worker
         if max_load - min_load > 0.2 {
             // Implementation depends on task transfer mechanism
         }
     }
-    
+
     /// Get current load balancer statistics
     pub fn get_metrics(&self) -> Arc<LoadBalancerMetrics> {
         Arc::clone(&self.metrics)
     }
-    
+
     /// Shutdown the load balancer
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
@@ -609,10 +633,8 @@ pub struct SchedulerMetrics {
 #[allow(dead_code)]
 impl SchedulerMetrics {
     pub fn new(num_priorities: usize) -> Self {
-        let tasks_by_priority = (0..num_priorities)
-            .map(|_| AtomicUsize::new(0))
-            .collect();
-        
+        let tasks_by_priority = (0..num_priorities).map(|_| AtomicUsize::new(0)).collect();
+
         Self {
             tasks_by_priority,
             total_steals: AtomicUsize::new(0),
@@ -621,12 +643,14 @@ impl SchedulerMetrics {
             priority_inversions: AtomicUsize::new(0),
         }
     }
-    
+
     pub fn get_summary(&self) -> String {
-        let priorities = self.tasks_by_priority.iter()
+        let priorities = self
+            .tasks_by_priority
+            .iter()
             .map(|p| p.load(Ordering::Relaxed))
             .collect::<Vec<_>>();
-        
+
         format!(
             "SchedulerMetrics{{priorities:{:?}, total_steals:{}, successful_steals:{}, failed_steals:{}, inversions:{}}}",
             priorities,
@@ -642,17 +666,18 @@ impl SchedulerMetrics {
 impl PriorityWorkStealingScheduler {
     pub fn new(num_threads: usize) -> Self {
         let mut priority_queues = Vec::new();
-        for _ in 0..5 { // 5 priority levels
+        for _ in 0..5 {
+            // 5 priority levels
             priority_queues.push(Arc::new(Injector::new()));
         }
-        
+
         let mut workers = Vec::new();
         for i in 0..num_threads {
             workers.push(Arc::new(WorkerState::new(i)));
         }
-        
+
         let metrics = Arc::new(SchedulerMetrics::new(5));
-        
+
         Self {
             priority_queues,
             workers,
@@ -660,14 +685,14 @@ impl PriorityWorkStealingScheduler {
             metrics,
         }
     }
-    
+
     /// Submit task with priority
     pub fn submit_task(&self, task: Task) {
         let priority_idx = task.priority as usize;
         self.metrics.tasks_by_priority[priority_idx].fetch_add(1, Ordering::Relaxed);
         self.priority_queues[priority_idx].push(task);
     }
-    
+
     /// Get next task with priority stealing
     pub fn get_next_task(&self, worker_id: usize) -> Option<Task> {
         // Try local worker queue first
@@ -678,13 +703,15 @@ impl PriorityWorkStealingScheduler {
                 crossbeam::deque::Steal::Retry => continue,
             }
         }
-        
+
         // Try priority queues in order
         for priority_idx in 0..5 {
             loop {
                 match self.priority_queues[priority_idx].steal() {
                     crossbeam::deque::Steal::Success(task) => {
-                        self.metrics.successful_steals.fetch_add(1, Ordering::Relaxed);
+                        self.metrics
+                            .successful_steals
+                            .fetch_add(1, Ordering::Relaxed);
                         return Some(task);
                     }
                     crossbeam::deque::Steal::Empty => break,
@@ -692,14 +719,14 @@ impl PriorityWorkStealingScheduler {
                 }
             }
         }
-        
+
         // Try to steal from other workers
         self.steal_from_other_workers(worker_id)
     }
-    
+
     fn steal_from_other_workers(&self, worker_id: usize) -> Option<Task> {
         self.metrics.total_steals.fetch_add(1, Ordering::Relaxed);
-        
+
         // Try random worker stealing
         let mut rng = fastrand::Rng::new();
         for _ in 0..self.num_threads * 2 {
@@ -707,14 +734,16 @@ impl PriorityWorkStealingScheduler {
             if victim_id == worker_id {
                 continue;
             }
-            
+
             // Try to steal from victim's queue
             if let crossbeam::deque::Steal::Success(task) = self.workers[victim_id].queue.steal() {
-                self.metrics.successful_steals.fetch_add(1, Ordering::Relaxed);
+                self.metrics
+                    .successful_steals
+                    .fetch_add(1, Ordering::Relaxed);
                 return Some(task);
             }
         }
-        
+
         self.metrics.failed_steals.fetch_add(1, Ordering::Relaxed);
         None
     }
@@ -755,7 +784,7 @@ pub struct PlayerMetrics {
 impl PredictiveLoadBalancer {
     pub fn new(num_threads: usize, max_queue_size: usize) -> Self {
         let base_balancer = AdaptiveLoadBalancer::new(num_threads, max_queue_size);
-        
+
         let traffic_predictor = TrafficPredictor {
             player_join_rate: 0.0,
             player_leave_rate: 0.0,
@@ -764,7 +793,7 @@ impl PredictiveLoadBalancer {
             confidence: 1.0,
             historical_data: VecDeque::new(),
         };
-        
+
         let player_metrics = PlayerMetrics {
             active_players: 0,
             player_load_factor: 0.0,
@@ -772,29 +801,36 @@ impl PredictiveLoadBalancer {
             combat_intensity: 0.0,
             last_update: Instant::now(),
         };
-        
+
         Self {
             base_balancer,
             traffic_predictor: Arc::new(RwLock::new(traffic_predictor)),
             player_metrics: Arc::new(RwLock::new(player_metrics)),
         }
     }
-    
+
     /// Update player metrics and predict future load
-    pub fn update_player_metrics(&self, active_players: usize, entity_count: usize, combat_events: usize) {
+    pub fn update_player_metrics(
+        &self,
+        active_players: usize,
+        entity_count: usize,
+        combat_events: usize,
+    ) {
         let mut predictor = self.traffic_predictor.write().unwrap();
         let mut metrics = self.player_metrics.write().unwrap();
-        
+
         // Update current metrics
         metrics.active_players = active_players;
         metrics.player_load_factor = active_players as f64 / 100.0; // Normalize to 0-1
         metrics.entity_density = entity_count as f64 / 1000.0; // Normalize to 0-1
         metrics.combat_intensity = combat_events as f64 / 50.0; // Normalize to 0-1
         metrics.last_update = Instant::now();
-        
+
         // Add to historical data
-        predictor.historical_data.push_back((Instant::now(), active_players));
-        
+        predictor
+            .historical_data
+            .push_back((Instant::now(), active_players));
+
         // Keep only recent history (last hour)
         let cutoff_time = Instant::now() - Duration::from_secs(3600);
         while let Some(&(timestamp, _)) = predictor.historical_data.front() {
@@ -804,37 +840,44 @@ impl PredictiveLoadBalancer {
                 break;
             }
         }
-        
+
         // Calculate arrival and leave rates
         if predictor.historical_data.len() >= 2 {
-            let time_span = predictor.historical_data.back().unwrap().0
+            let time_span = predictor
+                .historical_data
+                .back()
+                .unwrap()
+                .0
                 .duration_since(predictor.historical_data.front().unwrap().0)
                 .as_secs_f64();
-            
+
             if time_span > 0.0 {
                 let player_change = predictor.historical_data.back().unwrap().1 as f64
                     - predictor.historical_data.front().unwrap().1 as f64;
-                
+
                 predictor.player_join_rate = player_change.max(0.0) / time_span;
                 predictor.player_leave_rate = (-player_change).max(0.0) / time_span;
             }
         }
-        
+
         // Predict future player count based on time of day and trends
         let current_hour = (Instant::now().elapsed().as_secs() / 3600) % 24;
-        let is_peak_hour = predictor.peak_hours.iter()
+        let is_peak_hour = predictor
+            .peak_hours
+            .iter()
             .any(|(start, end)| current_hour >= (*start as u64) && current_hour <= (*end as u64));
-        
+
         let base_prediction = if is_peak_hour {
             active_players * 2 // Peak hours expect double load
         } else {
             active_players
         };
-        
+
         // Apply trend-based adjustment
         let trend_adjustment = (predictor.player_join_rate - predictor.player_leave_rate) * 300.0; // 5-minute prediction
-        predictor.predicted_player_count = (base_prediction as f64 + trend_adjustment).max(0.0) as usize;
-        
+        predictor.predicted_player_count =
+            (base_prediction as f64 + trend_adjustment).max(0.0) as usize;
+
         // Update confidence based on data quality
         predictor.confidence = if predictor.historical_data.len() >= 10 {
             0.9
@@ -842,25 +885,25 @@ impl PredictiveLoadBalancer {
             0.5 + (predictor.historical_data.len() as f64 * 0.04).min(0.4)
         };
     }
-    
+
     /// Get predicted load based on player traffic
     pub fn get_predicted_load(&self) -> f64 {
         let predictor = self.traffic_predictor.read().unwrap();
         let metrics = self.player_metrics.read().unwrap();
-        
+
         // Combine player prediction with current metrics
         let player_load = predictor.predicted_player_count as f64 / 100.0;
         let entity_load = metrics.entity_density;
         let combat_load = metrics.combat_intensity;
-        
+
         // Weighted combination of factors
         0.5 * player_load + 0.3 * entity_load + 0.2 * combat_load
     }
-    
+
     /// Adjust thread allocation based on predicted load
     pub fn adjust_thread_allocation(&self) -> usize {
         let predicted_load = self.get_predicted_load();
-        
+
         // Scale threads based on predicted load
         if predicted_load > 0.8 {
             self.base_balancer.num_threads * 2 // Double threads for high load
@@ -874,26 +917,31 @@ impl PredictiveLoadBalancer {
 
 /// Enhanced A* pathfinding with predictive heuristics
 #[allow(dead_code)]
-fn enhanced_a_star_pathfind(grid: &[Vec<bool>], start: (i32, i32), goal: (i32, i32), predicted_obstacles: &[(i32, i32)]) -> Option<Vec<(i32, i32)>> {
+fn enhanced_a_star_pathfind(
+    grid: &[Vec<bool>],
+    start: (i32, i32),
+    goal: (i32, i32),
+    predicted_obstacles: &[(i32, i32)],
+) -> Option<Vec<(i32, i32)>> {
     // Enhanced implementation with obstacle prediction
     let mut enhanced_grid = grid.to_vec();
-    
+
     // Mark predicted obstacles
     for &(x, y) in predicted_obstacles {
         if x >= 0 && y >= 0 && x < enhanced_grid.len() as i32 && y < enhanced_grid[0].len() as i32 {
             enhanced_grid[x as usize][y as usize] = true;
         }
     }
-    
+
     // Use the enhanced grid for pathfinding
     if start == goal {
         return Some(vec![start]);
     }
-    
+
     // Simplified pathfinding with obstacle avoidance
     let dx = (goal.0 - start.0).abs();
     let dy = (goal.1 - start.1).abs();
-    
+
     if dx + dy < 10 {
         Some(vec![start, goal])
     } else {
@@ -909,8 +957,11 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_createLoadBalancerEnhance
     num_threads: i32,
     max_queue_size: i32,
 ) -> jni::sys::jlong {
-    let load_balancer = Box::new(AdaptiveLoadBalancer::new(num_threads as usize, max_queue_size as usize));
-    
+    let load_balancer = Box::new(AdaptiveLoadBalancer::new(
+        num_threads as usize,
+        max_queue_size as usize,
+    ));
+
     Box::into_raw(load_balancer) as jni::sys::jlong
 }
 
@@ -923,7 +974,7 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_submitTask<'a>(
     data: JFloatArray,
 ) {
     let balancer = unsafe { &*(balancer_ptr as *const AdaptiveLoadBalancer) };
-    
+
     let task_type_str = match env.get_string(&task_type) {
         Ok(s) => s.to_str().unwrap_or("unknown").to_string(),
         Err(_) => "unknown".to_string(),
@@ -931,30 +982,24 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_submitTask<'a>(
     let data_len = env.get_array_length(&data).unwrap() as usize;
     let mut data_vec = vec![0.0f32; data_len];
     env.get_float_array_region(&data, 0, &mut data_vec).unwrap();
-    
+
     let workload = match task_type_str.as_str() {
-        "matrix_multiply" => {
-            Workload::MatrixMultiply { 
-                a: data_vec.clone(), 
-                b: data_vec.clone(), 
-                rows: 4, 
-                cols: 4 
-            }
-        }
-        "vector_add" => {
-            Workload::VectorOperation { 
-                data: data_vec, 
-                operation: "add".to_string() 
-            }
-        }
-        _ => {
-            Workload::VectorOperation { 
-                data: data_vec, 
-                operation: "multiply".to_string() 
-            }
-        }
+        "matrix_multiply" => Workload::MatrixMultiply {
+            a: data_vec.clone(),
+            b: data_vec.clone(),
+            rows: 4,
+            cols: 4,
+        },
+        "vector_add" => Workload::VectorOperation {
+            data: data_vec,
+            operation: "add".to_string(),
+        },
+        _ => Workload::VectorOperation {
+            data: data_vec,
+            operation: "multiply".to_string(),
+        },
     };
-    
+
     let task = Task {
         id: fastrand::u64(..),
         priority: TaskPriority::Normal,
@@ -962,7 +1007,7 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_submitTask<'a>(
         created_at: Instant::now(),
         estimated_duration: Duration::from_millis(10),
     };
-    
+
     balancer.submit_task(task).unwrap();
 }
 
@@ -975,7 +1020,7 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_getLoadBalancerMetrics<'a
     let balancer = unsafe { &*(balancer_ptr as *const AdaptiveLoadBalancer) };
     let metrics = balancer.get_metrics();
     let summary = metrics.get_summary();
-    
+
     env.new_string(&summary).unwrap()
 }
 

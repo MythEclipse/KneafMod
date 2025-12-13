@@ -4,14 +4,14 @@
 //! hit detection, combat state management, and integration with the ECS architecture.
 //! It provides native Rust implementation of combat mechanics with performance optimization.
 
-use glam::Vec3;
-use std::sync::{ Arc, RwLock };
-use std::collections::{ HashMap, VecDeque };
-use std::time::{ Duration, Instant };
-use rayon::prelude::*;
-use crate::entity_registry::{ EntityId, EntityRegistry, EntityType, Component };
-use crate::entity_framework::{ HealthComponent, BoundingBox };
+use crate::entity_framework::{BoundingBox, HealthComponent};
+use crate::entity_registry::{Component, EntityId, EntityRegistry, EntityType};
 use crate::performance_monitor::PerformanceMonitor;
+use glam::Vec3;
+use rayon::prelude::*;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 /// Combat event types for the combat system
 #[derive(Debug, Clone, PartialEq)]
@@ -42,11 +42,11 @@ pub struct CombatEvent {
 
 /// SIMD-optimized hit detection lookup table
 const HIT_NORMAL_TABLE: [Vec3; 6] = [
-    Vec3::new(1.0, 0.0, 0.0), // Right face
+    Vec3::new(1.0, 0.0, 0.0),  // Right face
     Vec3::new(-1.0, 0.0, 0.0), // Left face
-    Vec3::new(0.0, 1.0, 0.0), // Top face
+    Vec3::new(0.0, 1.0, 0.0),  // Top face
     Vec3::new(0.0, -1.0, 0.0), // Bottom face
-    Vec3::new(0.0, 0.0, 1.0), // Front face
+    Vec3::new(0.0, 0.0, 1.0),  // Front face
     Vec3::new(0.0, 0.0, -1.0), // Back face
 ];
 
@@ -169,10 +169,10 @@ impl CombatComponent {
     }
 
     pub fn can_attack(&self) -> bool {
-        self.state == CombatState::Idle &&
-            self.last_combat_action.is_none_or(|last| {
-                Instant::now().duration_since(last) >= self.combat_cooldown
-            })
+        self.state == CombatState::Idle
+            && self
+                .last_combat_action
+                .is_none_or(|last| Instant::now().duration_since(last) >= self.combat_cooldown)
     }
 
     /// Perform an attack and return the damage value for this attack
@@ -257,7 +257,7 @@ impl CombatSystem {
     /// Create a new combat system
     pub fn new(
         entity_registry: Arc<EntityRegistry>,
-        performance_monitor: Arc<PerformanceMonitor>
+        performance_monitor: Arc<PerformanceMonitor>,
     ) -> Self {
         let mut damage_modifiers = HashMap::new();
         damage_modifiers.insert(DamageType::Physical, 1.0);
@@ -283,7 +283,7 @@ impl CombatSystem {
         &self,
         attacker_id: EntityId,
         target_id: EntityId,
-        attack_position: Vec3
+        attack_position: Vec3,
     ) -> Result<CombatEvent, String> {
         let start_time = Instant::now();
 
@@ -306,7 +306,9 @@ impl CombatSystem {
         }
 
         // Special handling for ShadowZombieNinja - multi-shot with fixed trajectory
-        let is_shadow_zombie = self.entity_registry.get_entity_type(attacker_id)
+        let is_shadow_zombie = self
+            .entity_registry
+            .get_entity_type(attacker_id)
             .map(|t| t == EntityType::ShadowZombieNinja)
             .unwrap_or(false);
         let mut all_events = Vec::new();
@@ -333,35 +335,26 @@ impl CombatSystem {
                     shot_position + direction * attacker_combat.attack_range;
 
                 // Perform hit detection with straight trajectory
-                let hit_detection = self.perform_hit_detection(
-                    attacker_id,
-                    target_id,
-                    straight_attack_position
-                )?;
+                let hit_detection =
+                    self.perform_hit_detection(attacker_id, target_id, straight_attack_position)?;
 
                 if hit_detection.did_hit {
                     // Calculate damage
                     let damage_calc = self.prepare_damage_calculation(attacker_id, target_id)?;
-                    let damage_result = self.calculate_damage(
-                        damage_calc,
-                        &hit_detection,
-                        target_id
-                    )?;
+                    let damage_result =
+                        self.calculate_damage(damage_calc, &hit_detection, target_id)?;
 
                     // Apply damage to target
                     let event = self.apply_damage(
                         attacker_id,
                         target_id,
                         damage_result,
-                        straight_attack_position
+                        straight_attack_position,
                     )?;
                     all_events.push(event);
                 } else {
-                    let event = self.create_missed_event(
-                        attacker_id,
-                        target_id,
-                        straight_attack_position
-                    )?;
+                    let event =
+                        self.create_missed_event(attacker_id, target_id, straight_attack_position)?;
                     all_events.push(event);
                 }
             }
@@ -369,10 +362,9 @@ impl CombatSystem {
             // Return the first successful hit event, or last missed event
             if let Some(last_event) = all_events.last() {
                 // Update combat state for the first successful attack
-                if
-                    let Some(first_hit) = all_events
-                        .iter()
-                        .find(|e| e.event_type != CombatEventType::AttackMissed)
+                if let Some(first_hit) = all_events
+                    .iter()
+                    .find(|e| e.event_type != CombatEventType::AttackMissed)
                 {
                     self.update_combat_state(attacker_id, target_id, first_hit)?;
                 } else {
@@ -384,11 +376,8 @@ impl CombatSystem {
         } else {
             // Normal entity attack logic
             // Perform hit detection
-            let hit_detection = self.perform_hit_detection(
-                attacker_id,
-                target_id,
-                attack_position
-            )?;
+            let hit_detection =
+                self.perform_hit_detection(attacker_id, target_id, attack_position)?;
 
             if !hit_detection.did_hit {
                 return self.create_missed_event(attacker_id, target_id, attack_position);
@@ -399,12 +388,8 @@ impl CombatSystem {
             let damage_result = self.calculate_damage(damage_calc, &hit_detection, target_id)?;
 
             // Apply damage to target
-            let final_event = self.apply_damage(
-                attacker_id,
-                target_id,
-                damage_result,
-                attack_position
-            )?;
+            let final_event =
+                self.apply_damage(attacker_id, target_id, damage_result, attack_position)?;
 
             // Update combat state
             self.update_combat_state(attacker_id, target_id, &final_event)?;
@@ -416,7 +401,7 @@ impl CombatSystem {
         let processing_time = start_time.elapsed();
         self.performance_monitor.record_metric(
             "combat_attack_processing_time",
-            processing_time.as_secs_f64()
+            processing_time.as_secs_f64(),
         );
 
         Ok(CombatEvent {
@@ -435,7 +420,7 @@ impl CombatSystem {
         &self,
         attacker_id: EntityId,
         target_id: EntityId,
-        attack_position: Vec3
+        attack_position: Vec3,
     ) -> Result<HitDetection, String> {
         let start_time = Instant::now();
 
@@ -491,7 +476,8 @@ impl CombatSystem {
 
         // Record performance metrics
         let detection_time = start_time.elapsed();
-        self.performance_monitor.record_metric("hit_detection_time", detection_time.as_secs_f64());
+        self.performance_monitor
+            .record_metric("hit_detection_time", detection_time.as_secs_f64());
 
         Ok(hit_detection)
     }
@@ -523,7 +509,7 @@ impl CombatSystem {
         &self,
         ray_origin: Vec3,
         ray_direction: Vec3,
-        bbox: &BoundingBox
+        bbox: &BoundingBox,
     ) -> HitDetection {
         let mut t_min: f32 = 0.0;
         let mut t_max: f32 = f32::INFINITY;
@@ -558,16 +544,8 @@ impl CombatSystem {
         }
 
         // Find min and max for each axis
-        let t_nears: Vec<f32> = t1s
-            .iter()
-            .zip(t2s.iter())
-            .map(|(a, b)| a.min(*b))
-            .collect();
-        let t_fars: Vec<f32> = t1s
-            .iter()
-            .zip(t2s.iter())
-            .map(|(a, b)| a.max(*b))
-            .collect();
+        let t_nears: Vec<f32> = t1s.iter().zip(t2s.iter()).map(|(a, b)| a.min(*b)).collect();
+        let t_fars: Vec<f32> = t1s.iter().zip(t2s.iter()).map(|(a, b)| a.max(*b)).collect();
 
         // Calculate final t_min and t_max
         let t_near_max = t_nears.iter().fold(0.0f32, |a, &b| a.max(b));
@@ -623,13 +601,13 @@ impl CombatSystem {
     fn lookup_chance(&self, chance: f32) -> bool {
         // Pre-calculated threshold table for common chance values
         const CHANCE_THRESHOLDS: [f32; 101] = [
-            0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14, 0.15,
-            0.16, 0.17, 0.18, 0.19, 0.2, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27, 0.28, 0.29, 0.3, 0.31,
-            0.32, 0.33, 0.34, 0.35, 0.36, 0.37, 0.38, 0.39, 0.4, 0.41, 0.42, 0.43, 0.44, 0.45,
-            0.46, 0.47, 0.48, 0.49, 0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6, 0.61,
-            0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7, 0.71, 0.72, 0.73, 0.74, 0.75,
-            0.76, 0.77, 0.78, 0.79, 0.8, 0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87, 0.88, 0.89, 0.9, 0.91,
-            0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99, 1.0,
+            0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14,
+            0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27, 0.28,
+            0.29, 0.3, 0.31, 0.32, 0.33, 0.34, 0.35, 0.36, 0.37, 0.38, 0.39, 0.4, 0.41, 0.42, 0.43,
+            0.44, 0.45, 0.46, 0.47, 0.48, 0.49, 0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57,
+            0.58, 0.59, 0.6, 0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7, 0.71, 0.72,
+            0.73, 0.74, 0.75, 0.76, 0.77, 0.78, 0.79, 0.8, 0.81, 0.82, 0.83, 0.84, 0.85, 0.86,
+            0.87, 0.88, 0.89, 0.9, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99, 1.0,
         ];
 
         let threshold = if ((chance * 100.0) as usize) < 101 {
@@ -644,9 +622,8 @@ impl CombatSystem {
     /// Optimized dodge chance calculation using lookup tables
     fn get_dodge_chance_optimized(&self, target_id: EntityId) -> f32 {
         // Pre-calculated dodge chances based on entity level and type
-        const BASE_DODGE_CHANCES: [f32; 10] = [
-            0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14,
-        ];
+        const BASE_DODGE_CHANCES: [f32; 10] =
+            [0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14];
 
         // Simplified level-based lookup
         let level_index = (target_id.0 % 10) as usize;
@@ -658,7 +635,7 @@ impl CombatSystem {
         &self,
         ray_origin: Vec3,
         ray_direction: Vec3,
-        bbox: &BoundingBox
+        bbox: &BoundingBox,
     ) -> HitDetection {
         let mut t_min: f32 = 0.0;
         let mut t_max: f32 = f32::INFINITY;
@@ -745,7 +722,7 @@ impl CombatSystem {
     fn prepare_damage_calculation(
         &self,
         attacker_id: EntityId,
-        target_id: EntityId
+        target_id: EntityId,
     ) -> Result<DamageCalculation, String> {
         let attacker_combat = self.get_shadow_zombie_combat(attacker_id)?;
         let attacker_stats = self.get_combat_stats(attacker_id)?;
@@ -768,7 +745,7 @@ impl CombatSystem {
         &self,
         calc: DamageCalculation,
         hit_detection: &HitDetection,
-        target_id: EntityId
+        target_id: EntityId,
     ) -> Result<DamageResult, String> {
         let start_time = Instant::now();
 
@@ -810,7 +787,8 @@ impl CombatSystem {
 
         // Record performance metrics
         let calc_time = start_time.elapsed();
-        self.performance_monitor.record_metric("damage_calculation_time", calc_time.as_secs_f64());
+        self.performance_monitor
+            .record_metric("damage_calculation_time", calc_time.as_secs_f64());
 
         Ok(result)
     }
@@ -821,7 +799,7 @@ impl CombatSystem {
         attacker_id: EntityId,
         target_id: EntityId,
         damage_result: DamageResult,
-        position: Vec3
+        position: Vec3,
     ) -> Result<CombatEvent, String> {
         // Get target health component
         let mut target_health = self.get_entity_health_component(target_id)?;
@@ -863,7 +841,7 @@ impl CombatSystem {
         &self,
         attacker_id: EntityId,
         target_id: EntityId,
-        damage_result: &DamageResult
+        damage_result: &DamageResult,
     ) -> Result<(), String> {
         // Update attacker stats
         let mut attacker_stats = self.get_combat_stats(attacker_id)?;
@@ -916,7 +894,7 @@ impl CombatSystem {
         &self,
         attacker_id: EntityId,
         target_id: EntityId,
-        event: &CombatEvent
+        event: &CombatEvent,
     ) -> Result<(), String> {
         // Update attacker combat state
         let mut attacker_combat = self.get_combat_component(attacker_id)?;
@@ -936,7 +914,7 @@ impl CombatSystem {
         &self,
         attacker_id: EntityId,
         target_id: EntityId,
-        position: Vec3
+        position: Vec3,
     ) -> Result<CombatEvent, String> {
         let event = CombatEvent {
             event_type: CombatEventType::AttackMissed,
@@ -1014,7 +992,7 @@ impl CombatSystem {
         radius: f32,
         damage: f32,
         damage_type: DamageType,
-        exclude_entity: Option<EntityId>
+        exclude_entity: Option<EntityId>,
     ) -> Result<Vec<CombatEvent>, String> {
         let start_time = Instant::now();
 
@@ -1027,9 +1005,7 @@ impl CombatSystem {
         // Process entities in parallel batches
         let batch_results: Vec<Vec<CombatEvent>> = entities_in_range
             .par_chunks(batch_size)
-            .map(|batch| {
-                self.process_aoe_batch(batch, center, radius, damage, damage_type.clone())
-            })
+            .map(|batch| self.process_aoe_batch(batch, center, radius, damage, damage_type.clone()))
             .collect();
 
         // Flatten results
@@ -1039,10 +1015,8 @@ impl CombatSystem {
 
         // Record performance metrics
         let processing_time = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "aoe_damage_processing_time",
-            processing_time.as_secs_f64()
-        );
+        self.performance_monitor
+            .record_metric("aoe_damage_processing_time", processing_time.as_secs_f64());
 
         Ok(all_events)
     }
@@ -1054,7 +1028,7 @@ impl CombatSystem {
         center: Vec3,
         radius: f32,
         base_damage: f32,
-        damage_type: DamageType
+        damage_type: DamageType,
     ) -> Vec<CombatEvent> {
         let mut events = Vec::new();
 
@@ -1088,22 +1062,21 @@ impl CombatSystem {
                 };
 
                 // Apply damage asynchronously for better performance
-                if
-                    self
-                        .apply_damage_optimized(
-                            EntityId(0),
-                            *entity_id,
-                            DamageResult {
-                                final_damage,
-                                is_critical: false,
-                                damage_type: damage_type.clone(),
-                                was_blocked: false,
-                                was_dodged: false,
-                                overkill_damage: 0.0,
-                            },
-                            center
-                        )
-                        .is_ok()
+                if self
+                    .apply_damage_optimized(
+                        EntityId(0),
+                        *entity_id,
+                        DamageResult {
+                            final_damage,
+                            is_critical: false,
+                            damage_type: damage_type.clone(),
+                            was_blocked: false,
+                            was_dodged: false,
+                            overkill_damage: 0.0,
+                        },
+                        center,
+                    )
+                    .is_ok()
                 {
                     events.push(event);
                 }
@@ -1119,7 +1092,7 @@ impl CombatSystem {
         attacker_id: EntityId,
         target_id: EntityId,
         damage_result: DamageResult,
-        position: Vec3
+        position: Vec3,
     ) -> Result<(), String> {
         // Use parallel processing for damage application
         let damage_future = std::thread::spawn(move || {
@@ -1140,12 +1113,12 @@ impl CombatSystem {
         &self,
         center: Vec3,
         radius: f32,
-        exclude_entity: Option<EntityId>
+        exclude_entity: Option<EntityId>,
     ) -> Result<Vec<EntityId>, String> {
         // Get all entities from registry
-        let shadow_zombies = self.entity_registry.get_entities_by_type(
-            EntityType::ShadowZombieNinja
-        );
+        let shadow_zombies = self
+            .entity_registry
+            .get_entities_by_type(EntityType::ShadowZombieNinja);
 
         // Filter by distance
         let entities_in_range: Vec<EntityId> = shadow_zombies
@@ -1180,17 +1153,17 @@ impl CombatSystem {
 
         // Record performance metrics
         let update_time = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "combat_system_update_time",
-            update_time.as_secs_f64()
-        );
+        self.performance_monitor
+            .record_metric("combat_system_update_time", update_time.as_secs_f64());
 
         Ok(())
     }
 
     /// Parallel update of combat cooldowns and state timers
     fn update_combat_cooldowns(&self, delta_time: f32) -> Result<(), String> {
-        let entities = self.entity_registry.get_entities_by_type(EntityType::ShadowZombieNinja);
+        let entities = self
+            .entity_registry
+            .get_entities_by_type(EntityType::ShadowZombieNinja);
 
         // Process entities in parallel for better performance
         entities.par_iter().for_each(|&entity_id| {
@@ -1207,9 +1180,8 @@ impl CombatSystem {
                         }
                     }
                     CombatState::Invulnerable => {
-                        if
-                            combat_comp.state_timer >=
-                            combat_comp.invulnerability_duration.as_secs_f32()
+                        if combat_comp.state_timer
+                            >= combat_comp.invulnerability_duration.as_secs_f32()
                         {
                             combat_comp.state = CombatState::Idle;
                             combat_comp.state_timer = 0.0;
@@ -1308,7 +1280,9 @@ mod tests {
             hit_box: None,
         };
 
-        let result = combat_system.calculate_damage(calc, &hit_detection, EntityId(1)).unwrap();
+        let result = combat_system
+            .calculate_damage(calc, &hit_detection, EntityId(1))
+            .unwrap();
 
         assert_eq!(result.final_damage, 50.0);
         assert!(!result.is_critical);
@@ -1373,9 +1347,10 @@ mod tests {
         let event = result.unwrap();
 
         // Should be a valid combat event
-        assert!(
-            matches!(event.event_type, CombatEventType::DamageDealt | CombatEventType::AttackMissed)
-        );
+        assert!(matches!(
+            event.event_type,
+            CombatEventType::DamageDealt | CombatEventType::AttackMissed
+        ));
         assert_eq!(event.attacker_id, shadow_zombie_id);
         assert_eq!(event.target_id, target_id);
     }

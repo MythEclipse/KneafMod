@@ -1,14 +1,14 @@
 //! Metrics Collector - Struktur data untuk koleksi metrik performa
-//! 
+//!
 //! Modul ini menyediakan struktur data untuk mengumpulkan dan menyimpan
 //! berbagai jenis metrik performa dengan dukungan untuk time-series data
 //! dan operasi thread-safe.
 
+use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
-use std::sync::Arc;
-use chrono::{DateTime, Utc, Duration};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// Tipe metrik yang dikumpulkan
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,17 +97,21 @@ impl TimeSeriesMetric {
         };
 
         let mut data_points = self.data_points.lock().unwrap();
-        
+
         // Hapus data points yang lebih lama dari 24 jam jika sudah mencapai kapasitas
         if data_points.len() >= self.max_capacity {
             data_points.pop_front();
         }
-        
+
         data_points.push_back(data_point);
     }
 
     /// Mendapatkan data points dalam rentang waktu tertentu
-    pub fn get_data_points_in_range(&self, start_time: DateTime<Utc>, end_time: DateTime<Utc>) -> Vec<MetricDataPoint> {
+    pub fn get_data_points_in_range(
+        &self,
+        start_time: DateTime<Utc>,
+        end_time: DateTime<Utc>,
+    ) -> Vec<MetricDataPoint> {
         let data_points = self.data_points.lock().unwrap();
         data_points
             .iter()
@@ -132,7 +136,7 @@ impl TimeSeriesMetric {
     /// Menghitung statistik dasar
     pub fn calculate_statistics(&self) -> MetricStatistics {
         let data_points = self.data_points.lock().unwrap();
-        
+
         if data_points.is_empty() {
             return MetricStatistics::empty();
         }
@@ -141,14 +145,16 @@ impl TimeSeriesMetric {
         let count = values.len();
         let sum = values.iter().sum::<f64>();
         let avg = sum / count as f64;
-        
+
         let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
         let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        
+
         // Hitung standard deviation
-        let variance = values.iter()
+        let variance = values
+            .iter()
             .map(|value| (value - avg).powi(2))
-            .sum::<f64>() / count as f64;
+            .sum::<f64>()
+            / count as f64;
         let std_dev = variance.sqrt();
 
         MetricStatistics {
@@ -165,7 +171,7 @@ impl TimeSeriesMetric {
     pub fn cleanup_old_data(&self, max_age: Duration) {
         let mut data_points = self.data_points.lock().unwrap();
         let cutoff_time = Utc::now() - max_age;
-        
+
         // Hapus data points yang lebih lama dari cutoff time
         while let Some(front) = data_points.front() {
             if front.timestamp < cutoff_time {
@@ -246,7 +252,12 @@ impl MetricsCollector {
     }
 
     /// Merekam nilai metrik
-    pub fn record_metric(&self, name: &str, value: f64, label: Option<String>) -> Result<(), String> {
+    pub fn record_metric(
+        &self,
+        name: &str,
+        value: f64,
+        label: Option<String>,
+    ) -> Result<(), String> {
         match self.metrics.get(name) {
             Some(metric) => {
                 metric.add_data_point(value, label);
@@ -257,7 +268,10 @@ impl MetricsCollector {
     }
 
     /// Merekam multiple nilai metrik sekaligus (batch)
-    pub fn record_metrics_batch(&self, records: Vec<(String, f64, Option<String>)>) -> Vec<Result<(), String>> {
+    pub fn record_metrics_batch(
+        &self,
+        records: Vec<(String, f64, Option<String>)>,
+    ) -> Vec<Result<(), String>> {
         records
             .into_iter()
             .map(|(name, value, label)| self.record_metric(&name, value, label))
@@ -271,7 +285,10 @@ impl MetricsCollector {
 
     /// Mendapatkan semua nama metrik
     pub fn get_all_metric_names(&self) -> Vec<String> {
-        self.metrics.iter().map(|entry| entry.key().clone()).collect()
+        self.metrics
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     /// Mendapatkan metrik berdasarkan tipe
@@ -300,11 +317,11 @@ impl MetricsCollector {
     /// Membersihkan metrik yang tidak aktif (opsional)
     pub fn cleanup_inactive_metrics(&self, max_age: Duration) {
         let metric_names = self.get_all_metric_names();
-        
+
         for name in metric_names {
             if let Some(metric) = self.metrics.get(&name) {
                 let latest_point = metric.get_latest_data_point();
-                
+
                 // Hapus jika tidak ada data dalam waktu tertentu
                 if let Some(point) = latest_point {
                     if Utc::now() - point.timestamp > max_age {
@@ -321,14 +338,14 @@ impl MetricsCollector {
     /// Mendapatkan statistik untuk semua metrik
     pub fn get_all_statistics(&self) -> DashMap<String, MetricStatistics> {
         let stats = DashMap::new();
-        
+
         for entry in self.metrics.iter() {
             let name = entry.key().clone();
             let metric = entry.value();
             let statistics = metric.calculate_statistics();
             stats.insert(name, statistics);
         }
-        
+
         stats
     }
 
@@ -365,7 +382,7 @@ mod tests {
     #[test]
     fn test_metrics_collector_registration() {
         let collector = MetricsCollector::new();
-        
+
         let result = collector.register_metric(
             "cpu_usage".to_string(),
             MetricType::CpuUsage,
@@ -381,16 +398,19 @@ mod tests {
     #[test]
     fn test_metric_recording() {
         let collector = MetricsCollector::new();
-        
-        collector.register_metric(
-            "response_time".to_string(),
-            MetricType::ResponseTime,
-            MetricUnit::Milliseconds,
-            None,
-            vec![],
-        ).unwrap();
 
-        let result = collector.record_metric("response_time", 100.0, Some("test_label".to_string()));
+        collector
+            .register_metric(
+                "response_time".to_string(),
+                MetricType::ResponseTime,
+                MetricUnit::Milliseconds,
+                None,
+                vec![],
+            )
+            .unwrap();
+
+        let result =
+            collector.record_metric("response_time", 100.0, Some("test_label".to_string()));
         assert!(result.is_ok());
 
         let metric = collector.get_metric("response_time").unwrap();
@@ -410,7 +430,7 @@ mod tests {
         };
 
         let metric = TimeSeriesMetric::new(metadata, 100);
-        
+
         // Tambahkan beberapa data points
         for i in 1..=5 {
             metric.add_data_point(i as f64 * 10.0, None);
@@ -426,9 +446,25 @@ mod tests {
     #[test]
     fn test_batch_recording() {
         let collector = MetricsCollector::new();
-        
-        collector.register_metric("metric1".to_string(), MetricType::CpuUsage, MetricUnit::Percent, None, vec![]).unwrap();
-        collector.register_metric("metric2".to_string(), MetricType::MemoryUsage, MetricUnit::Bytes, None, vec![]).unwrap();
+
+        collector
+            .register_metric(
+                "metric1".to_string(),
+                MetricType::CpuUsage,
+                MetricUnit::Percent,
+                None,
+                vec![],
+            )
+            .unwrap();
+        collector
+            .register_metric(
+                "metric2".to_string(),
+                MetricType::MemoryUsage,
+                MetricUnit::Bytes,
+                None,
+                vec![],
+            )
+            .unwrap();
 
         let records = vec![
             ("metric1".to_string(), 50.0, None),

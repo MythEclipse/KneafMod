@@ -1,22 +1,24 @@
 //! Entity Modulation System - Generic Framework Implementation
-//! 
+//!
 //! This module provides the main integration point for the Entity Processing System,
 //! now using the generic entity framework instead of specific entity types.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use std::collections::{HashMap, VecDeque};
 use glam::Vec3;
 use rayon::prelude::*;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use crate::entity_registry::{EntityRegistry, EntityId, EntityType, EntitySystem};
-use crate::entity_framework::{EntityFactory, GenericEntity, EntityBuilder, EntityManager, Entity, ComponentEntity};
-use crate::entity_framework::{
-    HealthComponent, TransformComponent, MovementComponent, AnimationComponent, 
-    AIComponent, SkillComponent, AIType, BoundingBox
-};
-use crate::combat_system::{CombatSystem, CombatEvent};
+use crate::combat_system::{CombatEvent, CombatSystem};
 use crate::entity_framework::CombatComponent;
+use crate::entity_framework::{
+    AIComponent, AIType, AnimationComponent, BoundingBox, HealthComponent, MovementComponent,
+    SkillComponent, TransformComponent,
+};
+use crate::entity_framework::{
+    ComponentEntity, Entity, EntityBuilder, EntityFactory, EntityManager, GenericEntity,
+};
+use crate::entity_registry::{EntityId, EntityRegistry, EntitySystem, EntityType};
 use crate::performance_monitor::PerformanceMonitor;
 
 /// Entity priority levels for CPU resource allocation
@@ -229,21 +231,25 @@ impl EntityModulationSystem {
     /// Create a new entity modulation system
     pub fn new(max_entities: usize) -> Self {
         let performance_monitor = Arc::new(PerformanceMonitor::new());
-        
+
         let entity_registry = Arc::new(EntityRegistry::new(performance_monitor.clone()));
         let entity_factory = Arc::new(EntityFactory::new(performance_monitor.clone()));
-        
+
         let combat_system = Arc::new(CombatSystem::new(
             entity_registry.clone(),
             performance_monitor.clone(),
         ));
-        
-        let object_pool = Arc::new(parking_lot::Mutex::new(EntityObjectPool::new(max_entities / 4)));
+
+        let object_pool = Arc::new(parking_lot::Mutex::new(EntityObjectPool::new(
+            max_entities / 4,
+        )));
         let spatial_grid = Arc::new(parking_lot::Mutex::new(SpatialGrid::new(16.0))); // 16x16x16 cells
         let entity_batches = Arc::new(parking_lot::Mutex::new(HashMap::new()));
         let entity_priorities = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let entity_manager = Arc::new(parking_lot::Mutex::new(EntityManager::new(performance_monitor.clone())));
-        
+        let entity_manager = Arc::new(parking_lot::Mutex::new(EntityManager::new(
+            performance_monitor.clone(),
+        )));
+
         Self {
             entity_registry,
             entity_factory,
@@ -265,19 +271,17 @@ impl EntityModulationSystem {
     /// Initialize the entity modulation system
     pub fn initialize(&mut self) -> Result<(), String> {
         let start_time = Instant::now();
-        
+
         // Set up default resources
         self.setup_default_resources()?;
-        
+
         self.is_initialized = true;
-        
+
         // Record initialization metrics
         let init_time = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "entity_modulation_init_time",
-            init_time.as_secs_f64(),
-        );
-        
+        self.performance_monitor
+            .record_metric("entity_modulation_init_time", init_time.as_secs_f64());
+
         Ok(())
     }
 
@@ -285,7 +289,7 @@ impl EntityModulationSystem {
     fn setup_default_resources(&self) -> Result<(), String> {
         // This would load default textures, materials, and shader programs
         // For now, we'll use the built-in defaults
-        
+
         Ok(())
     }
 
@@ -296,72 +300,91 @@ impl EntityModulationSystem {
 
     /// Get entity priority
     pub fn get_entity_priority(&self, entity_id: EntityId) -> EntityPriority {
-        self.entity_priorities.lock().get(&entity_id).copied().unwrap_or(EntityPriority::Medium)
+        self.entity_priorities
+            .lock()
+            .get(&entity_id)
+            .copied()
+            .unwrap_or(EntityPriority::Medium)
     }
 
     /// Create a generic entity with specified components
-    pub fn create_entity(&self, entity_type: &str, position: Vec3, config: EntityConfig) -> Result<EntityId, String> {
+    pub fn create_entity(
+        &self,
+        entity_type: &str,
+        position: Vec3,
+        config: EntityConfig,
+    ) -> Result<EntityId, String> {
         let start_time = Instant::now();
-        
+
         // Check entity limit
         let current_count = self.entity_manager.lock().count();
         if current_count >= self.max_entities {
             return Err("Maximum entity limit reached".to_string());
         }
-        
+
         // Create entity in registry
-        let entity_id = self.entity_registry.create_entity(EntityType::ShadowZombieNinja); // Use existing type for compatibility
-        
+        let entity_id = self
+            .entity_registry
+            .create_entity(EntityType::ShadowZombieNinja); // Use existing type for compatibility
+
         // Build entity with specified components
         let mut builder = EntityBuilder::new(entity_id, position);
-        
+
         if config.has_health {
             builder = builder.with_health(config.max_health);
         }
-        
+
         if config.has_movement {
             builder = builder.with_movement(config.movement_speed);
         }
-        
+
         if config.has_combat {
             builder = builder.with_combat(config.attack_damage, config.attack_range);
         }
-        
+
         if config.has_ai {
-            builder = builder.with_ai(config.ai_type, config.detection_range, config.aggression_range);
+            builder = builder.with_ai(
+                config.ai_type,
+                config.detection_range,
+                config.aggression_range,
+            );
         }
-        
+
         if config.has_animation {
             builder = builder.with_animation();
         }
-        
+
         if config.has_skills {
             builder = builder.with_skills();
         }
-        
+
         let entity = builder.build();
-        
+
         // Add entity to manager
         self.entity_manager.lock().add_entity(entity);
-        
+
         // Update spatial grid
         self.spatial_grid.lock().update_entity(entity_id, position);
-        
+
         // Set default priority
         self.set_entity_priority(entity_id, EntityPriority::Medium);
-        
+
         // Record creation metrics
         let creation_time = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "entity_creation_time",
-            creation_time.as_secs_f64(),
-        );
-        
+        self.performance_monitor
+            .record_metric("entity_creation_time", creation_time.as_secs_f64());
+
         Ok(entity_id)
     }
 
     /// Create a combat-ready entity
-    pub fn create_combat_entity(&self, position: Vec3, health: f32, attack_damage: f32, movement_speed: f32) -> Result<EntityId, String> {
+    pub fn create_combat_entity(
+        &self,
+        position: Vec3,
+        health: f32,
+        attack_damage: f32,
+        movement_speed: f32,
+    ) -> Result<EntityId, String> {
         let config = EntityConfig {
             has_health: true,
             max_health: health,
@@ -377,118 +400,134 @@ impl EntityModulationSystem {
             has_animation: true,
             has_skills: false,
         };
-        
+
         self.create_entity("combat_entity", position, config)
     }
 
     /// Create multiple entities in a batch
-    pub fn create_entity_batch(&self, requests: Vec<EntityRequest>) -> Result<Vec<EntityId>, String> {
+    pub fn create_entity_batch(
+        &self,
+        requests: Vec<EntityRequest>,
+    ) -> Result<Vec<EntityId>, String> {
         let start_time = Instant::now();
-        
+
         let entity_ids: Vec<EntityId> = requests
             .par_iter()
             .filter_map(|request| {
-                self.create_entity(&request.entity_type, request.position, request.config.clone()).ok()
+                self.create_entity(
+                    &request.entity_type,
+                    request.position,
+                    request.config.clone(),
+                )
+                .ok()
             })
             .collect();
-        
+
         // Record batch creation metrics
         let batch_time = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "entity_batch_creation_time",
-            batch_time.as_secs_f64(),
-        );
-        
+        self.performance_monitor
+            .record_metric("entity_batch_creation_time", batch_time.as_secs_f64());
+
         Ok(entity_ids)
     }
 
     /// Remove an entity from the system
     pub fn remove_entity(&self, entity_id: EntityId) -> Result<bool, String> {
         let start_time = Instant::now();
-        
+
         // Return components to object pool
         if let Some(entity) = self.entity_manager.lock().get_entity_mut(entity_id) {
             if let Some(health) = entity.get_component::<HealthComponent>() {
                 let health_component = health.clone();
-                self.object_pool.lock().return_health_component(health_component);
+                self.object_pool
+                    .lock()
+                    .return_health_component(health_component);
             }
             if let Some(transform) = entity.get_component::<TransformComponent>() {
                 let transform_component = transform.clone();
-                self.object_pool.lock().return_transform_component(transform_component);
+                self.object_pool
+                    .lock()
+                    .return_transform_component(transform_component);
             }
             if let Some(combat) = entity.get_component::<CombatComponent>() {
                 let combat_component = combat.clone();
-                self.object_pool.lock().return_combat_component(combat_component);
+                self.object_pool
+                    .lock()
+                    .return_combat_component(combat_component);
             }
             if let Some(movement) = entity.get_component::<MovementComponent>() {
                 let movement_component = movement.clone();
-                self.object_pool.lock().return_movement_component(movement_component);
+                self.object_pool
+                    .lock()
+                    .return_movement_component(movement_component);
             }
             if let Some(animation) = entity.get_component::<AnimationComponent>() {
                 let animation_component = animation.clone();
-                self.object_pool.lock().return_animation_component(animation_component);
+                self.object_pool
+                    .lock()
+                    .return_animation_component(animation_component);
             }
             if let Some(ai) = entity.get_component::<AIComponent>() {
                 let ai_component = ai.clone();
                 self.object_pool.lock().return_ai_component(ai_component);
             }
         }
-        
+
         // Remove from spatial grid
         self.spatial_grid.lock().remove_entity(entity_id);
-        
+
         // Remove priority
         self.entity_priorities.lock().remove(&entity_id);
-        
+
         // Remove from manager and registry
-        let removed_from_manager = self.entity_manager.lock().remove_entity(entity_id).is_some();
+        let removed_from_manager = self
+            .entity_manager
+            .lock()
+            .remove_entity(entity_id)
+            .is_some();
         let removed_from_registry = self.entity_registry.remove_entity(entity_id);
-        
+
         // Record removal metrics
         let removal_time = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "entity_removal_time",
-            removal_time.as_secs_f64(),
-        );
-        
+        self.performance_monitor
+            .record_metric("entity_removal_time", removal_time.as_secs_f64());
+
         Ok(removed_from_manager && removed_from_registry)
     }
 
     /// Update all entities in the system
     pub fn update(&mut self, delta_time: f32) -> Result<(), String> {
         let start_time = Instant::now();
-        
+
         if !self.is_initialized {
             return Err("Entity modulation system not initialized".to_string());
         }
-        
+
         // Check update interval
         let now = Instant::now();
         if now.duration_since(self.last_update) < self.update_interval {
             return Ok(());
         }
-        
+
         // Update combat system
         self.combat_system.update(delta_time)?;
-        
+
         // Update entity manager (all entities)
         self.entity_manager.lock().update_all(delta_time);
-        
+
         // Update spatial grid for all entities
         self.update_spatial_grid()?;
-        
+
         // Clean up expired entities
         self.cleanup_expired_entities()?;
-        
+
         self.last_update = now;
-        
+
         // Record update metrics
         let update_time = start_time.elapsed();
-        self.performance_monitor.record_metric(
-            "entity_modulation_update_time",
-            update_time.as_secs_f64(),
-        );
-        
+        self.performance_monitor
+            .record_metric("entity_modulation_update_time", update_time.as_secs_f64());
+
         Ok(())
     }
 
@@ -496,15 +535,15 @@ impl EntityModulationSystem {
     fn update_spatial_grid(&self) -> Result<(), String> {
         let manager = self.entity_manager.lock();
         let mut grid = self.spatial_grid.lock();
-        
+
         // Clear and rebuild spatial grid
         grid.clear();
-        
+
         // Get all entities and update their positions in the grid
         for (entity_id, entity) in manager.entities.iter() {
-                    grid.update_entity(*entity_id, entity.get_position());
+            grid.update_entity(*entity_id, entity.get_position());
         }
-        
+
         Ok(())
     }
 
@@ -512,24 +551,24 @@ impl EntityModulationSystem {
     fn cleanup_expired_entities(&self) -> Result<(), String> {
         let now = Instant::now();
         let mut manager = self.entity_manager.lock();
-        
+
         let mut expired_entities = Vec::new();
-        
+
         // Check each entity's lifetime
         for entity in manager.get_all_entities() {
-                    let entity_id = entity.get_id();
+            let entity_id = entity.get_id();
             // Simple lifetime check - in a real implementation, you'd track creation time per entity
             // For now, we'll use a simple heuristic
-            if entity.is_active() == false {
+            if !entity.is_active() {
                 expired_entities.push(entity_id);
             }
         }
-        
+
         // Remove expired entities
         for entity_id in expired_entities {
             self.remove_entity(entity_id)?;
         }
-        
+
         Ok(())
     }
 
@@ -540,7 +579,8 @@ impl EntityModulationSystem {
         target_id: EntityId,
         attack_position: Vec3,
     ) -> Result<CombatEvent, String> {
-        self.combat_system.process_attack(attacker_id, target_id, attack_position)
+        self.combat_system
+            .process_attack(attacker_id, target_id, attack_position)
     }
 
     /// Process area-of-effect combat
@@ -551,14 +591,20 @@ impl EntityModulationSystem {
         damage: f32,
         exclude_entity: Option<EntityId>,
     ) -> Result<Vec<CombatEvent>, String> {
-        self.combat_system.process_aoe_damage(center, radius, damage, crate::combat_system::DamageType::Physical, exclude_entity)
+        self.combat_system.process_aoe_damage(
+            center,
+            radius,
+            damage,
+            crate::combat_system::DamageType::Physical,
+            exclude_entity,
+        )
     }
 
     /// Get system statistics
     pub fn get_statistics(&self) -> EntityModulationStats {
         let registry_stats = self.entity_registry.get_statistics();
         let manager_count = self.entity_manager.lock().count();
-        
+
         EntityModulationStats {
             total_entities: registry_stats.total_entities,
             active_entities: manager_count,
@@ -589,13 +635,19 @@ impl EntityModulationSystem {
     /// Shutdown the system and clean up resources
     pub fn shutdown(&mut self) -> Result<(), String> {
         // Clean up all entities
-        let entities: Vec<EntityId> = self.entity_manager.lock().entities.keys().cloned().collect();
+        let entities: Vec<EntityId> = self
+            .entity_manager
+            .lock()
+            .entities
+            .keys()
+            .cloned()
+            .collect();
         for entity_id in entities {
             self.remove_entity(entity_id)?;
         }
-        
+
         self.is_initialized = false;
-        
+
         Ok(())
     }
 }
@@ -690,7 +742,7 @@ mod tests {
     #[test]
     fn test_entity_modulation_system_creation() {
         let system = EntityModulationSystem::new(100);
-        
+
         assert!(!system.is_initialized);
         assert_eq!(system.max_entities, 100);
     }
@@ -699,13 +751,15 @@ mod tests {
     fn test_entity_creation() {
         let mut system = EntityModulationSystem::new(10);
         system.initialize().unwrap();
-        
+
         let position = Vec3::new(0.0, 0.0, 0.0);
         let config = EntityConfig::default();
-        let entity_id = system.create_entity("test_entity", position, config).unwrap();
-        
+        let entity_id = system
+            .create_entity("test_entity", position, config)
+            .unwrap();
+
         assert!(system.entity_registry.entity_exists(entity_id));
-        
+
         let stats = system.get_statistics();
         assert_eq!(stats.active_entities, 1);
     }
@@ -714,12 +768,14 @@ mod tests {
     fn test_combat_entity_creation() {
         let mut system = EntityModulationSystem::new(10);
         system.initialize().unwrap();
-        
+
         let position = Vec3::new(0.0, 0.0, 0.0);
-        let entity_id = system.create_combat_entity(position, 150.0, 20.0, 5.0).unwrap();
-        
+        let entity_id = system
+            .create_combat_entity(position, 150.0, 20.0, 5.0)
+            .unwrap();
+
         assert!(system.entity_registry.entity_exists(entity_id));
-        
+
         let stats = system.get_statistics();
         assert_eq!(stats.active_entities, 1);
     }
@@ -728,11 +784,13 @@ mod tests {
     fn test_entity_removal() {
         let mut system = EntityModulationSystem::new(10);
         system.initialize().unwrap();
-        
+
         let position = Vec3::new(1.0, 0.0, 1.0);
         let config = EntityConfig::default();
-        let entity_id = system.create_entity("test_entity", position, config).unwrap();
-        
+        let entity_id = system
+            .create_entity("test_entity", position, config)
+            .unwrap();
+
         assert!(system.remove_entity(entity_id).unwrap());
         assert!(!system.entity_registry.entity_exists(entity_id));
     }
@@ -741,15 +799,19 @@ mod tests {
     fn test_max_entity_limit() {
         let mut system = EntityModulationSystem::new(2);
         system.initialize().unwrap();
-        
+
         // Spawn first two entities
         let position1 = Vec3::new(0.0, 0.0, 0.0);
         let position2 = Vec3::new(1.0, 0.0, 0.0);
         let config = EntityConfig::default();
-        
-        assert!(system.create_entity("test1", position1, config.clone()).is_ok());
-        assert!(system.create_entity("test2", position2, config.clone()).is_ok());
-        
+
+        assert!(system
+            .create_entity("test1", position1, config.clone())
+            .is_ok());
+        assert!(system
+            .create_entity("test2", position2, config.clone())
+            .is_ok());
+
         // Third entity should fail
         let position3 = Vec3::new(2.0, 0.0, 0.0);
         assert!(system.create_entity("test3", position3, config).is_err());
@@ -759,7 +821,7 @@ mod tests {
     fn test_batch_creation() {
         let mut system = EntityModulationSystem::new(10);
         system.initialize().unwrap();
-        
+
         let requests = vec![
             EntityRequest {
                 entity_type: "combat_entity".to_string(),
@@ -777,10 +839,10 @@ mod tests {
                 config: EntityConfig::default(),
             },
         ];
-        
+
         let entity_ids = system.create_entity_batch(requests).unwrap();
         assert_eq!(entity_ids.len(), 3);
-        
+
         let stats = system.get_statistics();
         assert_eq!(stats.active_entities, 3);
     }

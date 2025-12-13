@@ -1,17 +1,17 @@
 //! Metric Aggregator - Sistem agregasi metrik async menggunakan tokio
-//! 
+//!
 //! Modul ini menyediakan sistem agregasi metrik yang efisien dengan
 //! support untuk async processing, threshold-based alerting, dan
 //! parallel processing menggunakan rayon.
 
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{interval, Duration};
-use rayon::prelude::*;
-use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
 
 /// Tipe agregasi yang didukung
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -154,7 +154,7 @@ impl MetricAggregator {
     /// Membuat aggregator dengan konfigurasi kustom
     pub fn with_config(config: MetricAggregatorConfig) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
-        
+
         Self {
             data_queue: Arc::new(RwLock::new(receiver)),
             data_sender: sender,
@@ -223,7 +223,8 @@ impl MetricAggregator {
                 aggregation_results,
                 alerts,
                 config,
-            ).await;
+            )
+            .await;
         });
 
         // Task untuk cleanup
@@ -250,7 +251,7 @@ impl MetricAggregator {
         while *is_running.read().await {
             let mut queue = data_queue.write().await;
             let mut buffer = data_buffer.write().await;
-            
+
             // Collect data dari queue
             while let Ok(data) = queue.try_recv() {
                 if buffer.len() < buffer.capacity() {
@@ -261,7 +262,7 @@ impl MetricAggregator {
                     buffer.push(data);
                 }
             }
-            
+
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -275,10 +276,10 @@ impl MetricAggregator {
         config: MetricAggregatorConfig,
     ) {
         let mut interval = interval(config.aggregation_interval);
-        
+
         loop {
             interval.tick().await;
-            
+
             let buffer = data_buffer.read().await;
             if buffer.is_empty() {
                 continue;
@@ -286,7 +287,7 @@ impl MetricAggregator {
 
             // Lakukan agregasi dengan rayon untuk parallel processing
             let results = Self::perform_aggregation(&buffer);
-            
+
             // Simpan hasil agregasi
             for result in &results {
                 aggregation_results.insert(result.metric_name.clone(), result.clone());
@@ -315,8 +316,9 @@ impl MetricAggregator {
             .par_iter()
             .flat_map(|(metric_name, data_points)| {
                 let values: Vec<f64> = data_points.iter().map(|d| d.value).collect();
-                let timestamps: Vec<DateTime<Utc>> = data_points.iter().map(|d| d.timestamp).collect();
-                
+                let timestamps: Vec<DateTime<Utc>> =
+                    data_points.iter().map(|d| d.timestamp).collect();
+
                 if values.is_empty() {
                     return vec![];
                 }
@@ -326,11 +328,21 @@ impl MetricAggregator {
 
                 // Hitung berbagai tipe agregasi
                 vec![
-                    Self::calculate_average(metric_name.clone(), &values, *window_start, *window_end),
+                    Self::calculate_average(
+                        metric_name.clone(),
+                        &values,
+                        *window_start,
+                        *window_end,
+                    ),
                     Self::calculate_sum(metric_name.clone(), &values, *window_start, *window_end),
                     Self::calculate_min(metric_name.clone(), &values, *window_start, *window_end),
                     Self::calculate_max(metric_name.clone(), &values, *window_start, *window_end),
-                    Self::calculate_std_deviation(metric_name.clone(), &values, *window_start, *window_end),
+                    Self::calculate_std_deviation(
+                        metric_name.clone(),
+                        &values,
+                        *window_start,
+                        *window_end,
+                    ),
                 ]
             })
             .collect();
@@ -430,7 +442,8 @@ impl MetricAggregator {
         let variance = values
             .iter()
             .map(|value| (value - avg).powi(2))
-            .sum::<f64>() / values.len() as f64;
+            .sum::<f64>()
+            / values.len() as f64;
         let std_dev = variance.sqrt();
 
         AggregationResult {
@@ -453,7 +466,7 @@ impl MetricAggregator {
         for result in results {
             for rule_entry in alert_rules.iter() {
                 let rule = rule_entry.value();
-                
+
                 if rule.metric_name != result.metric_name {
                     continue;
                 }
@@ -477,7 +490,11 @@ impl MetricAggregator {
                         threshold: rule.threshold,
                         operator: rule.operator.clone(),
                         timestamp: Utc::now(),
-                        severity: Self::determine_severity(result.value, rule.threshold, &rule.operator),
+                        severity: Self::determine_severity(
+                            result.value,
+                            rule.threshold,
+                            &rule.operator,
+                        ),
                     };
 
                     let mut alerts_list = alerts.write().await;
@@ -513,18 +530,15 @@ impl MetricAggregator {
     }
 
     /// Task untuk cleanup data lama
-    async fn run_cleanup(
-        data_buffer: Arc<RwLock<Vec<MetricData>>>,
-        cleanup_interval: Duration,
-    ) {
+    async fn run_cleanup(data_buffer: Arc<RwLock<Vec<MetricData>>>, cleanup_interval: Duration) {
         let mut interval = interval(cleanup_interval);
-        
+
         loop {
             interval.tick().await;
-            
+
             let mut buffer = data_buffer.write().await;
             let cutoff_time = Utc::now() - chrono::Duration::hours(24);
-            
+
             // Hapus data yang lebih lama dari 24 jam
             buffer.retain(|data| data.timestamp > cutoff_time);
         }
@@ -532,7 +546,9 @@ impl MetricAggregator {
 
     /// Mendapatkan hasil agregasi terakhir
     pub fn get_latest_aggregation(&self, metric_name: &str) -> Option<AggregationResult> {
-        self.aggregation_results.get(metric_name).map(|result| result.clone())
+        self.aggregation_results
+            .get(metric_name)
+            .map(|result| result.clone())
     }
 
     /// Mendapatkan semua hasil agregasi
@@ -571,7 +587,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_metric_data() {
         let aggregator = MetricAggregator::new();
-        
+
         let data = MetricData {
             metric_name: "test_metric".to_string(),
             value: 100.0,
@@ -586,7 +602,7 @@ mod tests {
     #[tokio::test]
     async fn test_alert_rule_evaluation() {
         let aggregator = MetricAggregator::new();
-        
+
         let rule = AlertRule {
             name: "cpu_alert".to_string(),
             metric_name: "cpu_usage".to_string(),
@@ -628,16 +644,24 @@ mod tests {
         let window_start = Utc::now();
         let window_end = Utc::now();
 
-        let avg_result = MetricAggregator::calculate_average("test".to_string(), &values, window_start, window_end);
+        let avg_result = MetricAggregator::calculate_average(
+            "test".to_string(),
+            &values,
+            window_start,
+            window_end,
+        );
         assert_eq!(avg_result.value, 30.0);
 
-        let sum_result = MetricAggregator::calculate_sum("test".to_string(), &values, window_start, window_end);
+        let sum_result =
+            MetricAggregator::calculate_sum("test".to_string(), &values, window_start, window_end);
         assert_eq!(sum_result.value, 150.0);
 
-        let min_result = MetricAggregator::calculate_min("test".to_string(), &values, window_start, window_end);
+        let min_result =
+            MetricAggregator::calculate_min("test".to_string(), &values, window_start, window_end);
         assert_eq!(min_result.value, 10.0);
 
-        let max_result = MetricAggregator::calculate_max("test".to_string(), &values, window_start, window_end);
+        let max_result =
+            MetricAggregator::calculate_max("test".to_string(), &values, window_start, window_end);
         assert_eq!(max_result.value, 50.0);
     }
 }

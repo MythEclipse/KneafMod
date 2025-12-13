@@ -4,10 +4,10 @@
 //! menggunakan lock-free data structures, sampling strategies, dan streaming
 //! algorithms untuk overhead minimal dan real-time performance.
 
-use std::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
 use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -50,10 +50,10 @@ pub struct PerformanceMonitorConfig {
 impl Default for PerformanceMonitorConfig {
     fn default() -> Self {
         Self {
-            measurement_interval: 1000, // 1 detik
-            cpu_threshold: 80.0, // 80%
+            measurement_interval: 1000,           // 1 detik
+            cpu_threshold: 80.0,                  // 80%
             memory_threshold: 1024 * 1024 * 1024, // 1GB
-            response_time_threshold: 1000.0, // 1 detik
+            response_time_threshold: 1000.0,      // 1 detik
             enabled: true,
         }
     }
@@ -66,7 +66,7 @@ impl PerformanceMonitor {
         let cpu_metrics = Arc::new(std::array::from_fn(|_| AtomicU32::new(0)));
         let memory_metrics = Arc::new(std::array::from_fn(|_| AtomicU64::new(0)));
         let response_time_metrics = Arc::new(std::array::from_fn(|_| AtomicU32::new(0)));
-        
+
         Self {
             cpu_metrics,
             memory_metrics,
@@ -117,7 +117,7 @@ impl PerformanceMonitor {
 
         let usage_u32 = (usage * 100.0) as u32;
         let index = self.get_component_index(component);
-        
+
         // Lock-free atomic store
         self.cpu_metrics[index].store(usage_u32, Ordering::Relaxed);
     }
@@ -134,7 +134,7 @@ impl PerformanceMonitor {
         }
 
         let index = self.get_component_index(component);
-        
+
         // Lock-free atomic store
         self.memory_metrics[index].store(usage, Ordering::Relaxed);
     }
@@ -152,7 +152,7 @@ impl PerformanceMonitor {
 
         let response_time_u32 = response_time as u32;
         let index = self.get_component_index(component);
-        
+
         // Lock-free atomic store
         self.response_time_metrics[index].store(response_time_u32, Ordering::Relaxed);
     }
@@ -162,10 +162,14 @@ impl PerformanceMonitor {
         if !self.is_monitoring() {
             return;
         }
-        
+
         // Redirect to appropriate specialized method based on category
         match category {
-            "combat_attack_processing_time" | "hit_detection_time" | "damage_calculation_time" | "aoe_damage_processing_time" | "combat_system_update_time" => {
+            "combat_attack_processing_time"
+            | "hit_detection_time"
+            | "damage_calculation_time"
+            | "aoe_damage_processing_time"
+            | "combat_system_update_time" => {
                 self.record_response_time(category, value);
             }
             _ => {
@@ -174,12 +178,12 @@ impl PerformanceMonitor {
             }
         }
     }
-    
+
     /// Sampling strategy untuk adaptive monitoring
     pub fn should_sample(&self) -> bool {
         let current_rate = self.sampling_rate.load(Ordering::Relaxed);
         let system_load = self.system_load.load(Ordering::Relaxed);
-        
+
         // Adaptive sampling based on system load
         let effective_rate = if system_load > 80 {
             // High load, reduce sampling to 10% minimum
@@ -191,7 +195,7 @@ impl PerformanceMonitor {
             // Low load, use full sampling rate
             current_rate
         };
-        
+
         // Use cached decision to avoid RNG overhead
         if effective_rate >= 100 {
             true
@@ -206,16 +210,18 @@ impl PerformanceMonitor {
             (now % 100) < (effective_rate as u64)
         }
     }
-    
+
     /// Mendapatkan index komponen untuk array
     pub fn get_component_index(&self, component: &str) -> usize {
         let mut component_hashes = self.component_hashes.lock().unwrap();
-        
+
         if let Some(&index) = component_hashes.get(component) {
             index
         } else {
             // Gunakan hash sederhana untuk index
-            let hash = component.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+            let hash = component
+                .bytes()
+                .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
             let index = (hash % 256) as usize;
             component_hashes.insert(component.to_string(), index);
             index
@@ -259,14 +265,14 @@ impl PerformanceMonitor {
     pub fn get_all_cpu_metrics(&self) -> Vec<(String, f64)> {
         let mut metrics = Vec::new();
         let component_hashes = self.component_hashes.lock().unwrap();
-        
+
         for (component, index) in component_hashes.iter() {
             let value = self.cpu_metrics[*index].load(Ordering::SeqCst);
             if value > 0 {
                 metrics.push((component.clone(), value as f64 / 100.0));
             }
         }
-        
+
         metrics
     }
 
@@ -274,14 +280,14 @@ impl PerformanceMonitor {
     pub fn get_all_memory_metrics(&self) -> Vec<(String, u64)> {
         let mut metrics = Vec::new();
         let component_hashes = self.component_hashes.lock().unwrap();
-        
+
         for (component, index) in component_hashes.iter() {
             let value = self.memory_metrics[*index].load(Ordering::SeqCst);
             if value > 0 {
                 metrics.push((component.clone(), value));
             }
         }
-        
+
         metrics
     }
 
@@ -289,14 +295,14 @@ impl PerformanceMonitor {
     pub fn get_all_response_time_metrics(&self) -> Vec<(String, f64)> {
         let mut metrics = Vec::new();
         let component_hashes = self.component_hashes.lock().unwrap();
-        
+
         for (component, index) in component_hashes.iter() {
             let value = self.response_time_metrics[*index].load(Ordering::SeqCst);
             if value > 0 {
                 metrics.push((component.clone(), value as f64));
             }
         }
-        
+
         metrics
     }
 
@@ -307,7 +313,7 @@ impl PerformanceMonitor {
             self.memory_metrics[i].store(0, Ordering::SeqCst);
             self.response_time_metrics[i].store(0, Ordering::SeqCst);
         }
-        
+
         let mut component_hashes = self.component_hashes.lock().unwrap();
         component_hashes.clear();
     }
@@ -341,9 +347,15 @@ impl PerformanceMonitor {
 
         // Use a set to track unique components (avoid double-counting)
         let mut unique_components = std::collections::HashSet::new();
-        cpu_metrics.iter().for_each(|(c, _)| { unique_components.insert(c); });
-        memory_metrics.iter().for_each(|(c, _)| { unique_components.insert(c); });
-        response_metrics.iter().for_each(|(c, _)| { unique_components.insert(c); });
+        cpu_metrics.iter().for_each(|(c, _)| {
+            unique_components.insert(c);
+        });
+        memory_metrics.iter().for_each(|(c, _)| {
+            unique_components.insert(c);
+        });
+        response_metrics.iter().for_each(|(c, _)| {
+            unique_components.insert(c);
+        });
 
         PerformanceSummary {
             total_components: unique_components.len(),
@@ -379,7 +391,7 @@ mod tests {
     fn test_cpu_metrics_recording() {
         let monitor = PerformanceMonitor::new();
         monitor.start_monitoring();
-        
+
         monitor.record_cpu_usage("test_component", 75.5);
         assert_eq!(monitor.get_cpu_usage("test_component"), Some(75.5));
     }
@@ -388,16 +400,19 @@ mod tests {
     fn test_memory_metrics_recording() {
         let monitor = PerformanceMonitor::new();
         monitor.start_monitoring();
-        
+
         monitor.record_memory_usage("test_component", 1024 * 1024);
-        assert_eq!(monitor.get_memory_usage("test_component"), Some(1024 * 1024));
+        assert_eq!(
+            monitor.get_memory_usage("test_component"),
+            Some(1024 * 1024)
+        );
     }
 
     #[test]
     fn test_response_time_metrics_recording() {
         let monitor = PerformanceMonitor::new();
         monitor.start_monitoring();
-        
+
         monitor.record_response_time("test_component", 500.0);
         assert_eq!(monitor.get_response_time("test_component"), Some(500.0));
     }
@@ -406,12 +421,12 @@ mod tests {
     fn test_summary_stats() {
         let monitor = PerformanceMonitor::new();
         monitor.start_monitoring();
-        
+
         monitor.record_cpu_usage("comp1", 50.0);
         monitor.record_cpu_usage("comp2", 70.0);
         monitor.record_memory_usage("comp1", 1024);
         monitor.record_response_time("comp1", 100.0);
-        
+
         let summary = monitor.get_summary_stats();
         assert_eq!(summary.total_components, 2); // Only comp1 and comp2
         assert_eq!(summary.avg_cpu_usage, 60.0);

@@ -1,40 +1,46 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 // Suppress common warnings during ongoing refactor: unused variables/imports/must_use, etc.
-#![allow(unused_variables, unused_imports, unused_mut, unused_assignments, unused_must_use)]
+#![allow(
+    unused_variables,
+    unused_imports,
+    unused_mut,
+    unused_assignments,
+    unused_must_use
+)]
 //! JNI implementation for KneafCore performance optimizations
 //! Provides real entity processing optimizations using SIMD and mathematical acceleration
 
 //! JNI implementation for KneafCore vector mathematics
 //! Provides STRICTLY PURE vector/matrix operations - NO game state access, NO entity references
 
+use jni::objects::{JClass, JDoubleArray, JFloatArray, JObject, JObjectArray, JString};
+use jni::sys::{jboolean, jdouble, jdoubleArray, jint, jlong};
 use jni::JNIEnv;
-use jni::objects::{JClass, JFloatArray, JDoubleArray, JObject, JObjectArray, JString};
-use jni::sys::{jdouble, jlong, jint, jboolean, jdoubleArray};
 use std::ffi::c_void;
 use std::sync::Arc;
 
 // Import all modules
-mod performance;
-mod parallel_processing;
+mod arena_memory;
+mod load_balancer;
 mod parallel_astar;
 mod parallel_matrix;
-mod arena_memory;
-mod simd_runtime;
-mod load_balancer;
+mod parallel_processing;
+mod performance;
 mod performance_monitoring;
+mod simd_runtime;
 mod tests;
 
 // Performance Monitoring System modules
-pub mod performance_monitor;
-mod metrics_collector;
 mod metric_aggregator;
+mod metrics_collector;
+pub mod performance_monitor;
 
 // Entity Processing System modules
-pub mod entity_registry;
-pub mod entity_framework;
 mod combat_system;
+pub mod entity_framework;
 mod entity_modulation;
+pub mod entity_registry;
 
 // AI Pathfinding System modules
 pub mod pathfinding;
@@ -78,12 +84,17 @@ pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_nalgebra_1matrix_1mul<'a
     b: JFloatArray,
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 16];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 16];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     let result = parallel_processing::nalgebra_matrix_mul(a_buf, b_buf);
-    let output = env.new_float_array(16).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(16)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -95,12 +106,17 @@ pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_nalgebra_1vector_1add<'a
     b: JFloatArray,
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 3];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 3];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     let result = parallel_processing::nalgebra_vector_add(a_buf, b_buf);
-    let output = env.new_float_array(3).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(3)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -112,9 +128,11 @@ pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_glam_1vector_1dot(
     b: JFloatArray,
 ) -> f32 {
     let mut a_buf = [0.0f32; 3];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 3];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     parallel_processing::glam_vector_dot(a_buf, b_buf)
 }
 
@@ -126,12 +144,17 @@ pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_glam_1vector_1cross<'a>(
     b: JFloatArray,
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 3];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 3];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     let result = parallel_processing::glam_vector_cross(a_buf, b_buf);
-    let output = env.new_float_array(3).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(3)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -143,12 +166,17 @@ pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_glam_1matrix_1mul<'a>(
     b: JFloatArray,
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 16];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 16];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     let result = performance::glam_matrix_mul(a_buf, b_buf);
-    let output = env.new_float_array(16).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(16)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -160,12 +188,17 @@ pub extern "C" fn Java_com_kneaf_core_RustVectorLibrary_faer_1matrix_1mul<'a>(
     b: JFloatArray,
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 16];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 16];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     let result = performance::faer_matrix_mul(a_buf, b_buf);
-    let output = env.new_float_array(16).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(16)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -182,8 +215,11 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1mul
     scalar: jdouble,
 ) -> JDoubleArray<'a> {
     let result = [x * scalar, y * scalar, z * scalar];
-    let output = env.new_double_array(3).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_double_array(3)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -199,8 +235,11 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1add
     z2: jdouble,
 ) -> JDoubleArray<'a> {
     let result = [x1 + x2, y1 + y2, z1 + z2];
-    let output = env.new_double_array(3).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_double_array(3)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -216,13 +255,16 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1dam
     // Advanced Physics Optimization: Use Rust for fast calculations on all axes
     // No damping - just passthrough with Rust-optimized vector operations
     // This allows SIMD optimizations and better performance for horizontal + vertical axes
-    
+
     // Direct passthrough - Rust compilation provides optimization benefits
     // SIMD instructions can be used by the Rust compiler for vector operations
     let result = [x, y, z];
 
-    let output = env.new_double_array(3).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_double_array(3)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -247,14 +289,27 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarP
 ) -> jni::objects::JObject<'a> {
     // Delegate to parallel_astar module
     parallel_astar::Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind(
-        env, _class, grid_data, width, height, depth, start_x, start_y, start_z, 
-        goal_x, goal_y, goal_z, num_threads
+        env,
+        _class,
+        grid_data,
+        width,
+        height,
+        depth,
+        start_x,
+        start_y,
+        start_z,
+        goal_x,
+        goal_y,
+        goal_z,
+        num_threads,
     )
 }
 
 /// Enhanced parallel matrix multiplication with block decomposition
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelMatrixMultiplyBlock<'a>(
+pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelMatrixMultiplyBlock<
+    'a,
+>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
     a: jni::objects::JFloatArray<'a>,
@@ -265,7 +320,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelMatrix
 ) -> jni::objects::JFloatArray<'a> {
     // Delegate to parallel_matrix module
     parallel_matrix::Java_com_kneaf_core_ParallelRustVectorProcessor_parallelMatrixMultiplyBlock(
-        env, _class, a, b, a_rows, a_cols, b_cols
+        env, _class, a, b, a_rows, a_cols, b_cols,
     )
 }
 
@@ -280,7 +335,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelStrass
 ) -> jni::objects::JFloatArray<'a> {
     // Delegate to parallel_matrix module
     parallel_matrix::Java_com_kneaf_core_ParallelRustVectorProcessor_parallelStrassenMultiply(
-        env, _class, a, b, size
+        env, _class, a, b, size,
     )
 }
 
@@ -296,7 +351,12 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_batchMatrixMul
 ) -> jni::objects::JObjectArray<'a> {
     // Delegate to parallel_matrix module
     parallel_matrix::Java_com_kneaf_core_ParallelRustVectorProcessor_batchMatrixMultiplyEnhanced(
-        env, _class, matrices_a, matrices_b, matrix_size, batch_size
+        env,
+        _class,
+        matrices_a,
+        matrices_b,
+        matrix_size,
+        batch_size,
     )
 }
 
@@ -313,9 +373,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_arenaMatrixMul
     thread_id: i32,
 ) -> jni::objects::JFloatArray<'a> {
     // Delegate to arena_memory module
-    arena_memory::arena_matrix_multiply_jni(
-        &mut env, &a, &b, a_rows, a_cols, b_cols, thread_id
-    )
+    arena_memory::arena_matrix_multiply_jni(&mut env, &a, &b, a_rows, a_cols, b_cols, thread_id)
 }
 
 /// Runtime-detected SIMD matrix multiplication
@@ -331,7 +389,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrixM
 ) -> jni::objects::JFloatArray<'a> {
     // Delegate to simd_runtime module
     simd_runtime::Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrixMultiply(
-        env, _class, a, b, a_rows, a_cols, b_cols
+        env, _class, a, b, a_rows, a_cols, b_cols,
     )
 }
 
@@ -345,7 +403,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorD
 ) -> f32 {
     // Delegate to simd_runtime module
     simd_runtime::Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorDotProduct(
-        env, _class, a, b
+        env, _class, a, b,
     )
 }
 
@@ -359,7 +417,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorA
 ) -> jni::objects::JFloatArray<'a> {
     // Delegate to simd_runtime module
     simd_runtime::Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeVectorAdd(
-        env, _class, a, b
+        env, _class, a, b,
     )
 }
 
@@ -373,7 +431,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrix4
 ) -> jni::objects::JFloatArray<'a> {
     // Delegate to simd_runtime module
     simd_runtime::Java_com_kneaf_core_ParallelRustVectorProcessor_runtimeMatrix4x4Multiply(
-        env, _class, a, b
+        env, _class, a, b,
     )
 }
 
@@ -384,9 +442,7 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_resetMemoryAre
     _class: jni::objects::JClass,
 ) {
     // Delegate to arena_memory module
-    arena_memory::Java_com_kneaf_core_ParallelRustVectorProcessor_resetMemoryArena(
-        env, _class
-    )
+    arena_memory::Java_com_kneaf_core_ParallelRustVectorProcessor_resetMemoryArena(env, _class)
 }
 
 /// Create load balancer
@@ -399,7 +455,10 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_createLoadBala
 ) -> jni::sys::jlong {
     // Delegate to load_balancer module
     load_balancer::Java_com_kneaf_core_ParallelRustVectorProcessor_createLoadBalancerEnhanced(
-        env, _class, num_threads, max_queue_size
+        env,
+        _class,
+        num_threads,
+        max_queue_size,
     )
 }
 
@@ -414,7 +473,11 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_submitTask(
 ) {
     // Delegate to load_balancer module
     load_balancer::Java_com_kneaf_core_ParallelRustVectorProcessor_submitTask(
-        env, _class, balancer_ptr, task_type, data
+        env,
+        _class,
+        balancer_ptr,
+        task_type,
+        data,
     )
 }
 
@@ -427,7 +490,9 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_shutdownLoadBa
 ) {
     // Delegate to load_balancer module
     load_balancer::Java_com_kneaf_core_ParallelRustVectorProcessor_shutdownLoadBalancer(
-        env, _class, balancer_ptr
+        env,
+        _class,
+        balancer_ptr,
     )
 }
 
@@ -471,7 +536,11 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_nalgebraMatrix
 ) -> JObject<'a> {
     // Delegate to parallel_processing module
     parallel_processing::Java_com_kneaf_core_ParallelRustVectorProcessor_nalgebraMatrixMulDirect(
-        env, _class, a_buffer, b_buffer, result_buffer
+        env,
+        _class,
+        a_buffer,
+        b_buffer,
+        result_buffer,
     )
 }
 
@@ -485,7 +554,11 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_nalgebraVector
 ) -> JObject<'a> {
     // Delegate to parallel_processing module
     parallel_processing::Java_com_kneaf_core_ParallelRustVectorProcessor_nalgebraVectorAddDirect(
-        env, _class, a_buffer, b_buffer, result_buffer
+        env,
+        _class,
+        a_buffer,
+        b_buffer,
+        result_buffer,
     )
 }
 
@@ -540,11 +613,10 @@ pub extern "C" fn Java_com_kneaf_core_ParallelRustVectorProcessor_copyFromNative
         } else {
             &data
         };
-         
+
         parallel_processing::copy_from_native_buffer(&env, data_slice, &result, offset);
     }
 }
-
 
 /// Original performance functions (unchanged)
 // These are internal helpers and are not FFI entry points. Use Rust ABI to avoid
@@ -576,7 +648,6 @@ pub fn glam_vector_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     res.to_array()
 }
 
-
 /// Performance monitoring JNI functions
 #[no_mangle]
 pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_getRustPerformanceStats<'a>(
@@ -594,7 +665,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_getRustMetri
     _class: jni::objects::JClass<'a>,
 ) -> jni::objects::JString<'a> {
     performance_monitoring::Java_com_kneaf_core_performance_DistributedTracer_getRustMetricsJson(
-        env, _class
+        env, _class,
     )
 }
 
@@ -608,23 +679,25 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityRe
 ) -> jni::sys::jlong {
     // Create performance monitor
     let performance_monitor = Arc::new(performance_monitor::PerformanceMonitor::new());
-     
+
     // Create entity registry
     let entity_registry = Arc::new(entity_registry::EntityRegistry::new(performance_monitor));
-     
+
     // Convert to raw pointer for Java
     Box::into_raw(Box::new(entity_registry)) as jlong
 }
 
 /// Initialize complete Entity Modulation System
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityModulationSystem<'a>(
+pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityModulationSystem<
+    'a,
+>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
     max_entities: i32,
 ) -> jni::sys::jlong {
     let modulation_system = entity_modulation::EntityModulationSystem::new(max_entities as usize);
-     
+
     // Convert to raw pointer for Java
     Box::into_raw(Box::new(modulation_system)) as jlong
 }
@@ -637,13 +710,14 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_updateEntityModula
     system_ptr: jni::sys::jlong,
     delta_time: jdouble,
 ) -> jni::objects::JString<'a> {
-    let mut system = unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
-     
+    let mut system =
+        unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
+
     let result = system.update(delta_time as f32);
-     
+
     // Convert back to raw pointer
     let _ = Box::into_raw(system);
-     
+
     match result {
         Ok(_) => {
             let json = r#"{"success": true}"#;
@@ -663,20 +737,19 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_getEntityModulatio
     _class: jni::objects::JClass<'a>,
     system_ptr: jni::sys::jlong,
 ) -> jni::objects::JString<'a> {
-    let system = unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
-     
+    let system =
+        unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
+
     let stats = system.get_statistics();
-     
+
     // Convert back to raw pointer
     let _ = Box::into_raw(system);
-     
+
     let json = format!(
         r#"{{"total_entities": {}, "active_entities": {}, "is_initialized": {}}}"#,
-        stats.total_entities,
-        stats.active_entities,
-        stats.is_initialized
+        stats.total_entities, stats.active_entities, stats.is_initialized
     );
-     
+
     env.new_string(&json).unwrap()
 }
 
@@ -687,13 +760,14 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeModulati
     _class: jni::objects::JClass<'a>,
     system_ptr: jni::sys::jlong,
 ) -> jni::objects::JString<'a> {
-    let mut system = unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
-     
+    let mut system =
+        unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
+
     let result = system.initialize();
-     
+
     // Convert back to raw pointer
     let _ = Box::into_raw(system);
-     
+
     match result {
         Ok(_) => {
             let json = r#"{"success": true}"#;
@@ -714,8 +788,11 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_shutdownModulation
     system_ptr: jni::sys::jlong,
 ) {
     if system_ptr != 0 {
-        let mut system = unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
-        system.shutdown().unwrap_or_else(|e| eprintln!("Shutdown error: {}", e));
+        let mut system =
+            unsafe { Box::from_raw(system_ptr as *mut entity_modulation::EntityModulationSystem) };
+        system
+            .shutdown()
+            .unwrap_or_else(|e| eprintln!("Shutdown error: {}", e));
     }
 }
 
@@ -728,7 +805,11 @@ pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_recordRustOp
     success: bool,
 ) {
     performance_monitoring::Java_com_kneaf_core_performance_DistributedTracer_recordRustOperation(
-        env, _class, component, duration_ns, success
+        env,
+        _class,
+        component,
+        duration_ns,
+        success,
     )
 }
 
@@ -739,7 +820,7 @@ pub extern "C" fn Java_com_kneaf_core_performance_DistributedTracer_recordRustEr
     component: jni::objects::JString,
 ) {
     performance_monitoring::Java_com_kneaf_core_performance_DistributedTracer_recordRustError(
-        env, _class, component
+        env, _class, component,
     )
 }
 
@@ -819,7 +900,10 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_findPath<'a>(
         result.nodes_explored,
         result.execution_time_ms,
         result.path,
-        result.error_message.as_ref().map_or("null".to_string(), |e| format!("\"{}\"", e))
+        result
+            .error_message
+            .as_ref()
+            .map_or("null".to_string(), |e| format!("\"{}\"", e))
     );
 
     env.new_string(&json).unwrap()
@@ -842,14 +926,15 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_findPathAsync<'a>(
     // For async operations, we need to handle this differently
     // For now, delegate to synchronous version
     Java_com_kneaf_core_EntityProcessingService_findPath(
-        env, _class, system_ptr, grid_data, width, height,
-        start_x, start_y, goal_x, goal_y
+        env, _class, system_ptr, grid_data, width, height, start_x, start_y, goal_x, goal_y,
     )
 }
 
 /// Initialize entity pathfinding system
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityPathfindingSystem<'a>(
+pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityPathfindingSystem<
+    'a,
+>(
     env: jni::JNIEnv<'a>,
     _class: jni::objects::JClass<'a>,
     max_search_distance: jdouble,
@@ -868,7 +953,8 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_initializeEntityPa
     };
 
     let performance_monitor = Arc::new(performance_monitor::PerformanceMonitor::new());
-    let entity_pathfinding_system = pathfinding::EntityPathfindingSystem::new(config, performance_monitor);
+    let entity_pathfinding_system =
+        pathfinding::EntityPathfindingSystem::new(config, performance_monitor);
 
     Box::into_raw(Box::new(entity_pathfinding_system)) as jlong
 }
@@ -891,7 +977,8 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_findEntityPath<'a>
     height: i32,
     grid_size: jdouble,
 ) -> jni::objects::JString<'a> {
-    let mut system = unsafe { Box::from_raw(system_ptr as *mut pathfinding::EntityPathfindingSystem) };
+    let mut system =
+        unsafe { Box::from_raw(system_ptr as *mut pathfinding::EntityPathfindingSystem) };
 
     let start_pos = glam::Vec3::new(start_x as f32, start_y as f32, start_z as f32);
     let target_pos = glam::Vec3::new(target_x as f32, target_y as f32, target_z as f32);
@@ -927,7 +1014,10 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_findEntityPath<'a>
                 path_result.nodes_explored,
                 path_result.execution_time_ms,
                 path_result.path,
-                path_result.error_message.as_ref().map_or("null".to_string(), |e| format!("\"{}\"", e))
+                path_result
+                    .error_message
+                    .as_ref()
+                    .map_or("null".to_string(), |e| format!("\"{}\"", e))
             );
             env.new_string(&json).unwrap()
         }
@@ -947,7 +1037,8 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_getEntityNextPathP
     entity_id: i32,
     grid_size: jdouble,
 ) -> jni::objects::JString<'a> {
-    let mut system = unsafe { Box::from_raw(system_ptr as *mut pathfinding::EntityPathfindingSystem) };
+    let mut system =
+        unsafe { Box::from_raw(system_ptr as *mut pathfinding::EntityPathfindingSystem) };
 
     let entity_id = entity_registry::EntityId(entity_id as u64);
     let next_pos = system.get_next_path_position(entity_id, grid_size as f32);
@@ -997,7 +1088,8 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_clearEntityPath(
     system_ptr: jni::sys::jlong,
     entity_id: i32,
 ) {
-    let mut system = unsafe { Box::from_raw(system_ptr as *mut pathfinding::EntityPathfindingSystem) };
+    let mut system =
+        unsafe { Box::from_raw(system_ptr as *mut pathfinding::EntityPathfindingSystem) };
 
     let entity_id = entity_registry::EntityId(entity_id as u64);
     system.clear_path(entity_id);
@@ -1022,8 +1114,7 @@ pub extern "C" fn Java_com_kneaf_core_EntityProcessingService_getPathfindingStat
 
     let json = format!(
         r#"{{"active_paths": {}, "total_paths_processed": {}}}"#,
-        stats.active_paths,
-        stats.total_paths_processed
+        stats.active_paths, stats.total_paths_processed
     );
 
     env.new_string(&json).unwrap()
@@ -1072,25 +1163,28 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_calculateTrajectory<'
     let dx = target_x - start_x;
     let dy = target_y - start_y;
     let dz = target_z - start_z;
-    let distance = (dx*dx + dy*dy + dz*dz).sqrt();
-    
+    let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+
     if distance == 0.0 {
         return env.new_double_array(0).unwrap();
     }
-    
+
     let normalized_x = dx / distance;
     let normalized_y = dy / distance;
     let normalized_z = dz / distance;
-    
+
     // Return next position with speed applied
     let result = [
         start_x + normalized_x * speed * 0.1,
         start_y + normalized_y * speed * 0.1,
-        start_z + normalized_z * speed * 0.1
+        start_z + normalized_z * speed * 0.1,
     ];
-    
-    let output = env.new_double_array(3).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+
+    let output = env
+        .new_double_array(3)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1106,26 +1200,34 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_calculateCircularPosi
     count: i32,
 ) -> JObjectArray<'a> {
     let mut positions = Vec::new();
-    
+
     for i in 0..count {
         let angle = (i as f64 * 2.0 * std::f64::consts::PI) / (count as f64);
         positions.push([
             center_x + angle.cos() * radius,
             center_y,
-            center_z + angle.sin() * radius
+            center_z + angle.sin() * radius,
         ]);
     }
-    
+
     // Create 2D array: double[count][3]
-    let double_array_class = env.find_class("[D").expect("Failed to find double array class");
-    let result_array = env.new_object_array(count, double_array_class, JObject::null()).expect("Failed to create object array");
-    
+    let double_array_class = env
+        .find_class("[D")
+        .expect("Failed to find double array class");
+    let result_array = env
+        .new_object_array(count, double_array_class, JObject::null())
+        .expect("Failed to create object array");
+
     for (i, pos) in positions.iter().enumerate() {
-        let pos_array = env.new_double_array(3).expect("Failed to create position array");
-        env.set_double_array_region(&pos_array, 0, pos).expect("Failed to set position array");
-        env.set_object_array_element(&result_array, i as i32, pos_array).expect("Failed to set array element");
+        let pos_array = env
+            .new_double_array(3)
+            .expect("Failed to create position array");
+        env.set_double_array_region(&pos_array, 0, pos)
+            .expect("Failed to set position array");
+        env.set_object_array_element(&result_array, i as i32, pos_array)
+            .expect("Failed to set array element");
     }
-    
+
     result_array
 }
 
@@ -1154,7 +1256,9 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_calculateLimitedStack
 
 /// JNI functions for Hayabusa skill optimizations - ShadowZombieNinja specific
 #[no_mangle]
-pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1phantom_1shuriken<'a>(
+pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1phantom_1shuriken<
+    'a,
+>(
     env: JNIEnv<'a>,
     _class: JClass,
     start_x: jdouble,
@@ -1168,28 +1272,34 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1p
     let dx = target_x - start_x;
     let dy = target_y - start_y;
     let dz = target_z - start_z;
-    let distance = (dx*dx + dy*dy + dz*dz).sqrt();
-    
+    let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+
     if distance == 0.0 {
         let result = [start_x, start_y, start_z];
-        let output = env.new_double_array(3).expect("Failed to create output array");
-        env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+        let output = env
+            .new_double_array(3)
+            .expect("Failed to create output array");
+        env.set_double_array_region(&output, 0, &result)
+            .expect("Failed to set output array");
         return output;
     }
-    
+
     let normalized_x = dx / distance;
     let normalized_y = dy / distance;
     let normalized_z = dz / distance;
-    
+
     // Apply speed and add slight acceleration for projectile behavior
     let result = [
         start_x + normalized_x * speed * 0.15,
         start_y + normalized_y * speed * 0.15,
-        start_z + normalized_z * speed * 0.15
+        start_z + normalized_z * speed * 0.15,
     ];
-    
-    let output = env.new_double_array(3).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+
+    let output = env
+        .new_double_array(3)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1203,23 +1313,31 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1q
     radius: jdouble,
 ) -> JObjectArray<'a> {
     let mut positions = Vec::new();
-    
+
     // Create 4 quadrant positions in a perfect square pattern
-    positions.push([center_x + radius, center_y, center_z]);      // Right
-    positions.push([center_x - radius, center_y, center_z]);      // Left
-    positions.push([center_x, center_y, center_z + radius]);      // Forward
-    positions.push([center_x, center_y, center_z - radius]);      // Backward
-    
+    positions.push([center_x + radius, center_y, center_z]); // Right
+    positions.push([center_x - radius, center_y, center_z]); // Left
+    positions.push([center_x, center_y, center_z + radius]); // Forward
+    positions.push([center_x, center_y, center_z - radius]); // Backward
+
     // Create 2D array: double[4][3]
-    let double_array_class = env.find_class("[D").expect("Failed to find double array class");
-    let result_array = env.new_object_array(4, double_array_class, JObject::null()).expect("Failed to create object array");
-    
+    let double_array_class = env
+        .find_class("[D")
+        .expect("Failed to find double array class");
+    let result_array = env
+        .new_object_array(4, double_array_class, JObject::null())
+        .expect("Failed to create object array");
+
     for (i, pos) in positions.iter().enumerate() {
-        let pos_array = env.new_double_array(3).expect("Failed to create position array");
-        env.set_double_array_region(&pos_array, 0, pos).expect("Failed to set position array");
-        env.set_object_array_element(&result_array, i as i32, pos_array).expect("Failed to set array element");
+        let pos_array = env
+            .new_double_array(3)
+            .expect("Failed to create position array");
+        env.set_double_array_region(&pos_array, 0, pos)
+            .expect("Failed to set position array");
+        env.set_object_array_element(&result_array, i as i32, pos_array)
+            .expect("Failed to set array element");
     }
-    
+
     result_array
 }
 
@@ -1245,7 +1363,7 @@ pub extern "C" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1c
     if successful_hit != jni::sys::JNI_TRUE {
         return current_stacks;
     }
-    
+
     let new_stacks = current_stacks + 2; // Faster stacking for more dynamic combat
     std::cmp::min(new_stacks, max_stacks)
 }
@@ -1264,12 +1382,17 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_nalgebra_1matrix_1mul<'a>
     b: JFloatArray,
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 16];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 16];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     let result = parallel_processing::nalgebra_matrix_mul(a_buf, b_buf);
-    let output = env.new_float_array(16).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(16)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1281,12 +1404,17 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_nalgebra_1vector_1add<'a>
     b: JFloatArray,
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 3];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 3];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     let result = parallel_processing::nalgebra_vector_add(a_buf, b_buf);
-    let output = env.new_float_array(3).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(3)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1298,9 +1426,11 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_glam_1vector_1dot(
     b: JFloatArray,
 ) -> f32 {
     let mut a_buf = [0.0f32; 3];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 3];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     parallel_processing::glam_vector_dot(a_buf, b_buf)
 }
 
@@ -1312,12 +1442,17 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_glam_1vector_1cross<'a>(
     b: JFloatArray,
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 3];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 3];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     let result = parallel_processing::glam_vector_cross(a_buf, b_buf);
-    let output = env.new_float_array(3).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(3)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1329,12 +1464,17 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_glam_1matrix_1mul<'a>(
     b: JFloatArray,
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 16];
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
     let mut b_buf = [0.0f32; 16];
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
     let result = performance::glam_matrix_mul(a_buf, b_buf);
-    let output = env.new_float_array(16).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(16)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1347,10 +1487,12 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_faer_1matrix_1mul<'a>(
 ) -> JDoubleArray<'a> {
     // Convert f64 to f32 for now since faer_matrix_mul only supports f32
     let mut a_buf_f64 = [0.0f64; 16];
-    env.get_double_array_region(&a, 0, &mut a_buf_f64).expect("Failed to get a array");
+    env.get_double_array_region(&a, 0, &mut a_buf_f64)
+        .expect("Failed to get a array");
     let mut b_buf_f64 = [0.0f64; 16];
-    env.get_double_array_region(&b, 0, &mut b_buf_f64).expect("Failed to get b array");
-    
+    env.get_double_array_region(&b, 0, &mut b_buf_f64)
+        .expect("Failed to get b array");
+
     // Convert to f32
     let mut a_buf = [0.0f32; 16];
     let mut b_buf = [0.0f32; 16];
@@ -1358,17 +1500,20 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_faer_1matrix_1mul<'a>(
         a_buf[i] = a_buf_f64[i] as f32;
         b_buf[i] = b_buf_f64[i] as f32;
     }
-    
+
     let result_f32 = performance::faer_matrix_mul(a_buf, b_buf);
-    
+
     // Convert back to f64
     let mut result = [0.0f64; 16];
     for i in 0..16 {
         result[i] = result_f32[i] as f64;
     }
-    
-    let output = env.new_double_array(16).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+
+    let output = env
+        .new_double_array(16)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1384,15 +1529,22 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_parallelMatrixMultiplyBlo
     let len = (size * size) as usize;
     let mut a_buf = vec![0.0f32; len];
     let mut b_buf = vec![0.0f32; len];
-    
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
-    
+
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
+
     // Use enhanced version which exists
     let size_usize = size as usize;
-    let result = parallel_matrix::enhanced_parallel_matrix_multiply_block(&a_buf, &b_buf, size_usize, size_usize, size_usize);
-    let output = env.new_float_array(len as i32).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let result = parallel_matrix::enhanced_parallel_matrix_multiply_block(
+        &a_buf, &b_buf, size_usize, size_usize, size_usize,
+    );
+    let output = env
+        .new_float_array(len as i32)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1407,13 +1559,18 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_parallelStrassenMultiply<
     let len = (n * n) as usize;
     let mut a_buf = vec![0.0f32; len];
     let mut b_buf = vec![0.0f32; len];
-    
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
-    
+
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
+
     let result = parallel_matrix::parallel_strassen_multiply(&a_buf, &b_buf, n as usize);
-    let output = env.new_float_array(len as i32).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(len as i32)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1429,14 +1586,20 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_arenaMatrixMultiply<'a>(
     let len = size_usize * size_usize;
     let mut a_buf = vec![0.0f32; len];
     let mut b_buf = vec![0.0f32; len];
-    
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
-    
+
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
+
     // arena_matrix_multiply needs: a, b, a_rows, a_cols, b_cols, thread_id
-    let result = arena_memory::arena_matrix_multiply(&a_buf, &b_buf, size_usize, size_usize, size_usize, 0);
-    let output = env.new_float_array(len as i32).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let result =
+        arena_memory::arena_matrix_multiply(&a_buf, &b_buf, size_usize, size_usize, size_usize, 0);
+    let output = env
+        .new_float_array(len as i32)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1452,14 +1615,20 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_runtimeMatrixMultiply<'a>
     let len = size_usize * size_usize;
     let mut a_buf = vec![0.0f32; len];
     let mut b_buf = vec![0.0f32; len];
-    
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
-    
+
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
+
     // runtime_matrix_multiply needs: a, b, a_rows, a_cols, b_cols
-    let result = simd_runtime::runtime_matrix_multiply(&a_buf, &b_buf, size_usize, size_usize, size_usize);
-    let output = env.new_float_array(len as i32).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let result =
+        simd_runtime::runtime_matrix_multiply(&a_buf, &b_buf, size_usize, size_usize, size_usize);
+    let output = env
+        .new_float_array(len as i32)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1470,13 +1639,17 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_runtimeVectorDotProduct(
     a: JFloatArray,
     b: JFloatArray,
 ) -> f32 {
-    let len = env.get_array_length(&a).expect("Failed to get array length") as usize;
+    let len = env
+        .get_array_length(&a)
+        .expect("Failed to get array length") as usize;
     let mut a_buf = vec![0.0f32; len];
     let mut b_buf = vec![0.0f32; len];
-    
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
-    
+
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
+
     simd_runtime::runtime_vector_dot_product(&a_buf, &b_buf)
 }
 
@@ -1487,16 +1660,23 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_runtimeVectorAdd<'a>(
     a: JFloatArray,
     b: JFloatArray,
 ) -> JFloatArray<'a> {
-    let len = env.get_array_length(&a).expect("Failed to get array length") as usize;
+    let len = env
+        .get_array_length(&a)
+        .expect("Failed to get array length") as usize;
     let mut a_buf = vec![0.0f32; len];
     let mut b_buf = vec![0.0f32; len];
-    
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
-    
+
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
+
     let result = simd_runtime::runtime_vector_add(&a_buf, &b_buf);
-    let output = env.new_float_array(len as i32).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(len as i32)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1509,13 +1689,18 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_runtimeMatrix4x4Multiply<
 ) -> JFloatArray<'a> {
     let mut a_buf = [0.0f32; 16];
     let mut b_buf = [0.0f32; 16];
-    
-    env.get_float_array_region(&a, 0, &mut a_buf).expect("Failed to get a array");
-    env.get_float_array_region(&b, 0, &mut b_buf).expect("Failed to get b array");
-    
+
+    env.get_float_array_region(&a, 0, &mut a_buf)
+        .expect("Failed to get a array");
+    env.get_float_array_region(&b, 0, &mut b_buf)
+        .expect("Failed to get b array");
+
     let result = simd_runtime::runtime_matrix4x4_multiply(&a_buf, &b_buf);
-    let output = env.new_float_array(16).expect("Failed to create output array");
-    env.set_float_array_region(&output, 0, &result).expect("Failed to set output array");
+    let output = env
+        .new_float_array(16)
+        .expect("Failed to create output array");
+    env.set_float_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1547,7 +1732,9 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1vector_1add<'a>
     y2: jdouble,
     z2: jdouble,
 ) -> JDoubleArray<'a> {
-    Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1add(env, class, x1, y1, z1, x2, y2, z2)
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1vector_1add(
+        env, class, x1, y1, z1, x2, y2, z2,
+    )
 }
 
 #[no_mangle]
@@ -1575,7 +1762,7 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1hayabusa_1phant
     speed: jdouble,
 ) -> JDoubleArray<'a> {
     Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1phantom_1shuriken(
-        env, class, start_x, start_y, start_z, target_x, target_y, target_z, speed
+        env, class, start_x, start_y, start_z, target_x, target_y, target_z, speed,
     )
 }
 
@@ -1588,7 +1775,9 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1hayabusa_1quad_
     center_z: jdouble,
     radius: jdouble,
 ) -> JObjectArray<'a> {
-    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1quad_1shadow(env, class, center_x, center_y, center_z, radius)
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1quad_1shadow(
+        env, class, center_x, center_y, center_z, radius,
+    )
 }
 
 #[no_mangle]
@@ -1598,7 +1787,12 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1hayabusa_1shado
     passive_stacks: jint,
     base_damage: jdouble,
 ) -> jdouble {
-    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1shadow_1kill_1damage(env, class, passive_stacks, base_damage)
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1shadow_1kill_1damage(
+        env,
+        class,
+        passive_stacks,
+        base_damage,
+    )
 }
 
 #[no_mangle]
@@ -1609,7 +1803,13 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_rustperf_1hayabusa_1calcu
     successful_hit: jboolean,
     max_stacks: jint,
 ) -> jint {
-    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1calculate_1passive_1stacks(env, class, current_stacks, successful_hit, max_stacks)
+    Java_com_kneaf_core_OptimizationInjector_rustperf_1hayabusa_1calculate_1passive_1stacks(
+        env,
+        class,
+        current_stacks,
+        successful_hit,
+        max_stacks,
+    )
 }
 
 // ========================================
@@ -1625,7 +1825,9 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchNalgebraMatrixMulNat
     matrices_b: JObjectArray<'a>,
     count: jint,
 ) -> JObjectArray<'a> {
-    Java_com_kneaf_core_ParallelRustVectorProcessor_batchNalgebraMatrixMul(env, class, matrices_a, matrices_b, count)
+    Java_com_kneaf_core_ParallelRustVectorProcessor_batchNalgebraMatrixMul(
+        env, class, matrices_a, matrices_b, count,
+    )
 }
 
 #[no_mangle]
@@ -1636,7 +1838,9 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchNalgebraVectorAddNat
     vectors_b: JObjectArray<'a>,
     count: jint,
 ) -> JObjectArray<'a> {
-    Java_com_kneaf_core_ParallelRustVectorProcessor_batchNalgebraVectorAdd(env, class, vectors_a, vectors_b, count)
+    Java_com_kneaf_core_ParallelRustVectorProcessor_batchNalgebraVectorAdd(
+        env, class, vectors_a, vectors_b, count,
+    )
 }
 
 // Note: Other batch methods (batchGlamVectorDot, batchGlamVectorCross, batchGlamMatrixMul, batchFaerMatrixMul)
@@ -1673,7 +1877,9 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_copyToNativeBuffer(
     offset: jint,
     length: jint,
 ) {
-    Java_com_kneaf_core_ParallelRustVectorProcessor_copyToNativeBuffer(env, class, pointer, data, offset, length)
+    Java_com_kneaf_core_ParallelRustVectorProcessor_copyToNativeBuffer(
+        env, class, pointer, data, offset, length,
+    )
 }
 
 #[no_mangle]
@@ -1685,7 +1891,9 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_copyFromNativeBuffer<'a>(
     offset: jint,
     length: jint,
 ) {
-    Java_com_kneaf_core_ParallelRustVectorProcessor_copyFromNativeBuffer(env, class, pointer, result, offset, length)
+    Java_com_kneaf_core_ParallelRustVectorProcessor_copyFromNativeBuffer(
+        env, class, pointer, result, offset, length,
+    )
 }
 
 // ========================================
@@ -1731,15 +1939,18 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_vectorNormalize<'a>(
     z: jdouble,
 ) -> JDoubleArray<'a> {
     let length = (x * x + y * y + z * z).sqrt();
-    
+
     let result = if length > 1e-10 {
         [x / length, y / length, z / length]
     } else {
         [0.0, 0.0, 0.0]
     };
-    
-    let output = env.new_double_array(3).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+
+    let output = env
+        .new_double_array(3)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1766,14 +1977,13 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_vectorLerp<'a>(
     z2: jdouble,
     t: jdouble,
 ) -> JDoubleArray<'a> {
-    let result = [
-        x1 + (x2 - x1) * t,
-        y1 + (y2 - y1) * t,
-        z1 + (z2 - z1) * t,
-    ];
-    
-    let output = env.new_double_array(3).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+    let result = [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, z1 + (z2 - z1) * t];
+
+    let output = env
+        .new_double_array(3)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1789,10 +1999,11 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchDistanceCalculation<
 ) -> JDoubleArray<'a> {
     let count_usize = count as usize;
     let mut pos_buf = vec![0.0f32; count_usize * 3];
-    env.get_float_array_region(&positions, 0, &mut pos_buf).expect("Failed to get positions");
-    
+    env.get_float_array_region(&positions, 0, &mut pos_buf)
+        .expect("Failed to get positions");
+
     let mut distances = vec![0.0f64; count_usize];
-    
+
     // SIMD-friendly batch processing
     for i in 0..count_usize {
         let idx = i * 3;
@@ -1801,9 +2012,12 @@ pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchDistanceCalculation<
         let dz = (pos_buf[idx + 2] as f64) - center_z;
         distances[i] = (dx * dx + dy * dy + dz * dz).sqrt();
     }
-    
-    let output = env.new_double_array(count).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &distances).expect("Failed to set output array");
+
+    let output = env
+        .new_double_array(count)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &distances)
+        .expect("Failed to set output array");
     output
 }
 
@@ -1821,10 +2035,13 @@ pub extern "system" fn Java_com_kneaf_core_RustNativeLoader_calculateCircularPos
     // Calculate cos and sin for circular positioning
     let x_offset = angle.cos() * radius;
     let z_offset = angle.sin() * radius;
-    
+
     let result = vec![center_x + x_offset, center_z + z_offset];
-    
-    let output = env.new_double_array(2).expect("Failed to create output array");
-    env.set_double_array_region(&output, 0, &result).expect("Failed to set output array");
+
+    let output = env
+        .new_double_array(2)
+        .expect("Failed to create output array");
+    env.set_double_array_region(&output, 0, &result)
+        .expect("Failed to set output array");
     output.into_raw()
 }

@@ -1,18 +1,19 @@
-use std::collections::BinaryHeap;
-use std::cmp::Ordering;
+use faer::Mat;
+use glam::Mat4;
 use lazy_static::lazy_static;
-use std::sync::Mutex;
+use libc::c_double;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use glam::Mat4;
-use faer::Mat;
-use libc::c_double;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::sync::Mutex;
 
 #[allow(dead_code)]
 const GRAVITY: f64 = 0.01; // Matches vanilla Minecraft gravity strength
 
 lazy_static! {
-    pub static ref ENTITY_PROCESSING_STATS: Mutex<EntityProcessingStats> = Mutex::new(EntityProcessingStats::default());
+    pub static ref ENTITY_PROCESSING_STATS: Mutex<EntityProcessingStats> =
+        Mutex::new(EntityProcessingStats::default());
 }
 
 #[allow(dead_code)]
@@ -26,28 +27,38 @@ pub struct EntityProcessingStats {
 
 #[allow(dead_code)]
 impl EntityProcessingStats {
-    pub fn record_processing(&mut self, dimension: &str, entities_processed: u64, optimizations_applied: u64, calculation_time_ns: u64) {
+    pub fn record_processing(
+        &mut self,
+        dimension: &str,
+        entities_processed: u64,
+        optimizations_applied: u64,
+        calculation_time_ns: u64,
+    ) {
         self.total_entities_processed += entities_processed;
         self.native_optimizations_applied += optimizations_applied;
         self.total_calculation_time_ns += calculation_time_ns;
-        
-        let dim_entry = self.dimension_stats.entry(dimension.to_string()).or_insert(0);
+
+        let dim_entry = self
+            .dimension_stats
+            .entry(dimension.to_string())
+            .or_insert(0);
         *dim_entry += entities_processed;
     }
-    
+
     pub fn get_summary(&self) -> String {
         let total_time_ms = (self.total_calculation_time_ns as f64 / 1_000_000.0).round() as u64;
         let avg_time_per_entity = if self.native_optimizations_applied > 0 {
-            (self.total_calculation_time_ns as f64 / self.native_optimizations_applied as f64).round() as u64
+            (self.total_calculation_time_ns as f64 / self.native_optimizations_applied as f64)
+                .round() as u64
         } else {
             0
         };
-        
+
         let mut dimension_summary = String::new();
         for (dim, count) in &self.dimension_stats {
             dimension_summary.push_str(&format!("{}:{} ", dim, count));
         }
-        
+
         format!("NativeEntityStats{{totalProcessed:{}, optimized:{}, totalTimeMs:{}, avgTimePerEntityNs:{}, dimensions:{}}}",
                 self.total_entities_processed,
                 self.native_optimizations_applied,
@@ -74,7 +85,6 @@ pub fn tick_entity_physics(data: &[f64; 6], on_ground: bool) -> [f64; 6] {
 
     [pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]]
 }
-
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
@@ -106,7 +116,14 @@ pub extern "C" fn rustperf_vector_multiply(x: f64, y: f64, z: f64, scalar: f64) 
 }
 
 #[no_mangle]
-pub extern "C" fn rustperf_vector_add(x1: f64, y1: f64, z1: f64, x2: f64, y2: f64, z2: f64) -> *mut c_double {
+pub extern "C" fn rustperf_vector_add(
+    x1: f64,
+    y1: f64,
+    z1: f64,
+    x2: f64,
+    y2: f64,
+    z2: f64,
+) -> *mut c_double {
     // General vector addition (x1+x2, y1+y2, z1+z2)
     // Pure mathematical operation - no game-specific logic
     let vec_result = vec![x1 + x2, y1 + y2, z1 + z2];
@@ -219,7 +236,11 @@ impl PartialOrd for Node {
 }
 
 #[allow(dead_code)]
-pub fn a_star_pathfind(grid: &[Vec<bool>], start: (i32, i32), goal: (i32, i32)) -> Option<Vec<(i32, i32)>> {
+pub fn a_star_pathfind(
+    grid: &[Vec<bool>],
+    start: (i32, i32),
+    goal: (i32, i32),
+) -> Option<Vec<(i32, i32)>> {
     let rows = grid.len() as i32;
     let cols = grid[0].len() as i32;
     let mut open_set = BinaryHeap::new();
@@ -276,7 +297,10 @@ fn get_neighbors(pos: (i32, i32), rows: i32, cols: i32) -> Vec<(i32, i32)> {
 }
 
 #[allow(dead_code)]
-fn reconstruct_path(came_from: &std::collections::HashMap<(i32, i32), (i32, i32)>, current: (i32, i32)) -> Vec<(i32, i32)> {
+fn reconstruct_path(
+    came_from: &std::collections::HashMap<(i32, i32), (i32, i32)>,
+    current: (i32, i32),
+) -> Vec<(i32, i32)> {
     let mut path = vec![current];
     let mut current = current;
     while let Some(&prev) = came_from.get(&current) {
@@ -295,21 +319,20 @@ pub struct PathQuery {
 }
 
 #[allow(dead_code)]
-pub fn batch_tick_entities(entities: &mut Vec<[f64;6]>, on_grounds: &[bool], dimension: &str) {
+pub fn batch_tick_entities(entities: &mut Vec<[f64; 6]>, on_grounds: &[bool], dimension: &str) {
     let start_time = std::time::Instant::now();
-    entities.par_iter_mut().zip(on_grounds.par_iter()).for_each(|(entity, &on_ground)| {
-        *entity = tick_entity_physics(entity, on_ground);
-    });
+    entities
+        .par_iter_mut()
+        .zip(on_grounds.par_iter())
+        .for_each(|(entity, &on_ground)| {
+            *entity = tick_entity_physics(entity, on_ground);
+        });
     let elapsed = start_time.elapsed().as_nanos() as u64;
     let entity_count = entities.len() as u64;
     if let Ok(mut stats) = ENTITY_PROCESSING_STATS.lock() {
         stats.record_processing(dimension, entity_count, entity_count, elapsed);
     }
 }
-
-
-
-
 
 // Internal helper - not an FFI entrypoint. Use Rust ABI for fixed-size arrays.
 pub fn glam_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
@@ -332,8 +355,10 @@ pub fn faer_matrix_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
     result
 }
 
-
 #[allow(dead_code)]
-pub fn parallel_a_star(grid: &[Vec<bool>], queries: &[PathQuery]) -> Vec<Option<Vec<(i32,i32)>>> {
-    queries.par_iter().map(|query| a_star_pathfind(grid, query.start, query.goal)).collect()
+pub fn parallel_a_star(grid: &[Vec<bool>], queries: &[PathQuery]) -> Vec<Option<Vec<(i32, i32)>>> {
+    queries
+        .par_iter()
+        .map(|query| a_star_pathfind(grid, query.start, query.goal))
+        .collect()
 }
