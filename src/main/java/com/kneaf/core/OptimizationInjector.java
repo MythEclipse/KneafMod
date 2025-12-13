@@ -131,6 +131,8 @@ public final class OptimizationInjector {
             isNativeLibraryLoaded = RustNativeLoader.loadLibrary();
             if (isNativeLibraryLoaded) {
                 LOGGER.info("✅ OptimizationInjector: Native library loaded via RustNativeLoader");
+                // Initialize chunk optimization
+                ChunkGeneratorOptimizer.init();
             } else {
                 LOGGER.error("❌ OptimizationInjector: Failed to load native library");
                 enableSafeMode();

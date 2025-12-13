@@ -2401,3 +2401,70 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
         });
     }
 }
+
+/// JNI implementation for RustNoise
+/// Provides high-performance parallel noise generation
+// Simple fast noise fallback
+fn simple_noise_2d(x: f64, z: f64, seed: i32, freq: f64) -> f64 {
+    let sx = (x * freq).sin();
+    let sz = (z * freq).cos();
+    let s = (seed as f64).sin();
+    sx * sz + s * 0.1
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNoise_noise2d(
+    _env: JNIEnv,
+    _class: JClass,
+    x: jdouble,
+    z: jdouble,
+    seed: jint,
+    frequency: jdouble,
+) -> jdouble {
+    simple_noise_2d(x, z, seed, frequency)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNoise_noise3d(
+    _env: JNIEnv,
+    _class: JClass,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+    seed: jint,
+    frequency: jdouble,
+) -> jdouble {
+    // 3D simple noise
+    let sx = (x * frequency).sin();
+    let sy = (y * frequency).cos();
+    let sz = (z * frequency).sin();
+    sx * sy * sz
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNoise_batchNoise2d<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    x_start: jdouble,
+    z_start: jdouble,
+    width: jint,
+    depth: jint,
+    seed: jint,
+    frequency: jdouble,
+) -> jdoubleArray<'a> {
+    let size = (width * depth) as usize;
+    let mut results = vec![0.0; size];
+    
+    use rayon::prelude::*;
+    results.par_iter_mut().enumerate().for_each(|(i, val)| {
+        let lx = (i as i32 % width) as f64;
+        let lz = (i as i32 / width) as f64;
+        let gx = x_start + lx;
+        let gz = z_start + lz;
+        *val = simple_noise_2d(gx, gz, seed, frequency);
+    });
+    
+    let output = env.new_double_array(size as i32).unwrap();
+    env.set_double_array_region(&output, 0, &results).unwrap();
+    output.into_raw()
+}
