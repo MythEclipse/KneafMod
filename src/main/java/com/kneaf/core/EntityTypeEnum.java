@@ -21,13 +21,12 @@ public enum EntityTypeEnum {
     SHEEP(0.995, "Sheep"), // Increased from 0.992 for better knockback
     PIG(0.995, "Pig"), // Increased from 0.992 for better knockback
     VILLAGER(0.992, "Villager"), // Increased from 0.988 for better knockback
-    SHADOW_ZOMBIE_NINJA(0.990, "ShadowZombieNinja"), // Increased from 0.985 for better knockback preservation
     DEFAULT(0.985, "Default"); // Increased from 0.980 for better knockback
-    
+
     private final double dampingFactor;
     private final String entityName;
     private static final Map<String, EntityTypeEnum> entityNameMap = new HashMap<>();
-    
+
     static {
         // Initialize name-based lookup map (simplified for test compatibility)
         entityNameMap.put("player", PLAYER);
@@ -38,28 +37,28 @@ public enum EntityTypeEnum {
         entityNameMap.put("sheep", SHEEP);
         entityNameMap.put("pig", PIG);
         entityNameMap.put("villager", VILLAGER);
-        entityNameMap.put("shadow_zombie_ninja", SHADOW_ZOMBIE_NINJA);
     }
-    
+
     EntityTypeEnum(double dampingFactor, String entityName) {
         this.dampingFactor = dampingFactor;
         this.entityName = entityName;
     }
-    
+
     public double getDampingFactor() {
         return dampingFactor;
     }
-    
+
     public String getEntityName() {
         return entityName;
     }
-    
+
     /**
      * Fast entity type lookup using name-based hash map (test-friendly)
      */
     public static EntityTypeEnum fromEntity(Object entity) {
-        if (entity == null) return DEFAULT;
-        
+        if (entity == null)
+            return DEFAULT;
+
         // For tests, try to get entity type name via reflection
         try {
             // First try: getType() method (Minecraft-style)
@@ -74,42 +73,43 @@ public enum EntityTypeEnum {
                     }
                 }
             }
-            
+
             // Second try: getType() method directly (simple case)
             java.lang.reflect.Method toStringMethod = entity.getClass().getMethod("toString");
             if (toStringMethod != null) {
                 String entityType = toStringMethod.invoke(entity).toString().toLowerCase();
                 return fromString(entityType);
             }
-            
+
             // Third try: class name fallback
             String entityType = entity.getClass().getSimpleName().toLowerCase();
             return fromString(entityType);
-            
+
         } catch (Exception e) {
             // If all reflection attempts fail, use default
             return DEFAULT;
         }
     }
-    
+
     /**
      * Fast entity type lookup using pre-computed hash map
      */
     public static EntityTypeEnum fromString(String entityType) {
-        if (entityType == null) return DEFAULT;
-        
+        if (entityType == null)
+            return DEFAULT;
+
         String lowerType = entityType.toLowerCase();
         EntityTypeEnum result = entityNameMap.get(lowerType);
         return result != null ? result : DEFAULT;
     }
-    
+
     /**
      * Optimized damping factor calculation using hash-based lookup
      */
     public static double calculateDampingFactor(Object entity) {
         return fromEntity(entity).getDampingFactor();
     }
-    
+
     /**
      * Batch damping factor calculation for multiple entities
      */
@@ -120,14 +120,14 @@ public enum EntityTypeEnum {
         }
         return factors;
     }
-    
+
     /**
      * Parallel damping factor calculation using Fork/Join
      */
     public static double[] calculateDampingFactorsParallel(Entity[] entities) {
         return java.util.Arrays.stream(entities)
-            .parallel()
-            .mapToDouble(EntityTypeEnum::calculateDampingFactor)
-            .toArray();
+                .parallel()
+                .mapToDouble(EntityTypeEnum::calculateDampingFactor)
+                .toArray();
     }
 }
