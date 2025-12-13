@@ -2200,3 +2200,128 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
     output.into_raw()
 }
 
+
+// ===================================
+// ADVANCED: ZERO-COPY SPATIAL GRID
+// ===================================
+
+#[repr(C)]
+struct EntitySpatialData {
+    x: f32,
+    y: f32,
+    z: f32,
+    vx: f32,
+    vy: f32,
+    vz: f32,
+    id: i32,
+    padding: i32, // Align to 32 bytes
+}
+
+#[repr(C)]
+struct SpatialResult {
+    nearest_neighbor_id: i32,
+    neighbor_dist_sq: f32,
+    crowd_density: f32,
+    avoidance_x: f32,
+    avoidance_z: f32,
+}
+
+/// Advanced Zero-Copy Spatial Grid Processing
+/// Uses Direct ByteBuffers to share memory between JRE and Rust heap
+/// Implements a spatial hash grid for O(1) neighbor lookups
+#[no_mangle]
+pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1batch_1spatial_1grid_1zero_1copy<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    input_buffer: JByteBuffer<'local>,  // Direct Buffer containing [EntitySpatialData] array
+    output_buffer: JByteBuffer<'local>, // Direct Buffer for [SpatialResult] array
+    count: jint,
+) {
+    let count = count as usize;
+
+    // 1. UNSAFE: Get raw memory pointers (Zero-Copy)
+    let input_ptr = env.get_direct_buffer_address(&input_buffer).expect("Invalid input buffer");
+    let output_ptr = env.get_direct_buffer_address(&output_buffer).expect("Invalid output buffer");
+
+    unsafe {
+        let entities = std::slice::from_raw_parts(input_ptr as *const EntitySpatialData, count);
+        let results = std::slice::from_raw_parts_mut(output_ptr as *mut SpatialResult, count);
+
+        // 2. Build Spatial Hash Grid (Parallel)
+        // Cell size = 4.0 blocks (typical collision/avoidance range)
+        let cell_size = 4.0;
+        let mut grid: std::collections::HashMap<(i32, i32, i32), Vec<usize>> = std::collections::HashMap::new();
+
+        // Populate grid (Single-threaded build, parallel query is faster usually)
+        for (i, entity) in entities.iter().enumerate() {
+            let cx = (entity.x / cell_size).floor() as i32;
+            let cy = (entity.y / cell_size).floor() as i32;
+            let cz = (entity.z / cell_size).floor() as i32;
+            grid.entry((cx, cy, cz)).or_default().push(i);
+        }
+
+        // 3. Process Entities (Parallel Rayon iterator)
+        use rayon::prelude::*;
+        
+        // We can't write to slice in parallel easily without UnsafeCell or chunks
+        // But we can iterate indices and use unsafe pointer write (carefully)
+        // Or simpler: Compute results into Vec then copy (fast enough compared to JNI copy)
+        // For "Very Complex", let's use Unsafe wrapper for random write access? 
+        // No, let's use chunk_mut to allow parallel mutable access to output
+        
+        results.par_chunks_mut(1).enumerate().for_each(|(i, result_slice)| {
+            let result = &mut result_slice[0];
+            let me = &entities[i];
+            
+            let cx = (me.x / cell_size).floor() as i32;
+            let cy = (me.y / cell_size).floor() as i32;
+            let cz = (me.z / cell_size).floor() as i32;
+
+            let mut closest_dist_sq = f32::MAX;
+            let mut closest_id = -1;
+            let mut density = 0.0;
+            let mut avoid_x = 0.0;
+            let mut avoid_z = 0.0;
+
+            // Check 3x3x3 neighbor cells
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if let Some(cell_indices) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                            for &other_idx in cell_indices {
+                                if i == other_idx { continue; }
+                                
+                                let other = &entities[other_idx];
+                                let dist_x = me.x - other.x;
+                                let dist_y = me.y - other.y;
+                                let dist_z = me.z - other.z;
+                                let dist_sq = dist_x*dist_x + dist_y*dist_y + dist_z*dist_z;
+
+                                if dist_sq < closest_dist_sq {
+                                    closest_dist_sq = dist_sq;
+                                    closest_id = other.id;
+                                }
+
+                                if dist_sq < 16.0 { // Density radius 4.0
+                                    density += 1.0;
+                                    // Boids: Separation vector
+                                    if dist_sq > 0.001 {
+                                        avoid_x += dist_x / dist_sq;
+                                        avoid_z += dist_z / dist_sq;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Write result struct
+            result.nearest_neighbor_id = closest_id;
+            result.neighbor_dist_sq = closest_dist_sq;
+            result.crowd_density = density;
+            result.avoidance_x = avoid_x;
+            result.avoidance_z = avoid_z;
+        });
+    }
+}

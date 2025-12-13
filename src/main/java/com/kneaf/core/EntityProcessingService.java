@@ -15,6 +15,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /**
  * Entity priority levels for CPU resource allocation
@@ -781,6 +783,10 @@ public final class EntityProcessingService {
     /**
      * Submit entity for async processing with priority
      */
+
+    // NATIVE DECLARATION: Advanced Zero-Copy Spatial Grid
+    public static native void rustperf_batch_spatial_grid_zero_copy(ByteBuffer input, ByteBuffer output, int count);
+
     /**
      * Submit entity for async processing with default priority (MEDIUM)
      * 
@@ -932,7 +938,6 @@ public final class EntityProcessingService {
             boolean rustSuccess = false;
 
             // 1. Initialize Futures for the batch
-            // We must do this FIRST so we have futures to complete (either by Rust or Java)
             for (int j = 0; j < batchSize; j++) {
                 EntityProcessingTask task = batch.get(j);
                 queuedEntities.incrementAndGet();
@@ -942,60 +947,86 @@ public final class EntityProcessingService {
                 futures.add(future);
             }
 
-            // 2. Try Rust Batch Processing
+            // 2. ADVANCED: Zero-Copy Shared Memory with Rust
+            // Allocating DirectByteBuffers allows Rust to access memory without copying.
+            // Struct Layout: { x, y, z, vx, vy, vz, id, padding } = 8 * 4 = 32 bytes
+            // Result Layout: { neighbor, distSq, density, avoidX, avoidZ } = 5 * 4 = 20
+            // bytes
             if (OptimizationInjector.isNativeLibraryLoaded()) {
                 try {
-                    double[] positions = new double[batchSize * 3];
-                    double[] velocities = new double[batchSize * 3];
+                    int inputSize = batchSize * 32;
+                    int outputSize = batchSize * 20;
 
+                    // Allocate Direct Buffers (off-heap)
+                    ByteBuffer inputBuf = ByteBuffer.allocateDirect(inputSize).order(ByteOrder.nativeOrder());
+                    ByteBuffer outputBuf = ByteBuffer.allocateDirect(outputSize).order(ByteOrder.nativeOrder());
+
+                    // Fill Input Buffer
                     for (int j = 0; j < batchSize; j++) {
                         EntityProcessingTask task = batch.get(j);
                         EntityInterface ent = (EntityInterface) task.entity;
                         EntityPhysicsData pd = task.physicsData;
 
-                        positions[j * 3] = ent.getX();
-                        positions[j * 3 + 1] = ent.getY();
-                        positions[j * 3 + 2] = ent.getZ();
-
-                        velocities[j * 3] = pd.motionX;
-                        velocities[j * 3 + 1] = pd.motionY;
-                        velocities[j * 3 + 2] = pd.motionZ;
+                        // Write EntitySpatialData struct
+                        inputBuf.putFloat((float) ent.getX());
+                        inputBuf.putFloat((float) ent.getY());
+                        inputBuf.putFloat((float) ent.getZ());
+                        inputBuf.putFloat((float) pd.motionX);
+                        inputBuf.putFloat((float) pd.motionY);
+                        inputBuf.putFloat((float) pd.motionZ);
+                        inputBuf.putInt((int) ent.getId());
+                        inputBuf.putInt(0); // padding
                     }
 
-                    // Call Rust Batch Physics
-                    double[] processedVelocities = OptimizationInjector.rustperf_batch_entity_physics(velocities,
-                            batchSize, 0.91);
+                    // Call Advanced Rust Function
+                    rustperf_batch_spatial_grid_zero_copy(inputBuf, outputBuf, batchSize);
 
-                    // Call Rust Spatial Calc (Proof of usage)
-                    double[] distMatrix = rustperf_batch_distance_matrix(positions, batchSize);
-                    if (distMatrix != null)
-                        METRICS.incrementCounter("rust_batch_matrix_calcs");
+                    // Read Output Buffer
+                    outputBuf.position(0); // Reset read cursor
 
-                    if (processedVelocities != null && processedVelocities.length == velocities.length) {
-                        // Success! Complete futures immediately
+                    if (batchSize > 0) {
                         for (int j = 0; j < batchSize; j++) {
+                            // Read SpatialResult struct
+                            int neighborId = outputBuf.getInt();
+                            float distSq = outputBuf.getFloat();
+                            float density = outputBuf.getFloat();
+                            float avoidX = outputBuf.getFloat();
+                            float avoidZ = outputBuf.getFloat();
+
+                            // Use the sophisticated data from Rust
                             EntityProcessingTask task = batch.get(j);
                             CompletableFuture<EntityProcessingResult> future = activeFutures
                                     .get(((EntityInterface) task.entity).getId());
 
                             if (future != null) {
-                                EntityPhysicsData resultData = new EntityPhysicsData(
-                                        processedVelocities[j * 3],
-                                        processedVelocities[j * 3 + 1],
-                                        processedVelocities[j * 3 + 2]);
+                                // METRICS: Track density
+                                if (density > 5.0f) METRICS.incrementCounter("high_crowd_density");
+                                
+                                // Apply Rust-calculated avoidance vector to velocity (Flocking behavior)
+                                EntityPhysicsData pd = task.physicsData;
+                                double newVx = pd.motionX + (avoidX * 0.1); // Weighting
+                                double newVz = pd.motionZ + (avoidZ * 0.1);
+
+                                // Damping (simple)
+                                newVx *= 0.91;
+                                newVz *= 0.91;
+                                double newVy = pd.motionY * 0.98 - 0.08; // Gravity
+
+                                EntityPhysicsData resultData = new EntityPhysicsData(newVx, newVy, newVz);
                                 future.complete(
-                                        new EntityProcessingResult(true, "Processed by Rust Batch", resultData));
+                                        new EntityProcessingResult(true, "Processed by Rust Spatial Grid", resultData));
                                 processedEntities.incrementAndGet();
                             }
                         }
                         rustSuccess = true;
+                        METRICS.incrementCounter("rust_spatial_grid_processed");
                     }
                 } catch (Exception e) {
-                    LOGGER.debug("Rust batch processing failed, falling back: {}", e.getMessage());
+                    LOGGER.warn("Rust zero-copy batch processing failed, falling back: {}", e.getMessage());
                 }
             }
 
-            // 3. Fallback to Java Thread Pool if Rust failed/skipped
+            // 3. Fallback to Java Thread Pool
             if (!rustSuccess) {
                 for (int j = 0; j < batchSize; j++) {
                     EntityProcessingTask task = batch.get(j);
