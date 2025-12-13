@@ -990,8 +990,10 @@ public final class EntityProcessingService {
                             int neighborId = outputBuf.getInt();
                             float distSq = outputBuf.getFloat();
                             float density = outputBuf.getFloat();
-                            @SuppressWarnings("unused") float avoidX = outputBuf.getFloat(); // Read but DO NOT USE
-                            @SuppressWarnings("unused") float avoidZ = outputBuf.getFloat(); // Read but DO NOT USE
+                            @SuppressWarnings("unused")
+                            float avoidX = outputBuf.getFloat(); // Read but DO NOT USE
+                            @SuppressWarnings("unused")
+                            float avoidZ = outputBuf.getFloat(); // Read but DO NOT USE
 
                             // METRICS ONLY - DO NOT MODIFY GAMEPLAY
                             EntityProcessingTask task = batch.get(j);
@@ -1000,15 +1002,19 @@ public final class EntityProcessingService {
 
                             if (future != null) {
                                 // Track spatial metrics
-                                if (density > 5.0f) METRICS.incrementCounter("high_crowd_density");
-                                if (neighborId != -1 && distSq < 4.0f) METRICS.incrementCounter("close_entity_pairs");
-                                
+                                if (density > 5.0f)
+                                    METRICS.incrementCounter("high_crowd_density");
+                                if (neighborId != -1 && distSq < 4.0f)
+                                    METRICS.incrementCounter("close_entity_pairs");
+
                                 // IMPORTANT: Complete future with ORIGINAL UNCHANGED physics data
                                 // This ensures vanilla Minecraft gameplay is NOT modified
                                 EntityPhysicsData pd = task.physicsData;
-                                EntityPhysicsData resultData = new EntityPhysicsData(pd.motionX, pd.motionY, pd.motionZ);
+                                EntityPhysicsData resultData = new EntityPhysicsData(pd.motionX, pd.motionY,
+                                        pd.motionZ);
                                 future.complete(
-                                        new EntityProcessingResult(true, "Rust Metrics (No Gameplay Change)", resultData));
+                                        new EntityProcessingResult(true, "Rust Metrics (No Gameplay Change)",
+                                                resultData));
                                 processedEntities.incrementAndGet();
                             }
                         }
@@ -1638,6 +1644,7 @@ public final class EntityProcessingService {
 
     /**
      * Validate that an entity is suitable for production processing
+     * UNIVERSAL MODE: Accept ALL entities (vanilla, modded, adapters)
      * 
      * @param entity Entity to validate
      * @return true if entity is valid for production use
@@ -1646,42 +1653,9 @@ public final class EntityProcessingService {
         if (entity == null)
             return false;
 
-        try {
-            // Check if entity is a valid Minecraft entity (production-only check)
-            String entityClassName = entity.getClass().getName();
-
-            // In test mode, accept test mock entities
-            if (ModeDetector.isTestMode() && entityClassName.startsWith("com.kneaf.core.mock.")) {
-                return true;
-            }
-
-            // Accept Minecraft entities from various packages:
-            // - net.minecraft.world.entity.* (standard entities)
-            // - net.minecraft.client.player.* (client-side player)
-            // - net.minecraft.server.level.* (server-side entities)
-            // - com.kneaf.entities.* (custom mod entities)
-            boolean isValidMinecraftEntity = entityClassName.startsWith("net.minecraft.world.entity.") ||
-                    entityClassName.startsWith("net.minecraft.client.player.") ||
-                    entityClassName.startsWith("net.minecraft.server.level.") ||
-                    entityClassName.startsWith("com.kneaf.entities.");
-
-            if (!isValidMinecraftEntity) {
-                LOGGER.warn("Rejected non-Minecraft entity in production: {}", entityClassName);
-                return false;
-            }
-
-            // Allow specific Minecraft entity types that benefit from optimization
-            // LocalPlayer, EntityLiving, EntityMob, etc. should all be allowed
-            // Block entities and other non-physical entities can be filtered out if needed
-
-            // Additional validation can be added here for specific entity types
-            // For example: check if entity is a player, mob, etc.
-
-            return true;
-        } catch (Exception e) {
-            LOGGER.debug("Entity validation failed due to exception", e);
-            return false;
-        }
+        // UNIVERSAL OPTIMIZATION: Accept ALL entities
+        // No whitelist filtering - process everything for maximum performance
+        return true;
     }
 
     public static class EntityProcessingStatistics {

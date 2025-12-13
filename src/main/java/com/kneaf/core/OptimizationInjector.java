@@ -28,7 +28,8 @@ import java.util.concurrent.TimeUnit;
  * entities
  * 
  * MOD COMPATIBILITY POLICY:
- * This optimization system applies to ALL entities, including those from other mods.
+ * This optimization system applies to ALL entities, including those from other
+ * mods.
  * 
  * UNIVERSAL OPTIMIZATION:
  * - Vanilla Minecraft entities
@@ -573,57 +574,17 @@ public final class OptimizationInjector {
      */
     @SubscribeEvent
     public static void onEntityTick(EntityTickEvent.Pre event) {
-        if (!PERFORMANCE_MANAGER.isEntityThrottlingEnabled())
-            return;
-
-        // Fast path: Skip expensive processing if native optimizations are not
-        // available
-        if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isRustIntegrationEnabled()) {
-            if (totalEntitiesProcessed.get() % 1000 == 0) {
-                recordOptimizationMiss("Native library not loaded or integration disabled");
-            }
-            return;
-        }
-
-        try {
-            Object entity = event.getEntity();
-            if (entity == null) {
-                return;
-            }
-
-            // Perform strict validation only when needed
-            if (!ModeDetector.isTestMode() && !isValidMinecraftEntity(entity)) {
-                return;
-            }
-
-            // ASYNC MOD PATTERN: Check if entity should tick synchronously
-            // Players, projectiles, minecarts, and blacklisted entities skip async
-            // processing
-            if (shouldTickSynchronously(entity)) {
-                syncFallbackCount.incrementAndGet();
-                // Let vanilla handle this entity - don't buffer it
-                return;
-            }
-
-            double[] movementData = getEntityMovementData(entity);
-            if (movementData == null || hasInvalidMovementValues(movementData[0], movementData[1], movementData[2])) {
-                return;
-            }
-
-            // Buffer entity for async batch processing
-            entityTickBuffer.add(new EntityTickData(entity, movementData));
-            asyncSuccessCount.incrementAndGet();
-
-            // Trigger batch processing if buffer is full
-            if (entityTickBuffer.size() >= BATCH_SIZE) {
-                processEntityBatchAsync();
-            }
-
-        } catch (Throwable t) {
-            LOGGER.debug("Entity buffering failed: {}", t.getMessage());
-        } finally {
-            totalEntitiesProcessed.incrementAndGet();
-        }
+        // =====================================================================
+        // DISABLED: Async entity processing was breaking gameplay
+        // The system caused:
+        // - Post-tick barrier timeouts
+        // - Severe input lag
+        // - Broken physics (jumping, movement)
+        //
+        // Rust optimization is now METRICS-ONLY via EntityProcessingService
+        // Vanilla Minecraft handles ALL entity physics
+        // =====================================================================
+        // Method body intentionally empty - no async processing
     }
 
     /**
@@ -1327,7 +1288,8 @@ public final class OptimizationInjector {
 
         try {
             // Check if entity is a valid Minecraft entity
-            // String entityClassName = entity.getClass().getName(); // Unused in Universal Mode
+            // String entityClassName = entity.getClass().getName(); // Unused in Universal
+            // Mode
 
             // UNIVERSAL OPTIMIZATION:
             // We optimized ALL entities including modded ones.
