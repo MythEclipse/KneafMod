@@ -525,11 +525,19 @@ public final class OptimizationInjector {
      */
     @SubscribeEvent
     public static void onEntityTick(EntityTickEvent.Pre event) {
-        if (!PERFORMANCE_MANAGER.isEntityThrottlingEnabled())
-            return;
+        // One-time logging to verify this is running
+        if (totalEntitiesProcessed.get() == 0 && Math.random() < 0.001) {
+            LOGGER.info("Entity tick event fired - throttling={}, nativeLoaded={}",
+                    PERFORMANCE_MANAGER.isEntityThrottlingEnabled(), isNativeLibraryLoaded);
+        }
 
-        if (!isNativeLibraryLoaded)
+        if (!PERFORMANCE_MANAGER.isEntityThrottlingEnabled()) {
             return;
+        }
+
+        if (!isNativeLibraryLoaded) {
+            return;
+        }
 
         try {
             Object entity = event.getEntity();
@@ -557,10 +565,15 @@ public final class OptimizationInjector {
                 totalEntitiesProcessed.incrementAndGet();
                 entitiesProcessedParallel.incrementAndGet();
                 recordOptimizationHit("Synchronous Rust processing");
+
+                // Log first successful process
+                if (totalEntitiesProcessed.get() == 1) {
+                    LOGGER.info("First entity processed successfully via Rust!");
+                }
             }
 
         } catch (Throwable t) {
-            LOGGER.debug("Entity tick processing failed: {}", t.getMessage());
+            LOGGER.warn("Entity tick processing failed: {}", t.getMessage(), t);
         }
     }
 
