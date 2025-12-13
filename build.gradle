@@ -348,6 +348,30 @@ tasks.register('buildRustNative', Exec) {
     }
 }
 
+// Copy native libraries to resources/natives for JAR bundling
+tasks.register('copyNativeLibraries', Copy) {
+    group = 'build'
+    description = 'Copy Rust native libraries to resources/natives for JAR bundling'
+    dependsOn 'buildRustNative'
+    
+    from('rust/target/release') {
+        include 'rustperf.dll'
+        include 'librustperf.so'
+        include 'librustperf.dylib'
+    }
+    into 'src/main/resources/natives'
+    
+    doLast {
+        logger.lifecycle("Native libraries copied to src/main/resources/natives for JAR bundling")
+    }
+}
+
+// Ensure native libraries are copied before processing resources
+tasks.named('processResources').configure {
+    dependsOn 'copyNativeLibraries'
+}
+
+
 tasks.register('buildRustCross', Exec) {
     group = 'build'
     description = 'Attempt cross/secondary platform Rust build when appropriate'
