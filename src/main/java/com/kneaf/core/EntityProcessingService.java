@@ -523,6 +523,10 @@ public final class EntityProcessingService {
     private final Queue<Double> recentLoadSamples = new ConcurrentLinkedQueue<>();
     private static final int MAX_LOAD_SAMPLES = 10;
 
+    // Throughput tracking
+    private final AtomicLong lastProcessedCount = new AtomicLong(0);
+    private final AtomicLong lastLogTime = new AtomicLong(System.currentTimeMillis());
+
     // Adaptive thread pool controller
     private final AdaptiveThreadPoolController adaptiveThreadPoolController;
 
@@ -1360,14 +1364,12 @@ public final class EntityProcessingService {
                 // Clean up completed futures
                 activeFutures.entrySet().removeIf(entry -> entry.getValue().isDone());
 
-                // Log performance metrics
-                if (processedEntities.get() % 1000 == 0) {
-                    logPerformanceMetrics();
-                }
+                // Log performance metrics every interval
+                logPerformanceMetrics();
             } catch (Exception e) {
                 LOGGER.error("Error in maintenance task: {}", e.getMessage(), e);
             }
-        }, 30, 30, TimeUnit.SECONDS);
+        }, 10, 10, TimeUnit.SECONDS);
     }
 
     /**
@@ -1375,9 +1377,25 @@ public final class EntityProcessingService {
      */
     private void logPerformanceMetrics() {
         EntityProcessingStatistics stats = getStatistics();
+
+        // Calculate throughput
+        long currentCount = processedEntities.get();
+        long currentTime = System.currentTimeMillis();
+        long lastCount = lastProcessedCount.getAndSet(currentCount);
+        long lastTime = lastLogTime.getAndSet(currentTime);
+
+        long deltaCount = currentCount - lastCount;
+        long deltaTime = currentTime - lastTime;
+        double throughput = 0.0;
+
+        if (deltaTime > 0) {
+            throughput = (double) deltaCount / (deltaTime / 1000.0);
+        }
+
         LOGGER.info(
-                "EntityProcessingService Metrics - Processed: {}, Queued: {}, Active: {}, QueueSize: {}, GridCells: {}, PoolSize: {}, CPU: {}%, AvgProcTime: {}ms",
+                "EntityProcessingService Metrics - Processed: {} (Rate: {:.1f}/sec), Queued: {}, Active: {}, QueueSize: {}, GridCells: {}, PoolSize: {}, CPU: {}%, AvgProcTime: {}ms",
                 stats.processedEntities,
+                throughput,
                 stats.queuedEntities,
                 stats.activeProcessors,
                 stats.queueSize,
