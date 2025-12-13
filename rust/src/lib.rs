@@ -2303,49 +2303,99 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
             let mut closest_id = -1;
             let mut density = 0.0;
             
-            // Explicit AVX2 Accumulators for avoidance
-            // (Using scalar here for readability within loop, but logic is "complex")
-            let mut avoid_x = 0.0;
-            let mut avoid_z = 0.0;
+            // -------------------------------------------------------------
+            // REAL AVX2 IMPLEMENTATION (No Simulation)
+            // Process neighbors in chunks of 8 using explicit CPU intrinsics
+            // -------------------------------------------------------------
+            
+            // Broadcast 'me' position to all 8 lanes of YMM registers
+            unsafe {
+                let me_x_ymm = _mm256_set1_ps(me.x);
+                let me_y_ymm = _mm256_set1_ps(me.y);
+                let me_z_ymm = _mm256_set1_ps(me.z);
+                
+                // Temp buffers for gathering scattered AOS data into SOA for SIMD
+                let mut neighbor_x = [0.0f32; 8];
+                let mut neighbor_y = [0.0f32; 8];
+                let mut neighbor_z = [0.0f32; 8];
+                let mut neighbor_ids = [-1i32; 8];
 
-            // Check neighbors using Morton Codes
-            // Note: Z-order neighbors aren't sequential, so we iterate canonical 3x3x3
-            for dx in 0..=2 {
-                for dy in 0..=2 {
-                    for dz in 0..=2 {
-                        let nx = cx.wrapping_add(dx).wrapping_sub(1);
-                        let ny = cy.wrapping_add(dy).wrapping_sub(1);
-                        let nz = cz.wrapping_add(dz).wrapping_sub(1);
-                        
-                        let neighbor_key = morton_encode_3d(nx, ny, nz);
-                        
-                        // COMPLEXITY: Branchless lookup attempt (if supported)
-                        if let Some(cell_indices) = grid.get(&neighbor_key) {
-                            for &other_idx in cell_indices {
-                                if i == other_idx { continue; }
-                                
-                                let other = &entities[other_idx];
-                                
-                                // AVX-ready data load (simulated)
-                                let dist_x = me.x - other.x;
-                                let dist_y = me.y - other.y;
-                                let dist_z = me.z - other.z;
-                                
-                                // Fused Multiply-Add (FMA) if widely available, else standard
-                                let dist_sq = dist_x*dist_x + dist_y*dist_y + dist_z*dist_z;
+                // Iterate canonical 3x3x3 cells
+                for dx in 0..=2 {
+                    for dy in 0..=2 {
+                        for dz in 0..=2 {
+                            let nx = cx.wrapping_add(dx).wrapping_sub(1);
+                            let ny = cy.wrapping_add(dy).wrapping_sub(1);
+                            let nz = cz.wrapping_add(dz).wrapping_sub(1);
+                            let neighbor_key = morton_encode_3d(nx, ny, nz);
 
-                                if dist_sq < closest_dist_sq {
-                                    closest_dist_sq = dist_sq;
-                                    closest_id = other.id;
-                                }
+                            if let Some(cell_indices) = grid.get(&neighbor_key) {
+                                // Process neighbors in chunks of 8
+                                for chunk in cell_indices.chunks(8) {
+                                    let chunk_len = chunk.len();
+                                    
+                                    // 1. GATHER (Scatter-Gather from AOS to SOA)
+                                    // We manually gather because vgather is complex with structs
+                                    for k in 0..chunk_len {
+                                        let other_idx = chunk[k];
+                                        if i == other_idx { 
+                                            // Handle self-check by putting infinity
+                                            neighbor_x[k] = f32::INFINITY; 
+                                        } else {
+                                            let other = &entities[other_idx];
+                                            neighbor_x[k] = other.x;
+                                            neighbor_y[k] = other.y;
+                                            neighbor_z[k] = other.z;
+                                            neighbor_ids[k] = other.id;
+                                        }
+                                    }
+                                    // Fill remainders with infinity to prevent false positives
+                                    for k in chunk_len..8 {
+                                        neighbor_x[k] = f32::INFINITY;
+                                        neighbor_y[k] = f32::INFINITY; 
+                                        neighbor_z[k] = f32::INFINITY;
+                                    }
 
-                                if dist_sq < 16.0 {
-                                    density += 1.0;
-                                    // Inverse Square Law Separation
-                                    if dist_sq > 0.001 {
-                                        let factory = 1.0 / dist_sq;
-                                        avoid_x += dist_x * factory;
-                                        avoid_z += dist_z * factory;
+                                    // 2. LOAD into AVX2 Registers
+                                    let others_x_ymm = _mm256_loadu_ps(neighbor_x.as_ptr());
+                                    let others_y_ymm = _mm256_loadu_ps(neighbor_y.as_ptr());
+                                    let others_z_ymm = _mm256_loadu_ps(neighbor_z.as_ptr());
+
+                                    // 3. COMPUTE Vectors (dx, dy, dz)
+                                    let dx_ymm = _mm256_sub_ps(me_x_ymm, others_x_ymm);
+                                    let dy_ymm = _mm256_sub_ps(me_y_ymm, others_y_ymm);
+                                    let dz_ymm = _mm256_sub_ps(me_z_ymm, others_z_ymm);
+
+                                    // 4. SQUARED DISTANCE (FMA if available, else mul+add)
+                                    // dist_sq = dx*dx + dy*dy + dz*dz
+                                    let dx_sq = _mm256_mul_ps(dx_ymm, dx_ymm);
+                                    let dy_sq = _mm256_mul_ps(dy_ymm, dy_ymm);
+                                    let dz_sq = _mm256_mul_ps(dz_ymm, dz_ymm);
+                                    let dist_sq_ymm = _mm256_add_ps(dx_sq, _mm256_add_ps(dy_sq, dz_sq));
+
+                                    // 5. EXTRACT Results (Store back to array to find min)
+                                    let mut dist_sq_res = [0.0f32; 8];
+                                    _mm256_storeu_ps(dist_sq_res.as_mut_ptr(), dist_sq_ymm);
+
+                                    // 6. PROCESS Results (Scalar reduction)
+                                    for k in 0..chunk_len {
+                                        let d2 = dist_sq_res[k];
+                                        
+                                        if d2 < closest_dist_sq {
+                                            closest_dist_sq = d2;
+                                            closest_id = neighbor_ids[k];
+                                        }
+                                        
+                                        if d2 < 16.0 && d2 > 0.001 {
+                                            density += 1.0;
+                                            // Extract single scalar components for accumulators (expensive but necessary for scalar acc)
+                                            // Optimization: We could use vector accumulators for avoid_x/z too, but complexity tradeoff.
+                                            let dx_val = neighbor_x[k] - me.x; // Recompute or extract? Recomputing scalar is fast enough
+                                            let dz_val = neighbor_z[k] - me.z;
+                                            let factor = 1.0 / d2;
+                                            avoid_x -= dx_val * factor; // Repel
+                                            avoid_z -= dz_val * factor;
+                                        }
                                     }
                                 }
                             }
