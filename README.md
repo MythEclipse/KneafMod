@@ -24,7 +24,7 @@
 - **Hit Detection Optimization**: Deteksi tabrakan yang lebih efisien
 - **Predictive Load Balancing**: Load balancing prediktif untuk distribusi beban kerja yang lebih baik
 - **Entity Registry System**: Sistem registry entity yang efisien dengan component-based architecture
-- **Shadow Zombie Ninja**: Custom entity untuk demonstrasi sistem optimasi
+- **Chunk Generation Optimization**: Noise generation acceleration via native Rust library
 
 ### 📊 Monitoring dan Profiling
 - **Comprehensive Performance Monitoring**: Sistem monitoring performa real-time dengan metric collection
@@ -36,8 +36,7 @@
 
 ### 🎮 Fitur Gameplay
 - **Metrics Command**: Command `/metrics` untuk melihat statistik performa real-time
-- **Shadow Ninja Commands**: Command untuk spawn dan manage custom entities
-- **Creative Tab Integration**: Integrasi dengan creative tab untuk spawn eggs
+- **Bundled Native Library**: DLL otomatis di-bundle dalam JAR - pengguna hanya butuh file JAR saja
 
 ## 🏗️ Arsitektur Teknologi
 
@@ -53,8 +52,9 @@ src/main/java/com/kneaf/
 │   ├── ParallelRustVectorProcessor.java # Parallel processing wrapper
 │   ├── OptimizationInjector.java  # Event-based optimization injector
 │   ├── OptimizedOptimizationInjector.java  # Optimized injector
-│   ├── EntityProcessingService.java  # Entity processing service
-│   ├── ParallelLibraryLoader.java  # Parallel library loading
+│   ├── ChunkProcessor.java      # C2ME-style parallel chunk processing
+│   ├── ChunkGeneratorOptimizer.java  # Chunk generation optimization
+│   ├── RustNoise.java            # Native noise acceleration wrapper
 │   └── performance/               # Performance monitoring subsystem
 │       ├── PerformanceMonitoringSystem.java  # Central monitoring
 │       ├── MetricsCollector.java  # Metric collection
@@ -64,14 +64,10 @@ src/main/java/com/kneaf/
 │       ├── AlertingSystem.java    # Alerting & notifications
 │       ├── CrossComponentEventBus.java  # Event bus
 │       └── PerformanceDashboard.java  # Performance dashboard
-├── entities/                      # Custom entities
-│   ├── ModEntities.java          # Entity registration
-│   ├── ShadowZombieNinja.java    # Custom ninja entity
-│   ├── ShadowZombieNinjaRenderer.java  # Entity renderer
-│   └── ShadowNinjaSpawnHandler.java    # Spawn handler
+├── entities/                      # Entity registration
+│   └── ModEntities.java          # Entity registration
 └── commands/                      # Commands
-    ├── MetricsCommand.java       # Performance metrics command
-    └── ShadowNinjaCommands.java  # Entity management commands
+    └── MetricsCommand.java       # Performance metrics command
 ```
 
 ### Rust Components (Native Library)
@@ -173,8 +169,9 @@ gradlew.bat runClient
 
 ### Instalasi Mod
 1. Copy `kneafcore-1.0.0.jar` ke folder `mods/` di instalasi Minecraft
-2. Copy native library (`rustperf.dll` atau `librustperf.so`) ke folder `mods/natives/` atau biarkan di classpath
-3. Jalankan Minecraft dengan NeoForge 21.0.167
+2. Jalankan Minecraft dengan NeoForge 21.0.167
+
+> **Note**: Native library (rustperf.dll) sudah ter-bundle dalam JAR dan akan di-extract otomatis saat runtime. Tidak perlu copy file DLL terpisah.
 
 ### Konfigurasi
 
@@ -204,8 +201,7 @@ optimizationMonitoringEnabled=true
 ### Commands
 
 - `/metrics` - Tampilkan statistik performa real-time
-- `/shadowninja spawn <count>` - Spawn Shadow Zombie Ninja
-- `/shadowninja clear` - Clear semua Shadow Zombie Ninja
+- `/kneaf async stats` - Tampilkan statistik async processing
 
 ## 📊 Performa Benchmark
 
@@ -352,4 +348,4 @@ Menggunakan Rayon untuk work-stealing thread pool:
 **Minecraft Version**: 1.21  
 **Mod Loader**: NeoForge 21.0.167  
 **Build Status**: Passing ✅  
-**Last Updated**: October 23, 2025
+**Last Updated**: December 14, 2024
