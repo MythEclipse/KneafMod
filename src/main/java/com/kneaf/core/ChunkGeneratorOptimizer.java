@@ -1,11 +1,8 @@
 package com.kneaf.core;
 
+import java.util.concurrent.ForkJoinPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
-import com.kneaf.core.performance.PerformanceMonitoringSystem;
 
 /**
  * Optimizes chunk generation by managing thread priorities and

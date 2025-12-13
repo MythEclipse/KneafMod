@@ -2451,7 +2451,7 @@ pub extern "C" fn Java_com_kneaf_core_RustNoise_batchNoise2d<'a>(
     depth: jint,
     seed: jint,
     frequency: jdouble,
-) -> jdoubleArray<'a> {
+) -> JDoubleArray<'a> {
     let size = (width * depth) as usize;
     let mut results = vec![0.0; size];
     
@@ -2466,5 +2466,5 @@ pub extern "C" fn Java_com_kneaf_core_RustNoise_batchNoise2d<'a>(
     
     let output = env.new_double_array(size as i32).unwrap();
     env.set_double_array_region(&output, 0, &results).unwrap();
-    output.into_raw()
+    output
 }
