@@ -14,7 +14,7 @@
 //! JNI implementation for KneafCore vector mathematics
 //! Provides STRICTLY PURE vector/matrix operations - NO game state access, NO entity references
 
-use jni::objects::{JClass, JDoubleArray, JFloatArray, JObject, JObjectArray, JString};
+use jni::objects::{JByteBuffer, JClass, JDoubleArray, JFloatArray, JObject, JObjectArray, JString};
 use jni::sys::{jboolean, jdouble, jdoubleArray, jint, jlong};
 use jni::JNIEnv;
 use std::ffi::c_void;
@@ -2287,6 +2287,10 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
             let mut closest_dist_sq = f32::MAX;
             let mut closest_id = -1;
             let mut density = 0.0;
+            
+            // Avoidance accumulators (declared outside unsafe for scope)
+            let mut avoid_x = 0.0f32;
+            let mut avoid_z = 0.0f32;
             
             // -------------------------------------------------------------
             // REAL AVX2 IMPLEMENTATION (No Simulation)
