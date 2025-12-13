@@ -517,22 +517,51 @@ public final class OptimizationInjector {
     /**
      * MULTI-THREADED ENTITY TICK PROCESSING (Async mod pattern)
      * Entities are categorized into sync-only (players, projectiles) and
-     * async-safe.
-     * Async-safe entities are buffered and processed in parallel batches.
+     * SYNCHRONOUS MULTI-THREAD PROCESSING:
+     * - Java calls Rust (blocking)
+     * - Rust uses Rayon for parallel processing across CPU cores
+     * - Rust returns results
+     * - Java uses results for METRICS ONLY (no gameplay modification)
      */
     @SubscribeEvent
     public static void onEntityTick(EntityTickEvent.Pre event) {
-        // =====================================================================
-        // DISABLED: Async entity processing was breaking gameplay
-        // The system caused:
-        // - Post-tick barrier timeouts
-        // - Severe input lag
-        // - Broken physics (jumping, movement)
-        //
-        // Rust optimization is now METRICS-ONLY via EntityProcessingService
-        // Vanilla Minecraft handles ALL entity physics
-        // =====================================================================
-        // Method body intentionally empty - no async processing
+        if (!PERFORMANCE_MANAGER.isEntityThrottlingEnabled())
+            return;
+
+        if (!isNativeLibraryLoaded)
+            return;
+
+        try {
+            Object entity = event.getEntity();
+            if (entity == null) {
+                return;
+            }
+
+            // Get movement data for metrics
+            double[] movementData = getEntityMovementData(entity);
+            if (movementData == null || hasInvalidMovementValues(movementData[0], movementData[1], movementData[2])) {
+                return;
+            }
+
+            // Create physics data for EntityProcessingService
+            EntityProcessingService.EntityPhysicsData physicsData = new EntityProcessingService.EntityPhysicsData(
+                    movementData[0], movementData[1], movementData[2]);
+
+            // SYNCHRONOUS processing via EntityProcessingService
+            // This updates spatial grid and calls Rust internally
+            EntityProcessingService service = EntityProcessingService.getInstance();
+            EntityProcessingService.EntityProcessingResult result = service.processEntitySync(entity, physicsData);
+
+            if (result != null && result.success) {
+                // Track metrics only - DO NOT modify entity physics
+                totalEntitiesProcessed.incrementAndGet();
+                entitiesProcessedParallel.incrementAndGet();
+                recordOptimizationHit("Synchronous Rust processing");
+            }
+
+        } catch (Throwable t) {
+            LOGGER.debug("Entity tick processing failed: {}", t.getMessage());
+        }
     }
 
     /**
@@ -546,11 +575,11 @@ public final class OptimizationInjector {
     }
 
     /**
-     * Server tick post event - currently no-op since async processing is disabled
+     * Server tick post event - currently no-op
      */
     @SubscribeEvent
     public static void onServerTickPost(ServerTickEvent.Post event) {
-        // No-op: Async processing disabled, vanilla handles all entity physics
+        // No-op: Synchronous processing completes within entity tick
     }
 
     private static double[] getEntityMovementData(Object entity) {

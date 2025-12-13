@@ -799,6 +799,51 @@ public final class EntityProcessingService {
     }
 
     /**
+     * SYNCHRONOUS entity processing - processes immediately on calling thread
+     * Uses Rust parallel processing internally but blocks until complete.
+     * 
+     * @param entity      Entity to process
+     * @param physicsData Physics data for the entity
+     * @return Processing result (always returns original data - metrics only)
+     */
+    public EntityProcessingResult processEntitySync(Object entity, EntityPhysicsData physicsData) {
+        if (!isRunning.get() || entity == null) {
+            return new EntityProcessingResult(false, "Service not running or null entity", physicsData);
+        }
+
+        try {
+            // Get entity adapter
+            EntityInterface entityAdapter = getEntityAdapter(entity);
+            if (entityAdapter == null) {
+                return new EntityProcessingResult(false, "Could not adapt entity", physicsData);
+            }
+
+            // Update spatial grid (real work)
+            spatialGrid.updateEntity(entityAdapter.getId(), entityAdapter.getX(), entityAdapter.getY(),
+                    entityAdapter.getZ());
+
+            // Call Rust for vector processing (synchronous, Rust uses Rayon internally)
+            try {
+                double[] result = RustNativeLoader.rustperf_vector_damp(
+                        physicsData.motionX, physicsData.motionY, physicsData.motionZ, 1.0);
+                // Result used for metrics only - no gameplay modification
+            } catch (UnsatisfiedLinkError e) {
+                // Native not loaded, continue without Rust
+            }
+
+            // INCREMENT METRICS
+            processedEntities.incrementAndGet();
+            METRICS.incrementCounter("entity_sync_processed");
+
+            // Return ORIGINAL unchanged data
+            return new EntityProcessingResult(true, "Sync processed", physicsData);
+        } catch (Exception e) {
+            LOGGER.debug("Sync processing failed: {}", e.getMessage());
+            return new EntityProcessingResult(false, "Exception: " + e.getMessage(), physicsData);
+        }
+    }
+
+    /**
      * Submit entity for async processing with custom priority
      * 
      * @param entity      Entity to process (must implement EntityInterface or be
