@@ -2051,16 +2051,16 @@ pub extern "system" fn Java_com_kneaf_core_RustNativeLoader_calculateCircularPos
 // High-performance batch processing for multi-threaded entity/chunk systems
 // ============================================================================
 
-/// Batch process entity velocities with SIMD optimization
+/// Batch process entity velocities - PURE PASSTHROUGH (No Gameplay Modification)
 /// Input: flat array of [vx0, vy0, vz0, vx1, vy1, vz1, ...]
-/// Output: optimized velocities with damping and normalization applied
+/// Output: SAME velocities unchanged (for benchmarking/profiling only)
 #[no_mangle]
 pub extern "system" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_1entity_1physics<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     velocities: JDoubleArray<'local>,
     entity_count: jint,
-    damping: jdouble,
+    _damping: jdouble, // IGNORED - kept for API compatibility
 ) -> jdoubleArray {
     let count = entity_count as usize;
     let array_size = count * 3;
@@ -2070,31 +2070,16 @@ pub extern "system" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_
         return env.new_double_array(0).unwrap().into_raw();
     }
     
-    // Process entities in parallel using rayon
+    // PURE PASSTHROUGH: Parallel iteration for profiling, but NO modification
+    // This demonstrates the parallelism/SIMD capability without altering gameplay
     use rayon::prelude::*;
     
     let results: Vec<f64> = (0..count)
         .into_par_iter()
         .flat_map(|i| {
             let idx = i * 3;
-            let vx = vel_buf[idx];
-            let vy = vel_buf[idx + 1];
-            let vz = vel_buf[idx + 2];
-            
-            // Apply damping (horizontal only, preserve gravity)
-            let damped_x = vx * damping;
-            let damped_z = vz * damping;
-            
-            // Normalize for stability (prevent extreme velocities)
-            let speed_sq = damped_x * damped_x + vy * vy + damped_z * damped_z;
-            let max_speed = 10.0; // Minecraft max entity speed
-            
-            if speed_sq > max_speed * max_speed {
-                let scale = max_speed / speed_sq.sqrt();
-                vec![damped_x * scale, vy * scale, damped_z * scale]
-            } else {
-                vec![damped_x, vy, damped_z]
-            }
+            // Return velocities UNCHANGED - vanilla Minecraft handles physics
+            vec![vel_buf[idx], vel_buf[idx + 1], vel_buf[idx + 2]]
         })
         .collect();
     

@@ -986,35 +986,29 @@ public final class EntityProcessingService {
 
                     if (batchSize > 0) {
                         for (int j = 0; j < batchSize; j++) {
-                            // Read SpatialResult struct
+                            // Read SpatialResult struct (for METRICS ONLY)
                             int neighborId = outputBuf.getInt();
                             float distSq = outputBuf.getFloat();
                             float density = outputBuf.getFloat();
-                            float avoidX = outputBuf.getFloat();
-                            float avoidZ = outputBuf.getFloat();
+                            @SuppressWarnings("unused") float avoidX = outputBuf.getFloat(); // Read but DO NOT USE
+                            @SuppressWarnings("unused") float avoidZ = outputBuf.getFloat(); // Read but DO NOT USE
 
-                            // Use the sophisticated data from Rust
+                            // METRICS ONLY - DO NOT MODIFY GAMEPLAY
                             EntityProcessingTask task = batch.get(j);
                             CompletableFuture<EntityProcessingResult> future = activeFutures
                                     .get(((EntityInterface) task.entity).getId());
 
                             if (future != null) {
-                                // METRICS: Track density
+                                // Track spatial metrics
                                 if (density > 5.0f) METRICS.incrementCounter("high_crowd_density");
+                                if (neighborId != -1 && distSq < 4.0f) METRICS.incrementCounter("close_entity_pairs");
                                 
-                                // Apply Rust-calculated avoidance vector to velocity (Flocking behavior)
+                                // IMPORTANT: Complete future with ORIGINAL UNCHANGED physics data
+                                // This ensures vanilla Minecraft gameplay is NOT modified
                                 EntityPhysicsData pd = task.physicsData;
-                                double newVx = pd.motionX + (avoidX * 0.1); // Weighting
-                                double newVz = pd.motionZ + (avoidZ * 0.1);
-
-                                // Damping (simple)
-                                newVx *= 0.91;
-                                newVz *= 0.91;
-                                double newVy = pd.motionY * 0.98 - 0.08; // Gravity
-
-                                EntityPhysicsData resultData = new EntityPhysicsData(newVx, newVy, newVz);
+                                EntityPhysicsData resultData = new EntityPhysicsData(pd.motionX, pd.motionY, pd.motionZ);
                                 future.complete(
-                                        new EntityProcessingResult(true, "Processed by Rust Spatial Grid", resultData));
+                                        new EntityProcessingResult(true, "Rust Metrics (No Gameplay Change)", resultData));
                                 processedEntities.incrementAndGet();
                             }
                         }

@@ -28,13 +28,14 @@ import java.util.concurrent.TimeUnit;
  * entities
  * 
  * MOD COMPATIBILITY POLICY:
- * This optimization system ONLY applies to:
- * - Vanilla Minecraft entities (net.minecraft.world.entity.*)
- * - Kneaf Mod custom entities (com.kneaf.entities.*)
+ * This optimization system applies to ALL entities, including those from other mods.
  * 
- * Entities from other mods are NEVER touched to ensure full compatibility.
- * This whitelist approach prevents conflicts with other mods' custom entity
- * behaviors.
+ * UNIVERSAL OPTIMIZATION:
+ * - Vanilla Minecraft entities
+ * - Modded entities (Twilight Forest, Alex's Mobs, etc.)
+ * 
+ * We use robust error handling and fallback mechanisms to ensure compatibility
+ * while providing maximum performance for the entire server.
  */
 @EventBusSubscriber(modid = KneafCore.MODID, bus = EventBusSubscriber.Bus.GAME)
 public final class OptimizationInjector {
@@ -566,7 +567,8 @@ public final class OptimizationInjector {
 
     /**
      * MULTI-THREADED ENTITY TICK PROCESSING (Async mod pattern)
-     * Entities are categorized into sync-only (players, projectiles) and async-safe.
+     * Entities are categorized into sync-only (players, projectiles) and
+     * async-safe.
      * Async-safe entities are buffered and processed in parallel batches.
      */
     @SubscribeEvent
@@ -574,7 +576,8 @@ public final class OptimizationInjector {
         if (!PERFORMANCE_MANAGER.isEntityThrottlingEnabled())
             return;
 
-        // Fast path: Skip expensive processing if native optimizations are not available
+        // Fast path: Skip expensive processing if native optimizations are not
+        // available
         if (!isNativeLibraryLoaded || !PERFORMANCE_MANAGER.isRustIntegrationEnabled()) {
             if (totalEntitiesProcessed.get() % 1000 == 0) {
                 recordOptimizationMiss("Native library not loaded or integration disabled");
@@ -594,7 +597,8 @@ public final class OptimizationInjector {
             }
 
             // ASYNC MOD PATTERN: Check if entity should tick synchronously
-            // Players, projectiles, minecarts, and blacklisted entities skip async processing
+            // Players, projectiles, minecarts, and blacklisted entities skip async
+            // processing
             if (shouldTickSynchronously(entity)) {
                 syncFallbackCount.incrementAndGet();
                 // Let vanilla handle this entity - don't buffer it
@@ -704,7 +708,8 @@ public final class OptimizationInjector {
      * Get parallel processing statistics including async/sync breakdown
      */
     public static String getParallelProcessingStats() {
-        return String.format("ParallelStats{batches=%d, entitiesParallel=%d, asyncSuccess=%d, syncFallback=%d, blacklisted=%d, bufferSize=%d}",
+        return String.format(
+                "ParallelStats{batches=%d, entitiesParallel=%d, asyncSuccess=%d, syncFallback=%d, blacklisted=%d, bufferSize=%d}",
                 batchesProcessed.get(),
                 entitiesProcessedParallel.get(),
                 asyncSuccessCount.get(),
@@ -712,7 +717,7 @@ public final class OptimizationInjector {
                 blacklistedEntities.size(),
                 entityTickBuffer.size());
     }
-    
+
     /**
      * Check if entity should tick synchronously (Async mod pattern)
      * Returns true for entities that have critical state or collision requirements
@@ -723,16 +728,16 @@ public final class OptimizationInjector {
         if (entityUUID != null && blacklistedEntities.contains(entityUUID)) {
             return true;
         }
-        
+
         // Check entity type against sync-only list
         String entityTypeId = getEntityTypeId(entity);
         if (entityTypeId != null && SYNC_ONLY_ENTITY_TYPES.contains(entityTypeId)) {
             return true;
         }
-        
+
         return false;
     }
-    
+
     /**
      * Extract entity UUID via reflection
      */
@@ -744,7 +749,7 @@ public final class OptimizationInjector {
             return null;
         }
     }
-    
+
     /**
      * Extract entity type ID via reflection (e.g., "minecraft:zombie")
      */
@@ -767,7 +772,7 @@ public final class OptimizationInjector {
         }
         return null;
     }
-    
+
     /**
      * Add entity to blacklist (called when async processing fails)
      */
@@ -779,7 +784,7 @@ public final class OptimizationInjector {
             LOGGER.debug("Blacklisted entity {} for async processing: {}", uuid, reason);
         }
     }
-    
+
     /**
      * Post-tick synchronization barrier (awaits all pending async tasks)
      * Called at end of server tick to ensure all entity processing completes
@@ -792,16 +797,16 @@ public final class OptimizationInjector {
         while ((task = pendingAsyncTasks.poll()) != null) {
             tasks.add(task);
         }
-        
+
         if (!tasks.isEmpty()) {
             try {
                 CompletableFuture.allOf(tasks.toArray(new CompletableFuture[0]))
-                    .orTimeout(100, TimeUnit.MILLISECONDS) // 100ms max wait
-                    .exceptionally(e -> {
-                        LOGGER.debug("Post-tick barrier timeout: {}", e.getMessage());
-                        return null;
-                    })
-                    .join();
+                        .orTimeout(100, TimeUnit.MILLISECONDS) // 100ms max wait
+                        .exceptionally(e -> {
+                            LOGGER.debug("Post-tick barrier timeout: {}", e.getMessage());
+                            return null;
+                        })
+                        .join();
             } catch (Exception e) {
                 LOGGER.debug("Post-tick barrier error: {}", e.getMessage());
             }
@@ -1322,33 +1327,13 @@ public final class OptimizationInjector {
 
         try {
             // Check if entity is a valid Minecraft entity
-            String entityClassName = entity.getClass().getName();
+            // String entityClassName = entity.getClass().getName(); // Unused in Universal Mode
 
-            // EXCLUDE ITEMS - they often have custom behaviors from mods
-            if (entityClassName.contains(".item.") ||
-                    entityClassName.contains("ItemEntity") ||
-                    entityClassName.contains("ItemFrame") ||
-                    entityClassName.contains("ItemStack")) {
-                return false; // Never optimize items
-            }
+            // UNIVERSAL OPTIMIZATION:
+            // We optimized ALL entities including modded ones.
+            // We only blacklist specific known issues via shouldTickSynchronously.
 
-            // WHITELIST APPROACH FOR COMPATIBILITY:
-            // Optimize vanilla Minecraft entities and our custom mod entities
-
-            boolean isVanillaMinecraftEntity = entityClassName.startsWith("net.minecraft.world.entity.") ||
-                    entityClassName.startsWith("net.minecraft.client.player.") ||
-                    entityClassName.startsWith("net.minecraft.server.level.");
-
-            boolean isKneafModEntity = entityClassName.startsWith("com.kneaf.entities.");
-
-            // Only allow vanilla or our mod's entities
-            if (!isVanillaMinecraftEntity && !isKneafModEntity) {
-                // Silently skip other mod entities for compatibility
-                return false;
-            }
-
-            // For vanilla entities, accept them directly without extra checks
-            // The original hierarchy check was too restrictive and blocked valid entities
+            // Basic sanity check only
             return true;
         } catch (Exception e) {
             LOGGER.debug("Entity validation failed due to exception", e);
