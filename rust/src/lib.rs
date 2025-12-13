@@ -29,7 +29,6 @@ mod tests;
 pub mod performance_monitor;
 mod metrics_collector;
 mod metric_aggregator;
-mod dashboard;
 
 // Entity Processing System modules
 pub mod entity_registry;
