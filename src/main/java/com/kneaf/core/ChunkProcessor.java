@@ -132,15 +132,17 @@ public final class ChunkProcessor {
         double memUsage = (double) usedMem / totalMem;
 
         // Adaptive logic
-        if (estimatedTps < lowTpsThreshold || memUsage > 0.90) {
+        // Adaptive logic - Rely primarily on TPS (User Request: Java uses high RAM naturally)
+        // If GC is thrashing, TPS will drop, so TPS is the ultimate metric.
+        if (estimatedTps < lowTpsThreshold) {
             // Performance struggling - decrease concurrency
             int newLimit = Math.max(MIN_CONCURRENT_CHUNKS, (int) (currentLimit * 0.7));
             if (newLimit < currentLimit) {
                 currentMaxConcurrentChunks.set(newLimit);
-                LOGGER.debug("Scale DOWN: TPS={:.1f}, Mem={:.0f}%, Limit={}->{}",
-                        estimatedTps, memUsage * 100, currentLimit, newLimit);
+                LOGGER.debug("Scale DOWN: TPS={:.1f}, Limit={}->{}",
+                        estimatedTps, currentLimit, newLimit);
             }
-        } else if (estimatedTps > highTpsThreshold && memUsage < 0.75 && pending > currentLimit * 0.8) {
+        } else if (estimatedTps > highTpsThreshold && pending > currentLimit * 0.8) {
             // Performance good & high demand - increase concurrency
             int newLimit = Math.min(ABSOLUTE_MAX_CHUNKS, (int) (currentLimit * 1.2) + 2);
             if (newLimit > currentLimit) {
