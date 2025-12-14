@@ -31,7 +31,6 @@
 - **Adaptive Sampling**: Sampling rate yang menyesuaikan dengan beban sistem
 - **Distributed Tracing**: Tracing terdistribusi untuk analisis performa mendalam
 - **Error Tracking**: Pelacakan error otomatis dengan alerting system
-- **Performance Dashboard**: Dashboard performa untuk visualisasi metrik
 - **Thread-Safe Metric Aggregation**: Agregasi metrik lock-free untuk overhead minimal
 
 ### 🎮 Fitur Gameplay
@@ -62,8 +61,7 @@ src/main/java/com/kneaf/
 │       ├── DistributedTracer.java  # Distributed tracing
 │       ├── ErrorTracker.java      # Error tracking & analytics
 │       ├── AlertingSystem.java    # Alerting & notifications
-│       ├── CrossComponentEventBus.java  # Event bus
-│       └── PerformanceDashboard.java  # Performance dashboard
+│       └── CrossComponentEventBus.java  # Event bus
 ├── entities/                      # Entity registration
 │   └── ModEntities.java          # Entity registration
 └── commands/                      # Commands
@@ -86,7 +84,6 @@ rust/src/
 ├── performance_monitor.rs       # Performance monitor interface
 ├── metrics_collector.rs         # Metrics collection
 ├── metric_aggregator.rs         # Metric aggregation
-├── dashboard.rs                 # Dashboard data provider
 ├── entity_registry.rs           # Entity component system
 ├── entity_framework.rs          # Entity framework
 ├── entity_modulation.rs         # Entity modulation
