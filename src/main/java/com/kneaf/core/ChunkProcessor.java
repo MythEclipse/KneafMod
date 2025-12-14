@@ -79,10 +79,20 @@ public final class ChunkProcessor {
     // Chunk positions being processed (to avoid duplicate processing)
     private static final Set<Long> processingChunks = ConcurrentHashMap.newKeySet();
 
-    // === INCREASED LIMITS FOR 100+ CHUNKS/SEC ===
+    // === DYNAMIC CONCURRENCY CONFIGURATION ===
     private static volatile boolean enabled = true;
-    private static final int MAX_CONCURRENT_CHUNKS = 128; // Aggressive optimizations: 128 concurrent chunks
-    private static final int BATCH_SIZE = 32; // Larger batches for efficiency
+
+    // Dynamic limits
+    private static final int MIN_CONCURRENT_CHUNKS = Math.max(4, Runtime.getRuntime().availableProcessors());
+    private static final int ABSOLUTE_MAX_CHUNKS = 256;
+    private static final AtomicInteger currentMaxConcurrentChunks = new AtomicInteger(64); // Start moderate
+    private static final AtomicInteger dynamicBatchSize = new AtomicInteger(16);
+
+    // Adaptive logic state
+    private static long lastAdjustmentTime = 0;
+    private static final long ADJUSTMENT_INTERVAL_MS = 2000; // Adjust every 2 seconds
+    private static double lowTpsThreshold = 18.0;
+    private static double highTpsThreshold = 19.5;
 
     // Native method declaration
     public static native double[] rustperf_analyze_chunk_sections(double[] sectionBlockCounts, int sectionCount);
@@ -91,8 +101,60 @@ public final class ChunkProcessor {
     }
 
     static {
-        LOGGER.info("ChunkProcessor initialized with {} threads, max {} concurrent chunks",
-                THREAD_COUNT, MAX_CONCURRENT_CHUNKS);
+        LOGGER.info("ChunkProcessor initialized with {} threads, dynamic limit {} (max {})",
+                THREAD_COUNT, currentMaxConcurrentChunks.get(), ABSOLUTE_MAX_CHUNKS);
+    }
+
+    /**
+     * Update concurrency limits based on server performance
+     * Called from ServerLevelMixin
+     */
+    public static void updateConcurrency(long tickTimeMs) {
+        if (!enabled)
+            return;
+
+        long now = System.currentTimeMillis();
+        if (now - lastAdjustmentTime < ADJUSTMENT_INTERVAL_MS) {
+            return;
+        }
+
+        int currentLimit = currentMaxConcurrentChunks.get();
+        long pending = getPendingTasksCount();
+
+        // Calculate TPS approximation from tick time
+        // 50ms = 20 TPS
+        double estimatedTps = tickTimeMs > 0 ? Math.min(20.0, 1000.0 / tickTimeMs) : 20.0;
+
+        // Memory usage
+        long totalMem = Runtime.getRuntime().totalMemory();
+        long freeMem = Runtime.getRuntime().freeMemory();
+        long usedMem = totalMem - freeMem;
+        double memUsage = (double) usedMem / totalMem;
+
+        // Adaptive logic
+        if (estimatedTps < lowTpsThreshold || memUsage > 0.90) {
+            // Performance struggling - decrease concurrency
+            int newLimit = Math.max(MIN_CONCURRENT_CHUNKS, (int) (currentLimit * 0.7));
+            if (newLimit < currentLimit) {
+                currentMaxConcurrentChunks.set(newLimit);
+                LOGGER.debug("Scale DOWN: TPS={:.1f}, Mem={:.0f}%, Limit={}->{}",
+                        estimatedTps, memUsage * 100, currentLimit, newLimit);
+            }
+        } else if (estimatedTps > highTpsThreshold && memUsage < 0.75 && pending > currentLimit * 0.8) {
+            // Performance good & high demand - increase concurrency
+            int newLimit = Math.min(ABSOLUTE_MAX_CHUNKS, (int) (currentLimit * 1.2) + 2);
+            if (newLimit > currentLimit) {
+                currentMaxConcurrentChunks.set(newLimit);
+                LOGGER.debug("Scale UP: TPS={:.1f}, Mem={:.0f}%, Limit={}->{}",
+                        estimatedTps, memUsage * 100, currentLimit, newLimit);
+            }
+        }
+
+        lastAdjustmentTime = now;
+    }
+
+    public static int getPendingTasksCount() {
+        return activeChunkTasks.get();
     }
 
     /**
@@ -108,8 +170,8 @@ public final class ChunkProcessor {
         if (event.getLevel().isClientSide())
             return;
 
-        // Allow higher concurrent processing
-        if (activeChunkTasks.get() >= MAX_CONCURRENT_CHUNKS) {
+        // Limit concurrent chunk processing dynamically
+        if (activeChunkTasks.get() >= currentMaxConcurrentChunks.get()) {
             return;
         }
 

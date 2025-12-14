@@ -36,20 +36,20 @@ public abstract class ServerLevelMixin {
 
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
-    
+
     // Per-tick statistics
     @Unique
     private static final AtomicLong kneaf$tickCount = new AtomicLong(0);
-    
+
     @Unique
     private static long kneaf$lastTickStart = 0;
-    
+
     @Unique
     private static long kneaf$totalTickTime = 0;
-    
+
     @Unique
     private static long kneaf$maxTickTime = 0;
-    
+
     @Unique
     private static long kneaf$lastLogTime = 0;
 
@@ -62,10 +62,10 @@ public abstract class ServerLevelMixin {
             kneaf$LOGGER.info("✅ ServerLevelMixin applied - TPS optimization active!");
             kneaf$loggedFirstApply = true;
         }
-        
+
         kneaf$lastTickStart = System.nanoTime();
     }
-    
+
     /**
      * Track tick end time and log statistics.
      */
@@ -73,14 +73,21 @@ public abstract class ServerLevelMixin {
     private void kneaf$onTickReturn(java.util.function.BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         long tickTime = System.nanoTime() - kneaf$lastTickStart;
         long tickMs = tickTime / 1_000_000;
-        
+
         kneaf$tickCount.incrementAndGet();
         kneaf$totalTickTime += tickMs;
-        
+
         if (tickMs > kneaf$maxTickTime) {
             kneaf$maxTickTime = tickMs;
         }
-        
+
+        // Feed real-time tick data to dynamic chunk processor
+        try {
+            com.kneaf.core.ChunkProcessor.updateConcurrency(tickMs);
+        } catch (Throwable t) {
+            // Ignore - don't crash server for optimization logic
+        }
+
         // Log stats every 30 seconds
         long now = System.currentTimeMillis();
         if (now - kneaf$lastLogTime > 30000) {
@@ -89,10 +96,10 @@ public abstract class ServerLevelMixin {
                 long avgMs = kneaf$totalTickTime / ticks;
                 double tps = avgMs > 0 ? 1000.0 / avgMs : 20.0;
                 tps = Math.min(tps, 20.0);
-                
+
                 kneaf$LOGGER.info("ServerLevel TPS stats: avg {}ms/tick ({:.1f} TPS), max {}ms, {} ticks",
                         avgMs, tps, kneaf$maxTickTime, ticks);
-                
+
                 // Reset counters
                 kneaf$tickCount.set(0);
                 kneaf$totalTickTime = 0;
