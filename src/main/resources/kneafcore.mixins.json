@@ -11,7 +11,8 @@
     "GoalSelectorMixin",
     "ServerLevelMixin",
     "MobMixin",
-    "BlockEntityMixin"
+    "BlockEntityMixin",
+    "ChunkMapMixin"
   ],
   "client": [],
   "server": [],
