@@ -95,10 +95,11 @@ public abstract class WalkNodeEvaluatorMixin {
      * Inject into getPathTypeOfMob to add caching.
      * This is called for every path node evaluation.
      */
-    @Inject(method = "getPathTypeOfMob", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "getPathType(Lnet/minecraft/world/level/pathfinder/PathfindingContext;IIILnet/minecraft/world/entity/Mob;)Lnet/minecraft/world/level/pathfinder/PathType;", at = @At("HEAD"), cancellable = true)
     private void kneaf$onGetPathTypeOfMob(
             net.minecraft.world.level.pathfinder.PathfindingContext context,
             int x, int y, int z,
+            net.minecraft.world.entity.Mob mob,
             CallbackInfoReturnable<PathType> cir) {
 
         kneaf$pathTypeQueries.incrementAndGet();

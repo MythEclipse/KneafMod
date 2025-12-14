@@ -12,7 +12,8 @@
     "ServerLevelMixin",
     "MobMixin",
     "BlockEntityMixin",
-    "ChunkMapMixin"
+    "ChunkMapMixin",
+    "WalkNodeEvaluatorMixin"
   ],
   "client": [],
   "server": [],
