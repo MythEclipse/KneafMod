@@ -1392,7 +1392,7 @@ public final class EntityProcessingService {
             throughput = (double) deltaCount / (deltaTime / 1000.0);
         }
 
-        LOGGER.info(
+        LOGGER.debug(
                 "EntityProcessingService Metrics - Processed: {} (Rate: {:.1f}/sec), Queued: {}, Active: {}, QueueSize: {}, GridCells: {}, PoolSize: {}, CPU: {}%, AvgProcTime: {}ms",
                 stats.processedEntities,
                 throughput,

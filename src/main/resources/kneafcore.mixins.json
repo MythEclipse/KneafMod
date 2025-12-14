@@ -1,0 +1,17 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.kneaf.core.mixin",
+  "compatibilityLevel": "JAVA_8",
+  "refmap": "kneafcore.refmap.json",
+  "mixins": [
+    "EntityMixin",
+    "LivingEntityMixin",
+    "ItemEntityMixin"
+  ],
+  "client": [],
+  "server": [],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}
