@@ -81,8 +81,8 @@ public final class ChunkProcessor {
 
     // === INCREASED LIMITS FOR 100+ CHUNKS/SEC ===
     private static volatile boolean enabled = true;
-    private static final int MAX_CONCURRENT_CHUNKS = 64; // Increased from 16
-    private static final int BATCH_SIZE = 16; // Process in batches for efficiency
+    private static final int MAX_CONCURRENT_CHUNKS = 128; // Aggressive optimizations: 128 concurrent chunks
+    private static final int BATCH_SIZE = 32; // Larger batches for efficiency
 
     // Native method declaration
     public static native double[] rustperf_analyze_chunk_sections(double[] sectionBlockCounts, int sectionCount);
