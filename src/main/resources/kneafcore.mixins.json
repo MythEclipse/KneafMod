@@ -8,7 +8,10 @@
     "EntityMixin",
     "LivingEntityMixin",
     "ItemEntityMixin",
-    "GoalSelectorMixin"
+    "GoalSelectorMixin",
+    "ServerLevelMixin",
+    "MobMixin",
+    "BlockEntityMixin"
   ],
   "client": [],
   "server": [],
