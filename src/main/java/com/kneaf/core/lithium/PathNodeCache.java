@@ -31,11 +31,11 @@ public class PathNodeCache {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/PathNodeCache");
 
-    // PathType cache for individual block states
-    private static final Map<BlockState, PathType> BLOCK_PATH_TYPE_CACHE = new IdentityHashMap<>(4096);
+    // PathType cache for individual block states - Thread Safe
+    private static final Map<BlockState, PathType> BLOCK_PATH_TYPE_CACHE = new java.util.concurrent.ConcurrentHashMap<>(4096);
 
     // Cache for "is this block type always open/walkable"
-    private static final Map<BlockState, Boolean> ALWAYS_PASSABLE_CACHE = new IdentityHashMap<>(1024);
+    private static final Map<BlockState, Boolean> ALWAYS_PASSABLE_CACHE = new java.util.concurrent.ConcurrentHashMap<>(1024);
 
     // Statistics
     private static final AtomicLong cacheHits = new AtomicLong(0);
