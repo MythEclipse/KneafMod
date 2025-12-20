@@ -147,15 +147,4 @@ public abstract class EntityMixin {
         // Let vanilla handle complex collision cases
     }
 
-    /**
-     * Inject before world collision check to potentially use optimized sweeper.
-     * 
-     * Note: This is a hook point for future chunk-aware optimization.
-     * Full implementation would redirect getBlockCollisions to use
-     * ChunkAwareBlockCollisionSweeper.
-     */
-    @Inject(method = "move", at = @At("HEAD"))
-    private void kneaf$onMoveHead(net.minecraft.world.entity.MoverType type, Vec3 movement, CallbackInfo ci) {
-        // Track collision check - actual optimization happens in collide()
-    }
 }

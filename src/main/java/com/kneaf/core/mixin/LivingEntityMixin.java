@@ -48,16 +48,22 @@ public abstract class LivingEntityMixin {
 
     /**
      * Optimization: Throttle active effect ticking for performance.
-     * Effects like regeneration/poison tick frequently, but we can reduce some
-     * checks.
+     * Effects like regeneration/poison tick frequently - skip processing on
+     * alternate ticks for non-player entities to reduce server load.
      */
     @Inject(method = "tickEffects", at = @At("HEAD"), cancellable = true)
     private void kneaf$onTickEffects(CallbackInfo ci) {
-        // Skip effect tick processing on certain ticks for less critical effects
-        // This is aggressive; a milder version would check effect types.
+        LivingEntity self = (LivingEntity) (Object) this;
+
+        // Never throttle players - effects must be precise for gameplay
+        if (self instanceof net.minecraft.world.entity.player.Player) {
+            return;
+        }
+
+        // Throttle effect processing for non-player entities every other tick
+        // This reduces effect CPU overhead by ~50% for mobs with effects
         if (kneaf$tickCounter % 2 != 0) {
-            // Allow vanilla to run every other tick for passive entities
-            // For now, we just track. Full skip would require more careful checks.
+            ci.cancel();
         }
     }
 }

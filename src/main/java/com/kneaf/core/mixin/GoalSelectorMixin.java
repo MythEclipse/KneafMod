@@ -70,28 +70,19 @@ public abstract class GoalSelectorMixin {
     }
 
     /**
-     * Track goal evaluation checks.
+     * Track and throttle goal evaluation checks.
+     * Skip goal tick on alternate ticks to reduce AI processing overhead.
      */
     @Inject(method = "tickRunningGoals", at = @At("HEAD"), cancellable = true)
     private void kneaf$onTickRunningGoals(boolean tickAllRunning, CallbackInfo ci) {
         kneaf$goalChecks.incrementAndGet();
 
-        // Throttling: specific entities don't need to check goals every tick
-        // We can use the entity's ID to distribute checks across ticks
-        // This mixin target might be inside an inner class or the selector itself which
-        // holds the mob.
-        // Assuming GoalSelector has a field 'mob' or similar wrapper access might be
-        // hard without shadow.
-        // However, we can use a randomized throttle.
-
-        // Skip 50% of checks for performance test (aggressive)
-        // In a real scenario, check mob.tickCount % interval == 0
-        if (kneaf$tickCount.get() % 2 == 0) {
-            // Let it run
-        } else {
-            // Skip for optimization (simulated behavior since we don't have Mob access here
-            // easily)
-            // In reality would need @Shadow private final Mob mob;
+        // Throttle goal checks: Skip processing on odd ticks
+        // This distributes AI load across ticks and reduces CPU usage by ~50%
+        // tickAllRunning=true forces all goals to run (important actions), so don't
+        // skip
+        if (!tickAllRunning && kneaf$tickCount.get() % 2 != 0) {
+            ci.cancel();
         }
     }
 }
