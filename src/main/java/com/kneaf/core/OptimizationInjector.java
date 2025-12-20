@@ -22,6 +22,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import com.kneaf.core.math.VectorMath;
 
 /**
  * Optimized entity processing injector with async processing and hash-based
@@ -297,13 +298,14 @@ public final class OptimizationInjector {
 
             if (useAdvancedPhysics) {
                 try {
-                    // Use Rust for fast vector normalization
-                    double[] rustOptimized = RustNativeLoader.vectorNormalize(
+                    // Use VectorMath for fast vector normalization (handles native fallback
+                    // automatically)
+                    double[] rustOptimized = VectorMath.normalize(
                             physicsData.motionX,
                             physicsData.motionY,
                             physicsData.motionZ);
 
-                    double magnitude = RustNativeLoader.vectorLength(
+                    double magnitude = VectorMath.length(
                             physicsData.motionX,
                             physicsData.motionY,
                             physicsData.motionZ);
@@ -326,7 +328,6 @@ public final class OptimizationInjector {
             } else {
                 entity.setDeltaMovement(physicsData.motionX, physicsData.motionY, physicsData.motionZ);
             }
-
         } catch (Exception e) {
             recordAsyncOptimizationMiss("Synchronous fallback failed: " + e.getMessage());
         }

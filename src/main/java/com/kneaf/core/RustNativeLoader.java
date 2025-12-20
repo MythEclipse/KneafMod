@@ -251,6 +251,26 @@ public class RustNativeLoader {
 
     public static native double[] faer_matrix_mul(double[] a, double[] b);
 
+    // RESTORED: Batch native methods
+    public static native float[][] batchNalgebraMatrixMulNative(float[][] matricesA, float[][] matricesB, int count);
+
+    // RESTORED: Java helper for batch alignment
+    public static float[] batchNalgebraMatrixMul(float[][] matricesA, float[][] matricesB, int count) {
+        float[][] result2D = batchNalgebraMatrixMulNative(matricesA, matricesB, count);
+        return flatten2DArray(result2D);
+    }
+    
+    private static float[] flatten2DArray(float[][] arr) {
+         if (arr == null || arr.length == 0) return new float[0];
+         int rows = arr.length;
+         int cols = arr[0].length;
+         float[] flat = new float[rows * cols];
+         for (int i=0; i<rows; i++) {
+             System.arraycopy(arr[i], 0, flat, i*cols, cols);
+         }
+         return flat;
+    }
+
     // ========================================
     // CATEGORY 2: OptimizationInjector Methods
     // Core optimizations + Hayabusa ninja skills
@@ -346,9 +366,18 @@ public class RustNativeLoader {
      * Grid is a boolean array where true = obstacle.
      * Returns path as [x1, y1, x2, y2, ...] or null if no path.
      */
+    /**
+     * A* pathfinding using Rust parallel implementation.
+     * Grid is a boolean array where true = obstacle.
+     * Returns path as [x1, y1, x2, y2, ...] or null if no path.
+     */
     public static native int[] rustperf_astar_pathfind(
             boolean[] grid, int width, int height,
             int startX, int startY, int goalX, int goalY);
+
+    // RESTORED: Zero-copy spatial grid method used by EntityProcessingService
+    public static native void rustperf_batch_spatial_grid_zero_copy(
+            java.nio.ByteBuffer input, java.nio.ByteBuffer output, int count);
 
     /**
      * Batch entity physics processing.
@@ -358,100 +387,14 @@ public class RustNativeLoader {
     public static native double[] rustperf_batch_entity_physics(
             double[] velocities, int entityCount, double damping);
 
-    /**
-     * Alias for isLibraryLoaded() for backward compatibility.
-     */
+    // Compatibility alias - keeping this one as it's a simple boolean check used
+    // widely
     public static boolean isLoaded() {
         return isLibraryLoaded();
     }
 
-    // Legacy A* stub - delegates to new implementation
-    public static int[] parallelAStarPathfind(
-            int startX, int startY, int startZ,
-            int goalX, int goalY, int goalZ,
-            byte[] blockData, int worldWidth, int worldHeight, int worldDepth) {
-        // Convert byte[] blockData to boolean[] grid for 2D pathfinding
-        boolean[] grid = new boolean[worldWidth * worldDepth];
-        // Simplified: treat any non-zero byte as obstacle
-        for (int z = 0; z < worldDepth; z++) {
-            for (int x = 0; x < worldWidth; x++) {
-                int idx3d = startY * worldWidth * worldDepth + z * worldWidth + x;
-                if (idx3d < blockData.length) {
-                    grid[z * worldWidth + x] = blockData[idx3d] != 0;
-                }
-            }
-        }
-        return rustperf_astar_pathfind(grid, worldWidth, worldDepth, startX, startZ, goalX, goalZ);
-    }
-
-    // Matrix operations - IMPLEMENTED
-    public static native float[] parallelMatrixMultiplyBlock(float[] a, float[] b, int size);
-
-    public static native float[] parallelStrassenMultiply(float[] a, float[] b, int n);
-
-    // Batch operations
-    public static float[] batchMatrixMultiply(float[] matrices, int batchSize, int matrixSize) {
-        // Placeholder for future implementation
-        return new float[0];
-    }
-
-    // Arena memory operations
-    public static native float[] arenaMatrixMultiply(float[] a, float[] b, int size);
-
-    // Runtime SIMD operations - IMPLEMENTED
-    public static native float[] runtimeMatrixMultiply(float[] a, float[] b, int size);
-
-    public static native float runtimeVectorDotProduct(float[] a, float[] b);
-
-    public static native float[] runtimeVectorAdd(float[] a, float[] b);
-
-    public static native float[] runtimeMatrix4x4Multiply(float[] a, float[] b);
-
-    // ========================================
-    // ========================================
-    // CATEGORY 4: Batch Operations (EntityProcessingService &
-    // ParallelRustVectorProcessor)
-    // ========================================
-
-    // From EntityProcessingService
-    public static native double[] rustperf_batch_distance_matrix(double[] positions, int entityCount);
-
-    public static native void rustperf_batch_spatial_grid_zero_copy(java.nio.ByteBuffer input,
-            java.nio.ByteBuffer output, int count);
-
-    // From ParallelRustVectorProcessor
-    public static native float[][] batchNalgebraMatrixMulNative(float[][] matricesA, float[][] matricesB, int count);
-
-    public static native float[][] batchNalgebraVectorAddNative(float[][] vectorsA, float[][] vectorsB, int count);
-
-    public static float[] batchNalgebraMatrixMul(float[][] matricesA, float[][] matricesB, int count) {
-        float[][] result2D = batchNalgebraMatrixMulNative(matricesA, matricesB, count);
-        return flatten2DArray(result2D);
-    }
-
-    public static float[] batchNalgebraVectorAdd(float[][] vectorsA, float[][] vectorsB, int count) {
-        float[][] result2D = batchNalgebraVectorAddNative(vectorsA, vectorsB, count);
-        return flatten2DArray(result2D);
-    }
-
-    private static float[] flatten2DArray(float[][] array2D) {
-        if (array2D == null)
-            return null;
-        int totalLength = 0;
-        for (float[] row : array2D) {
-            if (row != null)
-                totalLength += row.length;
-        }
-        float[] flat = new float[totalLength];
-        int offset = 0;
-        for (float[] row : array2D) {
-            if (row != null) {
-                System.arraycopy(row, 0, flat, offset, row.length);
-                offset += row.length;
-            }
-        }
-        return flat;
-    }
+    // Note: Java-side batch helpers removed in favor of direct VectorMath usage or
+    // native batch calls.
 
     // ========================================
     // CATEGORY 5: Native Memory Management

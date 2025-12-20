@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
+import com.kneaf.core.math.VectorMath;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.concurrent.locks.Lock;
@@ -439,7 +440,8 @@ public class ParallelRustVectorProcessor {
 
         private float[] computeDirectly() {
             if (!RustNativeLoader.isLibraryLoaded()) {
-                throw new IllegalStateException("Rust native library not loaded");
+                // Robust Fallback: Use VectorMath (which has Java implementation)
+                return VectorMath.matrixMultiply(matrixA, matrixB);
             }
             switch (operationType) {
                 case "nalgebra":

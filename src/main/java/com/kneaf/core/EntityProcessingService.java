@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import com.kneaf.core.async.AsyncLogger;
 import com.kneaf.core.async.AsyncLoggingManager;
 import com.kneaf.core.async.AsyncMetricsCollector;
+import com.kneaf.core.math.VectorMath;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
@@ -740,13 +741,13 @@ public final class EntityProcessingService {
             spatialGrid.updateEntity(entityAdapter.getId(), entityAdapter.getX(), entityAdapter.getY(),
                     entityAdapter.getZ());
 
-            // Call Rust for vector processing (synchronous, Rust uses Rayon internally)
+            // Call VectorMath for vector processing (uses Rust if available)
             try {
-                double[] result = RustNativeLoader.rustperf_vector_damp(
+                double[] result = VectorMath.damp(
                         physicsData.motionX, physicsData.motionY, physicsData.motionZ, 1.0);
                 // Result used for metrics only - no gameplay modification
-            } catch (UnsatisfiedLinkError e) {
-                // Native not loaded, continue without Rust
+            } catch (Exception e) {
+                // Ignore errors in sync processing metrics
             }
 
             // INCREMENT METRICS
@@ -1117,18 +1118,16 @@ public final class EntityProcessingService {
             if (useAdvancedPhysics) {
                 // ADVANCED PHYSICS OPTIMIZATION: Use Rust-powered calculations for better
                 // performance
-                // No damping - just use Rust for faster vector operations on all axes
-                // (horizontal + vertical)
+                // No damping - just use Rust/VectorMath for faster vector operations
                 try {
-                    // Use Rust for comprehensive vector normalization and validation across all
-                    // axes
-                    double[] rustOptimized = RustNativeLoader.vectorNormalize(
+                    // Use VectorMath for comprehensive vector normalization and validation
+                    double[] rustOptimized = VectorMath.normalize(
                             data.motionX,
                             data.motionY,
                             data.motionZ);
 
-                    // Rust normalization returns unit vector, so we need to preserve magnitude
-                    double magnitude = velocityMagnitude; // Use precomputed magnitude for optimization
+                    // Normalize returns unit vector, so we need to preserve magnitude
+                    double magnitude = velocityMagnitude; // Use precomputed magnitude
 
                     // Apply magnitude back to normalized vector for smooth physics
                     double optimizedX = rustOptimized[0] * magnitude;
@@ -1137,13 +1136,13 @@ public final class EntityProcessingService {
 
                     processedData = new EntityPhysicsData(optimizedX, optimizedY, optimizedZ);
 
-                    return new EntityProcessingResult(true, "Advanced physics optimization with Rust calculations",
+                    return new EntityProcessingResult(true, "Advanced physics optimization with VectorMath",
                             processedData);
                 } catch (Exception e) {
-                    // Fallback to vanilla if Rust fails
-                    LOGGER.debug("Rust calculation failed, using vanilla: {}", e.getMessage());
+                    // Fallback to vanilla if calculation fails
+                    LOGGER.debug("VectorMath calculation failed, using vanilla: {}", e.getMessage());
                     processedData = new EntityPhysicsData(data.motionX, data.motionY, data.motionZ);
-                    return new EntityProcessingResult(true, "Vanilla physics (Rust fallback)", processedData);
+                    return new EntityProcessingResult(true, "Vanilla physics (VectorMath fallback)", processedData);
                 }
             } else {
                 // Fallback: Pure vanilla physics passthrough
@@ -1182,19 +1181,15 @@ public final class EntityProcessingService {
             if (useAdvancedPhysics) {
                 // ADVANCED PHYSICS OPTIMIZATION: Use Rust-powered calculations for better
                 // performance
-                // No damping - just use Rust for faster vector operations on all axes
-                // (horizontal + vertical)
                 try {
-                    // Use Rust for comprehensive vector normalization and validation across all
-                    // axes
-                    double[] rustOptimized = RustNativeLoader.vectorNormalize(
+                    // Use VectorMath for comprehensive vector normalization
+                    double[] rustOptimized = VectorMath.normalize(
                             data.motionX,
                             data.motionY,
                             data.motionZ);
 
-                    // Rust normalization returns unit vector, so we need to preserve magnitude
-                    // FULL RUST CALCULATION: Use Rust vectorLength instead of Math.sqrt
-                    double magnitude = RustNativeLoader.vectorLength(
+                    // Use VectorMath for length calculation
+                    double magnitude = VectorMath.length(
                             data.motionX,
                             data.motionY,
                             data.motionZ);
@@ -1206,13 +1201,13 @@ public final class EntityProcessingService {
 
                     processedData = new EntityPhysicsData(optimizedX, optimizedY, optimizedZ);
 
-                    return new EntityProcessingResult(true, "Advanced physics optimization with Rust calculations",
+                    return new EntityProcessingResult(true, "Advanced physics optimization with VectorMath",
                             processedData);
                 } catch (Exception e) {
-                    // Fallback to vanilla if Rust fails
-                    LOGGER.debug("Rust calculation failed, using vanilla: {}", e.getMessage());
+                    // Fallback to vanilla if calculation fails
+                    LOGGER.debug("VectorMath calculation failed, using vanilla: {}", e.getMessage());
                     processedData = new EntityPhysicsData(data.motionX, data.motionY, data.motionZ);
-                    return new EntityProcessingResult(true, "Vanilla physics (Rust fallback)", processedData);
+                    return new EntityProcessingResult(true, "Vanilla physics (VectorMath fallback)", processedData);
                 }
             } else {
                 // Fallback: Pure vanilla physics passthrough
