@@ -23,6 +23,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import com.kneaf.core.math.VectorMath;
+import com.kneaf.core.model.EntityPhysicsData;
+import com.kneaf.core.model.EntityProcessingResult;
 
 /**
  * Optimized entity processing injector with async processing and hash-based
@@ -133,7 +135,7 @@ public final class OptimizationInjector {
             }
 
             // Extract physics data
-            EntityProcessingService.EntityPhysicsData physicsData = extractPhysicsData(entity);
+            EntityPhysicsData physicsData = extractPhysicsData(entity);
             if (physicsData == null) {
                 return;
             }
@@ -142,7 +144,7 @@ public final class OptimizationInjector {
             int adaptiveTimeoutMs = calculateAdaptiveTimeout(entity);
 
             // Submit for async processing with adaptive timeout
-            CompletableFuture<EntityProcessingService.EntityProcessingResult> future = entityProcessingService
+            CompletableFuture<EntityProcessingResult> future = entityProcessingService
                     .processEntityAsync(entity, physicsData);
 
             // Handle result asynchronously (non-blocking)
@@ -247,7 +249,7 @@ public final class OptimizationInjector {
         return Math.max(MIN_ASYNC_TIMEOUT_MS, Math.min(timeout, MAX_ASYNC_TIMEOUT_MS));
     }
 
-    private static EntityProcessingService.EntityPhysicsData extractPhysicsData(Entity entity) {
+    private static EntityPhysicsData extractPhysicsData(Entity entity) {
         try {
             Vec3 deltaMovement = entity.getDeltaMovement();
             double x = deltaMovement.x();
@@ -260,7 +262,7 @@ public final class OptimizationInjector {
                 return null;
             }
 
-            return new EntityProcessingService.EntityPhysicsData(x, y, z);
+            return new EntityPhysicsData(x, y, z);
         } catch (Exception e) {
             LOGGER.error("Error extracting physics data: {}", e.getMessage());
             return null;
@@ -268,13 +270,13 @@ public final class OptimizationInjector {
     }
 
     private static void applyPhysicsResult(Entity entity,
-            EntityProcessingService.EntityProcessingResult result) {
+            EntityProcessingResult result) {
         if (!result.success || result.processedData == null) {
             return;
         }
 
         try {
-            EntityProcessingService.EntityPhysicsData data = result.processedData;
+            EntityPhysicsData data = result.processedData;
 
             if (Double.isNaN(data.motionX) || Double.isInfinite(data.motionX) ||
                     Double.isNaN(data.motionY) || Double.isInfinite(data.motionY) ||
@@ -292,7 +294,7 @@ public final class OptimizationInjector {
     }
 
     private static void performSynchronousFallback(Entity entity,
-            EntityProcessingService.EntityPhysicsData physicsData) {
+            EntityPhysicsData physicsData) {
         try {
             boolean useAdvancedPhysics = PerformanceManager.getInstance().isAdvancedPhysicsOptimized();
 
@@ -383,6 +385,25 @@ public final class OptimizationInjector {
 
     public static void logAsyncPerformanceStats() {
         LOGGER.info("Async Metrics - Hits: {}, Misses: {}, Errors: {}, Total: {}",
+                asyncOptimizationHits.get(),
+                asyncOptimizationMisses.get(),
+                asyncOptimizationErrors.get(),
+                totalEntitiesProcessedAsync.get());
+    }
+
+    public static String getOptimizationMetrics() {
+        return String.format("Entities: %d, Hits: %d, Misses: %d",
+                totalEntitiesProcessedAsync.get(),
+                asyncOptimizationHits.get(),
+                asyncOptimizationMisses.get());
+    }
+
+    public static String getCombinedOptimizationMetrics() {
+        return getOptimizationMetrics();
+    }
+
+    public static String getAsyncOptimizationMetrics() {
+        return String.format("Hits: %d, Misses: %d, Errors: %d, Total: %d",
                 asyncOptimizationHits.get(),
                 asyncOptimizationMisses.get(),
                 asyncOptimizationErrors.get(),

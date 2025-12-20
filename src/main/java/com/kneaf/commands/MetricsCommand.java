@@ -1,7 +1,7 @@
 package com.kneaf.commands;
 
 import com.kneaf.core.OptimizationInjector;
-import com.kneaf.core.OptimizedOptimizationInjector;
+
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
@@ -16,9 +16,9 @@ public class MetricsCommand {
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("kneaf")
-            .then(Commands.literal("metrics")
-                .requires(source -> source.hasPermission(2)) // OP level 2 required
-                .executes(MetricsCommand::execute)));
+                .then(Commands.literal("metrics")
+                        .requires(source -> source.hasPermission(2)) // OP level 2 required
+                        .executes(MetricsCommand::execute)));
     }
 
     private static int execute(CommandContext<CommandSourceStack> context) {
@@ -26,7 +26,7 @@ public class MetricsCommand {
 
         String metrics = OptimizationInjector.getOptimizationMetrics();
         String combinedMetrics = OptimizationInjector.getCombinedOptimizationMetrics();
-        String asyncMetrics = OptimizedOptimizationInjector.getAsyncOptimizationMetrics();
+        String asyncMetrics = OptimizationInjector.getAsyncOptimizationMetrics();
 
         source.sendSuccess(() -> Component.literal("§6=== KneafCore Optimization Metrics ==="), false);
         source.sendSuccess(() -> Component.literal("§eEntity Optimization: §f" + metrics), false);

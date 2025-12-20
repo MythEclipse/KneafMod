@@ -7,11 +7,19 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.kneaf.core.performance.model.VectorOperation;
+
 /**
  * Cache-optimized work-stealing scheduler.
  * Extracted from ParallelRustVectorProcessor.
  */
 public class CacheOptimizedWorkStealingScheduler {
+    private final ConcurrentLinkedQueue<VectorOperation> globalQueue;
+    private final ConcurrentLinkedQueue<VectorOperation>[] workerQueues;
+    private final AtomicInteger successfulSteals;
+    private final AtomicInteger stealAttempts;
+    private final BlockDistribution blockDistribution;
+
     @SuppressWarnings("unchecked")
     public CacheOptimizedWorkStealingScheduler(int numWorkers) {
         this.globalQueue = new ConcurrentLinkedQueue<>();
@@ -25,11 +33,11 @@ public class CacheOptimizedWorkStealingScheduler {
         }
     }
 
-    public void submit(ParallelRustVectorProcessor.VectorOperation operation) {
+    public void submit(VectorOperation operation) {
         globalQueue.offer(operation);
     }
 
-    public void submitToWorker(int workerId, ParallelRustVectorProcessor.VectorOperation operation) {
+    public void submitToWorker(int workerId, VectorOperation operation) {
         if (workerId >= 0 && workerId < workerQueues.length) {
             workerQueues[workerId].offer(operation);
         } else {
@@ -37,7 +45,7 @@ public class CacheOptimizedWorkStealingScheduler {
         }
     }
 
-    public ParallelRustVectorProcessor.VectorOperation stealWithCacheAffinity(int workerId,
+    public VectorOperation stealWithCacheAffinity(int workerId,
             List<Integer> preferredBlocks) {
         stealAttempts.incrementAndGet();
 
@@ -45,7 +53,7 @@ public class CacheOptimizedWorkStealingScheduler {
         for (int block : preferredBlocks) {
             Integer targetWorker = blockDistribution.getBlockOwner(block);
             if (targetWorker != null && targetWorker != workerId) {
-                ParallelRustVectorProcessor.VectorOperation task = workerQueues[targetWorker].poll();
+                VectorOperation task = workerQueues[targetWorker].poll();
                 if (task != null) {
                     successfulSteals.incrementAndGet();
                     return task;
@@ -57,7 +65,7 @@ public class CacheOptimizedWorkStealingScheduler {
         return steal(workerId);
     }
 
-    public ParallelRustVectorProcessor.VectorOperation steal(int workerId) {
+    public VectorOperation steal(int workerId) {
         stealAttempts.incrementAndGet();
 
         // Try other worker queues
@@ -65,7 +73,7 @@ public class CacheOptimizedWorkStealingScheduler {
             if (i == workerId)
                 continue;
 
-            ParallelRustVectorProcessor.VectorOperation task = workerQueues[i].poll();
+            VectorOperation task = workerQueues[i].poll();
             if (task != null) {
                 successfulSteals.incrementAndGet();
                 return task;
@@ -76,7 +84,7 @@ public class CacheOptimizedWorkStealingScheduler {
         return globalQueue.poll();
     }
 
-    public ParallelRustVectorProcessor.VectorOperation getLocalTask(int workerId) {
+    public VectorOperation getLocalTask(int workerId) {
         if (workerId >= 0 && workerId < workerQueues.length) {
             return workerQueues[workerId].poll();
         }

@@ -3,8 +3,10 @@ package com.kneaf.core.performance;
 import com.kneaf.core.PerformanceManager;
 import com.kneaf.core.OptimizationInjector;
 import com.kneaf.core.ParallelRustVectorProcessor;
+import com.kneaf.core.performance.model.QueueStatistics;
 import com.kneaf.core.async.AsyncMetricsCollector;
 import com.kneaf.core.EntityProcessingService;
+import com.kneaf.core.model.EntityProcessingStatistics;
 import com.kneaf.core.RustNativeLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,7 +110,7 @@ public final class PerformanceMonitoringSystem {
         LOGGER.info("Initializing comprehensive performance monitoring system");
 
         // Initialize core components
-        this.metricsCollector = new AsyncMetricsCollector();
+        this.metricsCollector = AsyncMetricsCollector.getInstance();
         this.metricAggregator = new ThreadSafeMetricAggregator();
         this.eventBus = new CrossComponentEventBus();
         this.errorTracker = new ErrorTracker();
@@ -373,7 +375,7 @@ public final class PerformanceMonitoringSystem {
         // Collect dari ParallelRustVectorProcessor (formerly EnhancedRustVectorLibrary)
         if (shouldCollectComponentMetric("rust_vector_library", currentRate) &&
                 com.kneaf.core.RustNativeLoader.isLibraryLoaded()) {
-            ParallelRustVectorProcessor.QueueStatistics queueStats = ParallelRustVectorProcessor.getInstance()
+            QueueStatistics queueStats = ParallelRustVectorProcessor.getInstance()
                     .getQueueStatistics();
             recordMetricEvent("rust_vector_library.pending_operations",
                     (double) queueStats.pendingOperations, "gauge");
@@ -387,7 +389,7 @@ public final class PerformanceMonitoringSystem {
 
         // Collect dari EntityProcessingService
         if (shouldCollectComponentMetric("entity_processing", currentRate)) {
-            EntityProcessingService.EntityProcessingStatistics entityStats = EntityProcessingService.getInstance()
+            EntityProcessingStatistics entityStats = EntityProcessingService.getInstance()
                     .getStatistics();
             recordMetricEvent("entity_processing.processed_entities",
                     (double) entityStats.processedEntities, "counter");

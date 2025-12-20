@@ -1,7 +1,8 @@
 package com.kneaf.core.async;
 
 import com.kneaf.core.performance.AtomicDouble;
-
+import com.kneaf.core.async.model.*;
+import com.kneaf.core.async.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.*;
@@ -18,6 +19,8 @@ import java.util.*;
  * - Zero allocation di hot path untuk counter/gauge
  */
 public final class AsyncMetricsCollector {
+    private static volatile AsyncMetricsCollector instance;
+
     private static final int HISTOGRAM_RING_SIZE = 16384; // Must be power of 2
     private static final int TIMER_RING_SIZE = 16384;
     private static final int AGGREGATION_BATCH_SIZE = 128;
@@ -48,79 +51,18 @@ public final class AsyncMetricsCollector {
     private final AtomicLong totalMetricsRecorded = new AtomicLong(0);
     private final AtomicLong metricsDropped = new AtomicLong(0);
 
-    /**
-     * Lock-free ring buffer untuk histogram values
-     */
-    private static class HistogramRingBuffer {
-        private final long[] values;
-        private final AtomicLong writeIndex = new AtomicLong(0);
-        private final int mask;
-
-        HistogramRingBuffer(int size) {
-            this.values = new long[size];
-            this.mask = size - 1;
-        }
-
-        boolean offer(long value) {
-            long index = writeIndex.getAndIncrement();
-            values[(int) (index & mask)] = value;
-            return true;
-        }
-
-        long[] snapshot() {
-            long currentIndex = writeIndex.get();
-            int size = (int) Math.min(currentIndex, values.length);
-            long[] snapshot = new long[size];
-
-            for (int i = 0; i < size; i++) {
-                snapshot[i] = values[i];
+    public static AsyncMetricsCollector getInstance() {
+        if (instance == null) {
+            synchronized (AsyncMetricsCollector.class) {
+                if (instance == null) {
+                    instance = new AsyncMetricsCollector();
+                }
             }
-
-            return snapshot;
         }
-
-        void clear() {
-            writeIndex.set(0);
-        }
+        return instance;
     }
 
-    /**
-     * Lock-free ring buffer untuk timer values
-     */
-    private static class TimerRingBuffer {
-        private final long[] values;
-        private final AtomicLong writeIndex = new AtomicLong(0);
-        private final int mask;
-
-        TimerRingBuffer(int size) {
-            this.values = new long[size];
-            this.mask = size - 1;
-        }
-
-        boolean offer(long value) {
-            long index = writeIndex.getAndIncrement();
-            values[(int) (index & mask)] = value;
-            return true;
-        }
-
-        long[] snapshot() {
-            long currentIndex = writeIndex.get();
-            int size = (int) Math.min(currentIndex, values.length);
-            long[] snapshot = new long[size];
-
-            for (int i = 0; i < size; i++) {
-                snapshot[i] = values[i];
-            }
-
-            return snapshot;
-        }
-
-        void clear() {
-            writeIndex.set(0);
-        }
-    }
-
-    public AsyncMetricsCollector() {
+    private AsyncMetricsCollector() {
         // Start background aggregation every 5 seconds
         aggregator.scheduleAtFixedRate(
                 this::aggregateMetrics,
@@ -205,24 +147,6 @@ public final class AsyncMetricsCollector {
         return new TimerContext(this, name);
     }
 
-    public static class TimerContext implements AutoCloseable {
-        private final AsyncMetricsCollector collector;
-        private final String name;
-        private final long startTime;
-
-        TimerContext(AsyncMetricsCollector collector, String name) {
-            this.collector = collector;
-            this.name = name;
-            this.startTime = System.nanoTime();
-        }
-
-        @Override
-        public void close() {
-            long duration = System.nanoTime() - startTime;
-            collector.recordTimer(name, duration);
-        }
-    }
-
     /**
      * Get counter value
      */
@@ -270,24 +194,6 @@ public final class AsyncMetricsCollector {
         return new HistogramStats(values.length, min, max, avg, p50, p95);
     }
 
-    public static class HistogramStats {
-        public final long count;
-        public final long min;
-        public final long max;
-        public final long avg;
-        public final long p50;
-        public final long p95;
-
-        public HistogramStats(long count, long min, long max, long avg, long p50, long p95) {
-            this.count = count;
-            this.min = min;
-            this.max = max;
-            this.avg = avg;
-            this.p50 = p50;
-            this.p95 = p95;
-        }
-    }
-
     /**
      * Get timer statistics (in nanoseconds)
      */
@@ -317,32 +223,6 @@ public final class AsyncMetricsCollector {
         long p95 = values[(int) (values.length * 0.95)];
 
         return new TimerStats(values.length, min, max, avg, p50, p95);
-    }
-
-    public static class TimerStats {
-        public final long count;
-        public final long minNs;
-        public final long maxNs;
-        public final long avgNs;
-        public final long p50Ns;
-        public final long p95Ns;
-
-        public TimerStats(long count, long min, long max, long avg, long p50, long p95) {
-            this.count = count;
-            this.minNs = min;
-            this.maxNs = max;
-            this.avgNs = avg;
-            this.p50Ns = p50;
-            this.p95Ns = p95;
-        }
-
-        public double getAvgMs() {
-            return avgNs / 1_000_000.0;
-        }
-
-        public double getP95Ms() {
-            return p95Ns / 1_000_000.0;
-        }
     }
 
     /**
@@ -394,25 +274,6 @@ public final class AsyncMetricsCollector {
                 timers.size());
     }
 
-    public static class CollectorStatistics {
-        public final long totalRecorded;
-        public final long totalDropped;
-        public final int counterCount;
-        public final int gaugeCount;
-        public final int histogramCount;
-        public final int timerCount;
-
-        public CollectorStatistics(long recorded, long dropped, int counters,
-                int gauges, int histograms, int timers) {
-            this.totalRecorded = recorded;
-            this.totalDropped = dropped;
-            this.counterCount = counters;
-            this.gaugeCount = gauges;
-            this.histogramCount = histograms;
-            this.timerCount = timers;
-        }
-    }
-
     /**
      * Shutdown async metrics collector
      */
@@ -441,5 +302,4 @@ public final class AsyncMetricsCollector {
     public boolean isHealthy() {
         return !aggregator.isShutdown() && !aggregator.isTerminated();
     }
-
 }

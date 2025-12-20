@@ -5,16 +5,19 @@ import java.util.concurrent.*;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicLong;
-// import java.util.concurrent.atomic.AtomicInteger; // Unused
 import com.kneaf.core.math.VectorMath;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-// Removed unused imports
 import com.kneaf.core.performance.scheduler.CacheAffinity;
-// BlockDistribution imported but unused directly, removed
 import com.kneaf.core.performance.scheduler.CacheOptimizedWorkStealingScheduler;
+import com.kneaf.core.performance.model.OperationQueue;
+import com.kneaf.core.performance.model.VectorOperation;
+import com.kneaf.core.performance.model.VectorOperationResult;
+import com.kneaf.core.performance.model.QueueStatistics;
+import com.kneaf.core.performance.tasks.MatrixMulTask;
+import com.kneaf.core.performance.tasks.VectorOperationTask;
 
 /**
  * Cache-optimized parallel processor for Rust vector operations using Fork/Join
@@ -28,7 +31,7 @@ import com.kneaf.core.performance.scheduler.CacheOptimizedWorkStealingScheduler;
  */
 public class ParallelRustVectorProcessor {
     private static final int DEFAULT_BATCH_SIZE = 100;
-    private static final int MIN_PARALLEL_THRESHOLD = 10;
+    public static final int MIN_PARALLEL_THRESHOLD = 10; // Made public for Tasks
     private static final int MAX_THREADS = Runtime.getRuntime().availableProcessors();
     private static final int CACHE_LINE_SIZE = 64; // Typical cache line size in bytes
     private static final int BLOCK_SIZE = 8; // 8x8 blocks for cache-friendly processing
@@ -120,226 +123,6 @@ public class ParallelRustVectorProcessor {
         // Initialize cache affinity for each worker
         for (int i = 0; i < MAX_THREADS; i++) {
             workerCacheAffinity.put(i, new CacheAffinity());
-        }
-    }
-
-    /**
-     * Thread-safe operation queue for managing parallel tasks
-     */
-    private static class OperationQueue {
-        private final ConcurrentLinkedQueue<VectorOperation> pendingOperations;
-        private final ConcurrentHashMap<Long, CompletableFuture<VectorOperationResult>> activeFutures;
-        private final AtomicLong operationIdGenerator;
-
-        public OperationQueue() {
-            this.pendingOperations = new ConcurrentLinkedQueue<>();
-            this.activeFutures = new ConcurrentHashMap<>();
-            this.operationIdGenerator = new AtomicLong(0);
-        }
-
-        public long submitOperation(VectorOperation operation) {
-            long operationId = operationIdGenerator.incrementAndGet();
-            operation.setOperationId(operationId);
-            pendingOperations.offer(operation);
-            return operationId;
-        }
-
-        public VectorOperation pollOperation() {
-            return pendingOperations.poll();
-        }
-
-        public void completeOperation(long operationId, VectorOperationResult result) {
-            CompletableFuture<VectorOperationResult> future = activeFutures.remove(operationId);
-            if (future != null) {
-                future.complete(result);
-            }
-        }
-
-        public CompletableFuture<VectorOperationResult> getFuture(long operationId) {
-            CompletableFuture<VectorOperationResult> future = new CompletableFuture<>();
-            activeFutures.put(operationId, future);
-            return future;
-        }
-
-        public int getPendingOperationCount() {
-            return pendingOperations.size();
-        }
-    }
-
-    /**
-     * Base class for vector operations
-     */
-    public static abstract class VectorOperation {
-        protected long operationId;
-        protected final long timestamp;
-
-        public VectorOperation() {
-            this.timestamp = System.nanoTime();
-        }
-
-        public void setOperationId(long operationId) {
-            this.operationId = operationId;
-        }
-
-        public long getOperationId() {
-            return operationId;
-        }
-
-        public abstract VectorOperationResult execute();
-
-        public abstract int getEstimatedWorkload();
-    }
-
-    /**
-     * Result of vector operation
-     */
-    public static class VectorOperationResult {
-        public final long operationId;
-        public final Object result;
-        public final long executionTimeNs;
-        public final Exception error;
-
-        public VectorOperationResult(long operationId, Object result, long executionTimeNs) {
-            this.operationId = operationId;
-            this.result = result;
-            this.executionTimeNs = executionTimeNs;
-            this.error = null;
-        }
-
-        public VectorOperationResult(long operationId, Exception error) {
-            this.operationId = operationId;
-            this.result = null;
-            this.executionTimeNs = 0;
-            this.error = error;
-        }
-    }
-
-    /**
-     * Fork/Join task for parallel matrix multiplication
-     */
-    private static class MatrixMulTask extends RecursiveTask<float[]> {
-        private final float[] matrixA;
-        private final float[] matrixB;
-        private final int start;
-        private final int end;
-        private final String operationType;
-
-        public MatrixMulTask(float[] matrixA, float[] matrixB, int start, int end, String operationType) {
-            this.matrixA = matrixA;
-            this.matrixB = matrixB;
-            this.start = start;
-            this.end = end;
-            this.operationType = operationType;
-        }
-
-        @Override
-        protected float[] compute() {
-            if (end - start <= MIN_PARALLEL_THRESHOLD) {
-                return computeDirectly();
-            } else {
-                int mid = start + (end - start) / 2;
-                MatrixMulTask leftTask = new MatrixMulTask(matrixA, matrixB, start, mid, operationType);
-                MatrixMulTask rightTask = new MatrixMulTask(matrixA, matrixB, mid, end, operationType);
-
-                leftTask.fork();
-                float[] rightResult = rightTask.compute();
-                float[] leftResult = leftTask.join();
-
-                return combineResults(leftResult, rightResult);
-            }
-        }
-
-        private float[] computeDirectly() {
-            if (!RustNativeLoader.isLibraryLoaded()) {
-                // Robust Fallback: Use VectorMath (which has Java implementation)
-                return VectorMath.matrixMultiply(matrixA, matrixB);
-            }
-            switch (operationType) {
-                case "nalgebra":
-                    return RustNativeLoader.nalgebra_matrix_mul(matrixA, matrixB);
-                case "glam":
-                    return RustNativeLoader.glam_matrix_mul(matrixA, matrixB);
-                case "faer":
-                    // Handle double[] to float[] conversion
-                    double[] a = new double[16];
-                    double[] b = new double[16];
-                    for (int i = 0; i < 16; i++) {
-                        a[i] = matrixA[i];
-                        b[i] = matrixB[i];
-                    }
-                    double[] res = RustNativeLoader.faer_matrix_mul(a, b);
-                    float[] floatRes = new float[16];
-                    for (int i = 0; i < 16; i++)
-                        floatRes[i] = (float) res[i];
-                    return floatRes;
-                default:
-                    throw new IllegalArgumentException("Unknown operation type: " + operationType);
-            }
-        }
-
-        private float[] combineResults(float[] left, float[] right) {
-            // For matrix operations, results are identical, so return one
-            return left;
-        }
-    }
-
-    /**
-     * Fork/Join task for parallel vector operations
-     */
-    private static class VectorOperationTask extends RecursiveTask<Object> {
-        private final float[] vectorA;
-        private final float[] vectorB;
-        private final int start;
-        private final int end;
-        private final String operationType;
-
-        public VectorOperationTask(float[] vectorA, float[] vectorB, int start, int end, String operationType) {
-            this.vectorA = vectorA;
-            this.vectorB = vectorB;
-            this.start = start;
-            this.end = end;
-            this.operationType = operationType;
-        }
-
-        @Override
-        protected Object compute() {
-            if (end - start <= MIN_PARALLEL_THRESHOLD) {
-                return computeDirectly();
-            } else {
-                int mid = start + (end - start) / 2;
-                VectorOperationTask leftTask = new VectorOperationTask(vectorA, vectorB, start, mid, operationType);
-                VectorOperationTask rightTask = new VectorOperationTask(vectorA, vectorB, mid, end, operationType);
-
-                leftTask.fork();
-                Object rightResult = rightTask.compute();
-                Object leftResult = leftTask.join();
-
-                return combineResults(leftResult, rightResult);
-            }
-        }
-
-        private Object computeDirectly() {
-            if (!RustNativeLoader.isLibraryLoaded()) {
-                throw new IllegalStateException("Rust native library not loaded");
-            }
-            switch (operationType) {
-                case "vectorAdd":
-                    return RustNativeLoader.nalgebra_vector_add(vectorA, vectorB);
-                case "vectorDot":
-                    return RustNativeLoader.glam_vector_dot(vectorA, vectorB);
-                case "vectorCross":
-                    return RustNativeLoader.glam_vector_cross(vectorA, vectorB);
-                default:
-                    throw new IllegalArgumentException("Unknown operation type: " + operationType);
-            }
-        }
-
-        private Object combineResults(Object left, Object right) {
-            // For vector operations, results are combined based on operation type
-            if (operationType.equals("vectorDot")) {
-                return (Float) left + (Float) right;
-            }
-            return left; // For other operations, return first result
         }
     }
 
@@ -1080,52 +863,14 @@ public class ParallelRustVectorProcessor {
                     result = RustNativeLoader.batchNalgebraMatrixMul(batchA, batchB, batchSize);
                     break;
                 case "glam":
-                    // NOTE: generic batch method, assuming exists or fallback
-                    // RustNativeLoader didn't explicitly show batchGlamMatrixMul in previous view,
-                    // but ParallelRustVectorProcessor used it?
-                    // Wait, checking RustNativeLoader again (Step 20).
-                    // It has: batchNalgebraMatrixMulNative, batchNalgebraVectorAddNative.
-                    // It DOES NOT have batchGlamMatrixMul.
-                    // Checking original ParallelRustVectorProcessor code...
-                    // In original code (Step 26), processBatch just called RustNativeLoader.
-                    // Wait, in Step 26, processBatch used
-                    // RustNativeLoader.batchNalgebraMatrixMul...
-                    // But for "glam" case?
-                    // The original code had: case "glam": result =
-                    // RustNativeLoader.batchGlamMatrixMul(batchA, batchB, batchSize);
-                    // But RustNativeLoader view (Step 20) DOES NOT show batchGlamMatrixMul.
-                    // It shows: batchNalgebraMatrixMulNative, batchNalgebraVectorAddNative,
-                    // rustperf_batch_distance_matrix, rustperf_batch_spatial_grid_zero_copy.
-                    // So the original code might have been calling a method that didn't exist or I
-                    // missed it.
-                    // I will assume for now I should only support nalgebra batch or fallback for
-                    // others.
-                    // Actually, if the method doesn't exist, I should throw or fallback.
-                    // I'll check RustNativeLoader again carefully.
-                    // Step 20:
-                    // public static native float[][] batchNalgebraMatrixMulNative(float[][]
-                    // matricesA, float[][] matricesB, int count);
-                    // public static native float[][] batchNalgebraVectorAddNative(float[][]
-                    // vectorsA, float[][] vectorsB, int count);
-                    // public static float[] batchNalgebraMatrixMul(float[][] matricesA, float[][]
-                    // matricesB, int count) { ... }
-                    // It seems ONLY nalgebra batch is supported.
-                    // So for glam and faer, I should probably fallback to loop or throw.
-
-                    // I will implement fallback for non-nalgebra types in processBatch.
-
                     throw new UnsupportedOperationException(
                             "Native batch operation not supported for type: " + operationType);
-
                 case "faer":
                     throw new UnsupportedOperationException(
                             "Native batch operation not supported for type: " + operationType);
                 default:
                     throw new IllegalArgumentException("Unknown operation type: " + operationType);
             }
-            // Logic for nalgebra result is already float[] from helper wrapper in
-            // RustNativeLoader?
-            // RustNativeLoader.batchNalgebraMatrixMul returns float[].
 
             return result;
 
@@ -1177,23 +922,6 @@ public class ParallelRustVectorProcessor {
                 operationCounter.get(),
                 forkJoinPool.getActiveThreadCount(),
                 forkJoinPool.getQueuedTaskCount());
-    }
-
-    /**
-     * Queue statistics data class
-     */
-    public static class QueueStatistics {
-        public final int pendingOperations;
-        public final long totalOperations;
-        public final int activeThreads;
-        public final long queuedTasks;
-
-        public QueueStatistics(int pendingOperations, long totalOperations, int activeThreads, long queuedTasks) {
-            this.pendingOperations = pendingOperations;
-            this.totalOperations = totalOperations;
-            this.activeThreads = activeThreads;
-            this.queuedTasks = queuedTasks;
-        }
     }
 
     /**
