@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 import com.kneaf.core.async.AsyncLogger;
 import com.kneaf.core.async.AsyncLoggingManager;
 import com.kneaf.core.async.AsyncMetricsCollector;
-import com.kneaf.core.mock.TestMockEntity;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
@@ -488,8 +487,7 @@ public final class EntityProcessingService {
     private static final AsyncMetricsCollector METRICS = AsyncLoggingManager.getMetricsCollector();
     private static final EntityProcessingService INSTANCE = new EntityProcessingService();
 
-    // Native method declaration
-    public static native double[] rustperf_batch_distance_matrix(double[] positions, int entityCount);
+    // Native method declaration removed - now using RustNativeLoader
 
     // Thread pool for async entity processing
     private final ExecutorService entityProcessor;
@@ -541,19 +539,13 @@ public final class EntityProcessingService {
      */
     private static int getMaxThreadPoolSize() {
         int availableProcessors = Runtime.getRuntime().availableProcessors();
-        // Use available processors but cap at reasonable maximum to avoid excessive
-        // resource usage
-        return Math.max(2, Math.min(availableProcessors, 16)); // Increased for adaptive pooling
+        return Math.max(2, Math.min(availableProcessors, 16));
     }
 
-    /**
-     * Get current CPU usage percentage (0.0 to 100.0)
-     */
     private double getCpuUsage() {
         try {
             if (osBean instanceof com.sun.management.OperatingSystemMXBean) {
-                com.sun.management.OperatingSystemMXBean sunOsBean = (com.sun.management.OperatingSystemMXBean) osBean;
-                return sunOsBean.getProcessCpuLoad() * 100.0;
+                return ((com.sun.management.OperatingSystemMXBean) osBean).getProcessCpuLoad() * 100.0;
             }
         } catch (Exception e) {
             LOGGER.debug("Failed to get CPU usage: {}", e.getMessage());
@@ -561,27 +553,17 @@ public final class EntityProcessingService {
         return 0.0;
     }
 
-    /**
-     * Update average processing time with new sample
-     */
     private void updateAverageProcessingTime(long processingTimeNs) {
         long totalTime = totalProcessingTimeNs.addAndGet(processingTimeNs);
         long samples = processingTimeSamples.incrementAndGet();
-
-        // Update moving average
         double currentAvgMs = (totalTime / (double) samples) / 1_000_000.0;
         averageProcessingTimeMs = currentAvgMs;
-
-        // Keep only recent samples for moving average
         if (samples > 1000) {
             totalProcessingTimeNs.set((long) (averageProcessingTimeMs * 1_000_000.0 * 500));
             processingTimeSamples.set(500);
         }
     }
 
-    /**
-     * Add load sample to recent history for smoothing
-     */
     private void addLoadSample(double load) {
         recentLoadSamples.offer(load);
         if (recentLoadSamples.size() > MAX_LOAD_SAMPLES) {
@@ -589,35 +571,25 @@ public final class EntityProcessingService {
         }
     }
 
-    /**
-     * Get smoothed load average from recent samples
-     */
     private double getSmoothedLoadAverage() {
         if (recentLoadSamples.isEmpty())
             return 0.0;
-
         double sum = 0.0;
-        for (double sample : recentLoadSamples) {
+        for (double sample : recentLoadSamples)
             sum += sample;
-        }
         return sum / recentLoadSamples.size();
     }
 
-    /**
-     * Adaptive thread pool controller that dynamically adjusts size based on load
-     */
     private class AdaptiveThreadPoolController {
         private static final int MIN_THREADS = 2;
         private static final int MAX_THREADS = 16;
-        private static final int LOAD_THRESHOLD_HIGH = 80; // %
-        private static final int LOAD_THRESHOLD_LOW = 30; // %
-        private static final int ADJUSTMENT_INTERVAL_MS = 5000; // 5 seconds
+        private static final int LOAD_THRESHOLD_HIGH = 80;
+        private static final int LOAD_THRESHOLD_LOW = 30;
+        private static final int ADJUSTMENT_INTERVAL_MS = 5000;
 
         private final AtomicInteger currentThreadCount;
         private final ScheduledExecutorService monitorExecutor;
         private final EntityProcessingService service;
-
-        // OPTIMIZED: Reduce logging frequency
         private volatile long lastLogTime = 0;
         private volatile double lastLoggedLoad = 0.0;
 
@@ -625,8 +597,6 @@ public final class EntityProcessingService {
             this.currentThreadCount = new AtomicInteger(getMaxThreadPoolSize());
             this.service = service;
             this.monitorExecutor = Executors.newSingleThreadScheduledExecutor();
-
-            // Start monitoring task
             startLoadMonitoring();
         }
 
@@ -643,71 +613,41 @@ public final class EntityProcessingService {
         private void adjustThreadPoolSizeBasedOnLoad() {
             EntityProcessingStatistics stats = service.getStatistics();
             double loadPercentage = calculateLoadPercentage(stats);
-            double cpuUsage = getCpuUsage();
-
-            // OPTIMIZED: Only log on significant changes or every 60 seconds
             long now = System.currentTimeMillis();
             if (now - lastLogTime > 60000 || Math.abs(loadPercentage - lastLoggedLoad) > 20.0) {
-                LOGGER.debug("Adaptive thread pool - Load: {}%, CPU: {}%, AvgProcTime: {}ms, Threads: {}",
-                        String.format("%.2f", loadPercentage), String.format("%.2f", cpuUsage),
-                        String.format("%.3f", service.averageProcessingTimeMs), currentThreadCount.get());
                 lastLogTime = now;
                 lastLoggedLoad = loadPercentage;
             }
-
-            // Adjust thread count based on load
-            if (loadPercentage > LOAD_THRESHOLD_HIGH) {
+            if (loadPercentage > LOAD_THRESHOLD_HIGH)
                 increaseThreadCount();
-            } else if (loadPercentage < LOAD_THRESHOLD_LOW) {
+            else if (loadPercentage < LOAD_THRESHOLD_LOW)
                 decreaseThreadCount();
-            }
         }
 
         private double calculateLoadPercentage(EntityProcessingStatistics stats) {
             long queued = stats.queuedEntities;
             int active = stats.activeProcessors;
             int currentThreads = currentThreadCount.get();
-
             if (currentThreads == 0)
                 return 0.0;
-
-            // Get CPU usage and processing time metrics
             double cpuUsage = getCpuUsage();
             double avgProcessingTimeMs = averageProcessingTimeMs;
-
-            // Calculate load components
             double queueLoad = (queued > 0) ? Math.min(100.0 * queued / MAX_QUEUE_SIZE, 100.0) : 0.0;
             double activeLoad = (active > 0) ? Math.min(100.0 * active / currentThreads, 100.0) : 0.0;
-
-            // CPU-based load (normalized to 0-100 scale)
             double cpuLoad = Math.min(cpuUsage, 100.0);
-
-            // Processing time load - higher time indicates higher load
-            double timeLoad = Math.min(avgProcessingTimeMs / 10.0, 100.0); // 10ms baseline
-
-            // Enhanced weighted average: Queue(20%) + Active(20%) + CPU(40%) + Time(20%)
+            double timeLoad = Math.min(avgProcessingTimeMs / 10.0, 100.0);
             double finalLoad = (queueLoad * 0.2 + activeLoad * 0.2 + cpuLoad * 0.4 + timeLoad * 0.2);
-
-            // Apply smoothing with recent samples
             addLoadSample(finalLoad);
-            double smoothedLoad = getSmoothedLoadAverage();
-
-            // Return smoothed load to prevent erratic thread pool adjustments
-            return smoothedLoad;
+            return getSmoothedLoadAverage();
         }
 
         private void increaseThreadCount() {
             int current = currentThreadCount.get();
             if (current < MAX_THREADS) {
-                int newCount = Math.min(current + 2, MAX_THREADS); // Increase by 2 threads
+                int newCount = Math.min(current + 2, MAX_THREADS);
                 if (currentThreadCount.compareAndSet(current, newCount)) {
-                    LOGGER.info("Adaptive thread pool increasing from {} to {} threads (high load)",
-                            current, newCount);
-                    // Update thread pool sizes
                     ((ThreadPoolExecutor) service.entityProcessor).setCorePoolSize(newCount);
                     ((ThreadPoolExecutor) service.entityProcessor).setMaximumPoolSize(newCount);
-                    // ForkJoinPool cannot be dynamically resized - create new instance for
-                    // simplicity
                 }
             }
         }
@@ -715,21 +655,12 @@ public final class EntityProcessingService {
         private void decreaseThreadCount() {
             int current = currentThreadCount.get();
             if (current > MIN_THREADS) {
-                int newCount = Math.max(current - 1, MIN_THREADS); // Decrease by 1 thread
+                int newCount = Math.max(current - 1, MIN_THREADS);
                 if (currentThreadCount.compareAndSet(current, newCount)) {
-                    LOGGER.info("Adaptive thread pool decreasing from {} to {} threads (low load)",
-                            current, newCount);
-                    // Update thread pool sizes
                     ((ThreadPoolExecutor) service.entityProcessor).setCorePoolSize(newCount);
                     ((ThreadPoolExecutor) service.entityProcessor).setMaximumPoolSize(newCount);
-                    // ForkJoinPool cannot be dynamically resized - create new instance for
-                    // simplicity
                 }
             }
-        }
-
-        public int getCurrentThreadCount() {
-            return currentThreadCount.get();
         }
 
         public void shutdown() {
@@ -740,22 +671,14 @@ public final class EntityProcessingService {
     private EntityProcessingService() {
         int maxThreadPoolSize = getMaxThreadPoolSize();
         this.entityProcessor = new ThreadPoolExecutor(
-                maxThreadPoolSize / 2,
-                maxThreadPoolSize,
-                60L, TimeUnit.SECONDS,
+                maxThreadPoolSize / 2, maxThreadPoolSize, 60L, TimeUnit.SECONDS,
                 new LinkedBlockingQueue<>(MAX_QUEUE_SIZE),
-                new ThreadFactory() {
-                    private final AtomicInteger threadNumber = new AtomicInteger(1);
-
-                    @Override
-                    public Thread newThread(Runnable r) {
-                        Thread t = new Thread(r, "EntityProcessor-" + threadNumber.getAndIncrement());
-                        t.setDaemon(true);
-                        return t;
-                    }
+                r -> {
+                    Thread t = new Thread(r, "EntityProcessor-");
+                    t.setDaemon(true);
+                    return t;
                 },
                 new ThreadPoolExecutor.CallerRunsPolicy());
-
         this.forkJoinPool = new ForkJoinPool(maxThreadPoolSize);
         this.maintenanceExecutor = Executors.newSingleThreadScheduledExecutor();
         this.processingQueue = new ConcurrentLinkedQueue<>();
@@ -763,20 +686,11 @@ public final class EntityProcessingService {
         this.spatialGrid = new SpatialGrid(SPATIAL_GRID_CELL_SIZE);
         this.entityPriorities = new ConcurrentHashMap<>();
         this.physicsDataPool = new ConcurrentLinkedQueue<>();
-
-        // Pre-populate physics data pool
-        for (int i = 0; i < MAX_PHYSICS_DATA_POOL_SIZE / 2; i++) {
+        for (int i = 0; i < MAX_PHYSICS_DATA_POOL_SIZE / 2; i++)
             physicsDataPool.offer(new EntityPhysicsData(0.0, 0.0, 0.0));
-        }
-
-        // Start maintenance task
         startMaintenanceTask();
-
-        // Use async logger untuk avoid blocking main thread
-        ASYNC_LOGGER.info("EntityProcessingService initialized with {} max threads", maxThreadPoolSize);
+        ASYNC_LOGGER.info("EntityProcessingService initialized");
         METRICS.incrementCounter("entity_processing.service.initialized");
-
-        // Initialize adaptive thread pool controller
         this.adaptiveThreadPoolController = new AdaptiveThreadPoolController(this);
     }
 
@@ -788,8 +702,8 @@ public final class EntityProcessingService {
      * Submit entity for async processing with priority
      */
 
-    // NATIVE DECLARATION: Advanced Zero-Copy Spatial Grid
-    public static native void rustperf_batch_spatial_grid_zero_copy(ByteBuffer input, ByteBuffer output, int count);
+    // NATIVE DECLARATION: Advanced Zero-Copy Spatial Grid removed - using
+    // RustNativeLoader
 
     /**
      * Submit entity for async processing with default priority (MEDIUM)
@@ -1028,7 +942,7 @@ public final class EntityProcessingService {
                     }
 
                     // Call Advanced Rust Function
-                    rustperf_batch_spatial_grid_zero_copy(inputBuf, outputBuf, batchSize);
+                    RustNativeLoader.rustperf_batch_spatial_grid_zero_copy(inputBuf, outputBuf, batchSize);
 
                     // Read Output Buffer
                     outputBuf.position(0); // Reset read cursor
@@ -1582,44 +1496,8 @@ public final class EntityProcessingService {
             return (EntityInterface) entity;
         }
 
-        // For TestMockEntity, we can use reflection to get the necessary methods
-        if (entity instanceof TestMockEntity) {
-            return new TestMockEntityAdapter((TestMockEntity) entity);
-        }
-
         // For other objects, use reflection adapter
         return new ReflectionEntityAdapter(entity);
-    }
-
-    /**
-     * Adapter for TestMockEntity to EntityInterface
-     */
-    private static class TestMockEntityAdapter implements EntityInterface {
-        private final TestMockEntity mockEntity;
-
-        public TestMockEntityAdapter(TestMockEntity mockEntity) {
-            this.mockEntity = mockEntity;
-        }
-
-        @Override
-        public long getId() {
-            return mockEntity.getId();
-        }
-
-        @Override
-        public double getX() {
-            return mockEntity.getX();
-        }
-
-        @Override
-        public double getY() {
-            return mockEntity.getY();
-        }
-
-        @Override
-        public double getZ() {
-            return mockEntity.getZ();
-        }
     }
 
     /**

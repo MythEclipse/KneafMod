@@ -13,7 +13,6 @@
 ## 🎯 Fitur Utama
 
 ### 🚀 Optimasi Performa Inti
-- **Dynamic Entity Ticking Throttling**: Mengurangi overhead ticking entity dengan throttling dinamis berbasis jarak dan kepentingan
 - **AI Pathfinding Optimization**: Algoritma pathfinding yang dioptimalkan menggunakan Rust dengan parallel A* dan SIMD
 - **Rust-Powered Vector Mathematics**: Operasi matematika vektor dan matriks berkecepatan tinggi menggunakan native Rust library
 - **Item Stack Merging**: Penggabungan item stack otomatis untuk mengurangi jumlah entity di dunia

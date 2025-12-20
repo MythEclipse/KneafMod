@@ -392,17 +392,14 @@ public class RustNativeLoader {
 
     public static native float[] parallelStrassenMultiply(float[] a, float[] b, int n);
 
-    // Batch operations - NOT IMPLEMENTED YET
+    // Batch operations
     public static float[] batchMatrixMultiply(float[] matrices, int batchSize, int matrixSize) {
-        throw new UnsatisfiedLinkError("Batch matrix multiply not yet implemented for RustNativeLoader");
+        // Placeholder for future implementation
+        return new float[0];
     }
 
-    // Arena memory operations - IMPLEMENTED
+    // Arena memory operations
     public static native float[] arenaMatrixMultiply(float[] a, float[] b, int size);
-
-    public static void resetMemoryArena() {
-        throw new UnsatisfiedLinkError("Reset memory arena not yet implemented for RustNativeLoader");
-    }
 
     // Runtime SIMD operations - IMPLEMENTED
     public static native float[] runtimeMatrixMultiply(float[] a, float[] b, int size);
@@ -413,73 +410,23 @@ public class RustNativeLoader {
 
     public static native float[] runtimeMatrix4x4Multiply(float[] a, float[] b);
 
-    // Load balancer operations - NOT IMPLEMENTED YET
-    public static long createLoadBalancer(int numWorkers) {
-        throw new UnsatisfiedLinkError("Load balancer not yet implemented for RustNativeLoader");
-    }
-
-    public static long submitTask(long balancerPtr, int taskType, float[] data) {
-        throw new UnsatisfiedLinkError("Load balancer not yet implemented for RustNativeLoader");
-    }
-
-    public static float[] getTaskResult(long taskPtr, int timeoutMs) {
-        throw new UnsatisfiedLinkError("Load balancer not yet implemented for RustNativeLoader");
-    }
-
-    public static void destroyLoadBalancer(long balancerPtr) {
-        throw new UnsatisfiedLinkError("Load balancer not yet implemented for RustNativeLoader");
-    }
-
-    // Performance monitoring - NOT IMPLEMENTED YET
-    public static long createPerformanceMonitor() {
-        throw new UnsatisfiedLinkError("Performance monitor not yet implemented for RustNativeLoader");
-    }
-
-    public static void recordMetric(long monitorPtr, String metricName, double value) {
-        throw new UnsatisfiedLinkError("Performance monitor not yet implemented for RustNativeLoader");
-    }
-
-    public static double getMetricAverage(long monitorPtr, String metricName) {
-        throw new UnsatisfiedLinkError("Performance monitor not yet implemented for RustNativeLoader");
-    }
-
-    public static void destroyPerformanceMonitor(long monitorPtr) {
-        throw new UnsatisfiedLinkError("Performance monitor not yet implemented for RustNativeLoader");
-    }
-
-    // Entity system operations - NOT IMPLEMENTED YET
-    public static long createEntityRegistry() {
-        throw new UnsatisfiedLinkError("Entity registry not yet implemented for RustNativeLoader");
-    }
-
-    public static long registerEntity(long registryPtr, String entityType) {
-        throw new UnsatisfiedLinkError("Entity registry not yet implemented for RustNativeLoader");
-    }
-
-    public static void updateEntity(long registryPtr, long entityId, float[] position, float[] velocity) {
-        throw new UnsatisfiedLinkError("Entity registry not yet implemented for RustNativeLoader");
-    }
-
-    public static float[] queryEntities(long registryPtr, float[] center, float radius) {
-        throw new UnsatisfiedLinkError("Entity registry not yet implemented for RustNativeLoader");
-    }
-
-    public static void destroyEntityRegistry(long registryPtr) {
-        throw new UnsatisfiedLinkError("Entity registry not yet implemented for RustNativeLoader");
-    }
-
     // ========================================
-    // CATEGORY 4: ParallelRustVectorProcessor Batch Operations
-    // Batch processing for parallel vector/matrix operations
-    // Note: Rust returns float[][], but some callers expect flat float[]
+    // ========================================
+    // CATEGORY 4: Batch Operations (EntityProcessingService &
+    // ParallelRustVectorProcessor)
     // ========================================
 
-    // Native declarations returning float[][]
-    private static native float[][] batchNalgebraMatrixMulNative(float[][] matricesA, float[][] matricesB, int count);
+    // From EntityProcessingService
+    public static native double[] rustperf_batch_distance_matrix(double[] positions, int entityCount);
 
-    private static native float[][] batchNalgebraVectorAddNative(float[][] vectorsA, float[][] vectorsB, int count);
+    public static native void rustperf_batch_spatial_grid_zero_copy(java.nio.ByteBuffer input,
+            java.nio.ByteBuffer output, int count);
 
-    // Public wrappers that flatten results for compatibility
+    // From ParallelRustVectorProcessor
+    public static native float[][] batchNalgebraMatrixMulNative(float[][] matricesA, float[][] matricesB, int count);
+
+    public static native float[][] batchNalgebraVectorAddNative(float[][] vectorsA, float[][] vectorsB, int count);
+
     public static float[] batchNalgebraMatrixMul(float[][] matricesA, float[][] matricesB, int count) {
         float[][] result2D = batchNalgebraMatrixMulNative(matricesA, matricesB, count);
         return flatten2DArray(result2D);
@@ -509,71 +456,8 @@ public class RustNativeLoader {
         return flat;
     }
 
-    // Batch vector operations with Java fallback implementations
-    public static float[] batchGlamVectorDot(float[][] vectorsA, float[][] vectorsB, int count) {
-        float[] results = new float[count];
-        for (int i = 0; i < count; i++) {
-            if (i < vectorsA.length && i < vectorsB.length) {
-                float[] a = vectorsA[i];
-                float[] b = vectorsB[i];
-                float dot = 0.0f;
-                int len = Math.min(a.length, b.length);
-                for (int j = 0; j < len; j++) {
-                    dot += a[j] * b[j];
-                }
-                results[i] = dot;
-            }
-        }
-        return results;
-    }
-
-    public static float[] batchGlamVectorCross(float[][] vectorsA, float[][] vectorsB, int count) {
-        // Cross product only for 3D vectors, returns flattened array
-        float[] results = new float[count * 3];
-        for (int i = 0; i < count; i++) {
-            if (i < vectorsA.length && i < vectorsB.length &&
-                    vectorsA[i].length >= 3 && vectorsB[i].length >= 3) {
-                float[] a = vectorsA[i];
-                float[] b = vectorsB[i];
-                results[i * 3] = a[1] * b[2] - a[2] * b[1];
-                results[i * 3 + 1] = a[2] * b[0] - a[0] * b[2];
-                results[i * 3 + 2] = a[0] * b[1] - a[1] * b[0];
-            }
-        }
-        return results;
-    }
-
-    public static float[] batchGlamMatrixMul(float[][] matricesA, float[][] matricesB, int count) {
-        // Simplified 4x4 matrix multiplication fallback
-        float[] results = new float[count * 16]; // 4x4 matrices
-        for (int i = 0; i < count; i++) {
-            if (i < matricesA.length && i < matricesB.length &&
-                    matricesA[i].length >= 16 && matricesB[i].length >= 16) {
-                float[] a = matricesA[i];
-                float[] b = matricesB[i];
-                // Matrix multiplication for 4x4 matrices
-                for (int row = 0; row < 4; row++) {
-                    for (int col = 0; col < 4; col++) {
-                        float sum = 0.0f;
-                        for (int k = 0; k < 4; k++) {
-                            sum += a[row * 4 + k] * b[k * 4 + col];
-                        }
-                        results[i * 16 + row * 4 + col] = sum;
-                    }
-                }
-            }
-        }
-        return results;
-    }
-
-    public static float[] batchFaerMatrixMul(float[][] matricesA, float[][] matricesB, int count) {
-        // Faer matrix multiplication uses same algorithm as Glam for Java fallback
-        return batchGlamMatrixMul(matricesA, matricesB, count);
-    }
-
     // ========================================
     // CATEGORY 5: Native Memory Management
-    // Safe memory buffer operations for zero-copy transfers
     // ========================================
 
     public static native void releaseNativeBuffer(long pointer);
@@ -586,7 +470,6 @@ public class RustNativeLoader {
 
     // ========================================
     // CATEGORY 6: Performance Monitoring
-    // Rust-side performance statistics
     // ========================================
 
     public static native String getRustPerformanceStats();
