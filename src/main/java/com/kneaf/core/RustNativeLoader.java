@@ -17,12 +17,9 @@ import java.util.*;
  * - Verify native methods are available
  * - Provide status reporting
  * 
- * JNI Method Categories:
- * 1. RustVectorLibrary Methods (6 methods) - Pure mathematical operations
- * 2. OptimizationInjector Methods (7 methods) - Core optimizations + Hayabusa
- * skills
- * 3. ParallelRustVectorProcessor Methods (14+ methods) - Advanced parallel
- * processing
+ * 1. Vector & Matrix Operations - Pure mathematical operations
+ * 2. OptimizationInjector Methods - Core optimizations + Hayabusa skills
+ * 3. ParallelRustVectorProcessor Methods - Advanced parallel processing
  */
 public class RustNativeLoader {
     private static final Logger LOGGER = LoggerFactory.getLogger(RustNativeLoader.class);
@@ -238,7 +235,7 @@ public class RustNativeLoader {
     }
 
     // ========================================
-    // CATEGORY 1: RustVectorLibrary Methods
+    // CATEGORY 1: Vector & Matrix Operations
     // Pure mathematical vector/matrix operations
     // ========================================
 
