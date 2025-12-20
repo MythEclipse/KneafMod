@@ -58,6 +58,18 @@ public abstract class LevelMixin {
     }
 
     /**
+     * Note: Direct modification of the iteration logic in tickBlockEntities is
+     * complex due to locals.
+     * Instead, we rely on the BlockEntity's own tick method via mixin or the fact
+     * that
+     * BlockEntityTicker check already happened.
+     * 
+     * Ideally, we would Inject into the loop body to `continue` if
+     * `kneaf$isIdle()`.
+     * For now, we just track metrics here.
+     */
+
+    /**
      * Inject at the end of tickBlockEntities for metrics.
      */
     @Inject(method = "tickBlockEntities", at = @At("TAIL"))

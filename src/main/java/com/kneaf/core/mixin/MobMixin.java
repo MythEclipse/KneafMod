@@ -7,7 +7,6 @@
 package com.kneaf.core.mixin;
 
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.ai.Brain;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -78,10 +77,22 @@ public abstract class MobMixin {
     /**
      * Optimize serverAiStep - this is where most mob AI processing happens.
      * Key insight: Many mobs without targets just need basic navigation.
+     * Optimization: Throttle full AI step for mobs without a target.
      */
-    @Inject(method = "serverAiStep", at = @At("HEAD"))
+    @Inject(method = "serverAiStep", at = @At("HEAD"), cancellable = true)
     private void kneaf$onServerAiStep(CallbackInfo ci) {
-        // Track AI step execution
-        // This method is called every tick for each mob - prime optimization target
+        Mob self = (Mob) (Object) this;
+        int tickCount = self.tickCount;
+
+        // Caching: Only check for target every 10 ticks
+        if (tickCount - kneaf$lastTargetCheckTick >= 10) {
+            kneaf$hasTarget = self.getTarget() != null;
+            kneaf$lastTargetCheckTick = tickCount;
+        }
+
+        // Throttling: If no target, run full AI less often (every 4 ticks)
+        if (!kneaf$hasTarget && tickCount % 4 != 0) {
+            ci.cancel(); // Skip this AI step
+        }
     }
 }

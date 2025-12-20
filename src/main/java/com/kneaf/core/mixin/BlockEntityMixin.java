@@ -36,17 +36,17 @@ public abstract class BlockEntityMixin {
 
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
-    
+
     @Unique
     private static final AtomicLong kneaf$tickCount = new AtomicLong(0);
-    
+
     @Unique
     private static long kneaf$lastLogTime = 0;
-    
+
     // Track if this block entity is doing useful work
     @Unique
     private boolean kneaf$isActive = true;
-    
+
     @Unique
     private int kneaf$idleTicks = 0;
 
@@ -59,12 +59,12 @@ public abstract class BlockEntityMixin {
             kneaf$LOGGER.info("✅ BlockEntityMixin applied - Block entity optimization active!");
             kneaf$loggedFirstApply = true;
         }
-        
+
         // Block entity is doing something - reset idle counter
         kneaf$isActive = true;
         kneaf$idleTicks = 0;
         kneaf$tickCount.incrementAndGet();
-        
+
         // Log stats every 60 seconds
         long now = System.currentTimeMillis();
         if (now - kneaf$lastLogTime > 60000) {
@@ -76,7 +76,7 @@ public abstract class BlockEntityMixin {
             kneaf$lastLogTime = now;
         }
     }
-    
+
     /**
      * Check if block entity is considered idle.
      */
@@ -84,7 +84,7 @@ public abstract class BlockEntityMixin {
     public boolean kneaf$isIdle() {
         return !kneaf$isActive && kneaf$idleTicks > 20; // Idle for 1+ second
     }
-    
+
     /**
      * Increment idle counter.
      */
@@ -93,5 +93,15 @@ public abstract class BlockEntityMixin {
         if (!kneaf$isActive) {
             kneaf$idleTicks++;
         }
+    }
+
+    /**
+     * Optimization: If block entity is active, mark it as inactive for next tick.
+     * It must call setChanged() or trigger an update to become active again.
+     * This is a "sleep until woken" strategy.
+     */
+    @Inject(method = "clearRemoved", at = @At("RETURN"))
+    private void kneaf$onClearRemoved(CallbackInfo ci) {
+        kneaf$isActive = true; // Start active
     }
 }

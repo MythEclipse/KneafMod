@@ -22,7 +22,6 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -206,7 +205,6 @@ public abstract class PathFinderMixin {
                 }
 
                 // Create path with target as final goal
-                Set<Target> targets = Set.of(new Target(target.getX(), target.getY(), target.getZ()));
                 return new Path(nodes, target, true);
             }
 

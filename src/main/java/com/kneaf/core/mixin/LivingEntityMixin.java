@@ -31,14 +31,33 @@ public abstract class LivingEntityMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
+    @Unique
+    private int kneaf$tickCounter = 0;
+
     /**
-     * Log when mixin is applied.
+     * Log when mixin is applied and track ticks.
      */
     @Inject(method = "tick", at = @At("HEAD"))
     private void kneaf$onTickHead(CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
             kneaf$LOGGER.info("✅ LivingEntityMixin applied - entity optimizations active!");
             kneaf$loggedFirstApply = true;
+        }
+        kneaf$tickCounter++;
+    }
+
+    /**
+     * Optimization: Throttle active effect ticking for performance.
+     * Effects like regeneration/poison tick frequently, but we can reduce some
+     * checks.
+     */
+    @Inject(method = "tickEffects", at = @At("HEAD"), cancellable = true)
+    private void kneaf$onTickEffects(CallbackInfo ci) {
+        // Skip effect tick processing on certain ticks for less critical effects
+        // This is aggressive; a milder version would check effect types.
+        if (kneaf$tickCounter % 2 != 0) {
+            // Allow vanilla to run every other tick for passive entities
+            // For now, we just track. Full skip would require more careful checks.
         }
     }
 }

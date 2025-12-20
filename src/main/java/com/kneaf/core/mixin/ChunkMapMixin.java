@@ -66,4 +66,18 @@ public abstract class ChunkMapMixin {
             kneaf$lastLogTime = now;
         }
     }
+
+    /**
+     * Track when a chunk holder is created/updated.
+     */
+    @Inject(method = "updateChunkScheduling", at = @At("RETURN"))
+    private void kneaf$onUpdateChunkScheduling(long chunkPos, int level,
+            @javax.annotation.Nullable net.minecraft.server.level.ChunkHolder oldHolder,
+            int oldLevel, CallbackInfo ci) {
+        // Increment counter when a chunk is being loaded (level decreasing means
+        // loading)
+        if (level < oldLevel) {
+            kneaf$chunksLoaded.incrementAndGet();
+        }
+    }
 }
