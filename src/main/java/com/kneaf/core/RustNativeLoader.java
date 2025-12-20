@@ -85,10 +85,11 @@ public class RustNativeLoader {
      * Extract and load library from classpath resources
      */
     private static boolean loadFromClasspath() {
+        String libName = System.mapLibraryName("rustperf");
         String[] resourcePaths = {
-                "natives/rustperf.dll",
-                "/natives/rustperf.dll",
-                "rustperf.dll"
+                "natives/" + libName,
+                "/natives/" + libName,
+                libName
         };
 
         for (String resourcePath : resourcePaths) {
@@ -113,7 +114,7 @@ public class RustNativeLoader {
             // Create temp directory with timestamp to avoid caching issues
             String tempDirName = "kneafmod-natives-" + System.currentTimeMillis();
             Path tempDir = Files.createTempDirectory(tempDirName);
-            Path tempFile = tempDir.resolve("rustperf.dll");
+            Path tempFile = tempDir.resolve(System.mapLibraryName("rustperf"));
 
             // Extract DLL to temp file
             try (InputStream in = resourceUrl.openStream()) {
@@ -138,13 +139,14 @@ public class RustNativeLoader {
      * Try loading from known filesystem paths
      */
     private static boolean loadFromFilesystem() {
+        String libName = System.mapLibraryName("rustperf");
         String[] paths = {
-                "rustperf.dll",
-                "run/rustperf.dll",
-                "rust/target/release/rustperf.dll",
-                "rust/target/debug/rustperf.dll",
-                "src/main/resources/natives/rustperf.dll",
-                "build/resources/main/natives/rustperf.dll"
+                libName,
+                "run/" + libName,
+                "rust/target/release/" + libName,
+                "rust/target/debug/" + libName,
+                "src/main/resources/natives/" + libName,
+                "build/resources/main/natives/" + libName
         };
 
         for (String pathStr : paths) {

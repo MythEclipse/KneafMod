@@ -73,22 +73,27 @@ public final class OptimizationInjector {
     private static final Set<String> loggedEntityClasses = ConcurrentHashMap.newKeySet();
 
     private static final String RUST_PERF_LIBRARY_NAME = "rustperf";
-    private static final String[] RUST_PERF_LIBRARY_PATHS = {
-            "natives/rustperf.dll",
-            "rustperf.dll",
-            "src/main/resources/natives/rustperf.dll",
-            "build/resources/main/natives/rustperf.dll",
-            "run/natives/rustperf.dll",
-            "target/natives/rustperf.dll",
-            "target/debug/rustperf.dll",
-            "target/release/rustperf.dll",
-            "%USERPROFILE%/.minecraft/mods/natives/rustperf.dll",
-            "%APPDATA%/.minecraft/mods/natives/rustperf.dll",
-            "D:/KneafMod/src/main/resources/natives/rustperf.dll",
-            "D:/KneafMod/build/resources/main/natives/rustperf.dll",
-            "D:/KneafMod/run/natives/rustperf.dll",
-            "D:/KneafMod/target/natives/rustperf.dll"
-    };
+    private static final String[] RUST_PERF_LIBRARY_PATHS;
+
+    static {
+        String libName = System.mapLibraryName(RUST_PERF_LIBRARY_NAME);
+        RUST_PERF_LIBRARY_PATHS = new String[] {
+                "natives/" + libName,
+                libName,
+                "src/main/resources/natives/" + libName,
+                "build/resources/main/natives/" + libName,
+                "run/natives/" + libName,
+                "target/natives/" + libName,
+                "target/debug/" + libName,
+                "target/release/" + libName,
+                "%USERPROFILE%/.minecraft/mods/natives/" + libName,
+                "%APPDATA%/.minecraft/mods/natives/" + libName,
+                "D:/KneafMod/src/main/resources/natives/" + libName,
+                "D:/KneafMod/build/resources/main/natives/" + libName,
+                "D:/KneafMod/run/natives/" + libName,
+                "D:/KneafMod/target/natives/" + libName
+        };
+    }
     private static boolean isNativeLibraryLoaded = false;
     private static final Object nativeLibraryLock = new Object();
     private static boolean isTestMode = false;
@@ -149,8 +154,9 @@ public final class OptimizationInjector {
             try {
                 String os = System.getProperty("os.name").toLowerCase();
                 String arch = System.getProperty("os.arch").toLowerCase();
-                String libExtension = os.contains("win") ? "dll" : os.contains("mac") ? "dylib" : "so";
-                String libName = RUST_PERF_LIBRARY_NAME + "." + libExtension;
+                // String libExtension = os.contains("win") ? "dll" : os.contains("mac") ?
+                // "dylib" : "so"; // Deprecated manual extension
+                String libName = System.mapLibraryName(RUST_PERF_LIBRARY_NAME);
                 String userDir = System.getProperty("user.dir");
 
                 LOGGER.info("Starting native library search (OS: {}, Arch: {}, Java: {})", os, arch,
@@ -301,11 +307,11 @@ public final class OptimizationInjector {
                 LOGGER.info("✅ Rust library built successfully");
 
                 // Try to load the newly built library
-                String os = System.getProperty("os.name").toLowerCase();
-                String libExtension = os.contains("win") ? "dll" : os.contains("mac") ? "dylib" : "so";
+                // Try to load the newly built library
                 String sep = File.separator;
+                String libFileName = System.mapLibraryName(RUST_PERF_LIBRARY_NAME);
                 String libPath = rustDir.getAbsolutePath() + sep + "target" + sep + "release" + sep
-                        + RUST_PERF_LIBRARY_NAME + "." + libExtension;
+                        + libFileName;
 
                 LOGGER.info("Attempting to load built library from: {}", libPath);
                 return tryLoadFromAbsolutePath(libPath);
