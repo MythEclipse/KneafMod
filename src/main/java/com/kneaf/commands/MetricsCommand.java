@@ -1,7 +1,5 @@
 package com.kneaf.commands;
 
-import com.kneaf.core.OptimizationInjector;
-
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
@@ -24,14 +22,19 @@ public class MetricsCommand {
     private static int execute(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
 
-        String metrics = OptimizationInjector.getOptimizationMetrics();
-        String combinedMetrics = OptimizationInjector.getCombinedOptimizationMetrics();
-        String asyncMetrics = OptimizationInjector.getAsyncOptimizationMetrics();
+        java.util.Map<String, Object> perfMetrics = com.kneaf.core.PerformanceManager.getInstance()
+                .getOptimizationMetrics();
+        String asyncSummary = com.kneaf.core.async.AsyncMetricsCollector.getInstance().getMetricsSummary();
 
         source.sendSuccess(() -> Component.literal("§6=== KneafCore Optimization Metrics ==="), false);
-        source.sendSuccess(() -> Component.literal("§eEntity Optimization: §f" + metrics), false);
-        source.sendSuccess(() -> Component.literal("§eCombined Optimization: §f" + combinedMetrics), false);
-        source.sendSuccess(() -> Component.literal("§eAsync Optimization: §f" + asyncMetrics), false);
+        source.sendSuccess(() -> Component.literal("§eConfiguration:"), false);
+        perfMetrics.forEach((k, v) -> source.sendSuccess(() -> Component.literal("  §7" + k + ": §f" + v), false));
+
+        source.sendSuccess(() -> Component.literal("§eAsync Performance:"), false);
+        for (String line : asyncSummary.split("\n")) {
+            source.sendSuccess(() -> Component.literal("  §7" + line), false);
+        }
+
         source.sendSuccess(() -> Component.literal("§7Use §f/kneaf metrics §7to view these metrics anytime."), false);
 
         return 1;

@@ -794,13 +794,48 @@ public class ParallelRustVectorProcessor {
 
     // Helper method for dispatching batch ops (re-added as it was missing in my
     // view but used in the code I pasted back)
+    // Helper method for dispatching batch ops
     private float[] processBatch(float[][] blockA, float[][] blockB, String operationType) {
-        return RustNativeLoader.batchNalgebraMatrixMul(blockA, blockB, blockA.length);
-        // Note: operationType is ignored here as per original logic which seemed to
-        // default to one method for batch
-        // or I should implement switch if needed.
-        // Original code used: RustNativeLoader.batchNalgebraMatrixMul(blockA, blockB,
-        // matrixCount);
-        // I'll stick to that one.
+        switch (operationType) {
+            case "nalgebra":
+                return RustNativeLoader.batchNalgebraMatrixMul(blockA, blockB, blockA.length);
+            case "glam":
+                // GLAM doesn't have a native batch implementation yet, so we loop over the
+                // block
+                // efficiently inside this parallelized task
+                float[] glamResults = new float[blockA.length * 16];
+                for (int i = 0; i < blockA.length; i++) {
+                    float[] res = RustNativeLoader.glam_matrix_mul(blockA[i], blockB[i]);
+                    if (res != null) {
+                        System.arraycopy(res, 0, glamResults, i * 16, 16);
+                    }
+                }
+                return glamResults;
+            case "faer":
+                // FAER also needs bridging from double[] to float[] per item
+                float[] faerResults = new float[blockA.length * 16];
+                double[] a = new double[16];
+                double[] b = new double[16];
+
+                for (int i = 0; i < blockA.length; i++) {
+                    // Convert inputs
+                    for (int k = 0; k < 16; k++) {
+                        a[k] = blockA[i][k];
+                        b[k] = blockB[i][k];
+                    }
+
+                    double[] res = RustNativeLoader.faer_matrix_mul(a, b);
+
+                    if (res != null) {
+                        // Convert output
+                        for (int k = 0; k < 16; k++) {
+                            faerResults[i * 16 + k] = (float) res[k];
+                        }
+                    }
+                }
+                return faerResults;
+            default:
+                throw new IllegalArgumentException("Unknown operation type for batch processing: " + operationType);
+        }
     }
 }

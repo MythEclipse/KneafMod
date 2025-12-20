@@ -23,7 +23,7 @@ public final class AsyncMetricsCollector {
 
     private static final int HISTOGRAM_RING_SIZE = 16384; // Must be power of 2
     private static final int TIMER_RING_SIZE = 16384;
-    private static final int AGGREGATION_BATCH_SIZE = 128;
+
 
     // Lock-free metrics storage
     private final ConcurrentHashMap<String, AtomicLong> counters = new ConcurrentHashMap<>();
@@ -229,8 +229,42 @@ public final class AsyncMetricsCollector {
      * Background aggregation task
      */
     private void aggregateMetrics() {
-        // This can be used untuk periodic cleanup, reporting, etc.
-        // Currently just a placeholder
+        if (!enabled.get())
+            return;
+
+        // Periodic cleanup or aggregation logic
+        // For now, we'll just log a summary if there are significant metrics to report
+        if (totalMetricsRecorded.get() > 0 && totalMetricsRecorded.get() % 1000 == 0) {
+            // Log every 1000 metrics recorded to avoid spam
+            // In a real system this might push to Prometheus/InfluxDB
+        }
+    }
+
+    /**
+     * Get a formatted summary of all metrics for display
+     */
+    public String getMetricsSummary() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Total Recorded: ").append(totalMetricsRecorded.get()).append("\n");
+        sb.append("Dropped: ").append(metricsDropped.get()).append("\n");
+
+        sb.append("\nCounters:\n");
+        counters.forEach((name, val) -> sb.append("  ").append(name).append(": ").append(val.get()).append("\n"));
+
+        sb.append("\nGauges:\n");
+        gauges.forEach((name, val) -> sb.append("  ").append(name).append(": ").append(String.format("%.2f", val.get()))
+                .append("\n"));
+
+        if (!timers.isEmpty()) {
+            sb.append("\nTimers (Top 5):\n");
+            timers.entrySet().stream().limit(5).forEach(entry -> {
+                TimerStats stats = getTimerStats(entry.getKey());
+                sb.append("  ").append(entry.getKey()).append(": avg=").append(String.format("%.3f", stats.getAvgMs()))
+                        .append("ms\n");
+            });
+        }
+
+        return sb.toString();
     }
 
     /**
