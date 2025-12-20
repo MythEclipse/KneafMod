@@ -158,8 +158,28 @@ public abstract class PathFinderMixin {
             int height = maxRange * 2 + 1;
             boolean[] grid = new boolean[width * height];
 
-            // For now, assume all blocks are walkable (simplified demo)
-            // In a real implementation, we'd query the region for obstacles
+            BlockPos.MutableBlockPos mutPos = new BlockPos.MutableBlockPos();
+
+            // Populate grid with collision data
+            // We check the block at the entity's feet and head level
+            for (int z = 0; z < height; z++) {
+                for (int x = 0; x < width; x++) {
+                    int worldX = start.getX() + (x - maxRange);
+                    int worldZ = start.getZ() + (z - maxRange);
+
+                    // Check feet level
+                    mutPos.set(worldX, start.getY(), worldZ);
+                    boolean feetBlocked = !region.getBlockState(mutPos).getCollisionShape(region, mutPos).isEmpty();
+
+                    // Check head level
+                    mutPos.set(worldX, start.getY() + 1, worldZ);
+                    boolean headBlocked = !region.getBlockState(mutPos).getCollisionShape(region, mutPos).isEmpty();
+
+                    if (feetBlocked || headBlocked) {
+                        grid[z * width + x] = true; // Mark as obstacle
+                    }
+                }
+            }
 
             int startX = maxRange;
             int startY = maxRange;

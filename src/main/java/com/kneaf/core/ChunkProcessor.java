@@ -5,6 +5,9 @@ import org.slf4j.LoggerFactory;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.level.ChunkEvent;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.ChunkPos;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -132,7 +135,8 @@ public final class ChunkProcessor {
         double memUsage = (double) usedMem / totalMem;
 
         // Adaptive logic
-        // Adaptive logic - Rely primarily on TPS (User Request: Java uses high RAM naturally)
+        // Adaptive logic - Rely primarily on TPS (User Request: Java uses high RAM
+        // naturally)
         // If GC is thrashing, TPS will drop, so TPS is the ultimate metric.
         if (estimatedTps < lowTpsThreshold) {
             // Performance struggling - decrease concurrency
@@ -178,7 +182,7 @@ public final class ChunkProcessor {
         }
 
         try {
-            Object chunk = event.getChunk();
+            ChunkAccess chunk = event.getChunk();
             if (chunk == null)
                 return;
 
@@ -246,7 +250,7 @@ public final class ChunkProcessor {
      * Process chunk data asynchronously - OPTIMIZED FOR SPEED
      * Uses Rust for heavy computations when available
      */
-    private static void processChunkDataAsync(Object chunk) {
+    private static void processChunkDataAsync(ChunkAccess chunk) {
         try {
             // Get chunk section data for processing
             int heightBlocks = getChunkHeight(chunk);
@@ -271,7 +275,7 @@ public final class ChunkProcessor {
     /**
      * Process chunk data using Rust acceleration
      */
-    private static void processWithRust(Object chunk, int[] blockCounts) {
+    private static void processWithRust(ChunkAccess chunk, int[] blockCounts) {
         try {
             // Convert to format suitable for Rust processing
             double[] sectionData = new double[blockCounts.length];
@@ -305,38 +309,37 @@ public final class ChunkProcessor {
     /**
      * Get chunk position as a long for deduplication
      */
-    private static long getChunkPos(Object chunk) {
-        try {
-            java.lang.reflect.Method getPos = chunk.getClass().getMethod("getPos");
-            Object chunkPos = getPos.invoke(chunk);
-            if (chunkPos != null) {
-                java.lang.reflect.Method toLong = chunkPos.getClass().getMethod("toLong");
-                return (Long) toLong.invoke(chunkPos);
-            }
-        } catch (Exception e) {
-            // Fallback
-        }
-        return Long.MIN_VALUE;
+    private static long getChunkPos(ChunkAccess chunk) {
+        return chunk.getPos().toLong();
     }
 
     /**
      * Get chunk height (number of blocks vertically)
      */
-    private static int getChunkHeight(Object chunk) {
-        try {
-            java.lang.reflect.Method getHeight = chunk.getClass().getMethod("getHeight");
-            return (Integer) getHeight.invoke(chunk);
-        } catch (Exception e) {
-            return 384; // 1.18+ default height
-        }
+    private static int getChunkHeight(ChunkAccess chunk) {
+        return chunk.getHeight();
     }
 
     /**
      * Estimate section complexity (for LOD and optimization decisions)
      */
-    private static int estimateSectionComplexity(Object chunk, int section) {
-        // Simplified estimation - real implementation would analyze block variety
-        return 100 + (section * 10);
+    private static int estimateSectionComplexity(ChunkAccess chunk, int sectionIndex) {
+        try {
+            LevelChunkSection[] sections = chunk.getSections();
+            if (sectionIndex >= 0 && sectionIndex < sections.length) {
+                LevelChunkSection section = sections[sectionIndex];
+                // Check if section is empty (very fast check)
+                if (section == null || section.hasOnlyAir()) {
+                    return 0;
+                }
+
+                // If not empty, assign a base complexity
+                return 100;
+            }
+        } catch (Exception e) {
+            // Fallback
+        }
+        return 50; // Default fallback complexity
     }
 
     /**
