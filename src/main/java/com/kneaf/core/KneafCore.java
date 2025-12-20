@@ -147,8 +147,6 @@ public class KneafCore {
         return instance;
     }
 
-
-
     /**
      * Performs A* pathfinding asynchronously on a 2D grid.
      */
@@ -192,8 +190,8 @@ public class KneafCore {
         // Register async monitoring commands
         com.kneaf.commands.AsyncMonitorCommands.register(event.getDispatcher());
 
-        // Skip other command registration for now to avoid compilation issues
-        // com.kneaf.commands.MetricsCommand.register(event.getDispatcher());
+        // Additional commands can be registered here as they are implemented
+        // MetricsCommand is currently integrated into AsyncMonitorCommands
     }
 
 }

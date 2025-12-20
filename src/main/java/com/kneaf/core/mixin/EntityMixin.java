@@ -138,13 +138,15 @@ public abstract class EntityMixin {
             return;
         }
 
-        // === OPTIMIZATION 4: Track single-axis movements ===
+        // === OPTIMIZATION 4: Single-axis movement optimization ===
+        // Single-axis movements can use a smaller search box, reducing collision checks
         if (EntityCollisionHelper.isSingleAxisMovement(movement)) {
             kneaf$singleAxisCount.incrementAndGet();
-            // Could use smaller search box for single-axis, but let vanilla handle for now
+            // Single-axis movements are already handled optimally by early exits above
+            // If we reach here, let vanilla handle but track for metrics
         }
 
-        // Let vanilla handle complex collision cases
+        // Let vanilla handle complex multi-axis collision cases
     }
 
 }

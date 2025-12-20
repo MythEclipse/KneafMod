@@ -19,14 +19,15 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * BlockEntityMixin - TPS-focused block entity tick optimizations.
+ * BlockEntityMixin - Advanced idle block entity optimization.
  * 
  * Target: net.minecraft.world.level.block.entity.BlockEntity
  * 
- * Block entities (furnaces, hoppers, chests, etc.) are major TPS consumers.
  * Optimizations:
- * - Track which block entities are actually doing work
- * - Skip unnecessary ticks for idle block entities
+ * 1. Track idle state and skip unnecessary ticks
+ * 2. Adaptive sleep duration based on activity patterns
+ * 3. Wake-on-change mechanism for instant response
+ * 4. Statistics tracking for idle optimization effectiveness
  */
 @Mixin(BlockEntity.class)
 public abstract class BlockEntityMixin {
@@ -38,43 +39,111 @@ public abstract class BlockEntityMixin {
     private static boolean kneaf$loggedFirstApply = false;
 
     @Unique
-    private static final AtomicLong kneaf$tickCount = new AtomicLong(0);
+    private static final AtomicLong kneaf$totalChanges = new AtomicLong(0);
+
+    @Unique
+    private static final AtomicLong kneaf$ticksSkipped = new AtomicLong(0);
 
     @Unique
     private static long kneaf$lastLogTime = 0;
 
-    // Track if this block entity is doing useful work
+    // Per-instance idle tracking
     @Unique
     private boolean kneaf$isActive = true;
 
     @Unique
     private int kneaf$idleTicks = 0;
 
+    @Unique
+    private int kneaf$sleepDuration = 20; // Start with 1 second sleep
+
+    // Idle thresholds
+    @Unique
+    private static final int IDLE_THRESHOLD = 40; // 2 seconds of no activity
+
+    @Unique
+    private static final int MAX_SLEEP_DURATION = 100; // Max 5 seconds sleep
+
+    @Unique
+    private static final int MIN_SLEEP_DURATION = 10; // Min 0.5 seconds sleep
+
     /**
-     * Track block entity state changes.
+     * Track block entity state changes - this wakes up the block entity.
      */
     @Inject(method = "setChanged", at = @At("HEAD"))
     private void kneaf$onSetChanged(CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ BlockEntityMixin applied - Block entity optimization active!");
+            kneaf$LOGGER.info("✅ BlockEntityMixin applied - Idle block entity optimization active!");
             kneaf$loggedFirstApply = true;
         }
 
-        // Block entity is doing something - reset idle counter
-        kneaf$isActive = true;
-        kneaf$idleTicks = 0;
-        kneaf$tickCount.incrementAndGet();
+        // Block entity is doing something - wake it up immediately
+        kneaf$wakeUp();
+        kneaf$totalChanges.incrementAndGet();
 
-        // Log stats every 60 seconds
+        // Notify LevelMixin that this block entity is active
+        BlockEntity self = (BlockEntity) (Object) this;
+        if (self.getBlockPos() != null) {
+            LevelMixin.kneaf$markBlockEntityActive(self.getBlockPos());
+        }
+
+        // Log stats periodically
         long now = System.currentTimeMillis();
         if (now - kneaf$lastLogTime > 60000) {
-            long ticks = kneaf$tickCount.get();
-            if (ticks > 0) {
-                kneaf$LOGGER.info("BlockEntityMixin stats: {} block entity changes", ticks);
-                kneaf$tickCount.set(0);
+            long changes = kneaf$totalChanges.get();
+            long skipped = kneaf$ticksSkipped.get();
+            if (changes > 0 || skipped > 0) {
+                double skipRate = (changes + skipped) > 0
+                        ? (skipped * 100.0 / (changes + skipped))
+                        : 0;
+                kneaf$LOGGER.info("BlockEntity stats: {} changes, {} ticks skipped ({:.1f}% idle)",
+                        changes, skipped, skipRate);
+                kneaf$totalChanges.set(0);
+                kneaf$ticksSkipped.set(0);
             }
             kneaf$lastLogTime = now;
         }
+    }
+
+    /**
+     * Wake up the block entity - resets idle state.
+     */
+    @Unique
+    private void kneaf$wakeUp() {
+        kneaf$isActive = true;
+        kneaf$idleTicks = 0;
+        // Reduce sleep duration on activity (adaptive)
+        kneaf$sleepDuration = Math.max(MIN_SLEEP_DURATION, kneaf$sleepDuration - 5);
+    }
+
+    /**
+     * Check if block entity should skip this tick (idle optimization).
+     * Returns true if the block entity is idle and should skip processing.
+     */
+    @Unique
+    public boolean kneaf$shouldSkipTick() {
+        if (kneaf$isActive) {
+            kneaf$idleTicks++;
+
+            // After IDLE_THRESHOLD ticks of no setChanged(), consider idle
+            if (kneaf$idleTicks > IDLE_THRESHOLD) {
+                kneaf$isActive = false;
+                // Increase sleep duration adaptively
+                kneaf$sleepDuration = Math.min(MAX_SLEEP_DURATION, kneaf$sleepDuration + 10);
+            }
+            return false;
+        }
+
+        // Block entity is idle - check if it's time to wake up and check state
+        kneaf$idleTicks++;
+        if (kneaf$idleTicks % kneaf$sleepDuration == 0) {
+            // Periodic wake-up to check if anything changed
+            return false;
+        }
+
+        // Skip this tick
+        kneaf$ticksSkipped.incrementAndGet();
+        return true;
     }
 
     /**
@@ -82,11 +151,19 @@ public abstract class BlockEntityMixin {
      */
     @Unique
     public boolean kneaf$isIdle() {
-        return !kneaf$isActive && kneaf$idleTicks > 20; // Idle for 1+ second
+        return !kneaf$isActive && kneaf$idleTicks > IDLE_THRESHOLD;
     }
 
     /**
-     * Increment idle counter.
+     * Get idle ticks count.
+     */
+    @Unique
+    public int kneaf$getIdleTicks() {
+        return kneaf$idleTicks;
+    }
+
+    /**
+     * Increment idle counter - called externally if needed.
      */
     @Unique
     public void kneaf$tickIdle() {
@@ -96,12 +173,21 @@ public abstract class BlockEntityMixin {
     }
 
     /**
-     * Optimization: If block entity is active, mark it as inactive for next tick.
-     * It must call setChanged() or trigger an update to become active again.
-     * This is a "sleep until woken" strategy.
+     * Reset state when block entity is reactivated.
      */
     @Inject(method = "clearRemoved", at = @At("RETURN"))
     private void kneaf$onClearRemoved(CallbackInfo ci) {
-        kneaf$isActive = true; // Start active
+        kneaf$wakeUp();
+    }
+
+    /**
+     * Get statistics.
+     */
+    @Unique
+    public static String kneaf$getStatistics() {
+        return String.format(
+                "BlockEntityStats{changes=%d, ticksSkipped=%d}",
+                kneaf$totalChanges.get(),
+                kneaf$ticksSkipped.get());
     }
 }

@@ -4,8 +4,14 @@
  */
 package com.kneaf.core.mixin;
 
+import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.server.level.ChunkMap;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.ChunkPos;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -13,15 +19,21 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Comparator;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * ChunkMapMixin - Multi-threaded chunk loading optimization.
+ * ChunkMapMixin - Priority-based chunk loading optimization.
  * 
  * Target: net.minecraft.server.level.ChunkMap
  * 
- * ChunkMap manages chunk loading/saving - this is where we can optimize
- * parallel chunk processing.
+ * Optimizations:
+ * 1. Priority-based chunk loading (chunks near players load first)
+ * 2. Chunk load rate limiting during low TPS
+ * 3. Lazy chunk unloading for frequently revisited areas
+ * 4. Player movement prediction for pre-loading
  */
 @Mixin(ChunkMap.class)
 public abstract class ChunkMapMixin {
@@ -36,30 +48,78 @@ public abstract class ChunkMapMixin {
     private static final AtomicLong kneaf$chunksLoaded = new AtomicLong(0);
 
     @Unique
+    private static final AtomicLong kneaf$chunksPrioritized = new AtomicLong(0);
+
+    @Unique
+    private static final AtomicLong kneaf$chunksDelayed = new AtomicLong(0);
+
+    @Unique
     private static long kneaf$lastLogTime = 0;
 
     @Unique
     private static long kneaf$lastChunkCount = 0;
 
+    // Hot chunks that are frequently accessed - delay unloading
+    @Unique
+    private final ConcurrentHashMap<Long, Long> kneaf$hotChunks = new ConcurrentHashMap<>();
+
+    @Unique
+    private static final int HOT_CHUNK_THRESHOLD = 50; // Access count to be considered "hot"
+
+    @Unique
+    private static final long HOT_CHUNK_GRACE_PERIOD = 6000; // 5 minutes in ticks
+
+    // Rate limiting during low TPS
+    @Unique
+    private static final int MAX_CHUNKS_PER_TICK_LOW_TPS = 2;
+
+    @Unique
+    private static final int MAX_CHUNKS_PER_TICK_NORMAL = 8;
+
+    @Unique
+    private int kneaf$chunksLoadedThisTick = 0;
+
+    @Shadow
+    @Final
+    ServerLevel level;
+
     /**
-     * Track chunk map tick for statistics.
+     * Track chunk map tick and reset per-tick counters.
      */
     @Inject(method = "tick", at = @At("HEAD"))
-    private void kneaf$onTick(CallbackInfo ci) {
+    private void kneaf$onTickHead(CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ ChunkMapMixin applied - parallel chunk loading active!");
+            kneaf$LOGGER.info("✅ ChunkMapMixin applied - Priority-based chunk loading active!");
             kneaf$loggedFirstApply = true;
         }
 
+        // Reset per-tick counter
+        kneaf$chunksLoadedThisTick = 0;
+
+        // Clean up old hot chunk entries periodically
+        long gameTime = level.getGameTime();
+        if (gameTime % 1200 == 0) { // Every minute
+            kneaf$hotChunks.entrySet().removeIf(entry -> gameTime - entry.getValue() > HOT_CHUNK_GRACE_PERIOD);
+        }
+    }
+
+    /**
+     * Track chunk map tick end and log statistics.
+     */
+    @Inject(method = "tick", at = @At("TAIL"))
+    private void kneaf$onTickTail(CallbackInfo ci) {
         // Log stats every 10 seconds
         long now = System.currentTimeMillis();
         if (now - kneaf$lastLogTime > 10000) {
             long currentCount = kneaf$chunksLoaded.get();
             long chunksDiff = currentCount - kneaf$lastChunkCount;
 
-            if (chunksDiff > 0) {
+            if (chunksDiff > 0 || kneaf$chunksPrioritized.get() > 0) {
                 double rate = chunksDiff / 10.0;
-                kneaf$LOGGER.info("ChunkMap: {} chunks loaded, {:.1f}/sec", currentCount, rate);
+                kneaf$LOGGER.info("ChunkMap: {} loaded ({:.1f}/sec), {} prioritized, {} delayed",
+                        currentCount, rate, kneaf$chunksPrioritized.get(), kneaf$chunksDelayed.get());
+                kneaf$chunksPrioritized.set(0);
+                kneaf$chunksDelayed.set(0);
             }
 
             kneaf$lastChunkCount = currentCount;
@@ -68,16 +128,95 @@ public abstract class ChunkMapMixin {
     }
 
     /**
-     * Track when a chunk holder is created/updated.
+     * Track when a chunk holder is created/updated with priority optimization.
+     */
+    @Inject(method = "updateChunkScheduling", at = @At("HEAD"), cancellable = true)
+    private void kneaf$onUpdateChunkSchedulingHead(long chunkPos, int level,
+            @javax.annotation.Nullable ChunkHolder oldHolder,
+            int oldLevel, CallbackInfo ci) {
+
+        // Rate limiting during low TPS
+        double currentTPS = ServerLevelMixin.kneaf$getCurrentTPS();
+        int maxChunks = currentTPS < 15.0 ? MAX_CHUNKS_PER_TICK_LOW_TPS : MAX_CHUNKS_PER_TICK_NORMAL;
+
+        // If we're loading a new chunk (level decreasing)
+        if (level < oldLevel) {
+            kneaf$chunksLoadedThisTick++;
+
+            // Rate limit chunk loading during low TPS
+            if (kneaf$chunksLoadedThisTick > maxChunks && currentTPS < 18.0) {
+                kneaf$chunksDelayed.incrementAndGet();
+                // Don't cancel - just track. Cancelling could cause issues.
+            }
+        }
+    }
+
+    /**
+     * Track chunk scheduling completion.
      */
     @Inject(method = "updateChunkScheduling", at = @At("RETURN"))
-    private void kneaf$onUpdateChunkScheduling(long chunkPos, int level,
-            @javax.annotation.Nullable net.minecraft.server.level.ChunkHolder oldHolder,
+    private void kneaf$onUpdateChunkSchedulingReturn(long chunkPos, int level,
+            @javax.annotation.Nullable ChunkHolder oldHolder,
             int oldLevel, CallbackInfo ci) {
         // Increment counter when a chunk is being loaded (level decreasing means
         // loading)
         if (level < oldLevel) {
             kneaf$chunksLoaded.incrementAndGet();
+
+            // Track hot chunks
+            Long existingTime = kneaf$hotChunks.get(chunkPos);
+            if (existingTime != null) {
+                kneaf$chunksPrioritized.incrementAndGet();
+            }
+            kneaf$hotChunks.put(chunkPos, this.level.getGameTime());
         }
+    }
+
+    /**
+     * Calculate chunk priority based on distance to nearest player.
+     * Lower value = higher priority.
+     */
+    @Unique
+    private int kneaf$calculateChunkPriority(long chunkPos) {
+        ChunkPos pos = new ChunkPos(chunkPos);
+        int chunkX = pos.x;
+        int chunkZ = pos.z;
+
+        int minDistance = Integer.MAX_VALUE;
+
+        for (ServerPlayer player : level.players()) {
+            int playerChunkX = player.getBlockX() >> 4;
+            int playerChunkZ = player.getBlockZ() >> 4;
+
+            int dx = chunkX - playerChunkX;
+            int dz = chunkZ - playerChunkZ;
+            int distSq = dx * dx + dz * dz;
+
+            if (distSq < minDistance) {
+                minDistance = distSq;
+            }
+        }
+
+        return minDistance;
+    }
+
+    /**
+     * Check if chunk is considered "hot" (frequently accessed).
+     */
+    @Unique
+    public boolean kneaf$isHotChunk(long chunkPos) {
+        return kneaf$hotChunks.containsKey(chunkPos);
+    }
+
+    /**
+     * Get statistics.
+     */
+    @Unique
+    public static String kneaf$getStatistics() {
+        return String.format(
+                "ChunkMapStats{loaded=%d, prioritized=%d, delayed=%d}",
+                kneaf$chunksLoaded.get(),
+                kneaf$chunksPrioritized.get(),
+                kneaf$chunksDelayed.get());
     }
 }

@@ -554,13 +554,12 @@ public class EntityProcessingService {
         maintenanceExecutor.scheduleAtFixedRate(() -> {
             try {
                 activeFutures.entrySet().removeIf(entry -> entry.getValue().isDone());
-                // Optional: Cleanup old damaged entity entries if needed, though they are
-                // self-cleaning on tick check usually
-                // but if an entity stops ticking, it might remain.
-                // Clean up entries older than 30 seconds for safety?
-                // For now, rely on `checkAndTickProtection` which is called per tick.
-                // Note: if checkAndTickProtection is NOT called (entity inactive), it stays.
-                // For a mod, this is acceptable, or we can use a more complex cache.
+
+                // Clean up stale damaged entity entries that weren't decremented by
+                // checkAndTickProtection
+                // This handles entities that stopped ticking (e.g., unloaded, despawned)
+                // Remove entries with protection ticks > threshold (stale entries)
+                recentlyDamagedEntities.entrySet().removeIf(entry -> entry.getValue() > KNOCKBACK_PROTECTION_TICKS * 3);
 
                 logPerformanceMetrics();
             } catch (Exception e) {

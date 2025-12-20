@@ -364,9 +364,7 @@ public final class PerformanceMonitoringSystem {
         }
 
         if (shouldCollectComponentMetric("optimization_injector", currentRate)) {
-            // OptimizationInjector metrics handling - simplified as OptimizationInjector
-            // doesn't expose test metrics in the same way anymore
-            // Only tracking natives loading status for now or assume loaded
+            // OptimizationInjector metrics - track native library loading status
             if (com.kneaf.core.OptimizationInjector.isNativeLibraryLoaded()) {
                 recordMetricEvent("optimization_injector.native_library_loaded", 1.0, "gauge");
             }
