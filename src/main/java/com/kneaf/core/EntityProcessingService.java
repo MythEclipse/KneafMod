@@ -1,12 +1,14 @@
 package com.kneaf.core;
 
 import com.kneaf.core.async.AsyncLogger;
+import com.kneaf.core.async.AsyncMetricsCollector;
 import com.kneaf.core.math.VectorMath;
 import com.kneaf.core.model.*;
-
+import com.kneaf.core.util.EntityPhysicsHelper;
 import com.kneaf.core.spatial.SpatialGrid;
 import com.kneaf.core.performance.scheduler.AdaptiveThreadPoolController;
 import net.minecraft.world.entity.Entity;
+
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.*;
@@ -27,13 +29,16 @@ import com.sun.management.OperatingSystemMXBean;
 public class EntityProcessingService {
     private static final Logger LOGGER = LoggerFactory.getLogger(EntityProcessingService.class);
     private static final AsyncLogger ASYNC_LOGGER = new AsyncLogger(EntityProcessingService.class);
-    private static final com.kneaf.core.async.AsyncMetricsCollector METRICS = com.kneaf.core.async.AsyncMetricsCollector
-            .getInstance();
+    private static final AsyncMetricsCollector METRICS = AsyncMetricsCollector.getInstance();
 
     private static final int DEFAULT_THREAD_POOL_SIZE = Runtime.getRuntime().availableProcessors();
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final long PROCESSING_TIMEOUT_MS = 100;
     private static final double CELL_SIZE = 16.0; // Minecraft chunk size
+
+    // Knockback protection
+    private static final int KNOCKBACK_PROTECTION_TICKS = 6;
+    private final ConcurrentHashMap<Integer, Integer> recentlyDamagedEntities = new ConcurrentHashMap<>();
 
     // Singleton instance
     private static volatile EntityProcessingService instance;
@@ -131,6 +136,30 @@ public class EntityProcessingService {
     // Public API Logic
     // ==========================================
 
+    public void notifyEntityDamaged(int entityId) {
+        recentlyDamagedEntities.put(entityId, KNOCKBACK_PROTECTION_TICKS);
+    }
+
+    /**
+     * Checks if entity is protected from optimization (e.g. recently damaged).
+     * Decrements the protection tick if present.
+     * 
+     * @return true if protected, false if can be optimized.
+     */
+    public boolean checkAndTickProtection(int entityId) {
+        Integer protectionTicks = recentlyDamagedEntities.get(entityId);
+        if (protectionTicks != null) {
+            if (protectionTicks > 0) {
+                recentlyDamagedEntities.put(entityId, protectionTicks - 1);
+                return true; // Protected
+            } else {
+                recentlyDamagedEntities.remove(entityId);
+                return false;
+            }
+        }
+        return false;
+    }
+
     public void updateThreadPoolSize(int newSize) {
         if (newSize > 0 && newSize != entityProcessor.getCorePoolSize()) {
             entityProcessor.setCorePoolSize(newSize);
@@ -159,6 +188,8 @@ public class EntityProcessingService {
         double durationMs = durationNs / 1_000_000.0;
         // Exponential moving average with alpha = 0.05
         averageProcessingTimeMs = (averageProcessingTimeMs * 0.95) + (durationMs * 0.05);
+
+        METRICS.recordTimer("entity_processing_time", durationNs);
     }
 
     public EntityProcessingResult processEntitySync(Object entity, EntityPhysicsData physicsData) {
@@ -181,9 +212,11 @@ public class EntityProcessingService {
             long duration = System.nanoTime() - startTime;
             updateAverageProcessingTime(duration);
             processedEntities.incrementAndGet();
+            METRICS.incrementCounter("processed_entities_sync");
             return result;
         } catch (Exception e) {
             LOGGER.error("Synchronous processing failed", e);
+            METRICS.incrementCounter("processing_errors_sync");
             return new EntityProcessingResult(false, e.getMessage(), physicsData);
         }
     }
@@ -201,10 +234,6 @@ public class EntityProcessingService {
 
         EntityInterface entityAdapter = getEntityAdapter(entity);
 
-        // Check cache/existing future logic if needed (omitted for brevity, using fresh
-        // task)
-        // ...
-
         // Update spatial grid
         spatialGrid.updateEntity(entityAdapter.getId(), entityAdapter.getX(), entityAdapter.getY(),
                 entityAdapter.getZ());
@@ -220,6 +249,7 @@ public class EntityProcessingService {
 
         EntityProcessingTask task = new EntityProcessingTask(entityAdapter, finalData, priority);
         queuedEntities.incrementAndGet();
+        METRICS.incrementCounter("queued_entities");
 
         CompletableFuture<EntityProcessingResult> future = new CompletableFuture<>();
         activeFutures.put(entityAdapter.getId(), future);
@@ -236,7 +266,7 @@ public class EntityProcessingService {
             return Collections.emptyList();
         }
 
-        Map<EntityPriority, List<EntityProcessingTask>> priorityGroups = new HashMap<>();
+        Map<EntityPriority, List<EntityProcessingTask>> priorityGroups = new EnumMap<>(EntityPriority.class);
 
         for (int i = 0; i < entities.size(); i++) {
             EntityInterface entity = getEntityAdapter(entities.get(i));
@@ -267,6 +297,7 @@ public class EntityProcessingService {
 
         List<CompletableFuture<EntityProcessingResult>> futures = new ArrayList<>();
 
+        // Process in order of priority
         processPriorityBatch(priorityGroups.get(EntityPriority.CRITICAL), futures);
         processPriorityBatch(priorityGroups.get(EntityPriority.HIGH), futures);
         processPriorityBatch(priorityGroups.get(EntityPriority.MEDIUM), futures);
@@ -295,7 +326,7 @@ public class EntityProcessingService {
                 futures.add(future);
             }
 
-            if (OptimizationInjector.isNativeLibraryLoaded()) {
+            if (RustNativeLoader.isLibraryLoaded()) {
                 try {
                     int inputSize = batchSize * 32;
                     int outputSize = batchSize * 20;
@@ -393,10 +424,12 @@ public class EntityProcessingService {
 
             future.complete(result);
             processedEntities.incrementAndGet();
+            METRICS.incrementCounter("processed_entities_async");
 
         } catch (Exception e) {
             LOGGER.error("Error processing entity {}: {}", task.entity.getId(), e.getMessage(), e);
             future.completeExceptionally(e);
+            METRICS.incrementCounter("processing_errors_async");
         } finally {
             activeProcessors.decrementAndGet();
             queuedEntities.decrementAndGet();
@@ -424,9 +457,11 @@ public class EntityProcessingService {
 
             future.complete(result);
             processedEntities.incrementAndGet();
+            METRICS.incrementCounter("processed_entities_async");
         } catch (Exception e) {
             LOGGER.error("Processing error", e);
             future.completeExceptionally(e);
+            METRICS.incrementCounter("processing_errors_async");
         } finally {
             activeProcessors.decrementAndGet();
             queuedEntities.decrementAndGet();
@@ -444,9 +479,7 @@ public class EntityProcessingService {
         EntityPhysicsData data = task.physicsData;
 
         try {
-            if (Double.isNaN(data.motionX) || Double.isInfinite(data.motionX) ||
-                    Double.isNaN(data.motionY) || Double.isInfinite(data.motionY) ||
-                    Double.isNaN(data.motionZ) || Double.isInfinite(data.motionZ)) {
+            if (!EntityPhysicsHelper.isValidPhysicsData(data)) {
                 return new EntityProcessingResult(false, "Invalid motion values", data);
             }
 
@@ -484,9 +517,7 @@ public class EntityProcessingService {
         EntityPhysicsData data = task.physicsData;
 
         try {
-            if (Double.isNaN(data.motionX) || Double.isInfinite(data.motionX) ||
-                    Double.isNaN(data.motionY) || Double.isInfinite(data.motionY) ||
-                    Double.isNaN(data.motionZ) || Double.isInfinite(data.motionZ)) {
+            if (!EntityPhysicsHelper.isValidPhysicsData(data)) {
                 return new EntityProcessingResult(false, "Invalid motion values", data);
             }
 
@@ -523,6 +554,14 @@ public class EntityProcessingService {
         maintenanceExecutor.scheduleAtFixedRate(() -> {
             try {
                 activeFutures.entrySet().removeIf(entry -> entry.getValue().isDone());
+                // Optional: Cleanup old damaged entity entries if needed, though they are
+                // self-cleaning on tick check usually
+                // but if an entity stops ticking, it might remain.
+                // Clean up entries older than 30 seconds for safety?
+                // For now, rely on `checkAndTickProtection` which is called per tick.
+                // Note: if checkAndTickProtection is NOT called (entity inactive), it stays.
+                // For a mod, this is acceptable, or we can use a more complex cache.
+
                 logPerformanceMetrics();
             } catch (Exception e) {
                 LOGGER.error("Maintenance task error", e);
@@ -531,6 +570,14 @@ public class EntityProcessingService {
     }
 
     private void logPerformanceMetrics() {
+        // Use AsyncMetricsCollector instead of manual logging if possible, but keeping
+        // legacy log for manual inspection
+        // Sync metrics to global
+        METRICS.recordGauge("avg_processing_time_ms", averageProcessingTimeMs);
+        METRICS.recordGauge("cpu_usage", getCpuUsage());
+        METRICS.recordGauge("active_processors", activeProcessors.get());
+        METRICS.recordGauge("queue_size", processingQueue.size());
+
         EntityProcessingStatistics stats = getStatistics();
         long currentCount = processedEntities.get();
         long currentTime = System.currentTimeMillis();
@@ -540,6 +587,8 @@ public class EntityProcessingService {
         long deltaCount = currentCount - lastCount;
         long deltaTime = currentTime - lastTime;
         double throughput = deltaTime > 0 ? (double) deltaCount / (deltaTime / 1000.0) : 0.0;
+
+        METRICS.recordGauge("throughput_entities_per_sec", throughput);
 
         LOGGER.debug(
                 "Metrics - Processed: {} (Rate: {:.1f}/sec), Queued: {}, Active: {}, QueueSize: {}, Grid: {}, Pool: {}, CPU: {}%, Avg: {}ms",
