@@ -792,6 +792,19 @@ public class ParallelRustVectorProcessor {
         }
     }
 
+    /**
+     * Get queue statistics for monitoring purposes.
+     * Returns statistics about pending operations, total operations, active
+     * threads, and queued tasks.
+     */
+    public QueueStatistics getQueueStatistics() {
+        int pendingOps = operationQueue.getPendingOperationCount();
+        long totalOps = operationCounter.get();
+        int activeThreads = forkJoinPool.getActiveThreadCount();
+        long queuedTasks = forkJoinPool.getQueuedTaskCount();
+        return new QueueStatistics(pendingOps, totalOps, activeThreads, queuedTasks);
+    }
+
     // Helper method for dispatching batch ops (re-added as it was missing in my
     // view but used in the code I pasted back)
     // Helper method for dispatching batch ops
