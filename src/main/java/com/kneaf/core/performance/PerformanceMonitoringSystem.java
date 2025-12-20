@@ -3,6 +3,7 @@ package com.kneaf.core.performance;
 import com.kneaf.core.PerformanceManager;
 import com.kneaf.core.OptimizationInjector;
 import com.kneaf.core.ParallelRustVectorProcessor;
+import com.kneaf.core.async.AsyncMetricsCollector;
 import com.kneaf.core.EntityProcessingService;
 import com.kneaf.core.RustNativeLoader;
 import org.slf4j.Logger;
@@ -34,7 +35,7 @@ public final class PerformanceMonitoringSystem {
     private static final PerformanceMonitoringSystem INSTANCE = new PerformanceMonitoringSystem();
 
     // Core monitoring components
-    private final MetricsCollector metricsCollector;
+    private final AsyncMetricsCollector metricsCollector;
     private final ThreadSafeMetricAggregator metricAggregator;
     private final CrossComponentEventBus eventBus;
     private final ErrorTracker errorTracker;
@@ -107,7 +108,7 @@ public final class PerformanceMonitoringSystem {
         LOGGER.info("Initializing comprehensive performance monitoring system");
 
         // Initialize core components
-        this.metricsCollector = new MetricsCollector();
+        this.metricsCollector = new AsyncMetricsCollector();
         this.metricAggregator = new ThreadSafeMetricAggregator();
         this.eventBus = new CrossComponentEventBus();
         this.errorTracker = new ErrorTracker();
@@ -423,72 +424,6 @@ public final class PerformanceMonitoringSystem {
     }
 
     /**
-     * Collect metrics from Java components
-     */
-    private void collectJavaComponentMetrics() {
-        // Collect from PerformanceManager
-        PerformanceManager pm = PerformanceManager.getInstance();
-        metricAggregator.recordMetric("performance_manager.entity_throttling",
-                pm.isEntityThrottlingEnabled() ? 1.0 : 0.0);
-        metricAggregator.recordMetric("performance_manager.ai_pathfinding_optimized",
-                pm.isAiPathfindingOptimized() ? 1.0 : 0.0);
-        metricAggregator.recordMetric("performance_manager.rendering_math_optimized",
-                0.0);
-        metricAggregator.recordMetric("performance_manager.rust_integration_enabled",
-                pm.isRustIntegrationEnabled() ? 1.0 : 0.0);
-
-        // Collect from OptimizedOptimizationInjector
-        // Collect from OptimizationInjector
-        // Metric collection simplified
-        if (OptimizationInjector.isNativeLibraryLoaded()) {
-            metricAggregator.recordMetric("optimization_injector.native_library_loaded", 1.0);
-        }
-
-        // Collect from ParallelRustVectorProcessor
-        if (RustNativeLoader.isLibraryLoaded()) {
-            ParallelRustVectorProcessor.QueueStatistics queueStats = ParallelRustVectorProcessor.getInstance()
-                    .getQueueStatistics();
-            metricAggregator.recordMetric("rust_vector_library.pending_operations",
-                    (double) queueStats.pendingOperations);
-            metricAggregator.recordMetric("rust_vector_library.total_operations",
-                    (double) queueStats.totalOperations);
-            metricAggregator.recordMetric("rust_vector_library.active_threads",
-                    (double) queueStats.activeThreads);
-            metricAggregator.recordMetric("rust_vector_library.queued_tasks",
-                    (double) queueStats.queuedTasks);
-        }
-
-        // Collect from EntityProcessingService
-        EntityProcessingService.EntityProcessingStatistics entityStats = EntityProcessingService.getInstance()
-                .getStatistics();
-        metricAggregator.recordMetric("entity_processing.processed_entities",
-                (double) entityStats.processedEntities);
-        metricAggregator.recordMetric("entity_processing.queued_entities",
-                (double) entityStats.queuedEntities);
-        metricAggregator.recordMetric("entity_processing.active_processors",
-                (double) entityStats.activeProcessors);
-        metricAggregator.recordMetric("entity_processing.queue_size",
-                (double) entityStats.queueSize);
-    }
-
-    /**
-     * Collect metrics from Rust components
-     */
-    private void collectRustComponentMetrics() {
-        // This would call JNI methods to get Rust-side metrics
-        // Implementation depends on the specific JNI interface
-        try {
-            // Example: Get Rust performance statistics
-            String rustStats = getRustPerformanceStats();
-            if (rustStats != null) {
-                parseAndRecordRustMetrics(rustStats);
-            }
-        } catch (Exception e) {
-            LOGGER.debug("Could not collect Rust metrics (library may not be loaded)", e);
-        }
-    }
-
-    /**
      * Get Rust performance statistics via JNI (delegates to RustNativeLoader)
      */
     private String getRustPerformanceStats() {
@@ -683,7 +618,7 @@ public final class PerformanceMonitoringSystem {
     /**
      * Get metrics collector
      */
-    public MetricsCollector getMetricsCollector() {
+    public AsyncMetricsCollector getMetricsCollector() {
         return metricsCollector;
     }
 

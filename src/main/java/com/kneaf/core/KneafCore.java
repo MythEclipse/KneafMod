@@ -147,121 +147,15 @@ public class KneafCore {
         return instance;
     }
 
-    /**
-     * Performs A* pathfinding on a 2D grid.
-     *
-     * @param grid   the grid as a boolean array (true for obstacles)
-     * @param width  the width of the grid
-     * @param height the height of the grid
-     * @param startX the starting X coordinate
-     * @param startY the starting Y coordinate
-     * @param goalX  the goal X coordinate
-     * @param goalY  the goal Y coordinate
-     * @return the path as an array of coordinates [x1, y1, x2, y2, ...] or null if
-     *         no path found
-     */
-    private static int[] aStarPathfind(boolean[] grid, int width, int height, int startX, int startY, int goalX,
-            int goalY) {
-        if (grid == null)
-            throw new IllegalArgumentException("Grid cannot be null");
-        if (grid.length != width * height)
-            throw new IllegalArgumentException("Grid size does not match width*height");
-        if (startX < 0 || startY < 0 || goalX < 0 || goalY < 0 || startX >= width || goalX >= width || startY >= height
-                || goalY >= height)
-            throw new IllegalArgumentException("Start/goal outside grid");
 
-        // A* implementation using simple arrays. 4-connected grid.
-        final int W = width, H = height;
-        final int N = W * H;
-        int start = startY * W + startX;
-        int goal = goalY * W + goalX;
-        boolean[] closed = new boolean[N];
-        int[] gScore = new int[N];
-        int[] fScore = new int[N];
-        int[] cameFrom = new int[N];
-        java.util.Arrays.fill(gScore, Integer.MAX_VALUE / 2);
-        java.util.Arrays.fill(fScore, Integer.MAX_VALUE / 2);
-        java.util.Arrays.fill(cameFrom, -1);
-
-        java.util.PriorityQueue<Integer> open = new java.util.PriorityQueue<>(11,
-                (i, j) -> Integer.compare(fScore[i], fScore[j]));
-
-        gScore[start] = 0;
-        fScore[start] = heuristic(startX, startY, goalX, goalY);
-        open.add(start);
-
-        while (!open.isEmpty()) {
-            int current = open.poll();
-            if (current == goal) {
-                // reconstruct path
-                java.util.ArrayList<Integer> path = new java.util.ArrayList<>();
-                int cur = current;
-                while (cur != -1) {
-                    path.add(cur);
-                    cur = cameFrom[cur];
-                }
-                // reverse and convert to [x1,y1,x2,y2,...]
-                int len = path.size();
-                int[] coords = new int[len * 2];
-                for (int i = 0; i < len; i++) {
-                    int idx = path.get(len - 1 - i);
-                    coords[i * 2] = idx % W;
-                    coords[i * 2 + 1] = idx / W;
-                }
-                return coords;
-            }
-
-            closed[current] = true;
-            int cx = current % W;
-            int cy = current / W;
-
-            int[][] dirs = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
-            for (int[] d : dirs) {
-                int nx = cx + d[0];
-                int ny = cy + d[1];
-                if (nx < 0 || ny < 0 || nx >= W || ny >= H)
-                    continue;
-                int neighbor = ny * W + nx;
-                if (closed[neighbor])
-                    continue;
-                if (grid[neighbor])
-                    continue; // obstacle
-
-                int tentativeG = gScore[current] + 1;
-                if (tentativeG < gScore[neighbor]) {
-                    cameFrom[neighbor] = current;
-                    gScore[neighbor] = tentativeG;
-                    fScore[neighbor] = tentativeG + heuristic(nx, ny, goalX, goalY);
-                    if (!open.contains(neighbor))
-                        open.add(neighbor);
-                }
-            }
-        }
-
-        return null; // no path
-    }
-
-    private static int heuristic(int x, int y, int gx, int gy) {
-        // Manhattan distance
-        return Math.abs(x - gx) + Math.abs(y - gy);
-    }
 
     /**
      * Performs A* pathfinding asynchronously on a 2D grid.
-     *
-     * @param grid   the grid as a boolean array (true for obstacles)
-     * @param width  the width of the grid
-     * @param height the height of the grid
-     * @param startX the starting X coordinate
-     * @param startY the starting Y coordinate
-     * @param goalX  the goal X coordinate
-     * @param goalY  the goal Y coordinate
-     * @return a CompletableFuture that completes with the path as an array of
-     *         coordinates [x1, y1, x2, y2, ...] or null if no path found
      */
     public static CompletableFuture<int[]> aStarPathfindAsync(boolean[] grid, int width, int height, int startX,
             int startY, int goalX, int goalY) {
-        return CompletableFuture.supplyAsync(() -> aStarPathfind(grid, width, height, startX, startY, goalX, goalY));
+        return com.kneaf.core.pathfinding.DefaultPathfindingService.getInstance().findPathAsync(grid, width, height,
+                startX, startY, goalX, goalY);
     }
 
     /**

@@ -5,12 +5,16 @@ import java.util.concurrent.*;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicInteger;
+// import java.util.concurrent.atomic.AtomicInteger; // Unused
 import com.kneaf.core.math.VectorMath;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+// Removed unused imports
+import com.kneaf.core.performance.scheduler.CacheAffinity;
+// BlockDistribution imported but unused directly, removed
+import com.kneaf.core.performance.scheduler.CacheOptimizedWorkStealingScheduler;
 
 /**
  * Cache-optimized parallel processor for Rust vector operations using Fork/Join
@@ -102,199 +106,6 @@ public class ParallelRustVectorProcessor {
     // ==========================================
     // Internal Logic
     // ==========================================
-
-    /**
-     * Cache affinity tracking for spatial locality optimization
-     */
-    public static class CacheAffinity {
-        private final List<Integer> preferredBlocks;
-        private Integer lastAccessedBlock;
-        private double cacheHitRate;
-        private final AtomicInteger cacheHits;
-        private final AtomicInteger totalAccesses;
-
-        public CacheAffinity() {
-            this.preferredBlocks = new ArrayList<>();
-            this.lastAccessedBlock = null;
-            this.cacheHitRate = 0.0;
-            this.cacheHits = new AtomicInteger(0);
-            this.totalAccesses = new AtomicInteger(0);
-        }
-
-        public void updatePreferredBlock(int block) {
-            this.lastAccessedBlock = block;
-            totalAccesses.incrementAndGet();
-
-            if (!preferredBlocks.contains(block)) {
-                preferredBlocks.add(block);
-                if (preferredBlocks.size() > 8) {
-                    preferredBlocks.remove(0); // Keep only recent blocks
-                }
-            } else {
-                cacheHits.incrementAndGet();
-            }
-
-            updateCacheHitRate();
-        }
-
-        private void updateCacheHitRate() {
-            int hits = cacheHits.get();
-            int total = totalAccesses.get();
-            if (total > 0) {
-                cacheHitRate = (double) hits / total;
-            }
-        }
-
-        public List<Integer> getPreferredBlocks() {
-            return new ArrayList<>(preferredBlocks);
-        }
-
-        public double getCacheHitRate() {
-            return cacheHitRate;
-        }
-
-        public Integer getLastAccessedBlock() {
-            return lastAccessedBlock;
-        }
-    }
-
-    /**
-     * Block distribution for cache-aware work stealing
-     */
-    public static class BlockDistribution {
-        private final ConcurrentHashMap<Integer, Integer> blockWorkload;
-        private final ConcurrentHashMap<Integer, Integer> blockOwnership;
-        private final AtomicInteger totalBlocks;
-
-        public BlockDistribution() {
-            this.blockWorkload = new ConcurrentHashMap<>();
-            this.blockOwnership = new ConcurrentHashMap<>();
-            this.totalBlocks = new AtomicInteger(0);
-        }
-
-        public void assignBlock(int block, int workerId) {
-            blockOwnership.put(block, workerId);
-            blockWorkload.put(block, 0);
-            totalBlocks.incrementAndGet();
-        }
-
-        public void incrementBlockWorkload(int block) {
-            blockWorkload.computeIfPresent(block, (k, v) -> v + 1);
-        }
-
-        public Integer getBlockOwner(int block) {
-            return blockOwnership.get(block);
-        }
-
-        public double getLoadImbalance() {
-            if (blockWorkload.isEmpty()) {
-                return 0.0;
-            }
-
-            int maxLoad = blockWorkload.values().stream().max(Integer::compareTo).orElse(0);
-            int minLoad = blockWorkload.values().stream().min(Integer::compareTo).orElse(0);
-            double avgLoad = blockWorkload.values().stream().mapToInt(Integer::intValue).average().orElse(0.0);
-
-            if (avgLoad > 0.0) {
-                return (maxLoad - minLoad) / avgLoad;
-            } else {
-                return 0.0;
-            }
-        }
-    }
-
-    /**
-     * Cache-optimized work-stealing scheduler
-     */
-    public static class CacheOptimizedWorkStealingScheduler {
-        private final ForkJoinPool forkJoinPool;
-        private final ConcurrentLinkedQueue<VectorOperation> globalQueue;
-        private final ConcurrentLinkedQueue<VectorOperation>[] workerQueues;
-        private final AtomicInteger successfulSteals;
-        private final AtomicInteger stealAttempts;
-        private final BlockDistribution blockDistribution;
-
-        public CacheOptimizedWorkStealingScheduler(int numWorkers) {
-            this.forkJoinPool = new ForkJoinPool(numWorkers);
-            this.globalQueue = new ConcurrentLinkedQueue<>();
-            this.workerQueues = new ConcurrentLinkedQueue[numWorkers];
-            this.successfulSteals = new AtomicInteger(0);
-            this.stealAttempts = new AtomicInteger(0);
-            this.blockDistribution = new BlockDistribution();
-
-            for (int i = 0; i < numWorkers; i++) {
-                workerQueues[i] = new ConcurrentLinkedQueue<>();
-            }
-        }
-
-        public void submit(VectorOperation operation) {
-            globalQueue.offer(operation);
-        }
-
-        public void submitToWorker(int workerId, VectorOperation operation) {
-            if (workerId >= 0 && workerId < workerQueues.length) {
-                workerQueues[workerId].offer(operation);
-            } else {
-                globalQueue.offer(operation);
-            }
-        }
-
-        public VectorOperation stealWithCacheAffinity(int workerId, List<Integer> preferredBlocks) {
-            stealAttempts.incrementAndGet();
-
-            // Try to steal from workers that own preferred blocks
-            for (int block : preferredBlocks) {
-                Integer targetWorker = blockDistribution.getBlockOwner(block);
-                if (targetWorker != null && targetWorker != workerId) {
-                    VectorOperation task = workerQueues[targetWorker].poll();
-                    if (task != null) {
-                        successfulSteals.incrementAndGet();
-                        return task;
-                    }
-                }
-            }
-
-            // Fallback to regular stealing
-            return steal(workerId);
-        }
-
-        public VectorOperation steal(int workerId) {
-            stealAttempts.incrementAndGet();
-
-            // Try other worker queues
-            for (int i = 0; i < workerQueues.length; i++) {
-                if (i == workerId)
-                    continue;
-
-                VectorOperation task = workerQueues[i].poll();
-                if (task != null) {
-                    successfulSteals.incrementAndGet();
-                    return task;
-                }
-            }
-
-            // Try global queue as fallback
-            return globalQueue.poll();
-        }
-
-        public VectorOperation getLocalTask(int workerId) {
-            if (workerId >= 0 && workerId < workerQueues.length) {
-                return workerQueues[workerId].poll();
-            }
-            return null;
-        }
-
-        public double getStealSuccessRate() {
-            int attempts = stealAttempts.get();
-            if (attempts == 0)
-                return 0.0;
-            return (double) successfulSteals.get() / attempts;
-        }
-
-        public BlockDistribution getBlockDistribution() {
-            return blockDistribution;
-        }
-    }
 
     // Private constructor for singleton
     private ParallelRustVectorProcessor() {
@@ -1415,8 +1226,8 @@ public class ParallelRustVectorProcessor {
      */
     public Map<String, Object> getWorkStealingStatistics() {
         Map<String, Object> stats = new HashMap<>();
-        stats.put("successful_steals", workStealingScheduler.successfulSteals.get());
-        stats.put("steal_attempts", workStealingScheduler.stealAttempts.get());
+        stats.put("successful_steals", workStealingScheduler.getSuccessfulSteals());
+        stats.put("steal_attempts", workStealingScheduler.getStealAttempts());
         stats.put("steal_success_rate", workStealingScheduler.getStealSuccessRate());
         stats.put("load_imbalance", workStealingScheduler.getBlockDistribution().getLoadImbalance());
         return stats;
