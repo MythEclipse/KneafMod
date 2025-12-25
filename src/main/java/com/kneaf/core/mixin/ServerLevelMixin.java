@@ -155,7 +155,7 @@ public abstract class ServerLevelMixin {
      * Called by other mixins to check throttling state.
      */
     @Unique
-    public static boolean kneaf$shouldThrottleEntity(Entity entity, int tickCount) {
+    private static boolean kneaf$shouldThrottleEntity(Entity entity, int tickCount) {
         // Never throttle players
         if (entity instanceof Player) {
             return false;
@@ -188,7 +188,7 @@ public abstract class ServerLevelMixin {
      * Get current throttle level (0-3).
      */
     @Unique
-    public static int kneaf$getThrottleLevel() {
+    private static int kneaf$getThrottleLevel() {
         return kneaf$throttleLevel;
     }
 
@@ -196,7 +196,7 @@ public abstract class ServerLevelMixin {
      * Get current TPS.
      */
     @Unique
-    public static double kneaf$getCurrentTPS() {
+    private static double kneaf$getCurrentTPS() {
         return kneaf$currentTPS;
     }
 
@@ -204,7 +204,7 @@ public abstract class ServerLevelMixin {
      * Get statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format(
                 "ServerLevelStats{tps=%.1f, throttleLevel=%d, entitiesThrottled=%d}",
                 kneaf$currentTPS,
