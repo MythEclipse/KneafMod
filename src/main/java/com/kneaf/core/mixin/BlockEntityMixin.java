@@ -81,10 +81,10 @@ public abstract class BlockEntityMixin {
         kneaf$wakeUp();
         kneaf$totalChanges.incrementAndGet();
 
-        // Notify LevelMixin that this block entity is active
+        // Notify BlockEntityTracker that this block entity is active
         BlockEntity self = (BlockEntity) (Object) this;
         if (self.getBlockPos() != null) {
-            LevelMixin.kneaf$markBlockEntityActive(self.getBlockPos());
+            com.kneaf.core.util.BlockEntityTracker.markBlockEntityActive(self.getBlockPos());
         }
 
         // Log stats periodically
@@ -184,7 +184,7 @@ public abstract class BlockEntityMixin {
      * Get statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format(
                 "BlockEntityStats{changes=%d, ticksSkipped=%d}",
                 kneaf$totalChanges.get(),

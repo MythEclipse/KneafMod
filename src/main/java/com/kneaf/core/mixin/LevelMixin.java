@@ -102,7 +102,7 @@ public abstract class LevelMixin {
      */
     @Unique
     private void kneaf$adjustBatchSize() {
-        double currentTPS = ServerLevelMixin.kneaf$getCurrentTPS();
+        double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
 
         int newBatchSize;
         if (currentTPS < 12.0) {
@@ -148,7 +148,7 @@ public abstract class LevelMixin {
      * Mark a block entity as active (called from BlockEntityMixin.setChanged).
      */
     @Unique
-    public static void kneaf$markBlockEntityActive(BlockPos pos) {
+    private static void kneaf$markBlockEntityActive(BlockPos pos) {
         if (pos != null) {
             kneaf$idleTickCounts.put(pos.asLong(), 0);
         }
@@ -159,7 +159,7 @@ public abstract class LevelMixin {
      * Returns true if the block entity should tick, false to skip.
      */
     @Unique
-    public static boolean kneaf$shouldTickBlockEntity(BlockEntity blockEntity) {
+    private static boolean kneaf$shouldTickBlockEntity(BlockEntity blockEntity) {
         if (blockEntity == null) {
             return false;
         }
@@ -194,7 +194,7 @@ public abstract class LevelMixin {
      * Get current batch size for block entity processing.
      */
     @Unique
-    public static int kneaf$getBatchSize() {
+    private static int kneaf$getBatchSize() {
         return kneaf$currentBatchSize.get();
     }
 
@@ -202,7 +202,7 @@ public abstract class LevelMixin {
      * Get level mixin statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format(
                 "LevelStats{ticks=%d, ticked=%d, skipped=%d, batchSize=%d, tracked=%d}",
                 kneaf$ticksProcessed.get(),

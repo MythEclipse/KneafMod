@@ -88,7 +88,7 @@ public abstract class NoiseChunkGeneratorMixin {
         kneaf$noiseStartTime.set(System.nanoTime());
 
         // Adaptive delay during very low TPS to prevent overload
-        double currentTPS = ServerLevelMixin.kneaf$getCurrentTPS();
+        double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
         if (currentTPS < 12.0) {
             kneaf$throttledChunks.incrementAndGet();
             // Add small delay to reduce load during critical TPS situations
@@ -144,7 +144,7 @@ public abstract class NoiseChunkGeneratorMixin {
      * Uses ForkJoinPool to parallelize across height.
      */
     @Unique
-    public static void kneaf$generateNoiseSamples3DParallel(double[][][] samples3D,
+    private static void kneaf$generateNoiseSamples3DParallel(double[][][] samples3D,
             int chunkX, int chunkZ, int minY, int maxY, long seed) {
         if (samples3D == null || samples3D.length == 0) {
             return;
@@ -244,7 +244,7 @@ public abstract class NoiseChunkGeneratorMixin {
      * Trilinear interpolation for smooth noise values.
      */
     @Unique
-    public static double kneaf$interpolateNoise(double[][][] samples3D, int x, int y, int z) {
+    private static double kneaf$interpolateNoise(double[][][] samples3D, int x, int y, int z) {
         if (samples3D == null || samples3D.length == 0) {
             return 0.0;
         }
@@ -297,7 +297,7 @@ public abstract class NoiseChunkGeneratorMixin {
      * Get noise generation statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long total = kneaf$noiseGenCount.get();
         double avgMs = total > 0 ? (kneaf$totalNoiseTimeNs.get() / 1_000_000.0) / total : 0;
 
@@ -310,7 +310,7 @@ public abstract class NoiseChunkGeneratorMixin {
      * Shutdown the noise pool on mod unload.
      */
     @Unique
-    public static void kneaf$shutdown() {
+    private static void kneaf$shutdown() {
         kneaf$noisePool.shutdown();
     }
 }

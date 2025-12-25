@@ -146,7 +146,7 @@ public abstract class ServerChunkCacheMixin {
      * Clear hot chunk cache.
      */
     @Unique
-    public void kneaf$clearHotCache() {
+    private void kneaf$clearHotCache() {
         kneaf$hotChunkCache.clear();
     }
 
@@ -154,7 +154,7 @@ public abstract class ServerChunkCacheMixin {
      * Get chunk cache statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long hits = kneaf$cacheHits.get();
         long misses = kneaf$cacheMisses.get();
         long total = hits + misses;

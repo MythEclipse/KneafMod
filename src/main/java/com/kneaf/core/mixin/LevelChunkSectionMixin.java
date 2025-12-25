@@ -92,7 +92,7 @@ public abstract class LevelChunkSectionMixin {
      * Get statistics
      */
     @Unique
-    public static String kneaf$getStats() {
+    private static String kneaf$getStats() {
         double skipRate = kneaf$totalAccesses > 0
                 ? (double) kneaf$emptySkips / kneaf$totalAccesses * 100
                 : 0;

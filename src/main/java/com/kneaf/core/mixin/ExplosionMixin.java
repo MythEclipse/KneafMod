@@ -163,7 +163,7 @@ public abstract class ExplosionMixin {
      * Get explosion statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format(
                 "ExplosionStats{processed=%d, throttled=%d, blocksOptimized=%d}",
                 kneaf$explosionsProcessed.get(),

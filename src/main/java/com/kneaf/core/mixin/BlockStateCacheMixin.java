@@ -92,7 +92,7 @@ public abstract class BlockStateCacheMixin {
      * Clear caches periodically to prevent memory issues
      */
     @Unique
-    public static void kneaf$clearCaches() {
+    private static void kneaf$clearCaches() {
         kneaf$isAirCache.clear();
         kneaf$isSolidCache.clear();
         kneaf$hasBlockEntityCache.clear();
@@ -103,7 +103,7 @@ public abstract class BlockStateCacheMixin {
      * Get cache statistics
      */
     @Unique
-    public static String kneaf$getStats() {
+    private static String kneaf$getStats() {
         long total = kneaf$cacheHits + kneaf$cacheMisses;
         double hitRate = total > 0 ? (double) kneaf$cacheHits / total * 100 : 0;
         return String.format("BlockStateCache: %d hits, %d misses (%.1f%% hit rate), %d cached states",

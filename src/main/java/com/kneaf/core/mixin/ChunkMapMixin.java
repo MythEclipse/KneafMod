@@ -136,7 +136,7 @@ public abstract class ChunkMapMixin {
             int oldLevel, CallbackInfo ci) {
 
         // Rate limiting during low TPS
-        double currentTPS = ServerLevelMixin.kneaf$getCurrentTPS();
+        double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
         int maxChunks = currentTPS < 15.0 ? MAX_CHUNKS_PER_TICK_LOW_TPS : MAX_CHUNKS_PER_TICK_NORMAL;
 
         // If we're loading a new chunk (level decreasing)
@@ -212,7 +212,7 @@ public abstract class ChunkMapMixin {
      * Get statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format(
                 "ChunkMapStats{loaded=%d, prioritized=%d, delayed=%d}",
                 kneaf$chunksLoaded.get(),

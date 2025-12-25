@@ -85,7 +85,7 @@ public abstract class ChunkGeneratorMixin {
         kneaf$genStartTime.set(System.nanoTime());
 
         // Throttle decoration during low TPS
-        double currentTPS = ServerLevelMixin.kneaf$getCurrentTPS();
+        double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
         if (currentTPS < 14.0) {
             // During very low TPS, skip some decorations to prioritize gameplay
             long chunkPos = chunk.getPos().toLong();
@@ -143,7 +143,7 @@ public abstract class ChunkGeneratorMixin {
      * This is the core optimization - parallel feature placement.
      */
     @Unique
-    public static <T> void kneaf$processFeaturesBatch(List<T> features, Consumer<T> processor) {
+    private static <T> void kneaf$processFeaturesBatch(List<T> features, Consumer<T> processor) {
         if (features == null || features.isEmpty()) {
             return;
         }
@@ -175,7 +175,7 @@ public abstract class ChunkGeneratorMixin {
      * Get chunk generation statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long total = kneaf$chunksGenerated.get();
         double avgMs = total > 0 ? (kneaf$totalGenTimeNs.get() / 1_000_000.0) / total : 0;
 
@@ -188,7 +188,7 @@ public abstract class ChunkGeneratorMixin {
      * Shutdown the feature pool on mod unload.
      */
     @Unique
-    public static void kneaf$shutdown() {
+    private static void kneaf$shutdown() {
         kneaf$featurePool.shutdown();
     }
 }

@@ -244,7 +244,7 @@ public abstract class PathFinderMixin {
      * Get pathfinding statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format(
                 "PathFindStats{rust=%d, vanilla=%d, cache=%d, trivial=%d}",
                 kneaf$rustPathfinds.get(),
@@ -257,7 +257,7 @@ public abstract class PathFinderMixin {
      * Clear the path cache (for testing or memory management).
      */
     @Unique
-    public static void kneaf$clearCache() {
+    private static void kneaf$clearCache() {
         kneaf$pathCache.clear();
     }
 }
