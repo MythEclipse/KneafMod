@@ -80,8 +80,8 @@ public abstract class WalkNodeEvaluatorMixin {
                 long hits = kneaf$cacheHits.get();
                 long airs = kneaf$airSkips.get();
                 double hitRate = (double) (hits + airs) / queries * 100;
-                kneaf$LOGGER.info("Pathfinding stats: {} queries, {} cache hits, {} air skips ({:.1f}% optimized)",
-                        queries, hits, airs, hitRate);
+                kneaf$LOGGER.info("Pathfinding stats: {} queries, {} cache hits, {} air skips ({}% optimized)",
+                        queries, hits, airs, String.format("%.1f", hitRate));
 
                 kneaf$pathTypeQueries.set(0);
                 kneaf$cacheHits.set(0);

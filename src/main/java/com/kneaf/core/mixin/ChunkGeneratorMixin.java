@@ -132,8 +132,8 @@ public abstract class ChunkGeneratorMixin {
             double avgMs = totalChunks > 0 ? (totalNs / 1_000_000.0) / totalChunks : 0;
             double chunksPerSec = chunksDiff / 10.0;
 
-            kneaf$LOGGER.info("ChunkGen: {} total ({:.1f}/sec), avg {:.2f}ms, {} parallel, {} skipped",
-                    totalChunks, chunksPerSec, avgMs,
+            kneaf$LOGGER.info("ChunkGen: {} total ({}/sec), avg {}ms, {} parallel, {} skipped",
+                    totalChunks, String.format("%.1f", chunksPerSec), String.format("%.2f", avgMs),
                     kneaf$parallelFeatures.get(), kneaf$skippedDecorations.get());
         }
     }

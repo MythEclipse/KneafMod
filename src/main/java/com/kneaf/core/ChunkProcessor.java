@@ -141,16 +141,17 @@ public final class ChunkProcessor {
             int newLimit = Math.max(MIN_CONCURRENT_CHUNKS, (int) (currentLimit * 0.7));
             if (newLimit < currentLimit) {
                 currentMaxConcurrentChunks.set(newLimit);
-                LOGGER.debug("Scale DOWN: TPS={:.1f}, Limit={}->{}",
-                        estimatedTps, currentLimit, newLimit);
+                LOGGER.debug("Scale DOWN: TPS={}, Limit={}->{}",
+                        String.format("%.1f", estimatedTps), currentLimit, newLimit);
             }
         } else if (estimatedTps > highTpsThreshold && pending > currentLimit * 0.8) {
             // Performance good & high demand - increase concurrency
             int newLimit = Math.min(ABSOLUTE_MAX_CHUNKS, (int) (currentLimit * 1.2) + 2);
             if (newLimit > currentLimit) {
                 currentMaxConcurrentChunks.set(newLimit);
-                LOGGER.debug("Scale UP: TPS={:.1f}, Mem={:.0f}%, Limit={}->{}",
-                        estimatedTps, memUsage * 100, currentLimit, newLimit);
+                LOGGER.debug("Scale UP: TPS={}, Mem={}%, Limit={}->{}",
+                        String.format("%.1f", estimatedTps), String.format("%.0f", memUsage * 100), currentLimit,
+                        newLimit);
             }
         }
 

@@ -7,7 +7,6 @@ import com.kneaf.core.model.*;
 import com.kneaf.core.util.EntityPhysicsHelper;
 import com.kneaf.core.spatial.SpatialGrid;
 import com.kneaf.core.performance.scheduler.AdaptiveThreadPoolController;
-import net.minecraft.world.entity.Entity;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -475,6 +474,7 @@ public class EntityProcessingService {
 
     private EntityProcessingResult calculateEntityPhysicsOptimized(EntityProcessingTask task,
             double velocityMagnitude) {
+        @SuppressWarnings("unused") // Reserved for future entity-specific optimizations
         EntityInterface entity = task.entity;
         EntityPhysicsData data = task.physicsData;
 
@@ -513,6 +513,7 @@ public class EntityProcessingService {
     }
 
     private EntityProcessingResult calculateEntityPhysics(EntityProcessingTask task) {
+        @SuppressWarnings("unused") // Reserved for future entity-specific optimizations
         EntityInterface entity = task.entity;
         EntityPhysicsData data = task.physicsData;
 
@@ -590,8 +591,9 @@ public class EntityProcessingService {
         METRICS.recordGauge("throughput_entities_per_sec", throughput);
 
         LOGGER.debug(
-                "Metrics - Processed: {} (Rate: {:.1f}/sec), Queued: {}, Active: {}, QueueSize: {}, Grid: {}, Pool: {}, CPU: {}%, Avg: {}ms",
-                stats.processedEntities, throughput, stats.queuedEntities, stats.activeProcessors,
+                "Metrics - Processed: {} (Rate: {}/sec), Queued: {}, Active: {}, QueueSize: {}, Grid: {}, Pool: {}, CPU: {}%, Avg: {}ms",
+                stats.processedEntities, String.format("%.1f", throughput), stats.queuedEntities,
+                stats.activeProcessors,
                 stats.queueSize, spatialGrid.getGridSize(), physicsDataPool.size(),
                 String.format("%.2f", stats.cpuUsage), String.format("%.3f", stats.averageProcessingTimeMs));
     }

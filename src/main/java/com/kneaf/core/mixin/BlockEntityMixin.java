@@ -95,8 +95,8 @@ public abstract class BlockEntityMixin {
                 double skipRate = (changes + skipped) > 0
                         ? (skipped * 100.0 / (changes + skipped))
                         : 0;
-                kneaf$LOGGER.info("BlockEntity stats: {} changes, {} ticks skipped ({:.1f}% idle)",
-                        changes, skipped, skipRate);
+                kneaf$LOGGER.info("BlockEntity stats: {} changes, {} ticks skipped ({}% idle)",
+                        changes, skipped, String.format("%.1f", skipRate));
                 kneaf$totalChanges.set(0);
                 kneaf$ticksSkipped.set(0);
             }

@@ -6,13 +6,11 @@
  */
 package com.kneaf.core.mixin;
 
-import com.kneaf.core.lithium.ChunkAwareBlockCollisionSweeper;
 import com.kneaf.core.lithium.EntityCollisionHelper;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.VoxelShape;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -23,7 +21,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -91,8 +88,9 @@ public abstract class EntityMixin {
             if (total > 0) {
                 double skipRate = (double) earlyExits / total * 100;
                 kneaf$LOGGER.info(
-                        "EntityMixin stats: {} total collisions, {} early exits ({:.1f}%), {} single-axis, {} gravity opts",
-                        total, earlyExits, skipRate, kneaf$singleAxisCount.get(), kneaf$gravityOptimizations.get());
+                        "EntityMixin stats: {} total collisions, {} early exits ({}%), {} single-axis, {} gravity opts",
+                        total, earlyExits, String.format("%.1f", skipRate), kneaf$singleAxisCount.get(),
+                        kneaf$gravityOptimizations.get());
 
                 // Reset counters
                 kneaf$earlyExitCount.set(0);

@@ -1,0 +1,47 @@
+﻿Calculating task graph as configuration cache cannot be reused because file 'build.gradle' has changed.
+
+> Configure project :
+Successfully located 1 Rust library artifacts for copying
+
+> Task :jarJar NO-SOURCE
+> Task :generateModMetadata UP-TO-DATE
+> Task :processTestResources NO-SOURCE
+> Task :buildRustNative UP-TO-DATE
+> Task :cleanSrcNatives
+> Task :createMinecraftArtifacts UP-TO-DATE
+> Task :copyRustLib UP-TO-DATE
+
+> Task :copyNativeLibraries
+Native libraries copied to src/main/resources/natives for JAR bundling
+
+> Task :buildRustCross FAILED
+≡ƒöº Cross-compiling for Linux using Zig linker...
+.\gradlew.bat : Error: Failed to find zig
+At line:1 char:1
++ .\gradlew.bat build --console=plain 2>&1 | Out-File -FilePath build_o ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Error: Failed to find zig:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+Caused by:
+    cannot find binary path
+
+FAILURE: Build failed with an exception.
+
+* Where:
+Build file 'D:\KneafMod\build.gradle' line: 396
+
+* What went wrong:
+Execution failed for task ':buildRustCross'.
+> Cannot reference a Gradle script object from a Groovy closure as these are not supported with the configuration cache.
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 1s
+7 actionable tasks: 3 executed, 4 up-to-date
+Configuration cache entry stored.

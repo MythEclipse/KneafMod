@@ -75,7 +75,7 @@ public abstract class ServerLevelMixin {
         // Log stats every 30 seconds
         long now = System.currentTimeMillis();
         if (now - kneaf$lastLogTime > 30000) {
-            kneaf$LOGGER.info("ServerLevel TPS: {:.1f}", TPSTracker.getCurrentTPS());
+            kneaf$LOGGER.info("ServerLevel TPS: {}", String.format("%.1f", TPSTracker.getCurrentTPS()));
             kneaf$lastLogTime = now;
         }
     }

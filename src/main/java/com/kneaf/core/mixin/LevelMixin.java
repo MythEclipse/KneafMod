@@ -133,8 +133,8 @@ public abstract class LevelMixin {
                 double skipRate = (skipped + ticked) > 0
                         ? (skipped * 100.0 / (skipped + ticked))
                         : 0;
-                kneaf$LOGGER.info("LevelMixin: {} ticks, {} BE ticked, {} skipped ({:.1f}%), batch={}",
-                        ticks, ticked, skipped, skipRate, kneaf$currentBatchSize.get());
+                kneaf$LOGGER.info("LevelMixin: {} ticks, {} BE ticked, {} skipped ({}%), batch={}",
+                        ticks, ticked, skipped, String.format("%.1f", skipRate), kneaf$currentBatchSize.get());
 
                 kneaf$ticksProcessed.set(0);
                 kneaf$blockEntitiesSkipped.set(0);
