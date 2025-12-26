@@ -5,11 +5,13 @@
 package com.kneaf.core.mixin;
 
 import com.kneaf.core.RustNativeLoader;
+import com.kneaf.core.util.CachedPath;
+import com.kneaf.core.util.MixinHelper;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.pathfinder.Node;
 import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.level.pathfinder.PathFinder;
-import net.minecraft.world.level.pathfinder.Target;
 import net.minecraft.world.level.PathNavigationRegion;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -21,7 +23,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -41,6 +43,9 @@ public abstract class PathFinderMixin {
 
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
+
+    @Unique
+    private static boolean kneaf$rustPathfindingFailed = false;
 
     // Configuration
     @Unique
@@ -66,9 +71,7 @@ public abstract class PathFinderMixin {
     @Unique
     private static final ConcurrentHashMap<String, CachedPath> kneaf$pathCache = new ConcurrentHashMap<>();
 
-    @Unique
-    private record CachedPath(Path path, long timestamp) {
-    }
+
 
     /**
      * Inject at HEAD of findPath to use Rust for complex pathfinding.
@@ -77,8 +80,8 @@ public abstract class PathFinderMixin {
     @Inject(method = "findPath", at = @At("HEAD"), cancellable = true)
     private void kneaf$onFindPath(
             PathNavigationRegion region,
-            Node startNode,
-            Map<Target, BlockPos> targetPositions,
+            Mob mob,
+            Set<BlockPos> targetPositions,
             float maxRange,
             int accuracy,
             float searchDepthMultiplier,
@@ -100,8 +103,8 @@ public abstract class PathFinderMixin {
 
         try {
             // Get start and target positions
-            BlockPos startPos = new BlockPos(startNode.x, startNode.y, startNode.z);
-            BlockPos targetPos = targetPositions.values().iterator().next();
+            BlockPos startPos = mob.blockPosition();
+            BlockPos targetPos = targetPositions.iterator().next();
 
             // Calculate distance
             double distanceSq = startPos.distSqr(targetPos);
@@ -116,9 +119,9 @@ public abstract class PathFinderMixin {
             // Check cache
             String cacheKey = kneaf$createCacheKey(startPos, targetPos);
             CachedPath cached = kneaf$pathCache.get(cacheKey);
-            if (cached != null && System.currentTimeMillis() - cached.timestamp < PATH_CACHE_TTL_MS) {
+            if (cached != null && System.currentTimeMillis() - cached.timestamp() < PATH_CACHE_TTL_MS) {
                 kneaf$cacheHits.incrementAndGet();
-                cir.setReturnValue(cached.path);
+                cir.setReturnValue(cached.path());
                 return;
             }
 
@@ -151,6 +154,10 @@ public abstract class PathFinderMixin {
      */
     @Unique
     private Path kneaf$computeRustPath(PathNavigationRegion region, BlockPos start, BlockPos target, int maxRange) {
+        if (kneaf$rustPathfindingFailed) {
+            return null;
+        }
+
         try {
             // Create grid for A* (simplified - in reality would need to query block
             // walkability)
@@ -209,8 +216,11 @@ public abstract class PathFinderMixin {
                 return new Path(nodes, target, true);
             }
 
-        } catch (Exception e) {
-            kneaf$LOGGER.debug("Rust A* computation error: {}", e.getMessage());
+        } catch (Throwable e) {
+            if (!kneaf$rustPathfindingFailed) {
+                kneaf$LOGGER.error("Rust A* computation failed (disabling optimization): {}", e.toString());
+                kneaf$rustPathfindingFailed = true;
+            }
         }
 
         return null;
@@ -235,7 +245,7 @@ public abstract class PathFinderMixin {
         if (kneaf$pathCache.size() >= PATH_CACHE_SIZE) {
             // Remove oldest entries (simple cleanup)
             long now = System.currentTimeMillis();
-            kneaf$pathCache.entrySet().removeIf(e -> now - e.getValue().timestamp > PATH_CACHE_TTL_MS);
+            kneaf$pathCache.entrySet().removeIf(e -> now - e.getValue().timestamp() > PATH_CACHE_TTL_MS);
         }
 
         kneaf$pathCache.put(key, new CachedPath(path, System.currentTimeMillis()));

@@ -5,6 +5,7 @@
 package com.kneaf.core.mixin;
 
 import net.minecraft.core.BlockPos;
+import com.kneaf.core.util.MixinHelper;
 import net.minecraft.world.level.Explosion;
 import net.minecraft.world.level.Level;
 import org.spongepowered.asm.mixin.Final;

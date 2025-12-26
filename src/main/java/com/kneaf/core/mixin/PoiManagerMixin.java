@@ -204,7 +204,7 @@ public abstract class PoiManagerMixin {
      * Get statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long hits = kneaf$cacheHits.get();
         long misses = kneaf$cacheMisses.get();
         long total = hits + misses;

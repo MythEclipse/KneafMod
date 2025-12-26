@@ -34,10 +34,11 @@
     "WorldBorderMixin",
     "FluidTickMixin",
     "EntityTrackerMixin",
-    "DataFixerMixin",
     "RandomTickMixin",
     "ChunkStorageMixin",
-    "DedicatedServerMixin"
+    "DedicatedServerMixin",
+    "StructureCacheMixin",
+    "BlockEntityBatchMixin"
   ],
   "client": [],
   "server": [],

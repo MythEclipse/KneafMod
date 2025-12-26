@@ -89,7 +89,7 @@ public abstract class HopperBlockEntityMixin extends RandomizableContainerBlockE
 
     @Inject(method = "tryMoveItems", at = @At("RETURN"))
     private static void kneaf$onTryMoveItemsReturn(Level level, BlockPos pos, BlockState state,
-            HopperBlockEntity blockEntity, CallbackInfoReturnable<Boolean> cir) {
+            HopperBlockEntity blockEntity, java.util.function.BooleanSupplier validator, CallbackInfoReturnable<Boolean> cir) {
         if ((Object) blockEntity instanceof HopperBlockEntityMixin mixin) {
             if (!cir.getReturnValue()) {
                 mixin.kneaf$transferFailCount++;

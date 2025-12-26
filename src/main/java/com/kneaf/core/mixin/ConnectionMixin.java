@@ -142,7 +142,7 @@ public abstract class ConnectionMixin {
      * Get statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long sent = kneaf$packetsSent.get();
         long batches = kneaf$batchesSent.get();
         double avgBatchSize = batches > 0 ? (double) sent / batches : 0;

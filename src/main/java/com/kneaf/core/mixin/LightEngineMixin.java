@@ -117,7 +117,7 @@ public abstract class LightEngineMixin {
      * Intercept runLightUpdates to process batched updates efficiently.
      */
     @Inject(method = "runLightUpdates", at = @At("HEAD"))
-    private void kneaf$onRunLightUpdates(CallbackInfo ci) {
+    private void kneaf$onRunLightUpdates(CallbackInfoReturnable<Integer> cir) {
         int currentBatch = kneaf$batchSize.getAndSet(0);
 
         // Clear pending sections after processing
@@ -201,7 +201,7 @@ public abstract class LightEngineMixin {
      * Get light engine statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long hits = kneaf$cacheHits.get();
         long misses = kneaf$cacheMisses.get();
         long total = hits + misses;

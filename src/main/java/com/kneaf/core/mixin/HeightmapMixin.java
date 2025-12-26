@@ -72,7 +72,7 @@ public abstract class HeightmapMixin {
      * Track update requests for coalescing.
      */
     @Inject(method = "update", at = @At("HEAD"))
-    private void kneaf$onUpdate(ChunkAccess chunk, int x, int y, int z, 
+    private void kneaf$onUpdate(int x, int y, int z, 
             net.minecraft.world.level.block.state.BlockState state, 
             CallbackInfoReturnable<Boolean> cir) {
         if (!kneaf$loggedFirstApply) {
@@ -163,7 +163,7 @@ public abstract class HeightmapMixin {
      * Get statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long requested = kneaf$updatesRequested.get();
         long coalesced = kneaf$updatesCoalesced.get();
         long hits = kneaf$cacheHits.get();

@@ -75,7 +75,7 @@ public abstract class NoiseChunkGeneratorMixin {
      * Track noise fill start and apply delay during low TPS.
      */
     @Inject(method = "fillFromNoise", at = @At("HEAD"))
-    private void kneaf$onFillFromNoiseHead(Executor executor,
+    private void kneaf$onFillFromNoiseHead(
             net.minecraft.world.level.levelgen.blending.Blender blender,
             net.minecraft.world.level.levelgen.RandomState randomState,
             net.minecraft.world.level.StructureManager structureManager,
@@ -104,7 +104,7 @@ public abstract class NoiseChunkGeneratorMixin {
      * Track noise fill end and log statistics.
      */
     @Inject(method = "fillFromNoise", at = @At("RETURN"))
-    private void kneaf$onFillFromNoiseReturn(Executor executor,
+    private void kneaf$onFillFromNoiseReturn(
             net.minecraft.world.level.levelgen.blending.Blender blender,
             net.minecraft.world.level.levelgen.RandomState randomState,
             net.minecraft.world.level.StructureManager structureManager,

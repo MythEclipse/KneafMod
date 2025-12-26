@@ -6,7 +6,7 @@ package com.kneaf.core.mixin;
 
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.ChunkAccess;
-import net.minecraft.server.level.WorldGenRegion;
+import net.minecraft.world.level.WorldGenLevel;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -97,7 +97,7 @@ public abstract class ChunkGeneratorMixin {
      * Track biome generation start.
      */
     @Inject(method = "applyBiomeDecoration", at = @At("HEAD"), cancellable = true)
-    private void kneaf$onApplyBiomeDecorationHead(WorldGenRegion region, ChunkAccess chunk,
+    private void kneaf$onApplyBiomeDecorationHead(WorldGenLevel region, ChunkAccess chunk,
             net.minecraft.world.level.StructureManager structureManager, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
             kneaf$LOGGER.info("✅ ChunkGeneratorMixin applied - Parallel chunk generation active!");
@@ -123,7 +123,7 @@ public abstract class ChunkGeneratorMixin {
      * Track biome generation end and log statistics.
      */
     @Inject(method = "applyBiomeDecoration", at = @At("RETURN"))
-    private void kneaf$onApplyBiomeDecorationReturn(WorldGenRegion region, ChunkAccess chunk,
+    private void kneaf$onApplyBiomeDecorationReturn(WorldGenLevel region, ChunkAccess chunk,
             net.minecraft.world.level.StructureManager structureManager, CallbackInfo ci) {
         Long startTime = kneaf$genStartTime.get();
         if (startTime != null) {

@@ -70,7 +70,7 @@ public abstract class RedstoneWireBlockMixin {
      * Recursion guard to prevent stack overflow on long redstone chains.
      */
     @Inject(method = "updateIndirectNeighbourShapes", at = @At("HEAD"), cancellable = true)
-    private void kneaf$onUpdateIndirectNeighbourShapes(BlockState state, Level level, BlockPos pos, int flags,
+    private void kneaf$onUpdateIndirectNeighbourShapes(BlockState state, net.minecraft.world.level.LevelAccessor level, BlockPos pos, int flags,
             int recursionLeft, CallbackInfo ci) {
         if (recursionLeft < 0) {
             ci.cancel();

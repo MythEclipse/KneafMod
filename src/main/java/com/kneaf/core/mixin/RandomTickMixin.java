@@ -6,9 +6,7 @@
  */
 package com.kneaf.core.mixin;
 
-import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -27,12 +25,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 
  * Optimizations:
  * 1. Skip chunks with no tickable blocks
- * 2. Cache tickable block information per chunk section
- * 3. Batch random tick processing
- * 4. Track tick statistics
- * 
- * Random ticks are used for crop growth, grass spreading, etc.
- * Optimizing this improves performance on farming-heavy servers.
+ * 2. Cache tickable block information per chunk
+ * 3. Track tick statistics
  */
 @Mixin(ServerLevel.class)
 public abstract class RandomTickMixin {
@@ -43,7 +37,7 @@ public abstract class RandomTickMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Cache of chunks with no tickable blocks (chunk position -> game time)
+    // Cache of empty chunks
     @Unique
     private static final Map<Long, Long> kneaf$emptyChunkCache = new ConcurrentHashMap<>(256);
 
@@ -63,9 +57,8 @@ public abstract class RandomTickMixin {
     @Unique
     private static long kneaf$lastCacheClear = 0;
 
-    // Configuration
     @Unique
-    private static final long EMPTY_CHUNK_CACHE_DURATION = 600; // ticks (30 seconds)
+    private static final long EMPTY_CHUNK_CACHE_DURATION = 600;
 
     /**
      * Optimize random tick chunk selection.
@@ -81,45 +74,26 @@ public abstract class RandomTickMixin {
         long chunkPos = chunk.getPos().toLong();
         long gameTime = self.getGameTime();
 
-        // Check if chunk is in empty cache
+        // Check empty chunk cache
         Long cachedTime = kneaf$emptyChunkCache.get(chunkPos);
         if (cachedTime != null && gameTime - cachedTime < EMPTY_CHUNK_CACHE_DURATION) {
-            // Chunk recently checked and had no tickable blocks
             kneaf$chunksSkipped.incrementAndGet();
             return;
         }
 
         kneaf$chunksProcessed.incrementAndGet();
 
-        // Periodic cache cleanup
-        if (gameTime - kneaf$lastCacheClear > 1200) { // Every minute
+        // Periodic cleanup
+        if (gameTime - kneaf$lastCacheClear > 1200) {
             kneaf$cleanupCache(gameTime);
             kneaf$lastCacheClear = gameTime;
         }
 
-        // Log stats periodically
-        long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
-            long skipped = kneaf$chunksSkipped.get();
-            long processed = kneaf$chunksProcessed.get();
-            long ticks = kneaf$ticksApplied.get();
-            long total = skipped + processed;
-
-            if (total > 0) {
-                double skipRate = skipped * 100.0 / total;
-                kneaf$LOGGER.info("RandomTick: {} chunks ({} skipped, {}%), {} ticks applied",
-                        total, skipped, String.format("%.1f", skipRate), ticks);
-            }
-
-            kneaf$chunksSkipped.set(0);
-            kneaf$chunksProcessed.set(0);
-            kneaf$ticksApplied.set(0);
-            kneaf$lastLogTime = now;
-        }
+        kneaf$logStats();
     }
 
     /**
-     * Track when random ticks are actually applied.
+     * Track random ticks applied.
      */
     @Inject(method = "tickChunk", at = @At(
             value = "INVOKE",
@@ -129,57 +103,32 @@ public abstract class RandomTickMixin {
         kneaf$ticksApplied.incrementAndGet();
     }
 
-    /**
-     * Detect and cache chunks with no tickable blocks.
-     */
-    @Inject(method = "tickChunk", at = @At("RETURN"))
-    private void kneaf$afterTickChunk(LevelChunk chunk, int randomTickSpeed, CallbackInfo ci) {
-        ServerLevel self = (ServerLevel) (Object) this;
-        long chunkPos = chunk.getPos().toLong();
-        
-        // If no ticks were applied this pass, potentially mark as empty
-        // (This is a heuristic - chunk might have tickable blocks but none were selected)
-        // More sophisticated detection could iterate chunk sections
-    }
-
-    /**
-     * Cleanup old cache entries.
-     */
     @Unique
     private static void kneaf$cleanupCache(long currentTime) {
-        int removed = 0;
-        var iterator = kneaf$emptyChunkCache.entrySet().iterator();
-        while (iterator.hasNext()) {
-            var entry = iterator.next();
-            if (currentTime - entry.getValue() > EMPTY_CHUNK_CACHE_DURATION * 2) {
-                iterator.remove();
-                removed++;
-            }
-        }
-
-        if (removed > 0) {
-            kneaf$LOGGER.debug("Cleaned up {} empty chunk cache entries", removed);
-        }
-
-        // Limit cache size
         if (kneaf$emptyChunkCache.size() > 1000) {
             kneaf$emptyChunkCache.clear();
-            kneaf$LOGGER.debug("Empty chunk cache cleared due to size");
         }
     }
 
-    /**
-     * Get statistics.
-     */
     @Unique
-    public static String kneaf$getStatistics() {
-        long skipped = kneaf$chunksSkipped.get();
-        long processed = kneaf$chunksProcessed.get();
-        long total = skipped + processed;
-        double skipRate = total > 0 ? (skipped * 100.0 / total) : 0;
+    private static void kneaf$logStats() {
+        long now = System.currentTimeMillis();
+        if (now - kneaf$lastLogTime > 60000) {
+            long skipped = kneaf$chunksSkipped.get();
+            long processed = kneaf$chunksProcessed.get();
+            long ticks = kneaf$ticksApplied.get();
+            long total = skipped + processed;
 
-        return String.format(
-                "RandomTickStats{chunks=%d, skipRate=%.1f%%, ticksApplied=%d, cacheSize=%d}",
-                total, skipRate, kneaf$ticksApplied.get(), kneaf$emptyChunkCache.size());
+            if (total > 0) {
+                double skipRate = skipped * 100.0 / total;
+                kneaf$LOGGER.info("RandomTick: {} chunks, {}% skipped, {} ticks",
+                        total, String.format("%.1f", skipRate), ticks);
+            }
+
+            kneaf$chunksSkipped.set(0);
+            kneaf$chunksProcessed.set(0);
+            kneaf$ticksApplied.set(0);
+            kneaf$lastLogTime = now;
+        }
     }
 }

@@ -43,11 +43,11 @@ public abstract class ScheduledTickMixin<T> {
 
     // Track pending ticks per position for deduplication detection
     @Unique
-    private final Map<Long, Integer> kneaf$pendingTickCounts = new ConcurrentHashMap<>(256);
+    private Map<Long, Integer> kneaf$pendingTickCounts;
 
     // Track chunk regions with pending ticks for batch processing
     @Unique
-    private final Set<Long> kneaf$activeChunkRegions = ConcurrentHashMap.newKeySet();
+    private Set<Long> kneaf$activeChunkRegions;
 
     // Statistics
     @Unique
@@ -73,6 +73,14 @@ public abstract class ScheduledTickMixin<T> {
         }
 
         kneaf$ticksScheduled.incrementAndGet();
+
+        // Lazy init
+        if (kneaf$pendingTickCounts == null) {
+            kneaf$pendingTickCounts = new ConcurrentHashMap<>(256);
+        }
+        if (kneaf$activeChunkRegions == null) {
+            kneaf$activeChunkRegions = ConcurrentHashMap.newKeySet();
+        }
 
         // Track position for duplicate detection
         BlockPos pos = tick.pos();
@@ -119,12 +127,12 @@ public abstract class ScheduledTickMixin<T> {
     @Inject(method = "tick", at = @At("RETURN"))
     private void kneaf$afterTick(CallbackInfo ci) {
         // Cleanup tracking data periodically
-        if (kneaf$pendingTickCounts.size() > 1000) {
+        if (kneaf$pendingTickCounts != null && kneaf$pendingTickCounts.size() > 1000) {
             kneaf$pendingTickCounts.clear();
         }
 
         // Cleanup active regions
-        if (kneaf$activeChunkRegions.size() > 500) {
+        if (kneaf$activeChunkRegions != null && kneaf$activeChunkRegions.size() > 500) {
             kneaf$activeChunkRegions.clear();
         }
 
@@ -145,7 +153,7 @@ public abstract class ScheduledTickMixin<T> {
      * Get statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long scheduled = kneaf$ticksScheduled.get();
         long duplicates = kneaf$duplicatesDetected.get();
         double dupRate = scheduled > 0 ? (duplicates * 100.0 / scheduled) : 0;
