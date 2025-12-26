@@ -21,6 +21,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.ArrayList;
+import net.minecraft.world.level.levelgen.placement.PlacedFeature;
+import net.minecraft.util.RandomSource;
+import net.minecraft.core.BlockPos;
+import org.spongepowered.asm.mixin.injection.Redirect;
 
 /**
  * ChunkGeneratorMixin - Parallel chunk generation optimization.
@@ -93,6 +98,9 @@ public abstract class ChunkGeneratorMixin {
     private static final ForkJoinPool kneaf$featurePool = new ForkJoinPool(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2));
 
+    @Unique
+    private static final ThreadLocal<List<Runnable>> kneaf$featureBatch = ThreadLocal.withInitial(ArrayList::new);
+
     /**
      * Track biome generation start.
      */
@@ -125,6 +133,13 @@ public abstract class ChunkGeneratorMixin {
     @Inject(method = "applyBiomeDecoration", at = @At("RETURN"))
     private void kneaf$onApplyBiomeDecorationReturn(WorldGenLevel region, ChunkAccess chunk,
             net.minecraft.world.level.StructureManager structureManager, CallbackInfo ci) {
+        // Flush remaining features in batch
+        List<Runnable> batch = kneaf$featureBatch.get();
+        if (!batch.isEmpty()) {
+            kneaf$processFeaturesBatch(new ArrayList<>(batch), Runnable::run);
+            batch.clear();
+        }
+
         Long startTime = kneaf$genStartTime.get();
         if (startTime != null) {
             long elapsed = System.nanoTime() - startTime;
@@ -138,6 +153,28 @@ public abstract class ChunkGeneratorMixin {
                 kneaf$lastLogTime = now;
             }
         }
+    }
+
+    /**
+     * Redirect feature placement to batch and execute in parallel.
+     */
+    @Redirect(method = "applyBiomeDecoration", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/levelgen/placement/PlacedFeature;place(Lnet/minecraft/world/level/WorldGenLevel;Lnet/minecraft/world/level/chunk/ChunkGenerator;Lnet/minecraft/util/RandomSource;Lnet/minecraft/core/BlockPos;)Z"))
+    private boolean kneaf$redirectPlaceFeature(PlacedFeature instance, WorldGenLevel level, ChunkGenerator generator, RandomSource random, BlockPos pos) {
+        List<Runnable> batch = kneaf$featureBatch.get();
+        // Capture state for parallel execution
+        batch.add(() -> {
+            try {
+                instance.place(level, generator, random, pos);
+            } catch (Exception e) {
+                kneaf$LOGGER.error("Feature placement failed in parallel batch", e);
+            }
+        });
+        
+        if (batch.size() >= PARALLEL_FEATURE_THRESHOLD) {
+            kneaf$processFeaturesBatch(new ArrayList<>(batch), Runnable::run);
+            batch.clear();
+        }
+        return true; // Assume success to continue loop
     }
 
     /**
