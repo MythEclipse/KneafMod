@@ -4,11 +4,9 @@
  */
 package com.kneaf.core.mixin;
 
-import com.kneaf.core.RustNativeLoader;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Explosion;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -19,8 +17,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -108,7 +104,7 @@ public abstract class ExplosionMixin {
         // Rate limiting for chain explosions
         BlockPos pos = BlockPos.containing(x, y, z);
         long chunkKey = pos.asLong() >> 4; // Chunk-level key
-        int explosionCount = kneaf$explosionRateTracker.merge(chunkKey, 1, Integer::sum);
+        int explosionCount = kneaf$explosionRateTracker.merge(chunkKey, 1, (a, b) -> a + b);
 
         if (explosionCount > MAX_EXPLOSIONS_PER_CHUNK_PER_SECOND) {
             kneaf$explosionsSkipped.incrementAndGet();

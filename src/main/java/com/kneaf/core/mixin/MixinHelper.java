@@ -86,6 +86,7 @@ public final class MixinHelper {
      * Get squared distance from entity to nearest player.
      * Returns Double.MAX_VALUE if no players are present.
      */
+    @SuppressWarnings("null")
     public static double getDistanceToNearestPlayerSq(Entity entity) {
         Level level = entity.level();
         if (level == null || level.isClientSide()) {
@@ -160,6 +161,7 @@ public final class MixinHelper {
     /**
      * Apply Rust-optimized vector addition.
      */
+    @SuppressWarnings("null")
     public static Vec3 applyOptimizedAdd(Vec3 a, Vec3 b) {
         if (!isNativeAvailable()) {
             return a.add(b);

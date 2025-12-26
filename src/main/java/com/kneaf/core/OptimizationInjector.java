@@ -1,7 +1,6 @@
 package com.kneaf.core;
 
 import com.kneaf.core.async.AsyncMetricsCollector;
-import com.kneaf.core.math.VectorMath;
 import com.kneaf.core.model.EntityPhysicsData;
 import com.kneaf.core.model.EntityProcessingResult;
 import com.kneaf.core.util.EntityPhysicsHelper;
@@ -18,8 +17,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Optimized entity processing injector.

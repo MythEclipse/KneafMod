@@ -1,13 +1,11 @@
 package com.kneaf.core.performance;
 
 import com.kneaf.core.PerformanceManager;
-import com.kneaf.core.OptimizationInjector;
 import com.kneaf.core.ParallelRustVectorProcessor;
 import com.kneaf.core.performance.model.QueueStatistics;
 import com.kneaf.core.async.AsyncMetricsCollector;
 import com.kneaf.core.EntityProcessingService;
 import com.kneaf.core.model.EntityProcessingStatistics;
-import com.kneaf.core.RustNativeLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 // Minecraft-specific imports commented out for test compatibility
@@ -101,6 +99,7 @@ public final class PerformanceMonitoringSystem {
             return type;
         }
 
+        @SuppressWarnings("unused") // Part of MetricEvent public API
         public long getTimestamp() {
             return timestamp;
         }
@@ -431,6 +430,7 @@ public final class PerformanceMonitoringSystem {
     /**
      * Parse and record Rust metrics
      */
+    @SuppressWarnings("unused") // Reserved for future Rust metrics integration
     private void parseAndRecordRustMetrics(String rustStats) {
         try {
             // Parse the Rust statistics string format:

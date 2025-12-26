@@ -73,6 +73,7 @@ public abstract class PathFinderMixin {
     /**
      * Inject at HEAD of findPath to use Rust for complex pathfinding.
      */
+    @SuppressWarnings("null")
     @Inject(method = "findPath", at = @At("HEAD"), cancellable = true)
     private void kneaf$onFindPath(
             PathNavigationRegion region,

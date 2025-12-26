@@ -4,8 +4,6 @@
  */
 package com.kneaf.core.mixin;
 
-import com.kneaf.core.RustNativeLoader;
-import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -82,7 +80,7 @@ public abstract class ServerChunkCacheMixin {
         long key = kneaf$chunkKey(x, z);
         ChunkAccess cached = kneaf$hotChunkCache.get(key);
 
-        if (cached != null && cached instanceof LevelChunk levelChunk) {
+        if (cached != null && cached instanceof LevelChunk) {
             kneaf$cacheHits.incrementAndGet();
             cir.setReturnValue(cached);
         } else {
