@@ -29,7 +29,15 @@
     "PoiManagerMixin",
     "ScheduledTickMixin",
     "HeightmapMixin",
-    "ConnectionMixin"
+    "ConnectionMixin",
+    "RecipeManagerMixin",
+    "WorldBorderMixin",
+    "FluidTickMixin",
+    "EntityTrackerMixin",
+    "DataFixerMixin",
+    "RandomTickMixin",
+    "ChunkStorageMixin",
+    "DedicatedServerMixin"
   ],
   "client": [],
   "server": [],
