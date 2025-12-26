@@ -16,6 +16,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
@@ -30,6 +32,8 @@ import java.util.function.Consumer;
  * 2. Batch feature placement for cache efficiency
  * 3. Adaptive parallelism based on system load
  * 4. Skip decoration for chunks far from players during low TPS
+ * 5. Biome lookup caching per chunk
+ * 6. Structure placement result caching
  */
 @Mixin(ChunkGenerator.class)
 public abstract class ChunkGeneratorMixin {
@@ -39,6 +43,24 @@ public abstract class ChunkGeneratorMixin {
 
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
+
+    // Biome lookup cache - keyed by chunk position
+    @Unique
+    private static final Map<Long, Object> kneaf$biomeCache = new ConcurrentHashMap<>(256);
+
+    // Structure placement cache - keyed by structure + chunk position
+    @Unique
+    private static final Map<Long, Boolean> kneaf$structureCache = new ConcurrentHashMap<>(128);
+
+    // Cache hit statistics
+    @Unique
+    private static final AtomicLong kneaf$biomeCacheHits = new AtomicLong(0);
+
+    @Unique
+    private static final AtomicLong kneaf$biomeCacheMisses = new AtomicLong(0);
+
+    @Unique
+    private static final AtomicLong kneaf$structureCacheHits = new AtomicLong(0);
 
     // Statistics
     @Unique

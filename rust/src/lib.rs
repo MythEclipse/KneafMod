@@ -14,7 +14,9 @@
 //! JNI implementation for KneafCore vector mathematics
 //! Provides STRICTLY PURE vector/matrix operations - NO game state access, NO entity references
 
-use jni::objects::{JByteBuffer, JClass, JDoubleArray, JFloatArray, JObject, JObjectArray, JString};
+use jni::objects::{
+    JByteBuffer, JClass, JDoubleArray, JFloatArray, JObject, JObjectArray, JString,
+};
 use jni::sys::{jboolean, jdouble, jdoubleArray, jint, jlong};
 use jni::JNIEnv;
 use std::ffi::c_void;
@@ -2055,7 +2057,9 @@ pub extern "system" fn Java_com_kneaf_core_RustNativeLoader_calculateCircularPos
 /// Input: flat array of [vx0, vy0, vz0, vx1, vy1, vz1, ...]
 /// Output: SAME velocities unchanged (for benchmarking/profiling only)
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_1entity_1physics<'local>(
+pub extern "system" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_1entity_1physics<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     velocities: JDoubleArray<'local>,
@@ -2064,16 +2068,16 @@ pub extern "system" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_
 ) -> jdoubleArray {
     let count = entity_count as usize;
     let array_size = count * 3;
-    
+
     let mut vel_buf = vec![0.0f64; array_size];
     if let Err(_) = env.get_double_array_region(&velocities, 0, &mut vel_buf) {
         return env.new_double_array(0).unwrap().into_raw();
     }
-    
+
     // PURE PASSTHROUGH: Parallel iteration for profiling, but NO modification
     // This demonstrates the parallelism/SIMD capability without altering gameplay
     use rayon::prelude::*;
-    
+
     let results: Vec<f64> = (0..count)
         .into_par_iter()
         .flat_map(|i| {
@@ -2082,7 +2086,7 @@ pub extern "system" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_
             vec![vel_buf[idx], vel_buf[idx + 1], vel_buf[idx + 2]]
         })
         .collect();
-    
+
     let output = env
         .new_double_array(array_size as i32)
         .expect("Failed to create output array");
@@ -2094,36 +2098,44 @@ pub extern "system" fn Java_com_kneaf_core_OptimizationInjector_rustperf_1batch_
 /// Analyze chunk section complexity for LOD decisions
 /// Returns complexity scores per section [section0_score, section1_score, ...]
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_ChunkProcessor_rustperf_1analyze_1chunk_1sections<'local>(
+pub extern "system" fn Java_com_kneaf_core_ChunkProcessor_rustperf_1analyze_1chunk_1sections<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     section_block_counts: JDoubleArray<'local>,
     section_count: jint,
 ) -> jdoubleArray {
     let count = section_count as usize;
-    
+
     let mut block_counts = vec![0.0f64; count];
     if let Err(_) = env.get_double_array_region(&section_block_counts, 0, &mut block_counts) {
         return env.new_double_array(0).unwrap().into_raw();
     }
-    
+
     use rayon::prelude::*;
-    
+
     // Calculate complexity scores based on block counts and variety
     let complexity_scores: Vec<f64> = block_counts
         .par_iter()
         .enumerate()
         .map(|(i, &block_count)| {
             // Higher sections (y > 64) typically have less detail
-            let height_factor = if i < 4 { 1.5 } else if i < 8 { 1.0 } else { 0.7 };
-            
+            let height_factor = if i < 4 {
+                1.5
+            } else if i < 8 {
+                1.0
+            } else {
+                0.7
+            };
+
             // Complexity based on block count (more blocks = more complex)
             let base_complexity = (block_count / 4096.0).min(1.0); // 4096 = 16^3 blocks per section
-            
+
             base_complexity * height_factor * 100.0
         })
         .collect();
-    
+
     let output = env
         .new_double_array(count as i32)
         .expect("Failed to create output array");
@@ -2135,7 +2147,9 @@ pub extern "system" fn Java_com_kneaf_core_ChunkProcessor_rustperf_1analyze_1chu
 /// Batch distance calculation for spatial partitioning
 /// Takes entity positions and returns distances to all other entities
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1batch_1distance_1matrix<'local>(
+pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1batch_1distance_1matrix<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     positions: JDoubleArray<'local>,
@@ -2143,14 +2157,14 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
 ) -> jdoubleArray {
     let count = entity_count as usize;
     let pos_size = count * 3;
-    
+
     let mut pos_buf = vec![0.0f64; pos_size];
     if let Err(_) = env.get_double_array_region(&positions, 0, &mut pos_buf) {
         return env.new_double_array(0).unwrap().into_raw();
     }
-    
+
     use rayon::prelude::*;
-    
+
     // Calculate N x N distance matrix (flattened)
     let distances: Vec<f64> = (0..count)
         .into_par_iter()
@@ -2159,7 +2173,7 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
             let x1 = pos_buf[ix];
             let y1 = pos_buf[ix + 1];
             let z1 = pos_buf[ix + 2];
-            
+
             (0..count)
                 .map(|j| {
                     if i == j {
@@ -2175,7 +2189,7 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
                 .collect::<Vec<f64>>()
         })
         .collect();
-    
+
     let matrix_size = (count * count) as i32;
     let output = env
         .new_double_array(matrix_size)
@@ -2184,7 +2198,6 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
         .expect("Failed to set output array");
     output.into_raw()
 }
-
 
 // ===================================
 // ADVANCED: ZERO-COPY SPATIAL GRID
@@ -2238,18 +2251,24 @@ fn morton_encode_3d(x: u32, y: u32, z: u32) -> u32 {
 /// Uses Direct ByteBuffers to share memory between JRE and Rust heap
 /// Implements a spatial hash grid for O(1) neighbor lookups
 #[no_mangle]
-pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1batch_1spatial_1grid_1zero_1copy<'local>(
+pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1batch_1spatial_1grid_1zero_1copy<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
-    input_buffer: JByteBuffer<'local>,  // Direct Buffer containing [EntitySpatialData] array
+    input_buffer: JByteBuffer<'local>, // Direct Buffer containing [EntitySpatialData] array
     output_buffer: JByteBuffer<'local>, // Direct Buffer for [SpatialResult] array
     count: jint,
 ) {
     let count = count as usize;
 
     // 1. UNSAFE: Get raw memory pointers (Zero-Copy)
-    let input_ptr = env.get_direct_buffer_address(&input_buffer).expect("Invalid input buffer");
-    let output_ptr = env.get_direct_buffer_address(&output_buffer).expect("Invalid output buffer");
+    let input_ptr = env
+        .get_direct_buffer_address(&input_buffer)
+        .expect("Invalid input buffer");
+    let output_ptr = env
+        .get_direct_buffer_address(&output_buffer)
+        .expect("Invalid output buffer");
 
     unsafe {
         let entities = std::slice::from_raw_parts(input_ptr as *const EntitySpatialData, count);
@@ -2259,15 +2278,16 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
         // Cell size = 4.0 blocks
         let cell_size = 4.0;
         let world_offset = 10000.0; // Offset to keep coords positive for bitwise ops
-        
-        let mut grid: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::with_capacity(count);
+
+        let mut grid: std::collections::HashMap<u32, Vec<usize>> =
+            std::collections::HashMap::with_capacity(count);
 
         for (i, entity) in entities.iter().enumerate() {
             // Discretize and Offset
             let cx = ((entity.x + world_offset) / cell_size) as u32;
             let cy = ((entity.y + world_offset) / cell_size) as u32;
             let cz = ((entity.z + world_offset) / cell_size) as u32;
-            
+
             // Calculate Morton Code (Z-Order Key)
             let key = morton_encode_3d(cx, cy, cz);
             grid.entry(key).or_default().push(i);
@@ -2275,34 +2295,36 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
 
         // 3. Process Entities (Parallel Rayon iterator)
         use rayon::prelude::*;
-        
-        results.par_chunks_mut(1).enumerate().for_each(|(i, result_slice)| {
-            let result = &mut result_slice[0];
-            let me = &entities[i];
-            
-            let cx = ((me.x + world_offset) / cell_size) as u32;
-            let cy = ((me.y + world_offset) / cell_size) as u32;
-            let cz = ((me.z + world_offset) / cell_size) as u32;
 
-            let mut closest_dist_sq = f32::MAX;
-            let mut closest_id = -1;
-            let mut density = 0.0;
-            
-            // Avoidance accumulators (declared outside unsafe for scope)
-            let mut avoid_x = 0.0f32;
-            let mut avoid_z = 0.0f32;
-            
-            // -------------------------------------------------------------
-            // REAL AVX2 IMPLEMENTATION (No Simulation)
-            // Process neighbors in chunks of 8 using explicit CPU intrinsics
-            // -------------------------------------------------------------
-            
-            // Broadcast 'me' position to all 8 lanes of YMM registers
-            unsafe {
+        results
+            .par_chunks_mut(1)
+            .enumerate()
+            .for_each(|(i, result_slice)| {
+                let result = &mut result_slice[0];
+                let me = &entities[i];
+
+                let cx = ((me.x + world_offset) / cell_size) as u32;
+                let cy = ((me.y + world_offset) / cell_size) as u32;
+                let cz = ((me.z + world_offset) / cell_size) as u32;
+
+                let mut closest_dist_sq = f32::MAX;
+                let mut closest_id = -1;
+                let mut density = 0.0;
+
+                // Avoidance accumulators (declared outside unsafe for scope)
+                let mut avoid_x = 0.0f32;
+                let mut avoid_z = 0.0f32;
+
+                // -------------------------------------------------------------
+                // REAL AVX2 IMPLEMENTATION (No Simulation)
+                // Process neighbors in chunks of 8 using explicit CPU intrinsics
+                // -------------------------------------------------------------
+
+                // Broadcast 'me' position to all 8 lanes of YMM registers
                 let me_x_ymm = _mm256_set1_ps(me.x);
                 let me_y_ymm = _mm256_set1_ps(me.y);
                 let me_z_ymm = _mm256_set1_ps(me.z);
-                
+
                 // Temp buffers for gathering scattered AOS data into SOA for SIMD
                 let mut neighbor_x = [0.0f32; 8];
                 let mut neighbor_y = [0.0f32; 8];
@@ -2322,14 +2344,14 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
                                 // Process neighbors in chunks of 8
                                 for chunk in cell_indices.chunks(8) {
                                     let chunk_len = chunk.len();
-                                    
+
                                     // 1. GATHER (Scatter-Gather from AOS to SOA)
                                     // We manually gather because vgather is complex with structs
                                     for k in 0..chunk_len {
                                         let other_idx = chunk[k];
-                                        if i == other_idx { 
+                                        if i == other_idx {
                                             // Handle self-check by putting infinity
-                                            neighbor_x[k] = f32::INFINITY; 
+                                            neighbor_x[k] = f32::INFINITY;
                                         } else {
                                             let other = &entities[other_idx];
                                             neighbor_x[k] = other.x;
@@ -2341,7 +2363,7 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
                                     // Fill remainders with infinity to prevent false positives
                                     for k in chunk_len..8 {
                                         neighbor_x[k] = f32::INFINITY;
-                                        neighbor_y[k] = f32::INFINITY; 
+                                        neighbor_y[k] = f32::INFINITY;
                                         neighbor_z[k] = f32::INFINITY;
                                     }
 
@@ -2360,7 +2382,8 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
                                     let dx_sq = _mm256_mul_ps(dx_ymm, dx_ymm);
                                     let dy_sq = _mm256_mul_ps(dy_ymm, dy_ymm);
                                     let dz_sq = _mm256_mul_ps(dz_ymm, dz_ymm);
-                                    let dist_sq_ymm = _mm256_add_ps(dx_sq, _mm256_add_ps(dy_sq, dz_sq));
+                                    let dist_sq_ymm =
+                                        _mm256_add_ps(dx_sq, _mm256_add_ps(dy_sq, dz_sq));
 
                                     // 5. EXTRACT Results (Store back to array to find min)
                                     let mut dist_sq_res = [0.0f32; 8];
@@ -2369,12 +2392,12 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
                                     // 6. PROCESS Results (Scalar reduction)
                                     for k in 0..chunk_len {
                                         let d2 = dist_sq_res[k];
-                                        
+
                                         if d2 < closest_dist_sq {
                                             closest_dist_sq = d2;
                                             closest_id = neighbor_ids[k];
                                         }
-                                        
+
                                         if d2 < 16.0 && d2 > 0.001 {
                                             density += 1.0;
                                             // Extract single scalar components for accumulators (expensive but necessary for scalar acc)
@@ -2391,14 +2414,13 @@ pub extern "system" fn Java_com_kneaf_core_EntityProcessingService_rustperf_1bat
                         }
                     }
                 }
-            }
 
-            result.nearest_neighbor_id = closest_id;
-            result.neighbor_dist_sq = closest_dist_sq;
-            result.crowd_density = density;
-            result.avoidance_x = avoid_x;
-            result.avoidance_z = avoid_z;
-        });
+                result.nearest_neighbor_id = closest_id;
+                result.neighbor_dist_sq = closest_dist_sq;
+                result.crowd_density = density;
+                result.avoidance_x = avoid_x;
+                result.avoidance_z = avoid_z;
+            });
     }
 }
 
@@ -2454,7 +2476,7 @@ pub extern "C" fn Java_com_kneaf_core_RustNoise_batchNoise2d<'a>(
 ) -> JDoubleArray<'a> {
     let size = (width * depth) as usize;
     let mut results = vec![0.0; size];
-    
+
     use rayon::prelude::*;
     results.par_iter_mut().enumerate().for_each(|(i, val)| {
         let lx = (i as i32 % width) as f64;
@@ -2463,7 +2485,7 @@ pub extern "C" fn Java_com_kneaf_core_RustNoise_batchNoise2d<'a>(
         let gz = z_start + lz;
         *val = simple_noise_2d(gx, gz, seed, frequency);
     });
-    
+
     let output = env.new_double_array(size as i32).unwrap();
     env.set_double_array_region(&output, 0, &results).unwrap();
     output
