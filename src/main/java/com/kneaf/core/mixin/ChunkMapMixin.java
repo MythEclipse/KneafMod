@@ -16,6 +16,7 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -131,7 +132,7 @@ public abstract class ChunkMapMixin {
     @Inject(method = "updateChunkScheduling", at = @At("HEAD"), cancellable = true)
     private void kneaf$onUpdateChunkSchedulingHead(long chunkPos, int level,
             @javax.annotation.Nullable ChunkHolder oldHolder,
-            int oldLevel, CallbackInfo ci) {
+            int oldLevel, CallbackInfoReturnable<ChunkHolder> cir) {
 
         // Rate limiting during low TPS
         double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
@@ -155,7 +156,7 @@ public abstract class ChunkMapMixin {
     @Inject(method = "updateChunkScheduling", at = @At("RETURN"))
     private void kneaf$onUpdateChunkSchedulingReturn(long chunkPos, int level,
             @javax.annotation.Nullable ChunkHolder oldHolder,
-            int oldLevel, CallbackInfo ci) {
+            int oldLevel, CallbackInfoReturnable<ChunkHolder> cir) {
         // Increment counter when a chunk is being loaded (level decreasing means
         // loading)
         if (level < oldLevel) {
