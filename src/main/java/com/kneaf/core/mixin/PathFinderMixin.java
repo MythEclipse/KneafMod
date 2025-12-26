@@ -5,6 +5,7 @@
 package com.kneaf.core.mixin;
 
 import com.kneaf.core.RustNativeLoader;
+import com.kneaf.core.ParallelRustVectorProcessor;
 import com.kneaf.core.util.CachedPath;
 import com.kneaf.core.util.MixinHelper;
 import net.minecraft.core.BlockPos;
@@ -163,7 +164,7 @@ public abstract class PathFinderMixin {
             // walkability)
             int width = maxRange * 2 + 1;
             int height = maxRange * 2 + 1;
-            boolean[] grid = new boolean[width * height];
+            byte[] grid = new byte[width * height];
 
             BlockPos.MutableBlockPos mutPos = new BlockPos.MutableBlockPos();
 
@@ -183,7 +184,7 @@ public abstract class PathFinderMixin {
                     boolean headBlocked = !region.getBlockState(mutPos).getCollisionShape(region, mutPos).isEmpty();
 
                     if (feetBlocked || headBlocked) {
-                        grid[z * width + x] = true; // Mark as obstacle
+                        grid[z * width + x] = 1; // Mark as obstacle
                     }
                 }
             }
@@ -198,8 +199,9 @@ public abstract class PathFinderMixin {
             goalY = Math.max(0, Math.min(height - 1, goalY));
 
             // Call Rust A*
-            int[] pathCoords = RustNativeLoader.rustperf_astar_pathfind(
-                    grid, width, height, startX, startY, goalX, goalY);
+            // Call Rust A* - 3D signature: width, height, depth, startX, startY, startZ, goalX, goalY, goalZ, threads
+            int[] pathCoords = ParallelRustVectorProcessor.parallelAStarPathfind(
+                    grid, width, height, 1, startX, startY, 0, goalX, goalY, 0, 4);
 
             if (pathCoords != null && pathCoords.length >= 4) {
                 // Convert path coordinates to Minecraft Path

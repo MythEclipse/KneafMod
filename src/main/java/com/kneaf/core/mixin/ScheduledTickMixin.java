@@ -42,12 +42,13 @@ public abstract class ScheduledTickMixin<T> {
     private static boolean kneaf$loggedFirstApply = false;
 
     // Track pending ticks per position for deduplication detection
+    // Track pending ticks per position for deduplication detection
     @Unique
-    private Map<Long, Integer> kneaf$pendingTickCounts;
+    private Map<Long, Integer> kneaf$pendingTickCounts = new ConcurrentHashMap<>(256);
 
     // Track chunk regions with pending ticks for batch processing
     @Unique
-    private Set<Long> kneaf$activeChunkRegions;
+    private Set<Long> kneaf$activeChunkRegions = ConcurrentHashMap.newKeySet();
 
     // Statistics
     @Unique
@@ -74,7 +75,7 @@ public abstract class ScheduledTickMixin<T> {
 
         kneaf$ticksScheduled.incrementAndGet();
 
-        // Lazy init
+        // Ensure non-null (double check)
         if (kneaf$pendingTickCounts == null) {
             kneaf$pendingTickCounts = new ConcurrentHashMap<>(256);
         }
@@ -111,7 +112,8 @@ public abstract class ScheduledTickMixin<T> {
             if (scheduled > 0) {
                 double dupRate = duplicates * 100.0 / scheduled;
                 kneaf$LOGGER.info("ScheduledTick stats: {} scheduled, {} duplicates ({}%), {} processed, {} active regions",
-                        scheduled, duplicates, String.format("%.1f", dupRate), processed, kneaf$activeChunkRegions.size());
+                        scheduled, duplicates, String.format("%.1f", dupRate), processed, 
+                        kneaf$activeChunkRegions != null ? kneaf$activeChunkRegions.size() : 0);
             }
 
             kneaf$ticksScheduled.set(0);

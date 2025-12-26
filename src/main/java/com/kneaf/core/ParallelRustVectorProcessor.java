@@ -59,6 +59,28 @@ public class ParallelRustVectorProcessor {
     }
 
     // ==========================================
+    // Native Methods (Result of JNI Linking)
+    // ==========================================
+
+    /**
+     * Native binding for parallel A* pathfinding.
+     * Matches Rust signature: Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind
+     */
+    public static native int[] parallelAStarPathfind(
+            byte[] gridData,
+            int width,
+            int height,
+            int depth,
+            int startX,
+            int startY,
+            int startZ,
+            int goalX,
+            int goalY,
+            int goalZ,
+            int numThreads
+    );
+
+    // ==========================================
     // Static Convenience Methods
     // ==========================================
 
