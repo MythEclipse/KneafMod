@@ -84,7 +84,7 @@ public abstract class ChunkGeneratorMixin {
 
         kneaf$genStartTime.set(System.nanoTime());
 
-        // Throttle decoration during low TPS
+        // Skip decoration during low TPS
         double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
         if (currentTPS < 14.0) {
             // During very low TPS, skip some decorations to prioritize gameplay

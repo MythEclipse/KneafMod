@@ -8,9 +8,6 @@ package com.kneaf.core.mixin;
 
 import com.kneaf.core.util.TPSTracker;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.entity.player.Player;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -20,15 +17,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * ServerLevelMixin - Dynamic TPS-based entity throttling.
+ * ServerLevelMixin - TPS tracking and performance monitoring.
  * 
  * Target: net.minecraft.server.level.ServerLevel
  * 
- * Advanced Optimizations:
- * 1. Dynamic entity tick throttling based on current TPS
- * 2. Distance-based tick frequency (far entities tick less often)
- * 3. Entity type priority (players always full tick)
- * 4. Adaptive throttling that increases when TPS drops
+ * Optimizations:
+ * 1. TPS calculation and tracking
+ * 2. Dynamic chunk processor concurrency adjustment
  */
 @Mixin(ServerLevel.class)
 public abstract class ServerLevelMixin {
@@ -44,9 +39,6 @@ public abstract class ServerLevelMixin {
     private static long kneaf$lastTickStart = 0;
 
     @Unique
-    private static long kneaf$maxTickTime = 0;
-
-    @Unique
     private static long kneaf$lastLogTime = 0;
 
     /**
@@ -55,7 +47,7 @@ public abstract class ServerLevelMixin {
     @Inject(method = "tick", at = @At("HEAD"))
     private void kneaf$onTickHead(java.util.function.BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ ServerLevelMixin applied - Dynamic TPS-based entity throttling active!");
+            kneaf$LOGGER.info("✅ ServerLevelMixin applied - TPS tracking active!");
             kneaf$loggedFirstApply = true;
         }
 
@@ -73,10 +65,6 @@ public abstract class ServerLevelMixin {
         // Update the centralized TPS tracker
         TPSTracker.recordTick(tickMs);
 
-        if (tickMs > kneaf$maxTickTime) {
-            kneaf$maxTickTime = tickMs;
-        }
-
         // Feed real-time tick data to dynamic chunk processor
         try {
             com.kneaf.core.ChunkProcessor.updateConcurrency(tickMs);
@@ -87,48 +75,8 @@ public abstract class ServerLevelMixin {
         // Log stats every 30 seconds
         long now = System.currentTimeMillis();
         if (now - kneaf$lastLogTime > 30000) {
-            kneaf$LOGGER.info("ServerLevel TPS: {:.1f}, throttle level: {}, entities throttled: {}",
-                    TPSTracker.getCurrentTPS(), TPSTracker.getThrottleLevel(), TPSTracker.getEntitiesThrottled());
-
-            // Reset counters
-            kneaf$maxTickTime = 0;
-            TPSTracker.resetThrottledCount();
+            kneaf$LOGGER.info("ServerLevel TPS: {:.1f}", TPSTracker.getCurrentTPS());
             kneaf$lastLogTime = now;
         }
-    }
-
-    /**
-     * Determine if an entity should be throttled based on type and distance.
-     * Called by other mixins to check throttling state.
-     */
-    @Unique
-    private static boolean kneaf$shouldThrottleEntity(Entity entity, int tickCount) {
-        // Never throttle players
-        if (entity instanceof Player) {
-            return false;
-        }
-
-        int throttleLevel = TPSTracker.getThrottleLevel();
-        if (throttleLevel == 0) {
-            return false;
-        }
-
-        // Item entities are less important - throttle more aggressively
-        if (entity instanceof ItemEntity) {
-            int skipRate = throttleLevel * 2; // 2, 4, or 6
-            if (tickCount % (skipRate + 1) != 0) {
-                TPSTracker.incrementThrottled();
-                return true;
-            }
-        }
-
-        // Other entities throttled based on level
-        int skipRate = throttleLevel; // 1, 2, or 3
-        if (tickCount % (skipRate + 1) != 0) {
-            TPSTracker.incrementThrottled();
-            return true;
-        }
-
-        return false;
     }
 }

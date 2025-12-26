@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
  * HopperBlockEntityMixin - Optimized hopper logic.
  * 
  * Optimizations:
- * 1. Fail Count Throttling: Reduces item transfer checks for hoppers that
+ * 1. Fail Count Delay: Reduces item transfer checks for hoppers that
  * repeatedly fail.
  */
 @Mixin(HopperBlockEntity.class)

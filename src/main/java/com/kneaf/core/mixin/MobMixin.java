@@ -77,7 +77,7 @@ public abstract class MobMixin {
     /**
      * Optimize serverAiStep - this is where most mob AI processing happens.
      * Key insight: Many mobs without targets just need basic navigation.
-     * Optimization: Throttle full AI step for mobs without a target.
+     * Optimization: Skip full AI step for mobs without a target.
      */
     @Inject(method = "serverAiStep", at = @At("HEAD"), cancellable = true)
     private void kneaf$onServerAiStep(CallbackInfo ci) {
@@ -90,7 +90,7 @@ public abstract class MobMixin {
             kneaf$lastTargetCheckTick = tickCount;
         }
 
-        // Throttling: If no target, run full AI less often (every 4 ticks)
+        // Skip AI: If no target, run full AI less often (every 4 ticks)
         if (!kneaf$hasTarget && tickCount % 4 != 0) {
             ci.cancel(); // Skip this AI step
         }

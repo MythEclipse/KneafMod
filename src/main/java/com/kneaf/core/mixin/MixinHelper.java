@@ -14,31 +14,19 @@ import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * MixinHelper - Central utility class for all mixin operations.
- * Provides distance checking, throttle decisions, and native library
- * management.
+ * Provides distance checking and native library management.
  */
 public final class MixinHelper {
     private static final Logger LOGGER = LoggerFactory.getLogger(MixinHelper.class);
 
-    // Configuration thresholds
-    private static final double THROTTLE_DISTANCE_SQUARED = 64 * 64; // 64 blocks
-    private static final double AGGRESSIVE_THROTTLE_DISTANCE_SQUARED = 128 * 128; // 128 blocks
-    private static final int THROTTLE_TICK_INTERVAL = 4; // Process every 4th tick for distant entities
-    private static final int AGGRESSIVE_THROTTLE_TICK_INTERVAL = 8; // Process every 8th tick for very distant entities
-
     // Metrics tracking
-    private static final AtomicLong throttledTicks = new AtomicLong(0);
     private static final AtomicLong processedTicks = new AtomicLong(0);
     private static final AtomicLong rustOptimizedTicks = new AtomicLong(0);
     private static final AtomicLong vanillaFallbackTicks = new AtomicLong(0);
-
-    // Entity tick tracking for throttling
-    private static final ConcurrentHashMap<Integer, Integer> entityTickCounters = new ConcurrentHashMap<>();
 
     private static boolean initialized = false;
     private static boolean nativeAvailable = false;
@@ -74,10 +62,10 @@ public final class MixinHelper {
     }
 
     /**
-     * Check if entity optimizations are enabled in config.
+     * Check if optimization is enabled in config.
      */
     public static boolean isOptimizationEnabled() {
-        return PerformanceManager.getInstance().isEntityThrottlingEnabled();
+        return PerformanceManager.getInstance().isAdvancedPhysicsOptimized();
     }
 
     /**
@@ -101,7 +89,7 @@ public final class MixinHelper {
     public static double getDistanceToNearestPlayerSq(Entity entity) {
         Level level = entity.level();
         if (level == null || level.isClientSide()) {
-            return 0; // Don't throttle on client
+            return 0;
         }
 
         if (!(level instanceof ServerLevel serverLevel)) {
@@ -119,43 +107,6 @@ public final class MixinHelper {
         }
 
         return minDistSq;
-    }
-
-    /**
-     * Determine if this entity should be throttled this tick.
-     * Returns true if the entity should SKIP processing this tick.
-     */
-    public static boolean shouldThrottleTick(Entity entity) {
-        if (!isOptimizationEnabled()) {
-            return false;
-        }
-
-        double distSq = getDistanceToNearestPlayerSq(entity);
-
-        if (distSq < THROTTLE_DISTANCE_SQUARED) {
-            // Close to player - never throttle
-            return false;
-        }
-
-        int entityId = entity.getId();
-        int tickCount = entityTickCounters.compute(entityId, (k, v) -> (v == null) ? 0 : v + 1);
-
-        int throttleInterval;
-        if (distSq >= AGGRESSIVE_THROTTLE_DISTANCE_SQUARED) {
-            throttleInterval = AGGRESSIVE_THROTTLE_TICK_INTERVAL;
-        } else {
-            throttleInterval = THROTTLE_TICK_INTERVAL;
-        }
-
-        boolean shouldThrottle = (tickCount % throttleInterval) != 0;
-
-        if (shouldThrottle) {
-            throttledTicks.incrementAndGet();
-        } else {
-            processedTicks.incrementAndGet();
-        }
-
-        return shouldThrottle;
     }
 
     /**
@@ -229,10 +180,10 @@ public final class MixinHelper {
     }
 
     /**
-     * Clean up tick counter for removed entity.
+     * Clean up for removed entity.
      */
     public static void onEntityRemoved(int entityId) {
-        entityTickCounters.remove(entityId);
+        // No-op - no tracking to clean up
     }
 
     /**
@@ -240,8 +191,7 @@ public final class MixinHelper {
      */
     public static String getStatistics() {
         return String.format(
-                "MixinStats{throttled=%d, processed=%d, rust=%d, fallback=%d, ratio=%.1f%%}",
-                throttledTicks.get(),
+                "MixinStats{processed=%d, rust=%d, fallback=%d, ratio=%.1f%%}",
                 processedTicks.get(),
                 rustOptimizedTicks.get(),
                 vanillaFallbackTicks.get(),
@@ -254,10 +204,8 @@ public final class MixinHelper {
      * Reset statistics (for testing).
      */
     public static void resetStatistics() {
-        throttledTicks.set(0);
         processedTicks.set(0);
         rustOptimizedTicks.set(0);
         vanillaFallbackTicks.set(0);
-        entityTickCounters.clear();
     }
 }

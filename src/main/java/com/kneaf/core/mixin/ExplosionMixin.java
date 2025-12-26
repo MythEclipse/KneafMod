@@ -61,7 +61,7 @@ public abstract class ExplosionMixin {
     private static final AtomicLong kneaf$explosionsProcessed = new AtomicLong(0);
 
     @Unique
-    private static final AtomicLong kneaf$explosionsThrottled = new AtomicLong(0);
+    private static final AtomicLong kneaf$explosionsSkipped = new AtomicLong(0);
 
     @Unique
     private static final AtomicLong kneaf$blocksOptimized = new AtomicLong(0);
@@ -111,8 +111,8 @@ public abstract class ExplosionMixin {
         int explosionCount = kneaf$explosionRateTracker.merge(chunkKey, 1, Integer::sum);
 
         if (explosionCount > MAX_EXPLOSIONS_PER_CHUNK_PER_SECOND) {
-            kneaf$explosionsThrottled.incrementAndGet();
-            // Throttle: skip this explosion's block destruction to prevent lag
+            kneaf$explosionsSkipped.incrementAndGet();
+            // Skip: bypass this explosion's block destruction to prevent lag
             // The explosion still happens (damage, knockback) but blocks survive
             ci.cancel();
             return;
@@ -152,9 +152,9 @@ public abstract class ExplosionMixin {
 
         // Log stats periodically
         if (kneaf$explosionsProcessed.get() % 100 == 0 && kneaf$explosionsProcessed.get() > 0) {
-            kneaf$LOGGER.debug("ExplosionMixin: {} processed, {} throttled, {} blocks optimized",
+            kneaf$LOGGER.debug("ExplosionMixin: {} processed, {} skipped, {} blocks optimized",
                     kneaf$explosionsProcessed.get(),
-                    kneaf$explosionsThrottled.get(),
+                    kneaf$explosionsSkipped.get(),
                     kneaf$blocksOptimized.get());
         }
     }
@@ -165,9 +165,9 @@ public abstract class ExplosionMixin {
     @Unique
     private static String kneaf$getStatistics() {
         return String.format(
-                "ExplosionStats{processed=%d, throttled=%d, blocksOptimized=%d}",
+                "ExplosionStats{processed=%d, skipped=%d, blocksOptimized=%d}",
                 kneaf$explosionsProcessed.get(),
-                kneaf$explosionsThrottled.get(),
+                kneaf$explosionsSkipped.get(),
                 kneaf$blocksOptimized.get());
     }
 }

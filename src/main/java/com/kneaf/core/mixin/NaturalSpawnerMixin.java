@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * NaturalSpawnerMixin - Optimize mob spawning.
  * 
  * Optimizations:
- * 1. Spawning throttle: Reduce frequency of spawn attempts.
+ * 1. Spawn skip: Reduce frequency of spawn attempts.
  * 2. Fail Cache: Remember chunks where spawning failed recently.
  */
 @Mixin(NaturalSpawner.class)
@@ -48,7 +48,7 @@ public abstract class NaturalSpawnerMixin {
             kneaf$lastCleanTime = time;
         }
 
-        // Throttle: If this chunk recently failed spawning or is marked, skip
+        // Skip: If this chunk recently failed spawning or is marked, skip
         if (kneaf$spawnFailCache.containsKey(chunkPos)) {
             if (kneaf$spawnFailCache.get(chunkPos) > time) {
                 ci.cancel();
@@ -56,7 +56,7 @@ public abstract class NaturalSpawnerMixin {
             }
         }
 
-        // Global throttle: Only run full spawn logic every 10 ticks per chunk
+        // Global skip: Only run full spawn logic every 10 ticks per chunk
         // effectively
         // (Randomizing prevents all chunks skipping same tick)
         if ((time + chunkPos) % 2 != 0) {

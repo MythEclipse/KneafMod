@@ -47,7 +47,7 @@ public abstract class ItemEntityMixin {
     }
 
     /**
-     * Optimization: throttle item merging checks.
+     * Optimization: skip item merging checks.
      * Item merging is O(N^2) effectively in dense areas.
      */
     @Inject(method = "mergeWithNeighbours", at = @At("HEAD"), cancellable = true)

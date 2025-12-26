@@ -353,14 +353,12 @@ public final class PerformanceMonitoringSystem {
         // Collect dari PerformanceManager
         if (shouldCollectComponentMetric("performance_manager", currentRate)) {
             PerformanceManager pm = PerformanceManager.getInstance();
-            recordMetricEvent("performance_manager.entity_throttling",
-                    pm.isEntityThrottlingEnabled() ? 1.0 : 0.0, "gauge");
             recordMetricEvent("performance_manager.ai_pathfinding_optimized",
                     pm.isAiPathfindingOptimized() ? 1.0 : 0.0, "gauge");
-            recordMetricEvent("performance_manager.rendering_math_optimized",
-                    0.0, "gauge");
             recordMetricEvent("performance_manager.rust_integration_enabled",
                     pm.isRustIntegrationEnabled() ? 1.0 : 0.0, "gauge");
+            recordMetricEvent("performance_manager.advanced_physics_optimized",
+                    pm.isAdvancedPhysicsOptimized() ? 1.0 : 0.0, "gauge");
         }
 
         if (shouldCollectComponentMetric("optimization_injector", currentRate)) {

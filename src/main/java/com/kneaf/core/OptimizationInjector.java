@@ -74,8 +74,8 @@ public final class OptimizationInjector {
             if (entity == null)
                 return;
 
-            // Skip processing if throttling is disabled
-            if (!performanceManager.isEntityThrottlingEnabled())
+            // Skip processing if physics optimization is disabled
+            if (!performanceManager.isAdvancedPhysicsOptimized())
                 return;
 
             // --- Validation delegated to EntityPhysicsHelper ---
@@ -172,14 +172,14 @@ public final class OptimizationInjector {
             serverInstance = event.getServer();
         }
 
-        if (performanceManager.isEntityThrottlingEnabled()) {
+        if (performanceManager.isAdvancedPhysicsOptimized()) {
             metrics.incrementCounter("optimization_injector.server_tick");
         }
     }
 
     @SubscribeEvent
     public static void onLevelTick(LevelTickEvent.Pre event) {
-        if (performanceManager.isEntityThrottlingEnabled()) {
+        if (performanceManager.isAdvancedPhysicsOptimized()) {
             metrics.incrementCounter("optimization_injector.level_tick");
         }
     }

@@ -70,14 +70,14 @@ public abstract class GoalSelectorMixin {
     }
 
     /**
-     * Track and throttle goal evaluation checks.
+     * Track and skip goal evaluation checks.
      * Skip goal tick on alternate ticks to reduce AI processing overhead.
      */
     @Inject(method = "tickRunningGoals", at = @At("HEAD"), cancellable = true)
     private void kneaf$onTickRunningGoals(boolean tickAllRunning, CallbackInfo ci) {
         kneaf$goalChecks.incrementAndGet();
 
-        // Throttle goal checks: Skip processing on odd ticks
+        // Skip goal checks: Skip processing on odd ticks
         // This distributes AI load across ticks and reduces CPU usage by ~50%
         // tickAllRunning=true forces all goals to run (important actions), so don't
         // skip

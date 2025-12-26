@@ -23,7 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * RedstoneWireBlockMixin - Redstone optimization.
  * 
  * Optimizations:
- * 1. Anti-Lag Machine: Throttles updates for positions that change too
+ * 1. Anti-Lag Machine: Limits updates for positions that change too
  * frequently.
  * 2. Recursion Guard: Skips updates if recursion is exhausted.
  */

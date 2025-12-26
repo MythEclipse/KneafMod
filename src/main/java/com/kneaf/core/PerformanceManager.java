@@ -28,7 +28,6 @@ public final class PerformanceManager {
     private static final PerformanceManager INSTANCE = new PerformanceManager();
 
     // Optimization flags with thread safety - defaults to TRUE for processing
-    private final AtomicBoolean isEntityThrottlingEnabled = new AtomicBoolean(true);
     private final AtomicBoolean isAiPathfindingOptimized = new AtomicBoolean(true);
     private final AtomicBoolean isRustIntegrationEnabled = new AtomicBoolean(true);
     private final AtomicBoolean isAdvancedPhysicsOptimized = new AtomicBoolean(true);
@@ -84,7 +83,6 @@ public final class PerformanceManager {
             }
 
             // Load optimization flags with fallback defaults
-            isEntityThrottlingEnabled.set(parseBooleanProperty(properties, "entityThrottlingEnabled", true));
             isAiPathfindingOptimized.set(parseBooleanProperty(properties, "aiPathfindingOptimized", true));
             isRustIntegrationEnabled.set(parseBooleanProperty(properties, "rustIntegrationEnabled", true));
             isAdvancedPhysicsOptimized.set(parseBooleanProperty(properties, "advancedPhysicsOptimized", true));
@@ -112,7 +110,6 @@ public final class PerformanceManager {
      * Reset all optimization flags to safe default values.
      */
     public void resetToDefaults() {
-        isEntityThrottlingEnabled.set(true);
         isAiPathfindingOptimized.set(true);
         isRustIntegrationEnabled.set(true);
         isAdvancedPhysicsOptimized.set(true);
@@ -166,15 +163,6 @@ public final class PerformanceManager {
     // ------------------------------ Getter Methods ------------------------------
 
     /**
-     * Check if entity throttling is enabled.
-     * 
-     * @return true if entity throttling is enabled, false otherwise
-     */
-    public boolean isEntityThrottlingEnabled() {
-        return isEntityThrottlingEnabled.get();
-    }
-
-    /**
      * Check if AI pathfinding optimization is enabled.
      * 
      * @return true if AI pathfinding optimization is enabled, false otherwise
@@ -205,28 +193,6 @@ public final class PerformanceManager {
 
     // ------------------------------ Setter Methods (Thread-Safe)
     // ------------------------------
-
-    /**
-     * Set entity throttling state.
-     * 
-     * @param enabled true to enable entity throttling, false to disable
-     */
-    public void setEntityThrottlingEnabled(boolean enabled) {
-        boolean oldValue = isEntityThrottlingEnabled.get();
-        isEntityThrottlingEnabled.set(enabled);
-
-        // Record configuration change in monitoring system
-        PerformanceMonitoringSystem.getInstance().getMetricAggregator().recordMetric(
-                "performance_manager.entity_throttling_enabled", enabled ? 1.0 : 0.0);
-
-        if (oldValue != enabled) {
-            PerformanceMonitoringSystem.getInstance().getEventBus().publishEvent(
-                    new com.kneaf.core.performance.CrossComponentEvent(
-                            "PerformanceManager", "entity_throttling_config_changed",
-                            java.time.Instant.now(), 0,
-                            java.util.Map.of("old_value", oldValue, "new_value", enabled)));
-        }
-    }
 
     /**
      * Set AI pathfinding optimization state.
@@ -385,7 +351,6 @@ public final class PerformanceManager {
         java.util.Map<String, Object> metrics = new java.util.HashMap<>();
 
         // Basic optimization flags
-        metrics.put("entity_throttling_enabled", isEntityThrottlingEnabled.get());
         metrics.put("ai_pathfinding_optimized", isAiPathfindingOptimized.get());
         metrics.put("rust_integration_enabled", isRustIntegrationEnabled.get());
         metrics.put("advanced_physics_optimized", isAdvancedPhysicsOptimized.get());
@@ -410,10 +375,9 @@ public final class PerformanceManager {
     public String getOptimizationSummary() {
         return String.format(
                 "PerformanceManager{" +
-                        "entityThrottling=%s, aiPathfinding=%s, rustIntegration=%s, " +
+                        "aiPathfinding=%s, rustIntegration=%s, " +
                         "combatSimd=%s, combatParallel=%s, predictiveLoadBalancing=%s, hitDetection=%s, " +
                         "optimizationMonitoring=%s}",
-                isEntityThrottlingEnabled.get(),
                 isAiPathfindingOptimized.get(),
                 isRustIntegrationEnabled.get(),
                 isCombatSimdOptimized.get(),

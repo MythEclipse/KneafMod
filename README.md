@@ -174,12 +174,11 @@ gradlew.bat runClient
 Edit file `config/kneaf-performance.properties`:
 
 ```properties
-# Entity Optimization
-entityThrottlingEnabled=true
-advancedPhysicsOptimized=true
-
 # AI Optimization
 aiPathfindingOptimized=true
+
+# Physics Optimization
+advancedPhysicsOptimized=true
 
 # Rust Integration
 rustIntegrationEnabled=true
@@ -249,7 +248,7 @@ optimizationMonitoringEnabled=true
 
 ## 🐛 Known Issues
 
-1. **Incompatibility dengan Lithium**: Mod ini incompatible dengan Lithium karena conflict di entity ticking optimization
+1. **Incompatibility dengan Lithium**: Mod ini incompatible dengan Lithium karena conflict di entity optimization
 2. **Native Library Loading**: Pada beberapa sistem, native library perlu ditempatkan di path tertentu
 3. **Test Mode Detection**: False positive test mode detection di development environment (sudah di-fix dengan `forceProduction` flag)
 

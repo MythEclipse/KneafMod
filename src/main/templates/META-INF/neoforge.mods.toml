@@ -90,7 +90,7 @@ description='''${mod_description}'''
 [[dependencies.${mod_id}]]
     modId="lithium"
     type="incompatible"
-    reason="Lithium optimizes entity ticking which may conflict with KneafMod's tick throttling features"
+    reason="Lithium optimizes entity processing which may conflict with KneafMod's physics optimization features"
     versionRange="*"
     ordering="NONE"
     side="BOTH"

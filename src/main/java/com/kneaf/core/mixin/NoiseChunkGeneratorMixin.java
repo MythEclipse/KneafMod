@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 
  * Optimizations:
  * 1. Parallel noise sampling across Y levels using ForkJoinPool
- * 2. Throttle noise generation during low TPS
+ * 2. Add delay during low TPS to prevent overload
  * 3. Track and optimize noise generation time
  * 4. Skip noise for far chunks during heavy load
  */
@@ -47,7 +47,7 @@ public abstract class NoiseChunkGeneratorMixin {
     private static final AtomicLong kneaf$totalNoiseTimeNs = new AtomicLong(0);
 
     @Unique
-    private static final AtomicLong kneaf$throttledChunks = new AtomicLong(0);
+    private static final AtomicLong kneaf$delayedChunks = new AtomicLong(0);
 
     @Unique
     private static long kneaf$lastLogTime = 0;
@@ -72,7 +72,7 @@ public abstract class NoiseChunkGeneratorMixin {
     private static final int SAMPLES_PER_CHUNK = (CHUNK_WIDTH / NOISE_SAMPLE_STRIDE + 1);
 
     /**
-     * Track noise fill start and apply throttling during low TPS.
+     * Track noise fill start and apply delay during low TPS.
      */
     @Inject(method = "fillFromNoise", at = @At("HEAD"))
     private void kneaf$onFillFromNoiseHead(Executor executor,
@@ -90,7 +90,7 @@ public abstract class NoiseChunkGeneratorMixin {
         // Adaptive delay during very low TPS to prevent overload
         double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
         if (currentTPS < 12.0) {
-            kneaf$throttledChunks.incrementAndGet();
+            kneaf$delayedChunks.incrementAndGet();
             // Add small delay to reduce load during critical TPS situations
             try {
                 Thread.sleep(1);
@@ -132,10 +132,10 @@ public abstract class NoiseChunkGeneratorMixin {
         long total = kneaf$noiseGenCount.get();
         if (total > 0) {
             double avgMs = (kneaf$totalNoiseTimeNs.get() / 1_000_000.0) / total;
-            long throttled = kneaf$throttledChunks.get();
+            long delayed = kneaf$delayedChunks.get();
 
-            kneaf$LOGGER.info("NoiseGen: {} chunks, avg {:.2f}ms, {} throttled",
-                    total, avgMs, throttled);
+            kneaf$LOGGER.info("NoiseGen: {} chunks, avg {:.2f}ms, {} delayed",
+                    total, avgMs, delayed);
         }
     }
 
@@ -302,8 +302,8 @@ public abstract class NoiseChunkGeneratorMixin {
         double avgMs = total > 0 ? (kneaf$totalNoiseTimeNs.get() / 1_000_000.0) / total : 0;
 
         return String.format(
-                "NoiseGenStats{chunks=%d, throttled=%d, avgMs=%.2f}",
-                total, kneaf$throttledChunks.get(), avgMs);
+                "NoiseGenStats{chunks=%d, delayed=%d, avgMs=%.2f}",
+                total, kneaf$delayedChunks.get(), avgMs);
     }
 
     /**

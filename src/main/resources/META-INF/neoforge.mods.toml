@@ -46,7 +46,7 @@ authors="Kneaf" #optional
 
 # The description text for the mod (multi line!) (#mandatory)
 description='''A server-side performance optimization mod for Minecraft using Rust.
-Implements dynamic entity ticking throttling, item stack merging, and AI optimization.
+Implements physics optimization, AI pathfinding acceleration, item stack merging, and parallel processing.
 Compatible with large modpacks.'''
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
@@ -92,7 +92,7 @@ config="kneafcore.mixins.json"
 [[dependencies.kneafcore]]
     modId="lithium"
     type="incompatible"
-    reason="Lithium optimizes entity ticking which may conflict with KneafMod's tick throttling features"
+    reason="Lithium optimizes entity processing which may conflict with KneafMod's physics optimization features"
     versionRange="*"
     ordering="NONE"
     side="SERVER"
