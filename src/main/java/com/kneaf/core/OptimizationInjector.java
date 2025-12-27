@@ -146,6 +146,12 @@ public final class OptimizationInjector {
         if (!result.success || result.processedData == null)
             return;
 
+        // Ensure we are on the main thread before modifying entity state
+        if (serverInstance != null && !serverInstance.isSameThread()) {
+            serverInstance.execute(() -> applyPhysicsResult(entity, result));
+            return;
+        }
+
         try {
             EntityPhysicsData data = result.processedData;
 

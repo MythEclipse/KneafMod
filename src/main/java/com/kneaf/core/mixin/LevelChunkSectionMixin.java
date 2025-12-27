@@ -65,14 +65,16 @@ public abstract class LevelChunkSectionMixin {
 
         kneaf$totalAccesses++;
 
-        // Check if we've cached the empty status
-        if (kneaf$isCompletelyEmpty == null) {
+        // Use local variable to avoid race conditions with setBlockState
+        Boolean empty = kneaf$isCompletelyEmpty;
+        if (empty == null) {
             // First access - check and cache
-            kneaf$isCompletelyEmpty = hasOnlyAir();
+            empty = hasOnlyAir();
+            kneaf$isCompletelyEmpty = empty;
         }
 
         // If completely empty, return AIR immediately without palette lookup
-        if (kneaf$isCompletelyEmpty) {
+        if (empty) {
             kneaf$emptySkips++;
             cir.setReturnValue(net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
         }
