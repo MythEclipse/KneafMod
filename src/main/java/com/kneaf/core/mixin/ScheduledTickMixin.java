@@ -136,7 +136,7 @@ public abstract class ScheduledTickMixin<T> {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format("ScheduledTickStats{scheduled=%d, skipped=%d}",
                 kneaf$ticksScheduled.get(), kneaf$duplicatesSkipped.get());
     }

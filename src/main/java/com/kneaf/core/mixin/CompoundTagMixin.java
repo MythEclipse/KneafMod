@@ -178,7 +178,7 @@ public abstract class CompoundTagMixin {
      * Get NBT statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format("NBTStats{tags=%d, accesses=%d, interned=%d}",
                 kneaf$tagsCreated.get(), kneaf$tagAccesses.get(), kneaf$internedKeys.size());
     }
@@ -187,7 +187,7 @@ public abstract class CompoundTagMixin {
      * Clear interned keys cache.
      */
     @Unique
-    public static void kneaf$clearInternedKeys() {
+    private static void kneaf$clearInternedKeys() {
         kneaf$internedKeys.clear();
     }
 }

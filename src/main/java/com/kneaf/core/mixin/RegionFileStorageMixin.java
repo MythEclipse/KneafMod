@@ -8,9 +8,7 @@ package com.kneaf.core.mixin;
 
 import net.minecraft.world.level.chunk.storage.RegionFile;
 import net.minecraft.world.level.chunk.storage.RegionFileStorage;
-import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -65,9 +63,13 @@ public abstract class RegionFileStorageMixin {
     @Unique
     private static long kneaf$lastCleanupTime = 0;
 
-    @Shadow
-    @Final
-    private Map<?, ?> regionCache;
+    // Shadow removed as it was unused and caused InvalidMixinException
+    /*
+     * @Shadow
+     * 
+     * @Final
+     * private Map<?, ?> regionCache;
+     */
 
     /**
      * Track reads for metrics.
@@ -85,9 +87,12 @@ public abstract class RegionFileStorageMixin {
     /**
      * OPTIMIZATION: Skip duplicate writes to same chunk within coalesce time.
      */
+    /**
+     * OPTIMIZATION: Skip duplicate writes to same chunk within coalesce time.
+     */
     @Inject(method = "write", at = @At("HEAD"), cancellable = true)
     private void kneaf$onWrite(net.minecraft.world.level.ChunkPos pos,
-            java.io.InputStream input, CallbackInfo ci) {
+            net.minecraft.nbt.CompoundTag tag, CallbackInfo ci) {
         kneaf$totalWrites.incrementAndGet();
 
         long chunkKey = pos.toLong();
@@ -137,7 +142,7 @@ public abstract class RegionFileStorageMixin {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format("RegionIOStats{reads=%d, writes=%d, skipped=%d}",
                 kneaf$totalReads.get(), kneaf$totalWrites.get(), kneaf$writesSkipped.get());
     }

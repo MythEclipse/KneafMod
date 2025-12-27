@@ -17,7 +17,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -59,7 +58,7 @@ public abstract class InventoryMenuMixin {
     private static long kneaf$lastLogTime = 0;
 
     @Shadow
-    public abstract List<ItemStack> getItems();
+    public net.minecraft.core.NonNullList<net.minecraft.world.inventory.Slot> slots;
 
     /**
      * OPTIMIZATION: Skip sync when inventory hasn't changed.
@@ -102,15 +101,15 @@ public abstract class InventoryMenuMixin {
      */
     @Unique
     private int kneaf$calculateChecksum() {
-        List<ItemStack> items = getItems();
-        if (items == null || items.isEmpty()) {
+        if (slots == null || slots.isEmpty()) {
             return 0;
         }
 
-        int checksum = items.size();
-        for (int i = 0; i < items.size(); i++) {
-            ItemStack stack = items.get(i);
-            if (stack != null && !stack.isEmpty()) {
+        int checksum = slots.size();
+        for (int i = 0; i < slots.size(); i++) {
+            net.minecraft.world.inventory.Slot slot = slots.get(i);
+            if (slot.hasItem()) {
+                ItemStack stack = slot.getItem();
                 checksum = checksum * 31 + stack.getItem().hashCode();
                 checksum = checksum * 31 + stack.getCount();
                 // Include components hash for items with data
@@ -140,8 +139,8 @@ public abstract class InventoryMenuMixin {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
-        return String.format("ContainerSyncStats{attempts=%d, skipped=%d}",
+    private static String kneaf$getStatistics() {
+        return String.format("InventoryMenuStats{ticks=%d, rateLimited=%d, broadcastSkipped=%d}",
                 kneaf$syncAttempts.get(), kneaf$syncsSkipped.get());
     }
 }

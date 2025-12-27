@@ -110,7 +110,7 @@ public abstract class DedicatedServerMixin {
      * Get current optimization level.
      */
     @Unique
-    public static int kneaf$getOptimizationLevel() {
+    private static int kneaf$getOptimizationLevel() {
         return kneaf$optimizationLevel;
     }
 

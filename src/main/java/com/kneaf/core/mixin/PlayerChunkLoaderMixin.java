@@ -115,13 +115,13 @@ public abstract class PlayerChunkLoaderMixin {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format("PlayerChunkStats{moves=%d, skipped=%d, players=%d}",
                 kneaf$movesCalled.get(), kneaf$movesSkipped.get(), kneaf$playerChunkCache.size());
     }
 
     @Unique
-    public static void kneaf$clearCaches() {
+    private static void kneaf$clearCaches() {
         kneaf$playerChunkCache.clear();
     }
 }

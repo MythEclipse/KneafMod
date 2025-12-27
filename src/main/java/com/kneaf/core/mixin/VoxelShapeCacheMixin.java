@@ -92,15 +92,18 @@ public abstract class VoxelShapeCacheMixin {
 
         BlockState state = (BlockState) (Object) this;
 
-        // Fast path: Check if this is a simple full or empty block
-        // Many blocks have constant collision shapes that don't depend on context
-        @SuppressWarnings("null")
-        boolean isFullBlock = !state.hasBlockEntity() && state.isCollisionShapeFullBlock(level, pos);
-        if (isFullBlock) {
-            kneaf$fastPathHits.incrementAndGet();
-            cir.setReturnValue(FULL_BLOCK);
-            return;
-        }
+        // Fast path removed to prevent recursion with isCollisionShapeFullBlock calling
+        // getCollisionShape
+        /*
+         * @SuppressWarnings("null")
+         * boolean isFullBlock = !state.hasBlockEntity() &&
+         * state.isCollisionShapeFullBlock(level, pos);
+         * if (isFullBlock) {
+         * kneaf$fastPathHits.incrementAndGet();
+         * cir.setReturnValue(FULL_BLOCK);
+         * return;
+         * }
+         */
 
         // Generate cache key from block state
         int cacheKey = kneaf$generateCacheKey(state, pos);
@@ -255,7 +258,7 @@ public abstract class VoxelShapeCacheMixin {
      * Get cache statistics as a string.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long hits = kneaf$cacheHits.get();
         long misses = kneaf$cacheMisses.get();
         long total = hits + misses;
@@ -269,7 +272,7 @@ public abstract class VoxelShapeCacheMixin {
      * Clear all caches. Called when world unloads or on config change.
      */
     @Unique
-    public static void kneaf$clearCaches() {
+    private static void kneaf$clearCaches() {
         kneaf$collisionShapeCache.clear();
         kneaf$outlineShapeCache.clear();
         kneaf$LOGGER.debug("VoxelShape caches cleared");

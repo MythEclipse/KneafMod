@@ -186,7 +186,7 @@ public abstract class ThreadedAnvilMixin {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format("ChunkSaveStats{saved=%d, skipped=%d, throttled=%d}",
                 kneaf$chunksSaved.get(), kneaf$savesSkipped.get(), kneaf$savesThrottled.get());
     }

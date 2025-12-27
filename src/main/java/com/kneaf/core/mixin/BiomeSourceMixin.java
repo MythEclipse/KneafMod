@@ -9,7 +9,6 @@ package com.kneaf.core.mixin;
 
 import net.minecraft.core.Holder;
 import net.minecraft.world.level.biome.Biome;
-import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.Climate;
 import com.kneaf.core.RustOptimizations;
 import org.spongepowered.asm.mixin.Mixin;
@@ -36,7 +35,21 @@ import java.util.concurrent.atomic.AtomicLong;
  * 2. Structure placement (structures query biomes in patterns)
  * 3. Entity spawning (spawn checks query biomes)
  */
-@Mixin(BiomeSource.class)
+import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
+
+/**
+ * BiomeSourceMixin - Caches biome lookups for faster world generation.
+ * 
+ * Biome lookups happen extremely frequently during world generation.
+ * Since biomes are determined solely by coordinates and the seed,
+ * we can cache results for repeated lookups at the same position.
+ * 
+ * This is especially effective for:
+ * 1. Feature decoration (multiple features query same biome)
+ * 2. Structure placement (structures query biomes in patterns)
+ * 3. Entity spawning (spawn checks query biomes)
+ */
+@Mixin(MultiNoiseBiomeSource.class)
 public abstract class BiomeSourceMixin {
 
     @Unique
@@ -207,7 +220,7 @@ public abstract class BiomeSourceMixin {
      * Get cache statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long hits = kneaf$cacheHits.get();
         long misses = kneaf$cacheMisses.get();
         long total = hits + misses;

@@ -108,7 +108,7 @@ public abstract class ChunkDataPacketMixin {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format("ChunkPacketStats{created=%d, sections=%d, empty=%d}",
                 kneaf$packetsCreated.get(), kneaf$totalSections.get(), kneaf$emptySectionsSkipped.get());
     }

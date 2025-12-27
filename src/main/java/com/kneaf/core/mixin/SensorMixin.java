@@ -12,7 +12,6 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.sensing.Sensor;
 import com.kneaf.core.RustOptimizations;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -71,9 +70,6 @@ public abstract class SensorMixin<E extends LivingEntity> {
     @Unique
     private double kneaf$cachedMinDistance = 0;
 
-    @Shadow
-    public abstract int getScanRate();
-
     /**
      * Optimize sensor tick using Rust batch distance calculation.
      */
@@ -96,7 +92,8 @@ public abstract class SensorMixin<E extends LivingEntity> {
         double farThresholdSq = FAR_DISTANCE_THRESHOLD * FAR_DISTANCE_THRESHOLD;
 
         // === OPTIMIZATION: Increase scan interval for far entities ===
-        int baseScanRate = getScanRate();
+        // Default scan rate is usually 20 ticks (1 second) in vanilla 1.21
+        int baseScanRate = 20;
         int effectiveScanRate = baseScanRate;
 
         if (kneaf$cachedMinDistance > farThresholdSq * 4) {
@@ -194,7 +191,7 @@ public abstract class SensorMixin<E extends LivingEntity> {
      * Get sensor statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long total = kneaf$sensorTicksTotal.get();
         long skipped = kneaf$sensorTicksSkipped.get();
         double skipRate = total > 0 ? skipped * 100.0 / total : 0;

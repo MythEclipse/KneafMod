@@ -242,7 +242,7 @@ public abstract class LightEngineMixin {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long total = kneaf$cacheHits.get() + kneaf$cacheMisses.get();
         double rate = total > 0 ? kneaf$cacheHits.get() * 100.0 / total : 0;
         return String.format("LightStats{hitRate=%.1f%%, skipped=%d, rust=%d}",

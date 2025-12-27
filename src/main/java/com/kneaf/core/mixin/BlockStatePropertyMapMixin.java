@@ -16,7 +16,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.collect.ImmutableMap;
+import com.mojang.serialization.MapCodec;
+import it.unimi.dsi.fastutil.objects.Reference2ObjectArrayMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -64,8 +65,8 @@ public abstract class BlockStatePropertyMapMixin<O, S> {
      */
     @Inject(method = "<init>", at = @At("RETURN"))
     private void kneaf$onStateCreate(O owner,
-            ImmutableMap<Property<?>, Comparable<?>> entries,
-            com.google.common.collect.Table<Property<?>, Comparable<?>, S> neighbours,
+            Reference2ObjectArrayMap<Property<?>, Comparable<?>> entries,
+            MapCodec<S> codec,
             CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
             kneaf$LOGGER.info("✅ BlockStatePropertyMapMixin applied - Property deduplication active!");
@@ -97,7 +98,7 @@ public abstract class BlockStatePropertyMapMixin<O, S> {
      */
     @Unique
     @SuppressWarnings("unchecked")
-    public static <T> T kneaf$getCanonical(T value) {
+    private static <T> T kneaf$getCanonical(T value) {
         if (value == null)
             return null;
 
@@ -133,13 +134,13 @@ public abstract class BlockStatePropertyMapMixin<O, S> {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         return String.format("BlockStateStats{states=%d, deduped=%d, cached=%d}",
                 kneaf$statesCreated.get(), kneaf$valuesDeduplicated.get(), kneaf$internedValues.size());
     }
 
     @Unique
-    public static void kneaf$clearCache() {
+    private static void kneaf$clearCache() {
         kneaf$canonicalValues.clear();
         kneaf$internedValues.clear();
     }

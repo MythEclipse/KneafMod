@@ -170,7 +170,7 @@ public abstract class ChunkStorageMixin {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long total = kneaf$readCacheHits.get() + kneaf$readCacheMisses.get();
         double rate = total > 0 ? kneaf$readCacheHits.get() * 100.0 / total : 0;
         return String.format("ChunkStorageStats{hitRate=%.1f%%, writesSkipped=%d}",

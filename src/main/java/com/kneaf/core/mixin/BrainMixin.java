@@ -251,7 +251,7 @@ public abstract class BrainMixin<E extends LivingEntity> {
      * Get brain optimization statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long processed = kneaf$brainTicksProcessed.get();
         long skipped = kneaf$brainTicksSkipped.get();
         long total = processed + skipped;
@@ -265,7 +265,7 @@ public abstract class BrainMixin<E extends LivingEntity> {
      * Clear tracking data. Called on world unload.
      */
     @Unique
-    public static void kneaf$clearTracking() {
+    private static void kneaf$clearTracking() {
         kneaf$entityIdleTicks.clear();
     }
 }

@@ -25,6 +25,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
+import com.kneaf.core.util.CachedPoiResult;
 
 /**
  * PoiManagerMixin - POI lookup caching with REAL skip optimization.
@@ -73,19 +74,8 @@ public abstract class PoiManagerMixin {
     @Unique
     private static final int CACHE_TTL_TICKS = 100;
 
-    /**
-     * Cached POI search result.
-     */
-    @Unique
-    private static class CachedPoiResult {
-        final Optional<BlockPos> result;
-        final long timestamp;
-
-        CachedPoiResult(Optional<BlockPos> result, long timestamp) {
-            this.result = result;
-            this.timestamp = timestamp;
-        }
-    }
+    // Inner class removed to avoid IllegalClassLoadError
+    // Using com.kneaf.core.util.CachedPoiResult instead
 
     /**
      * OPTIMIZATION: Cache and return POI search results.
@@ -222,7 +212,7 @@ public abstract class PoiManagerMixin {
     }
 
     @Unique
-    public static String kneaf$getStatistics() {
+    private static String kneaf$getStatistics() {
         long hits = kneaf$cacheHits.get();
         long total = hits + kneaf$cacheMisses.get();
         double rate = total > 0 ? hits * 100.0 / total : 0;

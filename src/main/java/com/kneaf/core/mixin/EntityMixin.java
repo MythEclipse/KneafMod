@@ -243,9 +243,8 @@ public abstract class EntityMixin {
      * Get entity optimization statistics.
      */
     @Unique
-    public static String kneaf$getStatistics() {
-        return String.format(
-                "EntityStats{collisions=%d, earlyExits=%d, sleepSkips=%d}",
+    private static String kneaf$getStatistics() {
+        return String.format("EntityStats{collisions=%d, fast=%d, sleep=%d, skipped=%d}",
                 kneaf$totalCollisions.get(),
                 kneaf$earlyExitCount.get(),
                 kneaf$sleepSkips.get());
