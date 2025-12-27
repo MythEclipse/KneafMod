@@ -15,8 +15,6 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Optimized entity collision detection with early exits and lazy loading.
@@ -29,8 +27,6 @@ import org.slf4j.LoggerFactory;
  * 4. Smaller bounding box for single-axis movement
  */
 public class EntityCollisionHelper {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/EntityCollisionHelper");
 
     // Reusable BlockPos to avoid allocations
     private static final ThreadLocal<BlockPos.MutableBlockPos> MUTABLE_POS = ThreadLocal

@@ -9,9 +9,7 @@ package com.kneaf.core.mixin;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
-import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.lighting.LevelLightEngine;
-import net.minecraft.world.level.lighting.LayerLightEventListener;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -118,7 +116,7 @@ public abstract class LightEngineMixin {
      */
     @Inject(method = "runLightUpdates", at = @At("HEAD"))
     private void kneaf$onRunLightUpdates(CallbackInfoReturnable<Integer> cir) {
-        int currentBatch = kneaf$batchSize.getAndSet(0);
+        kneaf$batchSize.set(0);
 
         // Clear pending sections after processing
         if (!kneaf$pendingSectionUpdates.isEmpty()) {
@@ -188,7 +186,6 @@ public abstract class LightEngineMixin {
     private void kneaf$onUpdateSectionStatus(SectionPos pos, boolean isEmpty, CallbackInfo ci) {
         // Invalidate caches for this section
         // This ensures cache consistency when sections change
-        long sectionKey = pos.asLong();
 
         // Clear caches periodically or when too large
         if (kneaf$blockLightCache.size() > 5000 || kneaf$skyLightCache.size() > 5000) {

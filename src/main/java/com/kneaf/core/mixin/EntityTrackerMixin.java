@@ -108,13 +108,18 @@ public abstract class EntityTrackerMixin {
 
     @Unique
     private double kneaf$getNearestPlayerDistance() {
-        if (entity == null || entity.level() == null || entity.getServer() == null) {
+        if (entity == null || entity.level() == null) {
+            return Double.MAX_VALUE;
+        }
+
+        var server = entity.getServer();
+        if (server == null) {
             return Double.MAX_VALUE;
         }
 
         double nearestDist = Double.MAX_VALUE;
 
-        for (ServerPlayer player : entity.getServer().getPlayerList().getPlayers()) {
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             if (player.level() == entity.level()) {
                 double dist = player.distanceToSqr(entity);
                 if (dist < nearestDist) {

@@ -6,16 +6,11 @@
  */
 package com.kneaf.core.mixin;
 
-import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.levelgen.Heightmap;
-import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,8 +67,8 @@ public abstract class HeightmapMixin {
      * Track update requests for coalescing.
      */
     @Inject(method = "update", at = @At("HEAD"))
-    private void kneaf$onUpdate(int x, int y, int z, 
-            net.minecraft.world.level.block.state.BlockState state, 
+    private void kneaf$onUpdate(int x, int y, int z,
+            net.minecraft.world.level.block.state.BlockState state,
             CallbackInfoReturnable<Boolean> cir) {
         if (!kneaf$loggedFirstApply) {
             kneaf$LOGGER.info("✅ HeightmapMixin applied - Heightmap optimization active!");
@@ -139,7 +134,7 @@ public abstract class HeightmapMixin {
                 double coalesceRate = requested > 0 ? (coalesced * 100.0 / requested) : 0;
                 double hitRate = total > 0 ? (hits * 100.0 / total) : 0;
                 kneaf$LOGGER.info("Heightmap stats: {} updates ({} coalesced, {}%), cache: {}% hit rate",
-                        requested, coalesced, String.format("%.1f", coalesceRate), 
+                        requested, coalesced, String.format("%.1f", coalesceRate),
                         String.format("%.1f", hitRate));
             }
 

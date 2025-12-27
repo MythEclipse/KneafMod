@@ -12,7 +12,6 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,7 +65,8 @@ public abstract class ChunkStorageMixin {
      * Track chunk save operations.
      */
     @Inject(method = "write", at = @At("HEAD"))
-    private void kneaf$onWriteStart(ChunkPos pos, CompoundTag tag, CallbackInfoReturnable<CompletableFuture<Void>> cir) {
+    private void kneaf$onWriteStart(ChunkPos pos, CompoundTag tag,
+            CallbackInfoReturnable<CompletableFuture<Void>> cir) {
         kneaf$chunksSaved.incrementAndGet();
         kneaf$logStats();
     }

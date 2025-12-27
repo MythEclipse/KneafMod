@@ -59,6 +59,7 @@ public class KneafCore {
      * @param modEventBus  The mod event bus
      * @param modContainer The mod container
      */
+    @SuppressWarnings("null")
     public KneafCore(IEventBus modEventBus, ModContainer modContainer) {
         INSTANCE.set(this);
 

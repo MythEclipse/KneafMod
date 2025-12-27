@@ -86,6 +86,7 @@ public abstract class ScheduledTickMixin<T> {
         // Track position for duplicate detection
         BlockPos pos = tick.pos();
         long posKey = pos.asLong();
+        @SuppressWarnings("null")
         int count = kneaf$pendingTickCounts.merge(posKey, 1, Integer::sum);
 
         if (count > 1) {
@@ -111,8 +112,9 @@ public abstract class ScheduledTickMixin<T> {
 
             if (scheduled > 0) {
                 double dupRate = duplicates * 100.0 / scheduled;
-                kneaf$LOGGER.info("ScheduledTick stats: {} scheduled, {} duplicates ({}%), {} processed, {} active regions",
-                        scheduled, duplicates, String.format("%.1f", dupRate), processed, 
+                kneaf$LOGGER.info(
+                        "ScheduledTick stats: {} scheduled, {} duplicates ({}%), {} processed, {} active regions",
+                        scheduled, duplicates, String.format("%.1f", dupRate), processed,
                         kneaf$activeChunkRegions != null ? kneaf$activeChunkRegions.size() : 0);
             }
 

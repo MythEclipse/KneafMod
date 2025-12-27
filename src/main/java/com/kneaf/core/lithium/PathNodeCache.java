@@ -11,10 +11,7 @@ import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.pathfinder.PathType;
 import org.jetbrains.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -23,34 +20,27 @@ import java.util.concurrent.atomic.AtomicLong;
  * 
  * Key optimizations:
  * 1. Cache PathType for BlockStates (avoid repeated calculations)
- * 2. Cache neighbor danger checks (avoid scanning 26 neighbors repeatedly)
+ * 2. Cache neighbor danger checks (avoid repeated checks)
  * 3. Track "common blocks" that are known safe/open
  * 4. Fast path for air blocks
  */
 public class PathNodeCache {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/PathNodeCache");
-
     // PathType cache for individual block states - Thread Safe
-    private static final Map<BlockState, PathType> BLOCK_PATH_TYPE_CACHE = new java.util.concurrent.ConcurrentHashMap<>(4096);
+    private static final Map<BlockState, PathType> BLOCK_PATH_TYPE_CACHE = new java.util.concurrent.ConcurrentHashMap<>(
+            4096);
 
     // Cache for "is this block type always open/walkable"
-    private static final Map<BlockState, Boolean> ALWAYS_PASSABLE_CACHE = new java.util.concurrent.ConcurrentHashMap<>(1024);
+    private static final Map<BlockState, Boolean> ALWAYS_PASSABLE_CACHE = new java.util.concurrent.ConcurrentHashMap<>(
+            1024);
 
     // Statistics
     private static final AtomicLong cacheHits = new AtomicLong(0);
     private static final AtomicLong cacheMisses = new AtomicLong(0);
     private static final AtomicLong neighborSkips = new AtomicLong(0);
 
-    // Sentinel for "we haven't calculated this yet"
-    private static final PathType UNCACHED = null;
-
     // Maximum cache size to prevent memory issues
     private static final int MAX_CACHE_SIZE = 8192;
-
-    // Thread-local mutable BlockPos for neighbor checks
-    private static final ThreadLocal<BlockPos.MutableBlockPos> MUTABLE_POS = ThreadLocal
-            .withInitial(BlockPos.MutableBlockPos::new);
 
     /**
      * Get PathType for a BlockState, using cache if available.
@@ -163,6 +153,7 @@ public class PathNodeCache {
     @Nullable
     private static PathType checkNeighborDanger(BlockGetter world, BlockPos pos) {
         try {
+            @SuppressWarnings("null")
             BlockState state = world.getBlockState(pos);
 
             // Fast check for common safe blocks
@@ -217,7 +208,6 @@ public class PathNodeCache {
     public static void clearCaches() {
         BLOCK_PATH_TYPE_CACHE.clear();
         ALWAYS_PASSABLE_CACHE.clear();
-        LOGGER.info("PathNodeCache cleared");
     }
 
     /**

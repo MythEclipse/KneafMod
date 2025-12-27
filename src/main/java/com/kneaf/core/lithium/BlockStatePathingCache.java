@@ -27,9 +27,6 @@ public class BlockStatePathingCache {
     private static final Map<BlockState, PathType> BLOCK_PATH_TYPE_CACHE = new IdentityHashMap<>(4096);
     private static final Map<BlockState, PathType> IN_WATER_PATH_TYPE_CACHE = new IdentityHashMap<>(1024);
 
-    // Sentinel value for "not calculated yet" since null is valid
-    private static final PathType NOT_CACHED = null;
-
     /**
      * Get cached PathType for a BlockState, or null if not cached.
      */

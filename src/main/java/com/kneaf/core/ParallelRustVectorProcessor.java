@@ -3,16 +3,12 @@ package com.kneaf.core;
 import com.kneaf.core.performance.PerformanceMonitoringSystem;
 import java.util.concurrent.*;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import com.kneaf.core.math.VectorMath;
 import java.util.List;
 import java.util.ArrayList;
 import com.kneaf.core.performance.scheduler.CacheAffinity;
 import com.kneaf.core.performance.scheduler.CacheOptimizedWorkStealingScheduler;
 import com.kneaf.core.performance.model.OperationQueue;
-import com.kneaf.core.performance.model.VectorOperation;
-import com.kneaf.core.performance.model.VectorOperationResult;
 import com.kneaf.core.performance.model.QueueStatistics;
 import com.kneaf.core.performance.tasks.MatrixMulTask;
 import com.kneaf.core.performance.tasks.VectorOperationTask;
@@ -64,7 +60,8 @@ public class ParallelRustVectorProcessor {
 
     /**
      * Native binding for parallel A* pathfinding.
-     * Matches Rust signature: Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind
+     * Matches Rust signature:
+     * Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind
      */
     public static native int[] parallelAStarPathfind(
             byte[] gridData,
@@ -77,8 +74,7 @@ public class ParallelRustVectorProcessor {
             int goalX,
             int goalY,
             int goalZ,
-            int numThreads
-    );
+            int numThreads);
 
     // ==========================================
     // Static Convenience Methods

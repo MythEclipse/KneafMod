@@ -9,16 +9,13 @@ package com.kneaf.core.mixin;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ai.village.poi.PoiManager;
-import net.minecraft.world.entity.ai.village.poi.PoiRecord;
 import net.minecraft.world.entity.ai.village.poi.PoiType;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,8 +23,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Predicate;
-import java.util.stream.Stream;
 
 /**
  * PoiManagerMixin - POI lookup caching optimization.
@@ -147,12 +142,13 @@ public abstract class PoiManagerMixin {
         int cleared = 0;
         var iterator = kneaf$poiResultCache.entrySet().iterator();
         while (iterator.hasNext()) {
-            var entry = iterator.next();
+            iterator.next();
             // The key encodes position info - we could decode it, but for simplicity
             // just clear nearby entries based on key hash collision
             iterator.remove();
             cleared++;
-            if (cleared > 50) break; // Limit to avoid lag spikes
+            if (cleared > 50)
+                break; // Limit to avoid lag spikes
         }
 
         if (cleared > 0) {

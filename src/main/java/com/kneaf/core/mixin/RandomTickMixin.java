@@ -70,6 +70,7 @@ public abstract class RandomTickMixin {
             kneaf$loggedFirstApply = true;
         }
 
+        @SuppressWarnings("resource") // False positive - 'self' is a cast reference to 'this'
         ServerLevel self = (ServerLevel) (Object) this;
         long chunkPos = chunk.getPos().toLong();
         long gameTime = self.getGameTime();
@@ -95,10 +96,7 @@ public abstract class RandomTickMixin {
     /**
      * Track random ticks applied.
      */
-    @Inject(method = "tickChunk", at = @At(
-            value = "INVOKE",
-            target = "Lnet/minecraft/world/level/block/state/BlockState;randomTick(Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/core/BlockPos;Lnet/minecraft/util/RandomSource;)V"
-    ))
+    @Inject(method = "tickChunk", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/state/BlockState;randomTick(Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/core/BlockPos;Lnet/minecraft/util/RandomSource;)V"))
     private void kneaf$onRandomTickApplied(LevelChunk chunk, int randomTickSpeed, CallbackInfo ci) {
         kneaf$ticksApplied.incrementAndGet();
     }

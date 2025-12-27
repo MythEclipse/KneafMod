@@ -159,17 +159,19 @@ public abstract class ChunkGeneratorMixin {
      * Redirect feature placement to batch and execute in parallel.
      */
     @Redirect(method = "applyBiomeDecoration", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/levelgen/placement/PlacedFeature;place(Lnet/minecraft/world/level/WorldGenLevel;Lnet/minecraft/world/level/chunk/ChunkGenerator;Lnet/minecraft/util/RandomSource;Lnet/minecraft/core/BlockPos;)Z"))
-    private boolean kneaf$redirectPlaceFeature(PlacedFeature instance, WorldGenLevel level, ChunkGenerator generator, RandomSource random, BlockPos pos) {
+    private boolean kneaf$redirectPlaceFeature(PlacedFeature instance, WorldGenLevel level, ChunkGenerator generator,
+            RandomSource random, BlockPos pos) {
         List<Runnable> batch = kneaf$featureBatch.get();
         // Capture state for parallel execution
         batch.add(() -> {
             try {
-                instance.place(level, generator, random, pos);
+                @SuppressWarnings({ "null", "unused" })
+                boolean result = instance.place(level, generator, random, pos);
             } catch (Exception e) {
                 kneaf$LOGGER.error("Feature placement failed in parallel batch", e);
             }
         });
-        
+
         if (batch.size() >= PARALLEL_FEATURE_THRESHOLD) {
             kneaf$processFeaturesBatch(new ArrayList<>(batch), Runnable::run);
             batch.clear();

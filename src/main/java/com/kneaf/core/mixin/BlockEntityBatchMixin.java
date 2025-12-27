@@ -11,7 +11,6 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityTicker;
 import net.minecraft.world.level.block.entity.TickingBlockEntity;
-import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -116,7 +115,7 @@ public abstract class BlockEntityBatchMixin {
     @Unique
     private boolean kneaf$shouldSkipIdle(BlockPos pos) {
         int idleCount = kneaf$idleTickCount.getOrDefault(pos, 0);
-        
+
         if (idleCount >= IDLE_THRESHOLD) {
             // Only tick every 4th tick when idle
             if (idleCount % 4 != 0) {
@@ -125,7 +124,7 @@ public abstract class BlockEntityBatchMixin {
                 return true;
             }
         }
-        
+
         kneaf$idleTickCount.put(pos, idleCount + 1);
         return false;
     }
@@ -135,24 +134,28 @@ public abstract class BlockEntityBatchMixin {
      */
     @Unique
     private static <T extends BlockEntity> void kneaf$processBatch(
-            List<T> entities, 
+            List<T> entities,
             BlockEntityTicker<T> ticker,
             Level level) {
-        if (entities == null || entities.isEmpty()) {
+        if (entities == null || entities.isEmpty() || level == null) {
             return;
         }
 
         int size = entities.size();
-        
+
         // Process in batches
         for (int i = 0; i < size; i += BATCH_SIZE) {
             int end = Math.min(i + BATCH_SIZE, size);
-            
+
             for (int j = i; j < end; j++) {
                 T entity = entities.get(j);
                 if (entity != null && !entity.isRemoved()) {
-                    ticker.tick(level, entity.getBlockPos(), entity.getBlockState(), entity);
-                    kneaf$batchedTicks.incrementAndGet();
+                    final var state = entity.getBlockState();
+                    final var pos = entity.getBlockPos();
+                    if (state != null && pos != null) {
+                        ticker.tick(level, pos, state, entity);
+                        kneaf$batchedTicks.incrementAndGet();
+                    }
                 }
             }
         }
@@ -167,8 +170,7 @@ public abstract class BlockEntityBatchMixin {
             long batched = kneaf$batchedTicks.get();
 
             if (total > 0 || batched > 0) {
-                double skipRate = (total + skipped) > 0 ? 
-                        (skipped * 100.0 / (total + skipped)) : 0;
+                double skipRate = (total + skipped) > 0 ? (skipped * 100.0 / (total + skipped)) : 0;
                 kneaf$LOGGER.info("BlockEntityBatch: {} ticks, {} batched, {} skipped ({}%)",
                         total, batched, skipped, String.format("%.1f", skipRate));
             }

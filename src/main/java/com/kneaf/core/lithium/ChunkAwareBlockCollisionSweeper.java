@@ -8,7 +8,6 @@ package com.kneaf.core.lithium;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -17,9 +16,6 @@ import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -35,8 +31,6 @@ import java.util.List;
  * 5. Early exit when collision found for single-axis movement
  */
 public class ChunkAwareBlockCollisionSweeper implements Iterator<VoxelShape> {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/CollisionSweeper");
 
     // Reusable mutable position to avoid allocations
     private final BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
@@ -170,6 +164,7 @@ public class ChunkAwareBlockCollisionSweeper implements Iterator<VoxelShape> {
 
         try {
             // Get block state from chunk directly (faster than world.getBlockState)
+            @SuppressWarnings("null")
             BlockState state = currentChunk.getBlockState(pos);
 
             // Fast path: air blocks have no collision
@@ -178,6 +173,7 @@ public class ChunkAwareBlockCollisionSweeper implements Iterator<VoxelShape> {
             }
 
             // Get collision shape
+            @SuppressWarnings("null")
             VoxelShape shape = state.getCollisionShape(world, pos);
 
             // Fast path: empty shapes
@@ -197,7 +193,9 @@ public class ChunkAwareBlockCollisionSweeper implements Iterator<VoxelShape> {
 
             // Complex shape - do full intersection test
             VoxelShape offsetShape = shape.move(pos.getX(), pos.getY(), pos.getZ());
-            if (Shapes.joinIsNotEmpty(Shapes.create(box), offsetShape, BooleanOp.AND)) {
+            @SuppressWarnings("null")
+            boolean hasCollision = Shapes.joinIsNotEmpty(Shapes.create(box), offsetShape, BooleanOp.AND);
+            if (hasCollision) {
                 return offsetShape;
             }
 

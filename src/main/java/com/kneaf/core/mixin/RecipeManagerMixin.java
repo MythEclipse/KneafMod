@@ -6,7 +6,6 @@
  */
 package com.kneaf.core.mixin;
 
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.crafting.RecipeManager;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.RecipeType;
@@ -82,18 +81,22 @@ public abstract class RecipeManagerMixin {
      * Inject into getRecipeFor to use cache.
      * We purposefully target the generic method that takes a RecipeInput.
      */
-    @Inject(method = "getRecipeFor(Lnet/minecraft/world/item/crafting/RecipeType;Lnet/minecraft/world/item/crafting/RecipeInput;Lnet/minecraft/world/level/Level;)Ljava/util/Optional;", 
-            at = @At("HEAD"), cancellable = true)
-    private void kneaf$onGetRecipeFor(RecipeType<?> recipeType, RecipeInput input, Level level, CallbackInfoReturnable<Optional<RecipeHolder<?>>> cir) {
-        // Only cache crafting recipes for now as they are the most frequent and stateless
-        // Some recipe types might depend on more than just the input items (e.g. world time, position) regarding the Level
+    @Inject(method = "getRecipeFor(Lnet/minecraft/world/item/crafting/RecipeType;Lnet/minecraft/world/item/crafting/RecipeInput;Lnet/minecraft/world/level/Level;)Ljava/util/Optional;", at = @At("HEAD"), cancellable = true)
+    private void kneaf$onGetRecipeFor(RecipeType<?> recipeType, RecipeInput input, Level level,
+            CallbackInfoReturnable<Optional<RecipeHolder<?>>> cir) {
+        // Only cache crafting recipes for now as they are the most frequent and
+        // stateless
+        // Some recipe types might depend on more than just the input items (e.g. world
+        // time, position) regarding the Level
         // But for standard crafting, input items are usually enough.
         // To be safe, we compute a hash from the input and the recipe type.
-        
-        if (input == null) return;
+
+        if (input == null)
+            return;
 
         // Simple hash combination: RecipeType hash + Input items hash
-        // Note: RecipeInput implementations must implement a good hashCode for this to be effective.
+        // Note: RecipeInput implementations must implement a good hashCode for this to
+        // be effective.
         // Most vanilla inputs do (e.g. CraftingInput).
         long cacheKey = (long) recipeType.hashCode() ^ ((long) input.hashCode() << 32);
 
@@ -105,29 +108,34 @@ public abstract class RecipeManagerMixin {
             kneaf$logStats();
         } else {
             kneaf$cacheMisses.incrementAndGet();
-            // We cannot easily capture the result of the vanilla method in the same HEAD injection
+            // We cannot easily capture the result of the vanilla method in the same HEAD
+            // injection
             // without doing a double-invoke or using a different injection point.
-            // But doing a Tail injection allows us to capture the return value and cache it.
+            // But doing a Tail injection allows us to capture the return value and cache
+            // it.
         }
     }
 
-    @Inject(method = "getRecipeFor(Lnet/minecraft/world/item/crafting/RecipeType;Lnet/minecraft/world/item/crafting/RecipeInput;Lnet/minecraft/world/level/Level;)Ljava/util/Optional;", 
-            at = @At("RETURN"))
-    private void kneaf$onGetRecipeForReturn(RecipeType<?> recipeType, RecipeInput input, Level level, CallbackInfoReturnable<Optional<RecipeHolder<?>>> cir) {
-        if (input == null) return;
-        
+    @Inject(method = "getRecipeFor(Lnet/minecraft/world/item/crafting/RecipeType;Lnet/minecraft/world/item/crafting/RecipeInput;Lnet/minecraft/world/level/Level;)Ljava/util/Optional;", at = @At("RETURN"))
+    private void kneaf$onGetRecipeForReturn(RecipeType<?> recipeType, RecipeInput input, Level level,
+            CallbackInfoReturnable<Optional<RecipeHolder<?>>> cir) {
+        if (input == null)
+            return;
+
         long cacheKey = (long) recipeType.hashCode() ^ ((long) input.hashCode() << 32);
-        
-        // If it wasn't in cache (we can assume this because we check in HEAD), store it.
-        // To avoid race conditions where we overwrite a parallel put, computeIfAbsent is theoretically better,
+
+        // If it wasn't in cache (we can assume this because we check in HEAD), store
+        // it.
+        // To avoid race conditions where we overwrite a parallel put, computeIfAbsent
+        // is theoretically better,
         // but here we just want to put the result.
         // We accept the slight race of multiple threads computing the same recipe once.
-        
+
         // Only cache if we haven't exceeded size limit (simple protection)
         if (kneaf$recipeCache.size() < 5000) {
             kneaf$recipeCache.put(cacheKey, cir.getReturnValue());
         } else if (kneaf$recipeCache.size() == 5000) {
-             kneaf$cleanupCache();
+            kneaf$cleanupCache();
         }
     }
 
@@ -158,7 +166,8 @@ public abstract class RecipeManagerMixin {
      */
     @Unique
     private void kneaf$cleanupCache() {
-        // Simple strategy: clear half or all. For now, clear all to be safe and reclaim memory.
+        // Simple strategy: clear half or all. For now, clear all to be safe and reclaim
+        // memory.
         kneaf$recipeCache.clear();
         kneaf$LOGGER.debug("Recipe cache cleared due to size limit");
     }

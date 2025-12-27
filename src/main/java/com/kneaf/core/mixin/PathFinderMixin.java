@@ -4,7 +4,6 @@
  */
 package com.kneaf.core.mixin;
 
-import com.kneaf.core.RustNativeLoader;
 import com.kneaf.core.ParallelRustVectorProcessor;
 import com.kneaf.core.util.CachedPath;
 import com.kneaf.core.util.MixinHelper;
@@ -71,8 +70,6 @@ public abstract class PathFinderMixin {
     // Path cache
     @Unique
     private static final ConcurrentHashMap<String, CachedPath> kneaf$pathCache = new ConcurrentHashMap<>();
-
-
 
     /**
      * Inject at HEAD of findPath to use Rust for complex pathfinding.
@@ -199,7 +196,8 @@ public abstract class PathFinderMixin {
             goalY = Math.max(0, Math.min(height - 1, goalY));
 
             // Call Rust A*
-            // Call Rust A* - 3D signature: width, height, depth, startX, startY, startZ, goalX, goalY, goalZ, threads
+            // Call Rust A* - 3D signature: width, height, depth, startX, startY, startZ,
+            // goalX, goalY, goalZ, threads
             int[] pathCoords = ParallelRustVectorProcessor.parallelAStarPathfind(
                     grid, width, height, 1, startX, startY, 0, goalX, goalY, 0, 4);
 

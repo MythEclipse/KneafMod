@@ -7,15 +7,11 @@
  */
 package com.kneaf.core.lithium;
 
-import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
-import org.jetbrains.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
@@ -30,13 +26,8 @@ import java.util.List;
  */
 public class ItemMergingHelper {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/ItemMergingHelper");
-
     // Default merge radius squared (3.5 blocks)
     private static final double MERGE_RADIUS_SQ = 3.5 * 3.5;
-
-    // Minimum ticks before items can merge (prevents spam merging)
-    private static final int MIN_AGE_FOR_MERGE = 10;
 
     /**
      * Try to merge an item entity with nearby items.
@@ -68,7 +59,14 @@ public class ItemMergingHelper {
         int spaceAvailable = maxStack - currentCount;
 
         // Create search box
-        AABB searchBox = item.getBoundingBox().inflate(2.0);
+        AABB boundingBox = item.getBoundingBox();
+        if (boundingBox == null) {
+            return false;
+        }
+        AABB searchBox = boundingBox.inflate(2.0);
+        if (searchBox == null) {
+            return false;
+        }
 
         // Get nearby item entities
         List<ItemEntity> nearbyItems = level.getEntitiesOfClass(

@@ -13,71 +13,97 @@ jobs:
       contents: write
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Increment version tag
-      uses: rickstaa/action-create-tag@v1
-      with:
-        tag: v${{ github.run_number }}
-        message: "Release ${{ github.run_number }}"
+      - name: Get previous tag
+        id: previoustag
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "Previous tag: $PREV_TAG"
 
-    - name: Set up JDK 21
-      uses: actions/setup-java@v4
-      with:
-        java-version: '21'
-        distribution: 'temurin'
+      - name: Generate changelog from commits
+        id: changelog
+        run: |
+          if [ -z "${{ steps.previoustag.outputs.tag }}" ]; then
+            # No previous tag, get all commits
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            # Get commits since last tag
+            CHANGELOG=$(git log ${{ steps.previoustag.outputs.tag }}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
 
-    - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: rustfmt, clippy
+          # Save to file for multiline handling
+          echo "$CHANGELOG" > changelog.txt
 
-    - name: Install Cross
-      run: |
-        cargo install cross --git https://github.com/cross-rs/cross
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          # Also create a single-line version for Modrinth (escape newlines)
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-    - name: Build Rust library
-      working-directory: rust
-      run: |
-        cross build --release --target x86_64-unknown-linux-gnu
-        cross build --release --target x86_64-pc-windows-gnu
-        mkdir -p ../src/main/resources/natives
-        cp target/x86_64-unknown-linux-gnu/release/librustperf.so ../src/main/resources/natives/ || true
-        cp target/x86_64-pc-windows-gnu/release/rustperf.dll ../src/main/resources/natives/ || true
+      - name: Increment version tag
+        uses: rickstaa/action-create-tag@v1
+        with:
+          tag: v${{ github.run_number }}
+          message: "Release ${{ github.run_number }}"
 
-    - name: Build mod
-      run: ./gradlew build
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: v${{ github.run_number }}
-        files: build/libs/*.jar
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-    - name: Upload to Modrinth
-      uses: Kir-Antipov/mc-publish@v3.3
-      with:
-        modrinth-id: ${{ secrets.MODRINTH_PROJECT_ID }}
-        modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
-        files: build/libs/*.jar
-        name: KneafCore v${{ github.run_number }}
-        version: ${{ github.run_number }}
-        version-type: release
-        changelog: "Release ${{ github.run_number }}"
-        loaders: neoforge
-        game-versions: |
-          1.21
-          1.21.1
-        java: |
-          21
-        dependencies: |
-          neoforge(required){modrinth:P7dR8mSH}{curseforge:238222}
-        retry-attempts: 3
-        retry-delay: 10000
+      - name: Install Cross
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build Rust library
+        working-directory: rust
+        run: |
+          cross build --release --target x86_64-unknown-linux-gnu
+          cross build --release --target x86_64-pc-windows-gnu
+          mkdir -p ../src/main/resources/natives
+          cp target/x86_64-unknown-linux-gnu/release/librustperf.so ../src/main/resources/natives/ || true
+          cp target/x86_64-pc-windows-gnu/release/rustperf.dll ../src/main/resources/natives/ || true
+
+      - name: Build mod
+        run: ./gradlew build
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          files: build/libs/*.jar
+          body_path: changelog.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to Modrinth
+        uses: Kir-Antipov/mc-publish@v3.3
+        with:
+          modrinth-id: ${{ secrets.MODRINTH_PROJECT_ID }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          files: build/libs/*.jar
+          name: KneafCore v${{ github.run_number }}
+          version: ${{ github.run_number }}
+          version-type: release
+          changelog: ${{ steps.changelog.outputs.changelog }}
+          loaders: neoforge
+          game-versions: |
+            1.21
+            1.21.1
+          java: |
+            21
+          dependencies: |
+            neoforge(required){modrinth:P7dR8mSH}{curseforge:238222}
+          retry-attempts: 3
+          retry-delay: 10000

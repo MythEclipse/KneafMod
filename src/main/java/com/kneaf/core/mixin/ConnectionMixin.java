@@ -9,7 +9,6 @@ package com.kneaf.core.mixin;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import net.minecraft.network.Connection;
-import net.minecraft.network.protocol.Packet;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -20,8 +19,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -55,7 +52,7 @@ public abstract class ConnectionMixin {
 
     @Unique
     private static final AtomicLong kneaf$batchesSent = new AtomicLong(0);
-    
+
     @Unique
     private static final AtomicLong kneaf$packetsCoalesced = new AtomicLong(0);
 
@@ -72,10 +69,7 @@ public abstract class ConnectionMixin {
     /**
      * Replacing writeAndFlush with logic to batch.
      */
-    @Redirect(
-        method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V",
-        at = @At(value = "INVOKE", target = "Lio/netty/channel/Channel;writeAndFlush(Ljava/lang/Object;)Lio/netty/channel/ChannelFuture;")
-    )
+    @Redirect(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At(value = "INVOKE", target = "Lio/netty/channel/Channel;writeAndFlush(Ljava/lang/Object;)Lio/netty/channel/ChannelFuture;"))
     private ChannelFuture kneaf$onSendWrite(Channel channel, Object msg) {
         if (!kneaf$loggedFirstApply) {
             kneaf$LOGGER.info("✅ ConnectionMixin applied - Network packet optimization active!");
@@ -94,7 +88,7 @@ public abstract class ConnectionMixin {
             }
             return channel.writeAndFlush(msg);
         }
-        
+
         // Otherwise buffer
         return channel.write(msg);
     }
@@ -127,7 +121,7 @@ public abstract class ConnectionMixin {
                 kneaf$LOGGER.info("Network stats: {} packets in {} batches (avg {}/batch), {} coalesced",
                         sent, batches, String.format("%.1f", avgBatchSize), coalesced);
             }
-            
+
             kneaf$packetsSent.set(0);
             kneaf$batchesSent.set(0);
             kneaf$packetsCoalesced.set(0);
