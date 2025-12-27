@@ -16,7 +16,6 @@
     "ExplosionMixin",
     "RedstoneWireBlockMixin",
     "NaturalSpawnerMixin",
-    "LevelMixin",
     "NoiseChunkGeneratorMixin",
     "ChunkGeneratorMixin",
     "ServerChunkCacheMixin",
@@ -45,7 +44,8 @@
     "CompoundTagMixin",
     "PlayerChunkLoaderMixin",
     "ThreadedAnvilMixin",
-    "InventoryMenuMixin"
+    "InventoryMenuMixin",
+    "GoalSelectorMixin"
   ],
   "client": [],
   "server": [],

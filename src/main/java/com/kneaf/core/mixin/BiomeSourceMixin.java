@@ -10,7 +10,7 @@ package com.kneaf.core.mixin;
 import net.minecraft.core.Holder;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Climate;
-import com.kneaf.core.RustOptimizations;
+import com.kneaf.core.RustNativeLoader;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -22,32 +22,10 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-
-/**
- * BiomeSourceMixin - Caches biome lookups for faster world generation.
- * 
- * Biome lookups happen extremely frequently during world generation.
- * Since biomes are determined solely by coordinates and the seed,
- * we can cache results for repeated lookups at the same position.
- * 
- * This is especially effective for:
- * 1. Feature decoration (multiple features query same biome)
- * 2. Structure placement (structures query biomes in patterns)
- * 3. Entity spawning (spawn checks query biomes)
- */
 import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
 
 /**
  * BiomeSourceMixin - Caches biome lookups for faster world generation.
- * 
- * Biome lookups happen extremely frequently during world generation.
- * Since biomes are determined solely by coordinates and the seed,
- * we can cache results for repeated lookups at the same position.
- * 
- * This is especially effective for:
- * 1. Feature decoration (multiple features query same biome)
- * 2. Structure placement (structures query biomes in patterns)
- * 3. Entity spawning (spawn checks query biomes)
  */
 @Mixin(MultiNoiseBiomeSource.class)
 public abstract class BiomeSourceMixin {
@@ -59,8 +37,6 @@ public abstract class BiomeSourceMixin {
     private static boolean kneaf$loggedFirstApply = false;
 
     // Cache biome lookups by position
-    // Key: packed position (x, y, z as int)
-    // Value: biome holder
     @Unique
     private static final int MAX_CACHE_SIZE = 16384;
 
@@ -110,7 +86,6 @@ public abstract class BiomeSourceMixin {
         }
 
         kneaf$cacheMisses.incrementAndGet();
-        // Let vanilla compute it
     }
 
     /**
@@ -145,13 +120,13 @@ public abstract class BiomeSourceMixin {
         if (kneaf$rustHashCount.get() > 0 || kneaf$cacheHits.get() % 100 == 0) {
             try {
                 double[] positions = new double[] { x, y, z };
-                long[] hashes = RustOptimizations.batchSpatialHash(positions, 1.0, 1);
+                long[] hashes = RustNativeLoader.batchSpatialHash(positions, 1.0, 1);
                 if (hashes != null && hashes.length > 0) {
                     kneaf$rustHashCount.incrementAndGet();
                     return hashes[0];
                 }
-            } catch (Exception e) {
-                // Fall through to Java implementation
+            } catch (Throwable e) {
+                // Fall through to Java implementation if native fails or links incorrectly
             }
         }
 
@@ -170,13 +145,11 @@ public abstract class BiomeSourceMixin {
     private void kneaf$cleanupCache() {
         long now = System.currentTimeMillis();
 
-        // Don't cleanup too frequently
         if (now - kneaf$lastCleanupTime < 5000) {
             return;
         }
         kneaf$lastCleanupTime = now;
 
-        // Clear half the cache
         int toRemove = MAX_CACHE_SIZE / 2;
         var iterator = kneaf$biomeCache.keySet().iterator();
         while (iterator.hasNext() && toRemove-- > 0) {
@@ -186,7 +159,7 @@ public abstract class BiomeSourceMixin {
     }
 
     /**
-     * Clear the cache entirely. Called when world changes.
+     * Clear the cache entirely.
      */
     @Unique
     public void kneaf$clearCache() {

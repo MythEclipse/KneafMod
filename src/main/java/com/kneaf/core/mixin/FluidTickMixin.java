@@ -160,13 +160,15 @@ public abstract class FluidTickMixin {
 
             // Mark simulated positions as static based on results
             long now = System.currentTimeMillis();
-            idx = 0;
-            for (var entry : kneaf$pendingFluidUpdates.entrySet()) {
-                // Use result to check if fluid is now static
-                if (idx < results.length && results[idx] == 0) {
-                    kneaf$staticFluidCache.put(entry.getKey(), now);
+            if (results != null) {
+                idx = 0;
+                for (var entry : kneaf$pendingFluidUpdates.entrySet()) {
+                    // Use result to check if fluid is now static
+                    if (idx < results.length && results[idx] == 0) {
+                        kneaf$staticFluidCache.put(entry.getKey(), now);
+                    }
+                    idx++;
                 }
-                idx++;
             }
         } catch (Exception e) {
             // Java fallback - just clear pending

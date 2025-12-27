@@ -193,12 +193,14 @@ public abstract class LightEngineMixin {
             kneaf$rustBatchCalls.incrementAndGet();
 
             // Update cache with results
-            idx = 0;
-            for (var entry : kneaf$pendingLightUpdates.entrySet()) {
-                if (idx < results.length) {
-                    kneaf$lightCache.put(entry.getKey(), results[idx] & 0xFF);
+            if (results != null) {
+                idx = 0;
+                for (var entry : kneaf$pendingLightUpdates.entrySet()) {
+                    if (idx < results.length) {
+                        kneaf$lightCache.put(entry.getKey(), results[idx] & 0xFF);
+                    }
+                    idx++;
                 }
-                idx++;
             }
         } catch (Exception e) {
             // Java fallback - just clear pending
