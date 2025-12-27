@@ -30,7 +30,6 @@ public final class PerformanceManager {
     // Optimization flags with thread safety - defaults to TRUE for processing
     private final AtomicBoolean isAiPathfindingOptimized = new AtomicBoolean(true);
     private final AtomicBoolean isRustIntegrationEnabled = new AtomicBoolean(true);
-    private final AtomicBoolean isAdvancedPhysicsOptimized = new AtomicBoolean(true);
 
     // Combat system optimization flags
     private final AtomicBoolean isCombatSimdOptimized = new AtomicBoolean(true);
@@ -85,7 +84,6 @@ public final class PerformanceManager {
             // Load optimization flags with fallback defaults
             isAiPathfindingOptimized.set(parseBooleanProperty(properties, "aiPathfindingOptimized", true));
             isRustIntegrationEnabled.set(parseBooleanProperty(properties, "rustIntegrationEnabled", true));
-            isAdvancedPhysicsOptimized.set(parseBooleanProperty(properties, "advancedPhysicsOptimized", true));
 
             // Load combat system optimization flags
             isCombatSimdOptimized.set(parseBooleanProperty(properties, "combatSimdOptimized", true));
@@ -112,7 +110,6 @@ public final class PerformanceManager {
     public void resetToDefaults() {
         isAiPathfindingOptimized.set(true);
         isRustIntegrationEnabled.set(true);
-        isAdvancedPhysicsOptimized.set(true);
 
         // Combat system defaults
         isCombatSimdOptimized.set(true);
@@ -180,17 +177,6 @@ public final class PerformanceManager {
         return isRustIntegrationEnabled.get();
     }
 
-    /**
-     * Check if advanced physics optimization is enabled.
-     * Advanced physics optimization includes comprehensive optimizations on both
-     * horizontal and vertical axes.
-     * 
-     * @return true if advanced physics optimization is enabled, false otherwise
-     */
-    public boolean isAdvancedPhysicsOptimized() {
-        return isAdvancedPhysicsOptimized.get();
-    }
-
     // ------------------------------ Setter Methods (Thread-Safe)
     // ------------------------------
 
@@ -223,17 +209,6 @@ public final class PerformanceManager {
      */
     public void setRustIntegrationEnabled(boolean enabled) {
         isRustIntegrationEnabled.set(enabled);
-    }
-
-    /**
-     * Set advanced physics optimization state.
-     * Advanced physics optimization includes comprehensive optimizations on both
-     * horizontal and vertical axes.
-     * 
-     * @param enabled true to enable advanced physics optimization, false to disable
-     */
-    public void setAdvancedPhysicsOptimized(boolean enabled) {
-        isAdvancedPhysicsOptimized.set(enabled);
     }
 
     // ------------------------------ Combat System Optimization Methods
@@ -353,7 +328,6 @@ public final class PerformanceManager {
         // Basic optimization flags
         metrics.put("ai_pathfinding_optimized", isAiPathfindingOptimized.get());
         metrics.put("rust_integration_enabled", isRustIntegrationEnabled.get());
-        metrics.put("advanced_physics_optimized", isAdvancedPhysicsOptimized.get());
 
         // Combat system optimizations
         metrics.put("combat_simd_optimized", isCombatSimdOptimized.get());

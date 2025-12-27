@@ -262,7 +262,7 @@ public final class ChunkProcessor {
             }
 
             // If Rust is available, use it for heavy chunk analysis
-            if (OptimizationInjector.isNativeLibraryLoaded()) {
+            if (RustNativeLoader.isLibraryLoaded()) {
                 processWithRust(chunk, blockCounts);
             }
 

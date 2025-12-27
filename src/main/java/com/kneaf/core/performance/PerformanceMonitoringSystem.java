@@ -4,8 +4,7 @@ import com.kneaf.core.PerformanceManager;
 import com.kneaf.core.ParallelRustVectorProcessor;
 import com.kneaf.core.performance.model.QueueStatistics;
 import com.kneaf.core.async.AsyncMetricsCollector;
-import com.kneaf.core.EntityProcessingService;
-import com.kneaf.core.model.EntityProcessingStatistics;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 // Minecraft-specific imports commented out for test compatibility
@@ -356,18 +355,9 @@ public final class PerformanceMonitoringSystem {
                     pm.isAiPathfindingOptimized() ? 1.0 : 0.0, "gauge");
             recordMetricEvent("performance_manager.rust_integration_enabled",
                     pm.isRustIntegrationEnabled() ? 1.0 : 0.0, "gauge");
-            recordMetricEvent("performance_manager.advanced_physics_optimized",
-                    pm.isAdvancedPhysicsOptimized() ? 1.0 : 0.0, "gauge");
+
         }
 
-        if (shouldCollectComponentMetric("optimization_injector", currentRate)) {
-            // OptimizationInjector metrics - track native library loading status
-            if (com.kneaf.core.OptimizationInjector.isNativeLibraryLoaded()) {
-                recordMetricEvent("optimization_injector.native_library_loaded", 1.0, "gauge");
-            }
-        }
-
-        // Collect dari ParallelRustVectorProcessor (formerly EnhancedRustVectorLibrary)
         if (shouldCollectComponentMetric("rust_vector_library", currentRate) &&
                 com.kneaf.core.RustNativeLoader.isLibraryLoaded()) {
             QueueStatistics queueStats = ParallelRustVectorProcessor.getInstance()
@@ -380,20 +370,6 @@ public final class PerformanceMonitoringSystem {
                     (double) queueStats.activeThreads, "gauge");
             recordMetricEvent("rust_vector_library.queued_tasks",
                     (double) queueStats.queuedTasks, "gauge");
-        }
-
-        // Collect dari EntityProcessingService
-        if (shouldCollectComponentMetric("entity_processing", currentRate)) {
-            EntityProcessingStatistics entityStats = EntityProcessingService.getInstance()
-                    .getStatistics();
-            recordMetricEvent("entity_processing.processed_entities",
-                    (double) entityStats.processedEntities, "counter");
-            recordMetricEvent("entity_processing.queued_entities",
-                    (double) entityStats.queuedEntities, "gauge");
-            recordMetricEvent("entity_processing.active_processors",
-                    (double) entityStats.activeProcessors, "gauge");
-            recordMetricEvent("entity_processing.queue_size",
-                    (double) entityStats.queueSize, "gauge");
         }
     }
 

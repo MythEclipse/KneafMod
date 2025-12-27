@@ -75,7 +75,7 @@ public class RustNoise {
      * Check if native noise generation is available
      */
     public static boolean isAvailable() {
-        return OptimizationInjector.isNativeLibraryLoaded();
+        return RustNativeLoader.isLibraryLoaded();
     }
 
     /**
