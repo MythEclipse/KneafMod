@@ -188,9 +188,7 @@ dependencies {
     // Mock Minecraft types for testing without actual Minecraft dependencies
     testImplementation files('src/test/java/com/kneaf/core/MockMinecraftTypes.java')
     
-    testRuntimeOnly files('src/main/resources/natives/rustperf.dll') // Ensure native libs are available for tests
-    testRuntimeOnly files('src/main/resources/natives/librustperf.so')
-    testRuntimeOnly files('src/main/resources/natives/librustperf.dylib')
+
 }
 
 // Tests enabled for compatibility testing - SHOWS CLEAR PASS/FAIL COUNTS
