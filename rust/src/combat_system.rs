@@ -1315,7 +1315,7 @@ mod tests {
         let registry = Arc::new(EntityRegistry::new(monitor.clone()));
 
         // Create a combat system
-        let combat_system = CombatSystem::new(registry, monitor.clone());
+        let combat_system = CombatSystem::new(registry.clone(), monitor.clone());
 
         // Create test entities
         let shadow_zombie_id = registry.create_entity(EntityType::ShadowZombieNinja);
