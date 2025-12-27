@@ -145,6 +145,7 @@ public abstract class BrainMixin<E extends LivingEntity> {
      * Check if entity is far from all players and should skip brain tick.
      */
     @Unique
+    @SuppressWarnings("null")
     private boolean kneaf$shouldSkipDistant(ServerLevel level, E entity) {
         // Villagers and other important mobs should still tick occasionally even when
         // far

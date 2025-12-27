@@ -47,6 +47,15 @@ public final class TPSTracker {
     }
 
     /**
+     * Record a tick duration (double precision).
+     * 
+     * @param tickMs duration of the tick in milliseconds
+     */
+    public static void recordTick(double tickMs) {
+        recordTick((long) tickMs);
+    }
+
+    /**
      * Get statistics string.
      */
     public static String getStatistics() {

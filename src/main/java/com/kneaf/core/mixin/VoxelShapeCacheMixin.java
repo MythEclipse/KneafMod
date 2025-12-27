@@ -94,7 +94,9 @@ public abstract class VoxelShapeCacheMixin {
 
         // Fast path: Check if this is a simple full or empty block
         // Many blocks have constant collision shapes that don't depend on context
-        if (!state.hasBlockEntity() && state.isCollisionShapeFullBlock(level, pos)) {
+        @SuppressWarnings("null")
+        boolean isFullBlock = !state.hasBlockEntity() && state.isCollisionShapeFullBlock(level, pos);
+        if (isFullBlock) {
             kneaf$fastPathHits.incrementAndGet();
             cir.setReturnValue(FULL_BLOCK);
             return;

@@ -25,6 +25,7 @@ use std::sync::Arc;
 // Import all modules
 mod arena_memory;
 mod load_balancer;
+mod optimization_jni;
 mod parallel_astar;
 mod parallel_matrix;
 mod parallel_processing;

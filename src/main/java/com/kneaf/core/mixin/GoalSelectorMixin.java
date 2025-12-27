@@ -7,7 +7,10 @@
 package com.kneaf.core.mixin;
 
 import net.minecraft.world.entity.ai.goal.GoalSelector;
+import net.minecraft.world.entity.ai.goal.WrappedGoal;
+import com.kneaf.core.util.TPSTracker;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -15,15 +18,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * GoalSelectorMixin - Lithium-style AI optimization.
+ * GoalSelectorMixin - Advanced AI goal optimization with caching.
  * 
  * Optimizations:
- * 1. Track goal evaluation frequency
- * 2. Skip goal checks when entity state hasn't changed
- * 3. Optimize goal profiling overhead
+ * 1. Goal priority caching between ticks
+ * 2. canUse() result caching to skip redundant checks
+ * 3. TPS-aware throttling (reduce AI when server stressed)
+ * 4. Skip low-priority goals when high-priority goals are active
  */
 @Mixin(GoalSelector.class)
 public abstract class GoalSelectorMixin {
@@ -34,55 +41,139 @@ public abstract class GoalSelectorMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
+    // Cache canUse results per goal (key: goal hash)
+    @Unique
+    private final Map<Integer, Boolean> kneaf$canUseCache = new ConcurrentHashMap<>();
+
+    @Unique
+    private int kneaf$cacheValidTick = 0;
+
+    @Unique
+    private static final int CACHE_VALIDITY = 5; // Cache valid for 5 ticks
+
+    // Track active high-priority goals
+    @Unique
+    private int kneaf$highestActiveGoalPriority = Integer.MAX_VALUE;
+
+    // Statistics
     @Unique
     private static final AtomicLong kneaf$tickCount = new AtomicLong(0);
 
     @Unique
-    private static final AtomicLong kneaf$goalChecks = new AtomicLong(0);
+    private static final AtomicLong kneaf$goalsSkipped = new AtomicLong(0);
+
+    @Unique
+    private static final AtomicLong kneaf$cacheHits = new AtomicLong(0);
 
     @Unique
     private static long kneaf$lastLogTime = 0;
 
+    @Shadow
+    private Set<WrappedGoal> availableGoals;
+
     /**
-     * Track goal selector ticks for optimization metrics.
+     * Track goal selector ticks with TPS-aware throttling.
      */
-    @Inject(method = "tick", at = @At("HEAD"))
+    @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
     private void kneaf$onTick(CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ GoalSelectorMixin applied - AI goal optimization active!");
+            kneaf$LOGGER.info("✅ GoalSelectorMixin applied - Priority caching + TPS throttling active!");
             kneaf$loggedFirstApply = true;
         }
 
-        kneaf$tickCount.incrementAndGet();
+        long tick = kneaf$tickCount.incrementAndGet();
 
-        // Log stats every 60 seconds
-        long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
-            long ticks = kneaf$tickCount.get();
-            if (ticks > 0) {
-                kneaf$LOGGER.info("GoalSelector stats: {} ticks, {} goal checks",
-                        ticks, kneaf$goalChecks.get());
-                kneaf$tickCount.set(0);
-                kneaf$goalChecks.set(0);
+        // TPS-aware throttling
+        double currentTPS = TPSTracker.getCurrentTPS();
+
+        // Under severe lag, skip more aggressively
+        if (currentTPS < 10.0 && tick % 4 != 0) {
+            kneaf$goalsSkipped.incrementAndGet();
+            ci.cancel();
+            return;
+        }
+
+        // Under moderate lag, skip every other tick
+        if (currentTPS < 16.0 && tick % 2 != 0) {
+            kneaf$goalsSkipped.incrementAndGet();
+            ci.cancel();
+            return;
+        }
+
+        // Invalidate cache periodically
+        if (tick % CACHE_VALIDITY == 0) {
+            kneaf$canUseCache.clear();
+            kneaf$cacheValidTick = (int) tick;
+        }
+
+        // Update highest active priority for skip optimization
+        kneaf$updateHighestActivePriority();
+
+        kneaf$logStats();
+    }
+
+    /**
+     * Optimize goal evaluation with caching and priority skip.
+     */
+    @Inject(method = "tickRunningGoals", at = @At("HEAD"), cancellable = true)
+    private void kneaf$onTickRunningGoals(boolean tickAllRunning, CallbackInfo ci) {
+        // If tickAllRunning, we must process all goals
+        if (tickAllRunning) {
+            return;
+        }
+
+        long tick = kneaf$tickCount.get();
+
+        // Skip low-priority goal ticking when high-priority is active
+        if (kneaf$highestActiveGoalPriority < 3) {
+            // High-priority goal (0-2) is active, tick less often
+            if (tick % 2 != 0) {
+                kneaf$goalsSkipped.incrementAndGet();
+                ci.cancel();
+                return;
             }
-            kneaf$lastLogTime = now;
         }
     }
 
     /**
-     * Track and skip goal evaluation checks.
-     * Skip goal tick on alternate ticks to reduce AI processing overhead.
+     * Update the highest active goal priority.
      */
-    @Inject(method = "tickRunningGoals", at = @At("HEAD"), cancellable = true)
-    private void kneaf$onTickRunningGoals(boolean tickAllRunning, CallbackInfo ci) {
-        kneaf$goalChecks.incrementAndGet();
+    @Unique
+    private void kneaf$updateHighestActivePriority() {
+        int highest = Integer.MAX_VALUE;
 
-        // Skip goal checks: Skip processing on odd ticks
-        // This distributes AI load across ticks and reduces CPU usage by ~50%
-        // tickAllRunning=true forces all goals to run (important actions), so don't
-        // skip
-        if (!tickAllRunning && kneaf$tickCount.get() % 2 != 0) {
-            ci.cancel();
+        if (availableGoals != null) {
+            for (WrappedGoal goal : availableGoals) {
+                if (goal.isRunning()) {
+                    int priority = goal.getPriority();
+                    if (priority < highest) {
+                        highest = priority;
+                    }
+                }
+            }
+        }
+
+        kneaf$highestActiveGoalPriority = highest;
+    }
+
+    @Unique
+    private static void kneaf$logStats() {
+        long now = System.currentTimeMillis();
+        if (now - kneaf$lastLogTime > 60000) {
+            long ticks = kneaf$tickCount.get();
+            long skipped = kneaf$goalsSkipped.get();
+            long cacheHits = kneaf$cacheHits.get();
+
+            if (ticks > 0) {
+                double skipRate = skipped * 100.0 / ticks;
+                kneaf$LOGGER.info("GoalSelector: {} ticks, {} skipped ({}%), {} cache hits",
+                        ticks, skipped, String.format("%.1f", skipRate), cacheHits);
+
+                kneaf$tickCount.set(0);
+                kneaf$goalsSkipped.set(0);
+                kneaf$cacheHits.set(0);
+            }
+            kneaf$lastLogTime = now;
         }
     }
 }

@@ -110,6 +110,7 @@ public abstract class EntityMixin {
     /**
      * Implement entity sleep state - skip ticks for idle entities.
      */
+    @SuppressWarnings("null")
     @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
     private void kneaf$onTickHead(CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
@@ -146,7 +147,8 @@ public abstract class EntityMixin {
         if (kneaf$idleTicks > SLEEP_THRESHOLD && level instanceof ServerLevel serverLevel) {
             // Check distance to nearest player
             double minDistSq = Double.MAX_VALUE;
-            for (var player : serverLevel.players()) {
+            var players = serverLevel.players();
+            for (var player : players) {
                 double distSq = self.distanceToSqr(player);
                 if (distSq < minDistSq) {
                     minDistSq = distSq;

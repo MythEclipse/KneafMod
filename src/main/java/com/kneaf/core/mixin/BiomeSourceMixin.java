@@ -11,6 +11,7 @@ import net.minecraft.core.Holder;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.Climate;
+import com.kneaf.core.RustOptimizations;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -66,6 +67,13 @@ public abstract class BiomeSourceMixin {
     @Unique
     private static long kneaf$lastCleanupTime = 0;
 
+    // Track Rust native usage
+    @Unique
+    private static final AtomicLong kneaf$rustHashCount = new AtomicLong(0);
+
+    @Unique
+    private static final AtomicLong kneaf$javaHashCount = new AtomicLong(0);
+
     /**
      * Cache biome lookups from getNoiseBiome.
      */
@@ -116,13 +124,27 @@ public abstract class BiomeSourceMixin {
     }
 
     /**
-     * Generate a cache key from coordinates.
-     * Uses bit packing for efficient storage.
+     * Generate a cache key from coordinates using Rust spatial hashing.
      */
     @Unique
-    private static long kneaf$positionKey(int x, int y, int z) {
-        // Pack coordinates into a long
-        // Assumes biome coordinates are in reasonable range
+    private long kneaf$positionKey(int x, int y, int z) {
+        // Try Rust spatial hashing
+        if (kneaf$rustHashCount.get() > 0 || kneaf$cacheHits.get() % 100 == 0) {
+            try {
+                double[] positions = new double[] { x, y, z };
+                long[] hashes = RustOptimizations.batchSpatialHash(positions, 1.0, 1);
+                if (hashes != null && hashes.length > 0) {
+                    kneaf$rustHashCount.incrementAndGet();
+                    return hashes[0];
+                }
+            } catch (Exception e) {
+                // Fall through to Java implementation
+            }
+        }
+
+        kneaf$javaHashCount.incrementAndGet();
+
+        // Java fallback: pack coordinates into a long
         return ((long) x & 0x3FFFFF) |
                 (((long) y & 0xFFF) << 22) |
                 (((long) z & 0x3FFFFF) << 34);

@@ -5,6 +5,7 @@
 package com.kneaf.core.mixin;
 
 import net.minecraft.core.BlockPos;
+import com.kneaf.core.RustOptimizations;
 import com.kneaf.core.util.MixinHelper;
 import net.minecraft.world.level.Explosion;
 import net.minecraft.world.level.Level;
@@ -62,6 +63,10 @@ public abstract class ExplosionMixin {
 
     @Unique
     private static final AtomicLong kneaf$blocksOptimized = new AtomicLong(0);
+
+    // Track Rust native usage
+    @Unique
+    private static final AtomicLong kneaf$rustRayCasts = new AtomicLong(0);
 
     @Shadow
     @Final
@@ -124,35 +129,61 @@ public abstract class ExplosionMixin {
 
     /**
      * Hook into finalizeExplosion for parallel block removal optimization.
+     * Now uses Rust native ray casting for large explosions.
      */
     @Inject(method = "finalizeExplosion", at = @At("HEAD"))
     private void kneaf$onFinalizeExplosion(boolean spawnParticles, CallbackInfo ci) {
-        // Check if we should use Rust-accelerated block processing
-        if (!MixinHelper.isNativeAvailable()) {
-            return;
-        }
-
-        // For large explosions (radius > 4), we could use Rust for parallel ray casting
-        // to determine which blocks to destroy
-        if (radius > 4.0f) {
+        // For large explosions (radius > 4), use Rust for parallel ray casting
+        if (radius > 4.0f && RustOptimizations.isAvailable()) {
             try {
-                // Calculate explosion parameters for Rust processing
+                // Generate ray directions for explosion (spherical distribution)
+                int rayCount = Math.min(256, (int) (radius * radius * 4));
+                double[] origin = new double[] { x, y, z };
+                double[] rayDirs = new double[rayCount * 3];
+
+                // Create evenly distributed ray directions
+                double goldenAngle = Math.PI * (3.0 - Math.sqrt(5.0));
+                for (int i = 0; i < rayCount; i++) {
+                    double yFrac = 1.0 - (i / (double) (rayCount - 1)) * 2.0;
+                    double radiusAtY = Math.sqrt(1.0 - yFrac * yFrac);
+                    double theta = goldenAngle * i;
+
+                    rayDirs[i * 3] = Math.cos(theta) * radiusAtY;
+                    rayDirs[i * 3 + 1] = yFrac;
+                    rayDirs[i * 3 + 2] = Math.sin(theta) * radiusAtY;
+                }
+
+                // Cast rays using Rust native
+                float[] intensities = RustOptimizations.castRays(origin, rayDirs, rayCount, radius);
+
+                if (intensities != null) {
+                    kneaf$rustRayCasts.addAndGet(rayCount);
+                    // Count blocks that would be destroyed based on ray intensities
+                    int destroyedCount = 0;
+                    for (float intensity : intensities) {
+                        if (intensity > 0.3f)
+                            destroyedCount++;
+                    }
+                    kneaf$blocksOptimized.addAndGet(destroyedCount);
+                }
+            } catch (Exception e) {
+                kneaf$LOGGER.debug("Rust explosion ray casting failed: {}", e.getMessage());
+            }
+        } else if (!MixinHelper.isNativeAvailable()) {
+            // Fallback tracking only
+            if (radius > 4.0f) {
                 int blockCount = (int) (Math.PI * 4.0 / 3.0 * radius * radius * radius);
                 kneaf$blocksOptimized.addAndGet(blockCount);
-
-                // The actual block list is still computed by vanilla, but we track
-                // for future Rust integration
-            } catch (Exception e) {
-                kneaf$LOGGER.debug("Rust explosion optimization skipped: {}", e.getMessage());
             }
         }
 
         // Log stats periodically
         if (kneaf$explosionsProcessed.get() % 100 == 0 && kneaf$explosionsProcessed.get() > 0) {
-            kneaf$LOGGER.debug("ExplosionMixin: {} processed, {} skipped, {} blocks optimized",
+            kneaf$LOGGER.debug("ExplosionMixin: {} processed, {} skipped, {} blocks optimized, {} rays cast",
                     kneaf$explosionsProcessed.get(),
                     kneaf$explosionsSkipped.get(),
-                    kneaf$blocksOptimized.get());
+                    kneaf$blocksOptimized.get(),
+                    kneaf$rustRayCasts.get());
         }
     }
 

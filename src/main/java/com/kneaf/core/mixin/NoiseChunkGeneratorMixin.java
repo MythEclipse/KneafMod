@@ -6,6 +6,7 @@ package com.kneaf.core.mixin;
 
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.chunk.ChunkAccess;
+import com.kneaf.core.RustOptimizations;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -50,6 +51,13 @@ public abstract class NoiseChunkGeneratorMixin {
 
     @Unique
     private static long kneaf$lastLogTime = 0;
+
+    // Track Rust native usage
+    @Unique
+    private static final AtomicLong kneaf$rustNoiseCount = new AtomicLong(0);
+
+    @Unique
+    private static final AtomicLong kneaf$javaNoiseCount = new AtomicLong(0);
 
     // ThreadLocal timing
     @Unique
@@ -173,26 +181,39 @@ public abstract class NoiseChunkGeneratorMixin {
 
     /**
      * Fast deterministic noise function.
-     * Based on improved Perlin noise algorithm.
+     * Uses Rust SIMD when available, falls back to Java implementation.
      */
     @Unique
     private static double kneaf$fastNoise(double x, double y, double z, long seed) {
-        // Integer coordinates
+        // Try Rust native first for SIMD acceleration
+        if (RustOptimizations.isAvailable()) {
+            try {
+                float[] coords = new float[] { (float) x, (float) y, (float) z };
+                float[] result = RustOptimizations.batchNoise3D(seed, coords, 1);
+                if (result != null && result.length > 0) {
+                    kneaf$rustNoiseCount.incrementAndGet();
+                    return result[0];
+                }
+            } catch (Exception e) {
+                // Fall through to Java implementation
+            }
+        }
+
+        kneaf$javaNoiseCount.incrementAndGet();
+
+        // Java fallback implementation
         int ix = (int) Math.floor(x);
         int iy = (int) Math.floor(y);
         int iz = (int) Math.floor(z);
 
-        // Fractional parts
         double fx = x - ix;
         double fy = y - iy;
         double fz = z - iz;
 
-        // Smoothstep interpolation
         double u = fx * fx * (3 - 2 * fx);
         double v = fy * fy * (3 - 2 * fy);
         double w = fz * fz * (3 - 2 * fz);
 
-        // Hash-based gradients at corners
         double n000 = kneaf$grad(kneaf$hash(ix, iy, iz, seed), fx, fy, fz);
         double n100 = kneaf$grad(kneaf$hash(ix + 1, iy, iz, seed), fx - 1, fy, fz);
         double n010 = kneaf$grad(kneaf$hash(ix, iy + 1, iz, seed), fx, fy - 1, fz);
@@ -202,7 +223,6 @@ public abstract class NoiseChunkGeneratorMixin {
         double n011 = kneaf$grad(kneaf$hash(ix, iy + 1, iz + 1, seed), fx, fy - 1, fz - 1);
         double n111 = kneaf$grad(kneaf$hash(ix + 1, iy + 1, iz + 1, seed), fx - 1, fy - 1, fz - 1);
 
-        // Trilinear interpolation
         double nx00 = n000 + u * (n100 - n000);
         double nx10 = n010 + u * (n110 - n010);
         double nx01 = n001 + u * (n101 - n001);
