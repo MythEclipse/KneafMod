@@ -13,19 +13,22 @@
 ## 🎯 Fitur Utama
 
 ### 🚀 Optimasi Performa Inti
-- **AI Pathfinding Optimization**: Algoritma pathfinding yang dioptimalkan menggunakan Rust dengan parallel A* dan SIMD
+
+- **AI Pathfinding Optimization**: Algoritma pathfinding yang dioptimalkan menggunakan Rust dengan parallel A\* dan SIMD
 - **Rust-Powered Vector Mathematics**: Operasi matematika vektor dan matriks berkecepatan tinggi menggunakan native Rust library
 - **Item Stack Merging**: Penggabungan item stack otomatis untuk mengurangi jumlah entity di dunia
 - **Advanced Physics Optimization**: Optimasi fisika komprehensif pada sumbu horizontal dan vertikal untuk mengurangi kalkulasi berlebih
 
 ### 🧠 Sistem AI dan Entity
+
 - **Combat System Optimization**: Sistem pertarungan yang dioptimalkan dengan SIMD dan parallel processing
 - **Hit Detection Optimization**: Deteksi tabrakan yang lebih efisien
 - **Predictive Load Balancing**: Load balancing prediktif untuk distribusi beban kerja yang lebih baik
 - **Entity Registry System**: Sistem registry entity yang efisien dengan component-based architecture
-- **Chunk Generation Optimization**: Noise generation acceleration via native Rust library
+- **Chunk Generation Optimization**: Noise generation acceleration via native Rust library & **Parallel Feature Placement** (Batched)
 
 ### 📊 Monitoring dan Profiling
+
 - **Comprehensive Performance Monitoring**: Sistem monitoring performa real-time dengan metric collection
 - **Adaptive Sampling**: Sampling rate yang menyesuaikan dengan beban sistem
 - **Distributed Tracing**: Tracing terdistribusi untuk analisis performa mendalam
@@ -33,12 +36,14 @@
 - **Thread-Safe Metric Aggregation**: Agregasi metrik lock-free untuk overhead minimal
 
 ### 🎮 Fitur Gameplay
+
 - **Metrics Command**: Command `/metrics` untuk melihat statistik performa real-time
 - **Bundled Native Library**: DLL otomatis di-bundle dalam JAR - pengguna hanya butuh file JAR saja
 
 ## 🏗️ Arsitektur Teknologi
 
 ### Java Components (NeoForge)
+
 ```
 src/main/java/com/kneaf/
 ├── core/                          # Komponen inti mod
@@ -68,6 +73,7 @@ src/main/java/com/kneaf/
 ```
 
 ### Rust Components (Native Library)
+
 ```
 rust/src/
 ├── lib.rs                        # JNI entry point & exports
@@ -92,6 +98,7 @@ rust/src/
 ## 🔧 Teknologi yang Digunakan
 
 ### Java Stack
+
 - **NeoForge 21.0.167**: Mod loader untuk Minecraft 1.21
 - **Minecraft 1.21**: Target game version
 - **Java 21**: Language version dengan modern features
@@ -99,6 +106,7 @@ rust/src/
 - **SLF4J**: Logging framework
 
 ### Rust Stack
+
 - **JNI 0.21**: Java Native Interface bindings
 - **Rayon 1.8**: Data parallelism library
 - **GLAM 0.29**: Game-oriented linear algebra library
@@ -112,6 +120,7 @@ rust/src/
 - **Parking Lot 0.12**: Fast synchronization primitives
 
 ### Build System
+
 - **Gradle 8.x**: Build automation tool
 - **Cargo**: Rust package manager
 - **ModDevGradle 2.0.107**: NeoForge development plugin
@@ -119,6 +128,7 @@ rust/src/
 ## 📦 Instalasi
 
 ### Prerequisites
+
 - Java Development Kit 21 atau lebih tinggi
 - Rust 1.70 atau lebih tinggi (untuk build native library)
 - Gradle 8.x (included via wrapper)
@@ -127,12 +137,14 @@ rust/src/
 ### Build dari Source
 
 1. **Clone Repository**
+
 ```bash
 git clone https://github.com/MythEclipse/KneafMod.git
 cd KneafMod
 ```
 
 2. **Build Rust Native Library**
+
 ```bash
 cd rust
 cargo build --release
@@ -140,6 +152,7 @@ cd ..
 ```
 
 3. **Build Mod dengan Gradle**
+
 ```bash
 # Windows
 gradlew.bat build
@@ -149,6 +162,7 @@ gradlew.bat build
 ```
 
 4. **Run Development Client**
+
 ```bash
 # Windows
 gradlew.bat runClient
@@ -158,12 +172,14 @@ gradlew.bat runClient
 ```
 
 5. **Output**
+
 - Mod JAR: `build/libs/kneafcore-1.0.0.jar`
 - Native Library: `rust/target/release/rustperf.dll` (Windows) atau `librustperf.so` (Linux)
 
 ## 🎮 Penggunaan
 
 ### Instalasi Mod
+
 1. Copy `kneafcore-1.0.0.jar` ke folder `mods/` di instalasi Minecraft
 2. Jalankan Minecraft dengan NeoForge 21.0.167
 
@@ -201,16 +217,19 @@ optimizationMonitoringEnabled=true
 ## 📊 Performa Benchmark
 
 ### Entity Ticking Performance
+
 - **Vanilla**: ~15-20ms/tick dengan 1000 entities
 - **KneafMod**: ~5-8ms/tick dengan 1000 entities
 - **Improvement**: ~60-70% reduction dalam tick time
 
 ### AI Pathfinding Performance
+
 - **Vanilla**: ~50-80ms untuk pathfinding kompleks
-- **KneafMod**: ~15-25ms dengan parallel A* dan SIMD
+- **KneafMod**: ~15-25ms dengan parallel A\* dan SIMD
 - **Improvement**: ~65-70% reduction dalam pathfinding time
 
 ### Vector Mathematics Performance
+
 - **Java (JOML)**: ~100ns per matrix multiplication (4x4)
 - **Rust (SIMD)**: ~30-40ns per matrix multiplication (4x4)
 - **Improvement**: ~60-70% faster vector operations
@@ -248,8 +267,8 @@ optimizationMonitoringEnabled=true
 
 ## 🐛 Known Issues
 
-1. **Incompatibility dengan Lithium**: Mod ini incompatible dengan Lithium karena conflict di entity optimization
-2. **Native Library Loading**: Pada beberapa sistem, native library perlu ditempatkan di path tertentu
+1. **Incompatibility dengan Lithium**: Mod ini mengintegrasikan banyak optimasi style-Lithium secara internal, sehingga tidak disarankan menggunakan Lithium bersamaan.
+2. **Native Library Loading**: Native library (`rustperf`) kini fully bundled dan auto-loaded via `KneafCore`.
 3. **Test Mode Detection**: False positive test mode detection di development environment (sudah di-fix dengan `forceProduction` flag)
 
 ## 🤝 Contributing
@@ -318,6 +337,7 @@ KneafMod menggunakan JNI (Java Native Interface) untuk memanggil kode Rust dari 
 ### SIMD Optimization
 
 Runtime SIMD detection memilih implementasi optimal:
+
 - **AVX2**: Untuk CPU modern dengan AVX2 support
 - **SSE4.1**: Fallback untuk CPU dengan SSE4.1
 - **Scalar**: Fallback tanpa SIMD
@@ -325,6 +345,7 @@ Runtime SIMD detection memilih implementasi optimal:
 ### Parallel Processing
 
 Menggunakan Rayon untuk work-stealing thread pool:
+
 - Automatic thread count detection berdasarkan CPU cores
 - Work-stealing untuk load balancing
 - Zero-cost abstractions untuk minimal overhead
@@ -343,4 +364,4 @@ Menggunakan Rayon untuk work-stealing thread pool:
 **Minecraft Version**: 1.21  
 **Mod Loader**: NeoForge 21.0.167  
 **Build Status**: Passing ✅  
-**Last Updated**: December 14, 2024
+**Last Updated**: December 27, 2025

@@ -15,6 +15,7 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,21 +47,15 @@ public abstract class ConnectionMixin {
     @Shadow
     private Channel channel;
 
-    // Packet queue for batching
-    @Unique
-    private final Queue<Packet<?>> kneaf$pendingPackets = new ConcurrentLinkedQueue<>();
-
-    // Track pending flush for batching
     @Unique
     private final AtomicInteger kneaf$pendingCount = new AtomicInteger(0);
 
-    // Statistics
     @Unique
     private static final AtomicLong kneaf$packetsSent = new AtomicLong(0);
 
     @Unique
     private static final AtomicLong kneaf$batchesSent = new AtomicLong(0);
-
+    
     @Unique
     private static final AtomicLong kneaf$packetsCoalesced = new AtomicLong(0);
 
@@ -69,55 +64,57 @@ public abstract class ConnectionMixin {
 
     // Configuration
     @Unique
-    private static final int MAX_BATCH_SIZE = 16;
+    private static final int MAX_BATCH_SIZE = 16; /* Batch size limit */
 
     @Unique
     private static final int BATCH_DELAY_THRESHOLD = 4;
 
     /**
-     * Track packet sends for statistics.
+     * Replacing writeAndFlush with logic to batch.
      */
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;)V", at = @At("HEAD"))
-    private void kneaf$onSend(Packet<?> packet, CallbackInfo ci) {
+    @Redirect(
+        method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V",
+        at = @At(value = "INVOKE", target = "Lio/netty/channel/Channel;writeAndFlush(Ljava/lang/Object;)Lio/netty/channel/ChannelFuture;")
+    )
+    private ChannelFuture kneaf$onSendWrite(Channel channel, Object msg) {
         if (!kneaf$loggedFirstApply) {
             kneaf$LOGGER.info("✅ ConnectionMixin applied - Network packet optimization active!");
             kneaf$loggedFirstApply = true;
         }
 
+        int pending = kneaf$pendingCount.incrementAndGet();
         kneaf$packetsSent.incrementAndGet();
-        kneaf$pendingCount.incrementAndGet();
-    }
 
-    /**
-     * Track batch statistics after send.
-     */
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;)V", at = @At("RETURN"))
-    private void kneaf$afterSend(Packet<?> packet, CallbackInfo ci) {
-        int pending = kneaf$pendingCount.decrementAndGet();
-
-        // If this was the last packet in a batch, count it
-        if (pending == 0) {
+        // If batch is full, flush
+        if (pending >= MAX_BATCH_SIZE) {
+            kneaf$pendingCount.set(0);
             kneaf$batchesSent.incrementAndGet();
+            if (pending > 1) {
+                kneaf$packetsCoalesced.addAndGet(pending - 1);
+            }
+            return channel.writeAndFlush(msg);
         }
+        
+        // Otherwise buffer
+        return channel.write(msg);
     }
 
     /**
-     * Track flush operations for batch analysis.
-     */
-    @Inject(method = "flushChannel", at = @At("HEAD"))
-    private void kneaf$onFlushChannel(CallbackInfo ci) {
-        int pending = kneaf$pendingCount.get();
-        if (pending > 1) {
-            // Multiple packets were batched before flush
-            kneaf$packetsCoalesced.addAndGet(pending - 1);
-        }
-    }
-
-    /**
-     * Track tick for periodic stats logging.
+     * Flush logic on tick.
      */
     @Inject(method = "tick", at = @At("HEAD"))
     private void kneaf$onTick(CallbackInfo ci) {
+        // Flush any pending packets every tick
+        int pending = kneaf$pendingCount.get();
+        if (pending > 0) {
+            this.channel.flush();
+            kneaf$pendingCount.set(0);
+            kneaf$batchesSent.incrementAndGet();
+            if (pending > 1) {
+                kneaf$packetsCoalesced.addAndGet(pending - 1);
+            }
+        }
+
         // Log stats periodically
         long now = System.currentTimeMillis();
         if (now - kneaf$lastLogTime > 60000) {
@@ -130,25 +127,11 @@ public abstract class ConnectionMixin {
                 kneaf$LOGGER.info("Network stats: {} packets in {} batches (avg {}/batch), {} coalesced",
                         sent, batches, String.format("%.1f", avgBatchSize), coalesced);
             }
-
+            
             kneaf$packetsSent.set(0);
             kneaf$batchesSent.set(0);
             kneaf$packetsCoalesced.set(0);
             kneaf$lastLogTime = now;
         }
-    }
-
-    /**
-     * Get statistics.
-     */
-    @Unique
-    private static String kneaf$getStatistics() {
-        long sent = kneaf$packetsSent.get();
-        long batches = kneaf$batchesSent.get();
-        double avgBatchSize = batches > 0 ? (double) sent / batches : 0;
-
-        return String.format(
-                "NetworkStats{packets=%d, batches=%d, avgBatchSize=%.1f, coalesced=%d}",
-                sent, batches, avgBatchSize, kneaf$packetsCoalesced.get());
     }
 }
