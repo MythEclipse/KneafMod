@@ -76,7 +76,7 @@ jobs:
           cp target/x86_64-pc-windows-gnu/release/rustperf.dll ../src/main/resources/natives/ || true
 
       - name: Build mod
-        run: ./gradlew build
+        run: ./gradlew build -Pmod_version=v${{ github.run_number }}
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

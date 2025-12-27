@@ -7,7 +7,9 @@
 package com.kneaf.core.mixin;
 
 import com.kneaf.core.lithium.EntityCollisionHelper;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -31,7 +33,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 2. Supporting block check for downward movement (gravity optimization)
  * 3. Single-axis movement optimization (smaller search box)
  * 4. Chunk-aware collision sweeping
- * 5. Statistics tracking
+ * 5. Entity sleep state - skip ticks for idle entities
+ * 6. Statistics tracking
  */
 @Mixin(Entity.class)
 public abstract class EntityMixin {
@@ -41,6 +44,25 @@ public abstract class EntityMixin {
 
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
+
+    // === Entity Sleep State ===
+    @Unique
+    private int kneaf$idleTicks = 0;
+
+    @Unique
+    private Vec3 kneaf$lastPosition = null;
+
+    @Unique
+    private static final int SLEEP_THRESHOLD = 100; // 5 seconds without movement
+
+    @Unique
+    private static final int SKIP_INTERVAL = 4; // When sleeping, tick every 4th tick
+
+    @Unique
+    private static final double MOVEMENT_THRESHOLD = 0.01; // Min movement to count as active
+
+    @Unique
+    private static final double FAR_PLAYER_DISTANCE = 64.0;
 
     // Statistics
     @Unique
@@ -54,6 +76,9 @@ public abstract class EntityMixin {
 
     @Unique
     private static final AtomicLong kneaf$totalCollisions = new AtomicLong(0);
+
+    @Unique
+    private static final AtomicLong kneaf$sleepSkips = new AtomicLong(0);
 
     @Unique
     private static long kneaf$lastLogTime = 0;
@@ -70,14 +95,76 @@ public abstract class EntityMixin {
     @Shadow
     public abstract boolean onGround();
 
+    @Shadow
+    public abstract double getX();
+
+    @Shadow
+    public abstract double getY();
+
+    @Shadow
+    public abstract double getZ();
+
+    @Shadow
+    public abstract int getId();
+
     /**
-     * Log when mixin is applied and periodically log stats.
+     * Implement entity sleep state - skip ticks for idle entities.
      */
-    @Inject(method = "tick", at = @At("HEAD"))
+    @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
     private void kneaf$onTickHead(CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ EntityMixin applied - Advanced Lithium collision optimizations active!");
+            kneaf$LOGGER.info("✅ EntityMixin applied - Advanced Lithium collision + sleep state active!");
             kneaf$loggedFirstApply = true;
+        }
+
+        Entity self = (Entity) (Object) this;
+        Level level = level();
+
+        // Skip player entities - always tick players
+        if (self instanceof Player) {
+            return;
+        }
+
+        // === SLEEP STATE OPTIMIZATION ===
+        // Track movement to determine if entity is idle
+        Vec3 currentPos = new Vec3(getX(), getY(), getZ());
+
+        if (kneaf$lastPosition != null) {
+            double movedSq = currentPos.distanceToSqr(kneaf$lastPosition);
+
+            if (movedSq < MOVEMENT_THRESHOLD * MOVEMENT_THRESHOLD) {
+                // Entity hasn't moved significantly
+                kneaf$idleTicks++;
+            } else {
+                // Entity moved - wake up
+                kneaf$idleTicks = 0;
+            }
+        }
+        kneaf$lastPosition = currentPos;
+
+        // If entity is sleeping and far from players, skip most ticks
+        if (kneaf$idleTicks > SLEEP_THRESHOLD && level instanceof ServerLevel serverLevel) {
+            // Check distance to nearest player
+            double minDistSq = Double.MAX_VALUE;
+            for (var player : serverLevel.players()) {
+                double distSq = self.distanceToSqr(player);
+                if (distSq < minDistSq) {
+                    minDistSq = distSq;
+                }
+            }
+
+            double farDistSq = FAR_PLAYER_DISTANCE * FAR_PLAYER_DISTANCE;
+
+            // Only skip if far from players
+            if (minDistSq > farDistSq) {
+                long gameTime = serverLevel.getGameTime();
+                // Skip 3 out of 4 ticks
+                if ((gameTime + getId()) % SKIP_INTERVAL != 0) {
+                    kneaf$sleepSkips.incrementAndGet();
+                    ci.cancel();
+                    return;
+                }
+            }
         }
 
         // Log stats every 60 seconds
@@ -85,18 +172,21 @@ public abstract class EntityMixin {
         if (now - kneaf$lastLogTime > 60000) {
             long earlyExits = kneaf$earlyExitCount.get();
             long total = kneaf$totalCollisions.get();
-            if (total > 0) {
-                double skipRate = (double) earlyExits / total * 100;
+            long sleepSkipped = kneaf$sleepSkips.get();
+
+            if (total > 0 || sleepSkipped > 0) {
+                double skipRate = total > 0 ? (double) earlyExits / total * 100 : 0;
                 kneaf$LOGGER.info(
-                        "EntityMixin stats: {} total collisions, {} early exits ({}%), {} single-axis, {} gravity opts",
+                        "EntityMixin: {} collisions, {} early exits ({}%), {} single-axis, {} gravity, {} sleep skips",
                         total, earlyExits, String.format("%.1f", skipRate), kneaf$singleAxisCount.get(),
-                        kneaf$gravityOptimizations.get());
+                        kneaf$gravityOptimizations.get(), sleepSkipped);
 
                 // Reset counters
                 kneaf$earlyExitCount.set(0);
                 kneaf$singleAxisCount.set(0);
                 kneaf$gravityOptimizations.set(0);
                 kneaf$totalCollisions.set(0);
+                kneaf$sleepSkips.set(0);
             }
             kneaf$lastLogTime = now;
         }
@@ -147,4 +237,15 @@ public abstract class EntityMixin {
         // Let vanilla handle complex multi-axis collision cases
     }
 
+    /**
+     * Get entity optimization statistics.
+     */
+    @Unique
+    public static String kneaf$getStatistics() {
+        return String.format(
+                "EntityStats{collisions=%d, earlyExits=%d, sleepSkips=%d}",
+                kneaf$totalCollisions.get(),
+                kneaf$earlyExitCount.get(),
+                kneaf$sleepSkips.get());
+    }
 }
