@@ -2,7 +2,7 @@
  * Copyright (c) 2025 MYTHECLIPSE. All rights reserved.
  * Licensed under the MIT License.
  * 
- * Optimizes scheduled tick processing with batching and deduplication.
+ * Scheduled tick optimization with ACTUAL duplicate skip.
  */
 package com.kneaf.core.mixin;
 
@@ -18,19 +18,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * ScheduledTickMixin - Scheduled tick optimization.
+ * ScheduledTickMixin - REAL optimization for scheduled ticks.
  * 
- * Optimizations:
- * 1. Deduplicate scheduled ticks for same position
- * 2. Track tick scheduling patterns for metrics
- * 3. Batch tick processing by chunk region
- * 
- * This reduces redundant tick scheduling without throttling execution.
+ * ACTUAL OPTIMIZATIONS:
+ * 1. Skip scheduling duplicate ticks for same position+type within short time
+ * 2. Coalesce rapid tick requests to reduce overhead
  */
 @Mixin(LevelTicks.class)
 public abstract class ScheduledTickMixin<T> {
@@ -41,129 +37,107 @@ public abstract class ScheduledTickMixin<T> {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Track pending ticks per position for deduplication detection
-    // Track pending ticks per position for deduplication detection
+    // Track recently scheduled ticks to skip duplicates
+    // Key = position + type hash, Value = game tick when scheduled
     @Unique
-    private Map<Long, Integer> kneaf$pendingTickCounts = new ConcurrentHashMap<>(256);
+    private Map<Long, Long> kneaf$recentlyScheduled = new ConcurrentHashMap<>(256);
 
-    // Track chunk regions with pending ticks for batch processing
+    // Minimum ticks between same position+type scheduling
     @Unique
-    private Set<Long> kneaf$activeChunkRegions = ConcurrentHashMap.newKeySet();
+    private static final int MIN_SCHEDULE_INTERVAL = 2;
+
+    // Current game tick (updated externally or estimated)
+    @Unique
+    private long kneaf$currentTick = 0;
 
     // Statistics
     @Unique
     private static final AtomicLong kneaf$ticksScheduled = new AtomicLong(0);
 
     @Unique
-    private static final AtomicLong kneaf$duplicatesDetected = new AtomicLong(0);
-
-    @Unique
-    private static final AtomicLong kneaf$ticksProcessed = new AtomicLong(0);
+    private static final AtomicLong kneaf$duplicatesSkipped = new AtomicLong(0);
 
     @Unique
     private static long kneaf$lastLogTime = 0;
 
     /**
-     * Track scheduled tick additions for deduplication.
+     * OPTIMIZATION: Skip duplicate tick scheduling.
      */
-    @Inject(method = "schedule", at = @At("HEAD"))
+    @Inject(method = "schedule", at = @At("HEAD"), cancellable = true)
     private void kneaf$onSchedule(ScheduledTick<T> tick, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ ScheduledTickMixin applied - Tick scheduling optimization active!");
+            kneaf$LOGGER.info("✅ ScheduledTickMixin applied - Duplicate tick skip active!");
             kneaf$loggedFirstApply = true;
+        }
+
+        // Ensure map exists
+        if (kneaf$recentlyScheduled == null) {
+            kneaf$recentlyScheduled = new ConcurrentHashMap<>(256);
         }
 
         kneaf$ticksScheduled.incrementAndGet();
 
-        // Ensure non-null (double check)
-        if (kneaf$pendingTickCounts == null) {
-            kneaf$pendingTickCounts = new ConcurrentHashMap<>(256);
-        }
-        if (kneaf$activeChunkRegions == null) {
-            kneaf$activeChunkRegions = ConcurrentHashMap.newKeySet();
-        }
-
-        // Track position for duplicate detection
+        // Create key from position + type
         BlockPos pos = tick.pos();
-        long posKey = pos.asLong();
-        @SuppressWarnings("null")
-        int count = kneaf$pendingTickCounts.merge(posKey, 1, Integer::sum);
+        long key = pos.asLong() ^ ((long) tick.type().hashCode() << 32);
 
-        if (count > 1) {
-            kneaf$duplicatesDetected.incrementAndGet();
+        // Check if recently scheduled
+        Long lastScheduled = kneaf$recentlyScheduled.get(key);
+        if (lastScheduled != null && (kneaf$currentTick - lastScheduled) < MIN_SCHEDULE_INTERVAL) {
+            // Duplicate - skip this schedule
+            kneaf$duplicatesSkipped.incrementAndGet();
+            ci.cancel();
+            return;
         }
 
-        // Track active chunk region
-        long chunkRegionKey = kneaf$getChunkRegionKey(pos);
-        kneaf$activeChunkRegions.add(chunkRegionKey);
+        // Record this schedule
+        kneaf$recentlyScheduled.put(key, kneaf$currentTick);
+
+        kneaf$logStats();
     }
 
     /**
-     * Track tick processing and cleanup.
+     * Update tick counter and cleanup.
      */
     @Inject(method = "tick", at = @At("HEAD"))
     private void kneaf$onTick(CallbackInfo ci) {
-        // Log stats periodically
+        kneaf$currentTick++;
+
+        // Periodic cleanup
+        if (kneaf$currentTick % 100 == 0 && kneaf$recentlyScheduled != null) {
+            // Remove old entries
+            long threshold = kneaf$currentTick - 20;
+            kneaf$recentlyScheduled.entrySet().removeIf(e -> e.getValue() < threshold);
+
+            // Limit size
+            if (kneaf$recentlyScheduled.size() > 1000) {
+                kneaf$recentlyScheduled.clear();
+            }
+        }
+    }
+
+    @Unique
+    private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
         if (now - kneaf$lastLogTime > 60000) {
             long scheduled = kneaf$ticksScheduled.get();
-            long duplicates = kneaf$duplicatesDetected.get();
-            long processed = kneaf$ticksProcessed.get();
+            long skipped = kneaf$duplicatesSkipped.get();
 
             if (scheduled > 0) {
-                double dupRate = duplicates * 100.0 / scheduled;
-                kneaf$LOGGER.info(
-                        "ScheduledTick stats: {} scheduled, {} duplicates ({}%), {} processed, {} active regions",
-                        scheduled, duplicates, String.format("%.1f", dupRate), processed,
-                        kneaf$activeChunkRegions != null ? kneaf$activeChunkRegions.size() : 0);
+                double skipRate = skipped * 100.0 / scheduled;
+                kneaf$LOGGER.info("ScheduledTick: {} scheduled, {} duplicates skipped ({}%)",
+                        scheduled, skipped, String.format("%.1f", skipRate));
             }
 
             kneaf$ticksScheduled.set(0);
-            kneaf$duplicatesDetected.set(0);
-            kneaf$ticksProcessed.set(0);
+            kneaf$duplicatesSkipped.set(0);
             kneaf$lastLogTime = now;
         }
     }
 
-    /**
-     * Track when ticks are consumed.
-     */
-    @Inject(method = "tick", at = @At("RETURN"))
-    private void kneaf$afterTick(CallbackInfo ci) {
-        // Cleanup tracking data periodically
-        if (kneaf$pendingTickCounts != null && kneaf$pendingTickCounts.size() > 1000) {
-            kneaf$pendingTickCounts.clear();
-        }
-
-        // Cleanup active regions
-        if (kneaf$activeChunkRegions != null && kneaf$activeChunkRegions.size() > 500) {
-            kneaf$activeChunkRegions.clear();
-        }
-
-        kneaf$ticksProcessed.incrementAndGet();
-    }
-
-    /**
-     * Get chunk region key for batching (4x4 chunk groups).
-     */
     @Unique
-    private long kneaf$getChunkRegionKey(BlockPos pos) {
-        int regionX = pos.getX() >> 6; // 64 blocks = 4 chunks
-        int regionZ = pos.getZ() >> 6;
-        return ((long) regionX << 32) | (regionZ & 0xFFFFFFFFL);
-    }
-
-    /**
-     * Get statistics.
-     */
-    @Unique
-    private static String kneaf$getStatistics() {
-        long scheduled = kneaf$ticksScheduled.get();
-        long duplicates = kneaf$duplicatesDetected.get();
-        double dupRate = scheduled > 0 ? (duplicates * 100.0 / scheduled) : 0;
-
-        return String.format(
-                "ScheduledTickStats{scheduled=%d, duplicates=%d (%.1f%%), processed=%d}",
-                scheduled, duplicates, dupRate, kneaf$ticksProcessed.get());
+    public static String kneaf$getStatistics() {
+        return String.format("ScheduledTickStats{scheduled=%d, skipped=%d}",
+                kneaf$ticksScheduled.get(), kneaf$duplicatesSkipped.get());
     }
 }

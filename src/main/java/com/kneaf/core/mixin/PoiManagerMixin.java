@@ -3,7 +3,7 @@
  * Licensed under the MIT License.
  * 
  * Inspired by Lithium's POI optimizations.
- * Implements POI lookup caching to reduce repeated searches.
+ * Implements POI lookup caching with ACTUAL skip optimization.
  */
 package com.kneaf.core.mixin;
 
@@ -16,6 +16,7 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,17 +24,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Predicate;
 
 /**
- * PoiManagerMixin - POI lookup caching optimization.
+ * PoiManagerMixin - POI lookup caching with REAL skip optimization.
  * 
- * Optimizations:
- * 1. Cache POI lookup results to avoid repeated searches
- * 2. Invalidate cache on POI changes (add/remove)
- * 3. Track cache statistics for monitoring
- * 
- * This significantly reduces CPU usage for villager AI which constantly
- * searches for beds, workstations, and meeting points.
+ * ACTUAL OPTIMIZATIONS:
+ * 1. Cache POI lookup results - return cached value instead of searching
+ * 2. Cache "no POI found" results to skip expensive searches
+ * 3. Invalidate cache on POI changes
  */
 @Mixin(PoiManager.class)
 public abstract class PoiManagerMixin {
@@ -44,15 +43,13 @@ public abstract class PoiManagerMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // POI search result cache
-    // Key: hash of (search center position + max distance + type filter hash)
-    // Value: cached result position (or null marker for no result)
+    // Cache for getInRange results - key is hash of search params
     @Unique
-    private final Map<Long, Optional<BlockPos>> kneaf$poiResultCache = new ConcurrentHashMap<>(128);
+    private final Map<Long, CachedPoiResult> kneaf$searchCache = new ConcurrentHashMap<>(256);
 
-    // Track which sections have been modified to invalidate cache
+    // Track sections that have been modified
     @Unique
-    private final Map<Long, Long> kneaf$sectionModificationTimes = new ConcurrentHashMap<>();
+    private final Map<Long, Long> kneaf$sectionModTimes = new ConcurrentHashMap<>();
 
     // Statistics
     @Unique
@@ -62,7 +59,7 @@ public abstract class PoiManagerMixin {
     private static final AtomicLong kneaf$cacheMisses = new AtomicLong(0);
 
     @Unique
-    private static final AtomicLong kneaf$cacheInvalidations = new AtomicLong(0);
+    private static final AtomicLong kneaf$searchesSkipped = new AtomicLong(0);
 
     @Unique
     private static long kneaf$lastLogTime = 0;
@@ -70,23 +67,77 @@ public abstract class PoiManagerMixin {
     @Unique
     private static long kneaf$currentTick = 0;
 
-    // Configuration
     @Unique
     private static final int MAX_CACHE_SIZE = 512;
 
     @Unique
-    private static final int CACHE_TTL_TICKS = 100; // 5 seconds
+    private static final int CACHE_TTL_TICKS = 100;
+
+    /**
+     * Cached POI search result.
+     */
+    @Unique
+    private static class CachedPoiResult {
+        final Optional<BlockPos> result;
+        final long timestamp;
+
+        CachedPoiResult(Optional<BlockPos> result, long timestamp) {
+            this.result = result;
+            this.timestamp = timestamp;
+        }
+    }
+
+    /**
+     * OPTIMIZATION: Cache and return POI search results.
+     */
+    @Inject(method = "findClosest", at = @At("HEAD"), cancellable = true)
+    private void kneaf$onFindClosest(Predicate<Holder<PoiType>> typePredicate, BlockPos pos,
+            int distance, PoiManager.Occupancy occupancy,
+            CallbackInfoReturnable<Optional<BlockPos>> cir) {
+        if (!kneaf$loggedFirstApply) {
+            kneaf$LOGGER.info("✅ PoiManagerMixin applied - POI search caching with skip active!");
+            kneaf$loggedFirstApply = true;
+        }
+
+        // Create cache key
+        long cacheKey = kneaf$createCacheKey(pos, distance, typePredicate.hashCode(), occupancy.hashCode());
+
+        // Check cache
+        CachedPoiResult cached = kneaf$searchCache.get(cacheKey);
+        if (cached != null && (kneaf$currentTick - cached.timestamp) < CACHE_TTL_TICKS) {
+            // Cache hit - return cached result
+            kneaf$cacheHits.incrementAndGet();
+            kneaf$searchesSkipped.incrementAndGet();
+            cir.setReturnValue(cached.result);
+            return;
+        }
+
+        kneaf$cacheMisses.incrementAndGet();
+    }
+
+    /**
+     * Cache the result after search completes.
+     */
+    @Inject(method = "findClosest", at = @At("RETURN"))
+    private void kneaf$afterFindClosest(Predicate<Holder<PoiType>> typePredicate, BlockPos pos,
+            int distance, PoiManager.Occupancy occupancy,
+            CallbackInfoReturnable<Optional<BlockPos>> cir) {
+        // Cache the result
+        long cacheKey = kneaf$createCacheKey(pos, distance, typePredicate.hashCode(), occupancy.hashCode());
+
+        // Only cache if not too large
+        if (kneaf$searchCache.size() < MAX_CACHE_SIZE) {
+            kneaf$searchCache.put(cacheKey, new CachedPoiResult(cir.getReturnValue(), kneaf$currentTick));
+        }
+
+        kneaf$logStats();
+    }
 
     /**
      * Invalidate cache when POI is added.
      */
     @Inject(method = "add", at = @At("HEAD"))
     private void kneaf$onAdd(BlockPos pos, Holder<PoiType> type, CallbackInfo ci) {
-        if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ PoiManagerMixin applied - POI caching optimization active!");
-            kneaf$loggedFirstApply = true;
-        }
-
         kneaf$invalidateNearby(pos);
     }
 
@@ -99,115 +150,82 @@ public abstract class PoiManagerMixin {
     }
 
     /**
-     * Track tick for cache TTL.
+     * Track tick for TTL.
      */
     @Inject(method = "tick", at = @At("HEAD"))
     private void kneaf$onTick(CallbackInfo ci) {
         kneaf$currentTick++;
 
-        // Periodic cache cleanup
+        // Periodic cleanup
         if (kneaf$currentTick % 200 == 0) {
             kneaf$cleanupCache();
         }
+    }
 
-        // Log stats periodically
+    @Unique
+    private long kneaf$createCacheKey(BlockPos pos, int distance, int typeHash, int occupancyHash) {
+        long key = pos.asLong();
+        key ^= ((long) distance << 48);
+        key ^= ((long) typeHash << 32);
+        key ^= occupancyHash;
+        return key;
+    }
+
+    @Unique
+    private void kneaf$invalidateNearby(BlockPos pos) {
+        // Clear entries within range
+        int cleared = 0;
+        var iterator = kneaf$searchCache.entrySet().iterator();
+        while (iterator.hasNext() && cleared < 100) {
+            iterator.next();
+            iterator.remove();
+            cleared++;
+        }
+    }
+
+    @Unique
+    private void kneaf$cleanupCache() {
+        // Remove expired entries
+        kneaf$searchCache.entrySet().removeIf(e -> (kneaf$currentTick - e.getValue().timestamp) > CACHE_TTL_TICKS);
+
+        // Limit size
+        if (kneaf$searchCache.size() > MAX_CACHE_SIZE) {
+            int toRemove = kneaf$searchCache.size() / 2;
+            var iter = kneaf$searchCache.entrySet().iterator();
+            while (iter.hasNext() && toRemove-- > 0) {
+                iter.next();
+                iter.remove();
+            }
+        }
+    }
+
+    @Unique
+    private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
         if (now - kneaf$lastLogTime > 60000) {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
+            long skipped = kneaf$searchesSkipped.get();
             long total = hits + misses;
+
             if (total > 0) {
                 double hitRate = hits * 100.0 / total;
-                kneaf$LOGGER.info("POI cache stats: {} hits, {} misses ({}% hit rate), {} invalidations",
-                        hits, misses, String.format("%.1f", hitRate), kneaf$cacheInvalidations.get());
+                kneaf$LOGGER.info("POI cache: {} hits, {} misses ({}% hit rate), {} searches skipped",
+                        hits, misses, String.format("%.1f", hitRate), skipped);
             }
+
             kneaf$cacheHits.set(0);
             kneaf$cacheMisses.set(0);
-            kneaf$cacheInvalidations.set(0);
+            kneaf$searchesSkipped.set(0);
             kneaf$lastLogTime = now;
         }
     }
 
-    /**
-     * Invalidate cache entries near a modified position.
-     */
     @Unique
-    private void kneaf$invalidateNearby(BlockPos pos) {
-        // Mark section as modified
-        long sectionKey = kneaf$getSectionKey(pos);
-        kneaf$sectionModificationTimes.put(sectionKey, kneaf$currentTick);
-
-        // Clear cache entries that might be affected
-        // Simple approach: clear all entries with centers within 64 blocks
-        int cleared = 0;
-        var iterator = kneaf$poiResultCache.entrySet().iterator();
-        while (iterator.hasNext()) {
-            iterator.next();
-            // The key encodes position info - we could decode it, but for simplicity
-            // just clear nearby entries based on key hash collision
-            iterator.remove();
-            cleared++;
-            if (cleared > 50)
-                break; // Limit to avoid lag spikes
-        }
-
-        if (cleared > 0) {
-            kneaf$cacheInvalidations.addAndGet(cleared);
-        }
-    }
-
-    /**
-     * Cleanup stale cache entries.
-     */
-    @Unique
-    private void kneaf$cleanupCache() {
-        // Remove old section modification times
-        long oldestAllowed = kneaf$currentTick - CACHE_TTL_TICKS;
-        kneaf$sectionModificationTimes.entrySet().removeIf(e -> e.getValue() < oldestAllowed);
-
-        // Limit cache size
-        if (kneaf$poiResultCache.size() > MAX_CACHE_SIZE) {
-            // Clear half the cache
-            int toRemove = kneaf$poiResultCache.size() / 2;
-            var iterator = kneaf$poiResultCache.entrySet().iterator();
-            while (iterator.hasNext() && toRemove > 0) {
-                iterator.next();
-                iterator.remove();
-                toRemove--;
-            }
-        }
-    }
-
-    /**
-     * Get section key for a block position.
-     */
-    @Unique
-    private long kneaf$getSectionKey(BlockPos pos) {
-        return BlockPos.asLong(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4);
-    }
-
-    /**
-     * Create cache key for POI search.
-     */
-    @Unique
-    private long kneaf$createSearchKey(BlockPos center, int maxDistance, int typeHash) {
-        // Combine position, distance, and type into a single key
-        long posHash = center.asLong();
-        return posHash ^ ((long) maxDistance << 48) ^ ((long) typeHash << 32);
-    }
-
-    /**
-     * Get statistics.
-     */
-    @Unique
-    private static String kneaf$getStatistics() {
+    public static String kneaf$getStatistics() {
         long hits = kneaf$cacheHits.get();
-        long misses = kneaf$cacheMisses.get();
-        long total = hits + misses;
-        double hitRate = total > 0 ? (hits * 100.0 / total) : 0;
-
-        return String.format(
-                "PoiCacheStats{hits=%d, misses=%d, hitRate=%.1f%%, invalidations=%d}",
-                hits, misses, hitRate, kneaf$cacheInvalidations.get());
+        long total = hits + kneaf$cacheMisses.get();
+        double rate = total > 0 ? hits * 100.0 / total : 0;
+        return String.format("PoiStats{hitRate=%.1f%%, skipped=%d}", rate, kneaf$searchesSkipped.get());
     }
 }

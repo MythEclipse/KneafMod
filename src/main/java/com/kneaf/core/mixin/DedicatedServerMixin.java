@@ -62,7 +62,7 @@ public abstract class DedicatedServerMixin {
             kneaf$LOGGER.info("  - Recipe: Lookup caching");
             kneaf$LOGGER.info("  - World Border: Distance optimization");
             kneaf$LOGGER.info("============================================================");
-            kneaf$LOGGER.info("Total optimizations: 33 mixins active");
+            kneaf$LOGGER.info("Total optimizations: 46 mixins active");
             kneaf$LOGGER.info("Server ready for optimal performance!");
             kneaf$LOGGER.info("============================================================");
         }
