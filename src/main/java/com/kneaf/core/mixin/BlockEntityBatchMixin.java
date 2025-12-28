@@ -59,12 +59,29 @@ public abstract class BlockEntityBatchMixin {
     @Unique
     private static long kneaf$lastLogTime = 0;
 
-    // Configuration
+    // Dynamic configuration that adapts to TPS
     @Unique
-    private static final int IDLE_THRESHOLD = 20; // Skip after 20 ticks of no change
+    private static final java.util.concurrent.atomic.AtomicInteger kneaf$dynamicIdleThreshold = new java.util.concurrent.atomic.AtomicInteger(
+            20);
 
     @Unique
-    private static final int BATCH_SIZE = 16; // Process in batches of 16
+    private static final java.util.concurrent.atomic.AtomicInteger kneaf$dynamicBatchSize = new java.util.concurrent.atomic.AtomicInteger(
+            16);
+
+    @Unique
+    private static long kneaf$lastThresholdAdjustment = 0;
+
+    @Unique
+    private static final int MIN_IDLE_THRESHOLD = 10;
+
+    @Unique
+    private static final int MAX_IDLE_THRESHOLD = 40;
+
+    @Unique
+    private static final int MIN_BATCH_SIZE = 8;
+
+    @Unique
+    private static final int MAX_BATCH_SIZE = 64;
 
     /**
      * Track block entity ticking for batching optimization.
@@ -75,6 +92,9 @@ public abstract class BlockEntityBatchMixin {
             kneaf$LOGGER.info("✅ BlockEntityBatchMixin applied - Block entity batching optimization active!");
             kneaf$loggedFirstApply = true;
         }
+
+        // Adjust thresholds based on TPS
+        kneaf$adjustThresholds();
     }
 
     /**
@@ -114,9 +134,10 @@ public abstract class BlockEntityBatchMixin {
      */
     @Unique
     private boolean kneaf$shouldSkipIdle(BlockPos pos) {
+        int idleThreshold = kneaf$dynamicIdleThreshold.get();
         int idleCount = kneaf$idleTickCount.getOrDefault(pos, 0);
 
-        if (idleCount >= IDLE_THRESHOLD) {
+        if (idleCount >= idleThreshold) {
             // Only tick every 4th tick when idle
             if (idleCount % 4 != 0) {
                 kneaf$skippedTicks.incrementAndGet();
@@ -142,10 +163,11 @@ public abstract class BlockEntityBatchMixin {
         }
 
         int size = entities.size();
+        int batchSize = kneaf$dynamicBatchSize.get();
 
         // Process in batches
-        for (int i = 0; i < size; i += BATCH_SIZE) {
-            int end = Math.min(i + BATCH_SIZE, size);
+        for (int i = 0; i < size; i += batchSize) {
+            int end = Math.min(i + batchSize, size);
 
             for (int j = i; j < end; j++) {
                 T entity = entities.get(j);
@@ -188,13 +210,42 @@ public abstract class BlockEntityBatchMixin {
     }
 
     /**
+     * Adjust thresholds based on TPS for optimal performance.
+     */
+    @Unique
+    private static void kneaf$adjustThresholds() {
+        long now = System.currentTimeMillis();
+        if (now - kneaf$lastThresholdAdjustment < 2000) {
+            return; // Adjust every 2 seconds
+        }
+        kneaf$lastThresholdAdjustment = now;
+
+        double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
+
+        if (currentTPS < 15.0) {
+            // Low TPS: more aggressive idle detection, larger batches
+            kneaf$dynamicIdleThreshold.set(MIN_IDLE_THRESHOLD);
+            kneaf$dynamicBatchSize.set(MAX_BATCH_SIZE);
+        } else if (currentTPS > 19.0) {
+            // High TPS: normal thresholds
+            kneaf$dynamicIdleThreshold.set(MAX_IDLE_THRESHOLD);
+            kneaf$dynamicBatchSize.set(MIN_BATCH_SIZE);
+        } else {
+            // Balanced
+            kneaf$dynamicIdleThreshold.set(20);
+            kneaf$dynamicBatchSize.set(16);
+        }
+    }
+
+    /**
      * Cleanup idle cache periodically.
      */
     @Unique
     private void kneaf$cleanupIdleCache() {
+        int idleThreshold = kneaf$dynamicIdleThreshold.get();
         if (kneaf$idleTickCount.size() > 1000) {
             // Remove entries that have been idle for too long
-            kneaf$idleTickCount.entrySet().removeIf(e -> e.getValue() > IDLE_THRESHOLD * 10);
+            kneaf$idleTickCount.entrySet().removeIf(e -> e.getValue() > idleThreshold * 10);
         }
     }
 }

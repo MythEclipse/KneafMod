@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * ParallelEntityTicker - Batch process entities for optimized
@@ -36,8 +37,12 @@ public final class ParallelEntityTicker {
 
     // Use centralized WorkerThreadPool for parallel entity processing
 
-    // Batch size for efficient processing
-    private static final int BATCH_SIZE = 64;
+    // Dynamic batch size that adjusts based on TPS and entity count
+    private static final AtomicInteger DYNAMIC_BATCH_SIZE = new AtomicInteger(64);
+    private static final int MIN_BATCH_SIZE = 16;
+    private static final int MAX_BATCH_SIZE = 256;
+    private static long lastBatchAdjustment = 0;
+    private static final long BATCH_ADJUST_INTERVAL_MS = 2000; // Adjust every 2s
 
     // Statistics
     private static final AtomicLong entitiesProcessed = new AtomicLong(0);
@@ -106,7 +111,10 @@ public final class ParallelEntityTicker {
         long startTime = System.nanoTime();
         int count = entities.size();
 
-        if (count < BATCH_SIZE) {
+        adjustBatchSize(entities.size());
+        int batchSize = DYNAMIC_BATCH_SIZE.get();
+
+        if (count < batchSize) {
             // Small number - process sequentially (avoid thread overhead)
             for (Entity entity : entities) {
                 processor.process(entity);
@@ -115,9 +123,9 @@ public final class ParallelEntityTicker {
             // Large number - process in parallel batches
             List<ForkJoinTask<?>> tasks = new ArrayList<>();
 
-            for (int i = 0; i < count; i += BATCH_SIZE) {
+            for (int i = 0; i < count; i += batchSize) {
                 final int start = i;
-                final int end = Math.min(i + BATCH_SIZE, count);
+                final int end = Math.min(i + batchSize, count);
 
                 tasks.add(WorkerThreadPool.getComputePool().submit(() -> {
                     for (int j = start; j < end; j++) {
@@ -134,7 +142,7 @@ public final class ParallelEntityTicker {
 
         // Update stats
         entitiesProcessed.addAndGet(count);
-        batchesProcessed.addAndGet((count + BATCH_SIZE - 1) / BATCH_SIZE);
+        batchesProcessed.addAndGet((count + batchSize - 1) / batchSize);
         parallelMs.addAndGet((System.nanoTime() - startTime) / 1_000_000);
 
     }
@@ -208,6 +216,45 @@ public final class ParallelEntityTicker {
     public static void shutdown() {
         // Pool managed by WorkerThreadPool
         LOGGER.info("ParallelEntityTicker shutdown. Stats: {}", getStatistics());
+    }
+
+    /**
+     * Adjust batch size based on current TPS and entity count.
+     * Called periodically to optimize performance.
+     */
+    private static void adjustBatchSize(int entityCount) {
+        long now = System.currentTimeMillis();
+        if (now - lastBatchAdjustment < BATCH_ADJUST_INTERVAL_MS) {
+            return; // Don't adjust too frequently
+        }
+        lastBatchAdjustment = now;
+
+        double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
+        int newBatchSize;
+
+        if (currentTPS < 15.0) {
+            // Low TPS: larger batches to reduce threading overhead
+            newBatchSize = Math.min(MAX_BATCH_SIZE, Math.max(MIN_BATCH_SIZE, entityCount / 5));
+        } else if (currentTPS > 19.0) {
+            // High TPS: smaller batches for better responsiveness
+            newBatchSize = Math.max(MIN_BATCH_SIZE, Math.min(MAX_BATCH_SIZE, entityCount / 20));
+        } else {
+            // Normal TPS: balanced batch size
+            newBatchSize = Math.max(MIN_BATCH_SIZE, Math.min(MAX_BATCH_SIZE, entityCount / 10));
+        }
+
+        // Only update if significantly different (avoid thrashing)
+        int currentBatch = DYNAMIC_BATCH_SIZE.get();
+        if (Math.abs(newBatchSize - currentBatch) > 8) {
+            DYNAMIC_BATCH_SIZE.set(newBatchSize);
+        }
+    }
+
+    /**
+     * Get current batch size for monitoring.
+     */
+    public static int getCurrentBatchSize() {
+        return DYNAMIC_BATCH_SIZE.get();
     }
 
     /**
