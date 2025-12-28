@@ -51,6 +51,11 @@ public abstract class BrainMixin<E extends LivingEntity> {
     @Unique
     private final ConcurrentHashMap<Integer, MemoryStatus> kneaf$memoryStatusCache = new ConcurrentHashMap<>();
 
+    // Memory VALUE cache - caches isMemoryValue results within a tick
+    // Key: combined hash of (type + value), Value: result
+    @Unique
+    private final ConcurrentHashMap<Integer, Boolean> kneaf$memoryValueCache = new ConcurrentHashMap<>();
+
     @Unique
     private long kneaf$lastCacheClearTick = 0;
 
@@ -80,6 +85,7 @@ public abstract class BrainMixin<E extends LivingEntity> {
         long gameTick = level.getGameTime();
         if (gameTick != kneaf$lastCacheClearTick) {
             kneaf$memoryStatusCache.clear();
+            kneaf$memoryValueCache.clear();
             kneaf$lastCacheClearTick = gameTick;
         }
 
@@ -90,11 +96,28 @@ public abstract class BrainMixin<E extends LivingEntity> {
     /**
      * Optimize memory status checks by caching within a tick.
      * Memory status is checked multiple times per tick by behaviors.
+     * REAL OPTIMIZATION: Cache results to skip repeated expensive lookups.
      */
     @Redirect(method = "checkMemory", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/ai/Brain;isMemoryValue(Lnet/minecraft/world/entity/ai/memory/MemoryModuleType;Ljava/lang/Object;)Z"))
     private <U> boolean kneaf$cachedIsMemoryValue(Brain<E> brain, MemoryModuleType<U> type, U value) {
-        // This is a value check, not just presence - always compute
-        return brain.isMemoryValue(type, value);
+        // Create cache key from type and value
+        int key = type.hashCode() ^ (value != null ? value.hashCode() * 31 : 0);
+
+        // Check cache first
+        Boolean cached = kneaf$memoryValueCache.get(key);
+        if (cached != null) {
+            kneaf$cacheHits.incrementAndGet();
+            return cached;
+        }
+
+        // Compute actual result
+        kneaf$cacheMisses.incrementAndGet();
+        @SuppressWarnings("null") // isMemoryValue handles null value internally
+        boolean result = brain.isMemoryValue(type, value);
+
+        // Cache for future lookups within same tick
+        kneaf$memoryValueCache.put(key, result);
+        return result;
     }
 
     @Unique

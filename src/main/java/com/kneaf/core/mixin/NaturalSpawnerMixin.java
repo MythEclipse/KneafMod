@@ -6,12 +6,15 @@ package com.kneaf.core.mixin;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.NaturalSpawner;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,12 +24,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * NaturalSpawnerMixin - Optimize mob spawning WITHOUT throttling.
+ * NaturalSpawnerMixin - Optimize mob spawning with REAL performance gains.
  * 
  * Optimization Strategy (maintains vanilla spawn rates):
- * 1. Cache spawn position calculations per chunk
- * 2. Pre-compute light levels for spawn checks
- * 3. Batch-optimize position validity checks
+ * 1. Cache isValidSpawn results per tick via redirect
+ * 2. Skip redundant spawn position calculations
+ * 3. Track cache effectiveness
  * 
  * NOTE: This mixin NEVER skips spawn attempts - vanilla spawn rates preserved.
  */
@@ -39,10 +42,10 @@ public abstract class NaturalSpawnerMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Cache for spawn position validations - cleared each tick
-    // This caches whether a blockpos is valid for spawning
+    // Cache for isValidSpawn results - cleared each tick
+    // Key: position hash, Value: result
     @Unique
-    private static final Map<Long, Map<Long, Boolean>> kneaf$spawnPosCache = new ConcurrentHashMap<>();
+    private static final Map<Long, Boolean> kneaf$validSpawnCache = new ConcurrentHashMap<>(512);
 
     // Statistics
     @Unique
@@ -50,12 +53,14 @@ public abstract class NaturalSpawnerMixin {
     @Unique
     private static final AtomicLong kneaf$cacheHits = new AtomicLong(0);
     @Unique
+    private static final AtomicLong kneaf$cacheMisses = new AtomicLong(0);
+    @Unique
     private static long kneaf$lastLogTime = 0;
     @Unique
     private static long kneaf$lastCleanTick = 0;
 
     /**
-     * Track and optimize spawn attempts (NO THROTTLING).
+     * Track spawn attempts and clear cache periodically.
      */
     @Inject(method = "spawnForChunk", at = @At("HEAD"))
     private static void kneaf$onSpawnForChunk(ServerLevel level, LevelChunk chunk,
@@ -69,42 +74,42 @@ public abstract class NaturalSpawnerMixin {
 
         kneaf$spawnAttempts.incrementAndGet();
 
-        // Clean cache every 20 ticks (less frequently since spawn happens every tick)
+        // Clean cache every 20 ticks
         long gameTick = level.getGameTime();
         if (gameTick - kneaf$lastCleanTick > 20) {
-            kneaf$spawnPosCache.clear();
+            kneaf$validSpawnCache.clear();
             kneaf$lastCleanTick = gameTick;
         }
 
         // Log stats periodically
         kneaf$logStats();
-
-        // NOTE: We never call ci.cancel() - all spawn attempts execute normally!
     }
 
     /**
-     * Cache spawn position validity within a chunk.
+     * REAL OPTIMIZATION: Cache isValidSpawn results.
+     * This intercepts calls to BlockState.isValidSpawn() during spawn checks.
      */
-    @Unique
-    public static boolean kneaf$isSpawnPositionValid(ServerLevel level, BlockPos pos) {
-        long chunkKey = pos.asLong() >> 4;
-        long posKey = pos.asLong();
+    @Redirect(method = "isValidSpawnPostitionForType", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/state/BlockState;isValidSpawn(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/entity/EntityType;)Z"))
+    private static boolean kneaf$cachedIsValidSpawn(BlockState state,
+            net.minecraft.world.level.BlockGetter level, BlockPos pos, EntityType<?> type) {
 
-        Map<Long, Boolean> chunkCache = kneaf$spawnPosCache.computeIfAbsent(
-                chunkKey, k -> new ConcurrentHashMap<>());
+        // Create cache key from position and entity type
+        long key = pos.asLong() ^ ((long) type.hashCode() << 32);
 
-        Boolean cached = chunkCache.get(posKey);
+        // Check cache first
+        Boolean cached = kneaf$validSpawnCache.get(key);
         if (cached != null) {
             kneaf$cacheHits.incrementAndGet();
             return cached;
         }
 
-        // Actually check - this is what vanilla does
-        boolean valid = level.getBlockState(pos).isValidSpawn(level, pos,
-                net.minecraft.world.entity.EntityType.ZOMBIE); // Use zombie as default check
+        // Compute and cache
+        kneaf$cacheMisses.incrementAndGet();
+        @SuppressWarnings("null") // level is non-null at runtime from mixin context
+        boolean result = state.isValidSpawn(level, pos, type);
+        kneaf$validSpawnCache.put(key, result);
 
-        chunkCache.put(posKey, valid);
-        return valid;
+        return result;
     }
 
     @Unique
@@ -113,13 +118,18 @@ public abstract class NaturalSpawnerMixin {
         if (now - kneaf$lastLogTime > 60000) {
             long attempts = kneaf$spawnAttempts.get();
             long hits = kneaf$cacheHits.get();
+            long misses = kneaf$cacheMisses.get();
+            long total = hits + misses;
 
-            if (attempts > 0) {
-                kneaf$LOGGER.info("SpawnOptim: {} attempts, {} cache hits", attempts, hits);
+            if (total > 0) {
+                double hitRate = hits * 100.0 / total;
+                kneaf$LOGGER.info("SpawnOptim: {} attempts, {} cache hits/misses ({}% hit rate)",
+                        attempts, total, String.format("%.1f", hitRate));
             }
 
             kneaf$spawnAttempts.set(0);
             kneaf$cacheHits.set(0);
+            kneaf$cacheMisses.set(0);
             kneaf$lastLogTime = now;
         }
     }

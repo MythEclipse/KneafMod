@@ -160,7 +160,6 @@ public abstract class ItemEntityMixin {
         }
 
         // Use ItemMergingHelper for efficient pre-check
-        ItemEntity self = (ItemEntity) (Object) this;
         if (!kneaf$usedItemMergingHelper) {
             kneaf$LOGGER.info("  ↳ Using ItemMergingHelper for optimized merge checks");
             kneaf$usedItemMergingHelper = true;

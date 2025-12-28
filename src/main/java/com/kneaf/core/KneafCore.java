@@ -111,6 +111,7 @@ public class KneafCore {
             LOGGER.info("ParallelEntityTicker parallelism: {}", ParallelEntityTicker.getParallelism());
 
             // Initialize ObjectPool for common objects
+            @SuppressWarnings("unused") // Initialized for side-effect registration
             com.kneaf.core.util.ObjectPool<double[]> vectorPool = new com.kneaf.core.util.ObjectPool<>(
                     () -> new double[3], 64);
             LOGGER.info("ObjectPool initialized for vector reuse");

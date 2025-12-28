@@ -45,8 +45,7 @@
     "PlayerChunkLoaderMixin",
     "ThreadedAnvilMixin",
     "InventoryMenuMixin",
-    "GoalSelectorMixin",
-    "RegistryAccessMixin"
+    "GoalSelectorMixin"
   ],
   "client": [],
   "server": [],
