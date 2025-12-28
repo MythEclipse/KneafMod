@@ -97,10 +97,41 @@ public final class PerformanceManager {
             isOptimizationMonitoringEnabled
                     .set(parseBooleanProperty(properties, "optimizationMonitoringEnabled", true));
 
+            // Dynamic View Distance
+            boolean dvdEnabled = parseBooleanProperty(properties, "dynamicViewDistanceEnabled", true);
+            DynamicViewDistance.setEnabled(dvdEnabled);
+            if (dvdEnabled) {
+                DynamicViewDistance.setMinViewDistance(parseIntProperty(properties, "minViewDistance", 4));
+                DynamicViewDistance.setMaxViewDistance(parseIntProperty(properties, "maxViewDistance", 16));
+                DynamicViewDistance.setTpsThresholdLow(parseDoubleProperty(properties, "tpsThresholdLow", 15.0));
+            }
+
         } catch (IOException e) {
             LOGGER.error("Failed to load performance configuration", e);
             // Set safe defaults on error
             resetToDefaults();
+        }
+    }
+
+    private int parseIntProperty(Properties properties, String key, int defaultValue) {
+        String value = properties.getProperty(key);
+        if (value == null)
+            return defaultValue;
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (Exception e) {
+            return defaultValue;
+        }
+    }
+
+    private double parseDoubleProperty(Properties properties, String key, double defaultValue) {
+        String value = properties.getProperty(key);
+        if (value == null)
+            return defaultValue;
+        try {
+            return Double.parseDouble(value.trim());
+        } catch (Exception e) {
+            return defaultValue;
         }
     }
 

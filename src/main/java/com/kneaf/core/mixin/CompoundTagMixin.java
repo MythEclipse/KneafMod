@@ -161,10 +161,14 @@ public abstract class CompoundTagMixin {
             long accesses = kneaf$tagAccesses.get();
             long interned = kneaf$keysInterned.get();
             long skips = kneaf$emptyTagSkips.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (created > 0 || accesses > 0) {
-                kneaf$LOGGER.info("NBT stats: {} tags, {} accesses, {} keys interned, {} empty skips",
-                        created, accesses, interned, skips);
+                kneaf$LOGGER.info("NBT: {}/sec tags, {}/sec accesses, {} keys, {}/sec empty skips",
+                        String.format("%.1f", created / timeDiff),
+                        String.format("%.1f", accesses / timeDiff),
+                        interned,
+                        String.format("%.1f", skips / timeDiff));
             }
 
             kneaf$tagsCreated.set(0);

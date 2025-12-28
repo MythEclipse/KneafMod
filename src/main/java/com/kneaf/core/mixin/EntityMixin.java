@@ -126,12 +126,15 @@ public abstract class EntityMixin {
             long optimized = kneaf$pushesOptimized.get();
             long skipped = kneaf$pushesSkipped.get();
             long total = optimized + skipped;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
                 // Log with RustPhysicsMath friction example for integration proof
                 double[] frictionResult = RustPhysicsMath.applyFriction(1.0, 1.0, 1.0, 0.91f);
-                kneaf$LOGGER.info("EntityPush: {} optimized, {} skipped, friction={}",
-                        optimized, skipped, String.format("%.2f", frictionResult[0]));
+                kneaf$LOGGER.info("EntityPush: {}/sec optimized, {}/sec skipped, friction={}",
+                        String.format("%.1f", optimized / timeDiff),
+                        String.format("%.1f", skipped / timeDiff),
+                        String.format("%.2f", frictionResult[0]));
             }
 
             kneaf$pushesOptimized.set(0);

@@ -102,6 +102,9 @@ public class KneafCore {
             performanceManager.loadConfiguration();
             LOGGER.info("PerformanceManager initialized: {}", performanceManager);
 
+            // Initialize Mod Compatibility
+            ModCompatibility.init();
+
             // Initialize ChunkGeneratorOptimizer (includes RustNoise warmup)
             ChunkGeneratorOptimizer.init();
             LOGGER.info("ChunkGeneratorOptimizer initialized, Rust acceleration: {}",
@@ -211,6 +214,9 @@ public class KneafCore {
     private void registerCommands(RegisterCommandsEvent event) {
         // Register async monitoring commands
         com.kneaf.commands.AsyncMonitorCommands.register(event.getDispatcher());
+
+        // Register chunk pre-generation commands
+        com.kneaf.commands.PregenCommands.register(event.getDispatcher());
 
         // Additional commands can be registered here as they are implemented
         // MetricsCommand is currently integrated into AsyncMonitorCommands

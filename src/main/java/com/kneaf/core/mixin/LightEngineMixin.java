@@ -125,6 +125,11 @@ public abstract class LightEngineMixin {
      */
     @Inject(method = "checkBlock", at = @At("HEAD"), cancellable = true)
     private void kneaf$onCheckBlock(BlockPos pos, CallbackInfo ci) {
+        // SAFE FALLBACK: If Rust is not available, do NOT intercept logic
+        if (!RustOptimizations.isAvailable()) {
+            return;
+        }
+
         long posKey = pos.asLong();
 
         // Skip if already checked this tick
@@ -149,8 +154,8 @@ public abstract class LightEngineMixin {
         // Clear per-tick tracking
         kneaf$checkedThisTick.clear();
 
-        // Process batch if above threshold
-        if (kneaf$pendingLightUpdates.size() >= BATCH_THRESHOLD) {
+        // Process batch if above threshold and native is available
+        if (RustOptimizations.isAvailable() && kneaf$pendingLightUpdates.size() >= BATCH_THRESHOLD) {
             kneaf$processBatchLightUpdates();
         }
 

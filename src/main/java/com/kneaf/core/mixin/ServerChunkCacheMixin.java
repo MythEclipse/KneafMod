@@ -117,18 +117,34 @@ public abstract class ServerChunkCacheMixin {
         }
     }
 
+    @Unique
+    private static long kneaf$lastLogTime = 0;
+
     /**
      * Inject into tick to clean stale cache entries.
      */
     @Inject(method = "tick", at = @At("TAIL"))
     private void kneaf$onTick(java.util.function.BooleanSupplier hasTimeLeft, boolean tickChunks, CallbackInfo ci) {
         // Periodically log stats
-        if (kneaf$chunkAccesses.get() % 10000 == 0 && kneaf$chunkAccesses.get() > 0) {
-            kneaf$LOGGER.debug("ChunkCache stats: accesses={}, hits={}, misses={}, ratio={}%",
-                    kneaf$chunkAccesses.get(),
-                    kneaf$cacheHits.get(),
-                    kneaf$cacheMisses.get(),
-                    kneaf$cacheHits.get() * 100 / Math.max(1, kneaf$cacheHits.get() + kneaf$cacheMisses.get()));
+        long now = System.currentTimeMillis();
+        if (now - kneaf$lastLogTime > 60000) {
+            long accesses = kneaf$chunkAccesses.get();
+            long hits = kneaf$cacheHits.get();
+            long misses = kneaf$cacheMisses.get();
+            long total = hits + misses;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
+
+            if (accesses > 0) {
+                double hitRate = total > 0 ? (hits * 100.0 / total) : 0;
+                kneaf$LOGGER.debug("ChunkCache: {}/sec accesses, {}% hit rate",
+                        String.format("%.1f", accesses / timeDiff),
+                        String.format("%.1f", hitRate));
+            }
+
+            kneaf$chunkAccesses.set(0);
+            kneaf$cacheHits.set(0);
+            kneaf$cacheMisses.set(0);
+            kneaf$lastLogTime = now;
         }
     }
 

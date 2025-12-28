@@ -39,6 +39,14 @@
 - **Entity Registry System**: Sistem registry entity yang efisien dengan component-based architecture
 - **Chunk Generation Optimization**: Noise generation acceleration via native Rust library & **Parallel Feature Placement** (Batched)
 
+### 🚀 Fitur Baru (v1.0.0 Update)
+
+- **Chunk Pre-generation**: Generate world chunks in the background while the server is running to prevent lag during exploration.
+- **Dynamic View Distance (DVD)**: Secara otomatis menyesuaikan view distance server berdasarkan TPS. Jika TPS turun di bawah ambang batas (default: 15.0), jarak pandang dikurangi untuk memulihkan performa.
+- **F3 Debug Overlay**: Statistik performa KneafMod (TPS, Chunks/detik, Cache Hit Ratio, Entities Optimized) kini ditampilkan langsung di layar debug F3 sebelah kanan.
+- **Profile Mode**: Mode profiling terintegrasi untuk melacak performa function call secara presisi, berguna untuk debugging server lag.
+- **Smart Mod Compatibility**: Deteksi otomatis untuk Lithium, Sodium, C2ME, FerriteCore, Starlight, dan ModernFix. Fitur internal akan dinonaktifkan secara selektif untuk mencegah konflik.
+
 ### 📊 Monitoring dan Profiling
 
 - **Comprehensive Performance Monitoring**: Sistem monitoring performa real-time dengan metric collection
@@ -219,12 +227,25 @@ hitDetectionOptimized=true
 
 # Monitoring
 optimizationMonitoringEnabled=true
+
+# Dynamic View Distance
+dynamicViewDistanceEnabled=true
+minViewDistance=4
+maxViewDistance=16
+tpsThresholdLow=15.0
+
 ```
 
 ### Commands
 
 - `/metrics` - Tampilkan statistik performa real-time
 - `/kneaf async stats` - Tampilkan statistik async processing
+- `/kneaf profile start` - Memulai sesi profiling performa mendalam
+- `/kneaf profile stop` - Menghentikan profiling dan menampilkan laporan detail
+- `/kneaf profile report` - Menampilkan ulang laporan profiling terakhir
+- `/kneaf pregen start <radius>` - Mulai generate chunk di sekitar pemain (radius dalam chunks)
+- `/kneaf pregen stop` - Hentikan proses pre-generation
+- `/kneaf pregen status` - Cek status pre-generation saat ini
 
 ## 📊 Performa Benchmark
 
@@ -279,7 +300,7 @@ optimizationMonitoringEnabled=true
 
 ## 🐛 Known Issues
 
-1. **Incompatibility dengan Lithium**: Mod ini mengintegrasikan banyak optimasi style-Lithium secara internal, sehingga tidak disarankan menggunakan Lithium bersamaan.
+1. **Mod Compatibility**: Mod ini sekarang **secara otomatis mendeteksi** mod optimasi lain (Lithium, Sodium, C2ME, FerriteCore, Starlight, ModernFix) dan menonaktifkan fitur internal yang konflik. Tidak perlu lagi menghapus mod tersebut secara manual.
 2. **Native Library Loading**: Native library (`rustperf`) kini fully bundled dan auto-loaded via `KneafCore`.
 3. **Test Mode Detection**: False positive test mode detection di development environment (sudah di-fix dengan `forceProduction` flag)
 
@@ -376,5 +397,5 @@ Menggunakan Rayon untuk work-stealing thread pool:
 **Minecraft Version**: 1.21  
 **Mod Loader**: NeoForge 21.0.167  
 **Build Status**: Passing ✅  
-**Mixin Count**: 42 behavior-changing mixins  
+**Mixin Count**: 47 behavior-changing mixins (Updated)  
 **Last Updated**: December 28, 2025

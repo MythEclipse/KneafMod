@@ -129,12 +129,15 @@ public abstract class HeightmapMixin {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
             long total = hits + misses;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (requested > 0 || total > 0) {
                 double coalesceRate = requested > 0 ? (coalesced * 100.0 / requested) : 0;
                 double hitRate = total > 0 ? (hits * 100.0 / total) : 0;
-                kneaf$LOGGER.info("Heightmap stats: {} updates ({} coalesced, {}%), cache: {}% hit rate",
-                        requested, coalesced, String.format("%.1f", coalesceRate),
+                kneaf$LOGGER.info("Heightmap: {}/sec updates ({}/sec coalesced, {}%), {}% cache hit",
+                        String.format("%.1f", requested / timeDiff),
+                        String.format("%.1f", coalesced / timeDiff),
+                        String.format("%.1f", coalesceRate),
                         String.format("%.1f", hitRate));
             }
 
