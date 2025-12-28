@@ -155,11 +155,14 @@ public abstract class ChunkStorageMixin {
             long misses = kneaf$readCacheMisses.get();
             long skipped = kneaf$writesSkipped.get();
             long total = hits + misses;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0 || skipped > 0) {
                 double hitRate = total > 0 ? hits * 100.0 / total : 0;
-                kneaf$LOGGER.info("ChunkStorage: {}% read cache hit, {} writes skipped",
-                        String.format("%.1f", hitRate), skipped);
+                kneaf$LOGGER.info("ChunkStorage: {}/sec reads ({}% hit), {}/sec writes skipped",
+                        String.format("%.1f", total / timeDiff),
+                        String.format("%.1f", hitRate),
+                        String.format("%.1f", skipped / timeDiff));
             }
 
             kneaf$readCacheHits.set(0);

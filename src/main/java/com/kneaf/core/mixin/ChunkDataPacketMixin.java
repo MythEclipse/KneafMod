@@ -164,11 +164,18 @@ public abstract class ChunkDataPacketMixin {
             long duplicates = kneaf$duplicatesDetected.get();
             long hotChunks = kneaf$hotChunksDetected.get();
             long empty = kneaf$emptySections.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (packets > 0) {
-                double dupRate = duplicates * 100.0 / packets;
-                kneaf$LOGGER.info("ChunkPacket: {} created, {} duplicates ({}%), {} hot chunks, {} empty sections",
-                        packets, duplicates, String.format("%.1f", dupRate), hotChunks, empty);
+                double packetRate = packets / timeDiff;
+                double dupRate = duplicates / timeDiff;
+                double dupPercent = duplicates * 100.0 / packets;
+                kneaf$LOGGER.info("ChunkPacket: {}/sec created, {}/sec duplicates ({}%), {}/sec hot, {}/sec empty",
+                        String.format("%.1f", packetRate),
+                        String.format("%.1f", dupRate),
+                        String.format("%.1f", dupPercent),
+                        String.format("%.1f", hotChunks / timeDiff),
+                        String.format("%.1f", empty / timeDiff));
             }
 
             kneaf$packetsCreated.set(0);

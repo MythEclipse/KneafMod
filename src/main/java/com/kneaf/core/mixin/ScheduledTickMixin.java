@@ -122,11 +122,14 @@ public abstract class ScheduledTickMixin<T> {
         if (now - kneaf$lastLogTime > 60000) {
             long scheduled = kneaf$ticksScheduled.get();
             long skipped = kneaf$duplicatesSkipped.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (scheduled > 0) {
                 double skipRate = skipped * 100.0 / scheduled;
-                kneaf$LOGGER.info("ScheduledTick: {} scheduled, {} duplicates skipped ({}%)",
-                        scheduled, skipped, String.format("%.1f", skipRate));
+                kneaf$LOGGER.info("ScheduledTick: {}/sec scheduled, {}/sec skipped ({}%)",
+                        String.format("%.1f", scheduled / timeDiff),
+                        String.format("%.1f", skipped / timeDiff),
+                        String.format("%.1f", skipRate));
             }
 
             kneaf$ticksScheduled.set(0);

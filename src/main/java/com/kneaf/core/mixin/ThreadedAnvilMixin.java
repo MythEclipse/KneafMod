@@ -171,11 +171,15 @@ public abstract class ThreadedAnvilMixin {
             long skipped = kneaf$savesSkipped.get();
             long throttled = kneaf$savesThrottled.get();
             long total = saved + skipped + throttled;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
                 double skipRate = (skipped + throttled) * 100.0 / total;
-                kneaf$LOGGER.info("ChunkSave optimization: {} saved, {} skipped, {} throttled ({}% reduction)",
-                        saved, skipped, throttled, String.format("%.1f", skipRate));
+                kneaf$LOGGER.info("ChunkSave: {}/sec saved, {}/sec skipped, {}/sec throttled ({}% reduction)",
+                        String.format("%.1f", saved / timeDiff),
+                        String.format("%.1f", skipped / timeDiff),
+                        String.format("%.1f", throttled / timeDiff),
+                        String.format("%.1f", skipRate));
             }
 
             kneaf$chunksSaved.set(0);

@@ -197,11 +197,15 @@ public abstract class PoiManagerMixin {
             long misses = kneaf$cacheMisses.get();
             long skipped = kneaf$searchesSkipped.get();
             long total = hits + misses;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
                 double hitRate = hits * 100.0 / total;
-                kneaf$LOGGER.info("POI cache: {} hits, {} misses ({}% hit rate), {} searches skipped",
-                        hits, misses, String.format("%.1f", hitRate), skipped);
+                kneaf$LOGGER.info("POI: {}/sec hits, {}/sec misses ({}% hit rate), {}/sec skipped",
+                        String.format("%.1f", hits / timeDiff),
+                        String.format("%.1f", misses / timeDiff),
+                        String.format("%.1f", hitRate),
+                        String.format("%.1f", skipped / timeDiff));
             }
 
             kneaf$cacheHits.set(0);

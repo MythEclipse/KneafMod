@@ -112,12 +112,16 @@ public abstract class ChunkMapMixin {
         if (now - kneaf$lastLogTime > 10000) {
             long currentCount = kneaf$chunksLoaded.get();
             long chunksDiff = currentCount - kneaf$lastChunkCount;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (chunksDiff > 0 || kneaf$chunksPrioritized.get() > 0) {
-                double rate = chunksDiff / 10.0;
-                kneaf$LOGGER.info("ChunkMap: {} loaded ({}/sec), {} prioritized, {} delayed",
-                        currentCount, String.format("%.1f", rate), kneaf$chunksPrioritized.get(),
-                        kneaf$chunksDelayed.get());
+                double loadRate = chunksDiff / timeDiff;
+                double prioritizeRate = kneaf$chunksPrioritized.get() / timeDiff;
+                double delayRate = kneaf$chunksDelayed.get() / timeDiff;
+                kneaf$LOGGER.info("ChunkMap: {}/sec loaded, {}/sec prioritized, {}/sec delayed",
+                        String.format("%.1f", loadRate),
+                        String.format("%.1f", prioritizeRate),
+                        String.format("%.1f", delayRate));
                 kneaf$chunksPrioritized.set(0);
                 kneaf$chunksDelayed.set(0);
             }

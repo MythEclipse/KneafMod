@@ -101,11 +101,14 @@ public abstract class PlayerChunkLoaderMixin {
         if (now - kneaf$lastLogTime > 60000) {
             long moves = kneaf$movesCalled.get();
             long skipped = kneaf$movesSkipped.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (moves > 0) {
                 double skipRate = skipped * 100.0 / moves;
-                kneaf$LOGGER.info("PlayerChunk optimization: {} moves, {} skipped ({}% saved)",
-                        moves, skipped, String.format("%.1f", skipRate));
+                kneaf$LOGGER.info("PlayerChunk: {}/sec moves, {}/sec skipped ({}% saved)",
+                        String.format("%.1f", moves / timeDiff),
+                        String.format("%.1f", skipped / timeDiff),
+                        String.format("%.1f", skipRate));
             }
 
             kneaf$movesCalled.set(0);

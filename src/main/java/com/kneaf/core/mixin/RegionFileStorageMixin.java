@@ -127,11 +127,15 @@ public abstract class RegionFileStorageMixin {
             long writes = kneaf$totalWrites.get();
             long skipped = kneaf$writesSkipped.get();
             long reads = kneaf$totalReads.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (writes > 0 || reads > 0) {
                 double skipRate = writes > 0 ? skipped * 100.0 / writes : 0;
-                kneaf$LOGGER.info("RegionFile I/O: {} reads, {} writes, {} skipped ({}% reduction)",
-                        reads, writes, skipped, String.format("%.1f", skipRate));
+                kneaf$LOGGER.info("RegionFile: {}/sec reads, {}/sec writes, {}/sec skipped ({}%)",
+                        String.format("%.1f", reads / timeDiff),
+                        String.format("%.1f", writes / timeDiff),
+                        String.format("%.1f", skipped / timeDiff),
+                        String.format("%.1f", skipRate));
             }
 
             kneaf$totalWrites.set(0);

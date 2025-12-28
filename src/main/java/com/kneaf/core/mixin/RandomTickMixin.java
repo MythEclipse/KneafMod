@@ -118,11 +118,14 @@ public abstract class RandomTickMixin {
             long processed = kneaf$chunksProcessed.get();
             long ticks = kneaf$ticksApplied.get();
             long total = skipped + processed;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
                 double skipRate = skipped * 100.0 / total;
-                kneaf$LOGGER.info("RandomTick: {} chunks, {}% skipped, {} ticks",
-                        total, String.format("%.1f", skipRate), ticks);
+                kneaf$LOGGER.info("RandomTick: {}/sec chunks, {}% skipped, {}/sec ticks",
+                        String.format("%.1f", total / timeDiff),
+                        String.format("%.1f", skipRate),
+                        String.format("%.1f", ticks / timeDiff));
             }
 
             kneaf$chunksSkipped.set(0);

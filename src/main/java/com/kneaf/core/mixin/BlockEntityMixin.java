@@ -91,12 +91,15 @@ public abstract class BlockEntityMixin {
         if (now - kneaf$lastLogTime > 60000) {
             long changes = kneaf$totalChanges.get();
             long skipped = kneaf$ticksSkipped.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
             if (changes > 0 || skipped > 0) {
                 double skipRate = (changes + skipped) > 0
                         ? (skipped * 100.0 / (changes + skipped))
                         : 0;
-                kneaf$LOGGER.info("BlockEntity stats: {} changes, {} ticks skipped ({}% idle)",
-                        changes, skipped, String.format("%.1f", skipRate));
+                kneaf$LOGGER.info("BlockEntity: {}/sec changes, {}/sec skipped ({}% idle)",
+                        String.format("%.1f", changes / timeDiff),
+                        String.format("%.1f", skipped / timeDiff),
+                        String.format("%.1f", skipRate));
                 kneaf$totalChanges.set(0);
                 kneaf$ticksSkipped.set(0);
             }

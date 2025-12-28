@@ -102,11 +102,12 @@ public abstract class WorldBorderMixin {
             long skipped = kneaf$checksSkipped.get();
             long performed = kneaf$checksPerformed.get();
             long total = skipped + performed;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
                 double skipRate = skipped * 100.0 / total;
-                kneaf$LOGGER.info("WorldBorder: {} checks, {}% skipped",
-                        total, String.format("%.1f", skipRate));
+                kneaf$LOGGER.info("WorldBorder: {}/sec checks, {}% skipped",
+                        String.format("%.1f", total / timeDiff), String.format("%.1f", skipRate));
             }
 
             kneaf$checksSkipped.set(0);

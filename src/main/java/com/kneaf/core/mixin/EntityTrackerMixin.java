@@ -138,11 +138,12 @@ public abstract class EntityTrackerMixin {
             long skipped = kneaf$updatesSkipped.get();
             long sent = kneaf$updatesSent.get();
             long total = skipped + sent;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
                 double skipRate = skipped * 100.0 / total;
-                kneaf$LOGGER.info("EntityTracker: {} updates, {}% skipped",
-                        total, String.format("%.1f", skipRate));
+                kneaf$LOGGER.info("EntityTracker: {}/sec updates, {}% skipped",
+                        String.format("%.1f", total / timeDiff), String.format("%.1f", skipRate));
             }
 
             kneaf$updatesSkipped.set(0);

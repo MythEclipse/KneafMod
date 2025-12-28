@@ -176,11 +176,14 @@ public abstract class BiomeSourceMixin {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
             long total = hits + misses;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
                 double hitRate = hits * 100.0 / total;
-                kneaf$LOGGER.info("Biome cache: {} hits, {} misses ({}% hit rate)",
-                        hits, misses, String.format("%.1f", hitRate));
+                kneaf$LOGGER.info("BiomeCache: {}/sec hits, {}/sec misses ({}% hit rate)",
+                        String.format("%.1f", hits / timeDiff),
+                        String.format("%.1f", misses / timeDiff),
+                        String.format("%.1f", hitRate));
             }
 
             kneaf$cacheHits.set(0);

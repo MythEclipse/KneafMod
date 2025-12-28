@@ -178,11 +178,12 @@ public abstract class ItemEntityMixin {
         if (now - kneaf$lastLogTime > 60000) {
             long checked = kneaf$mergesChecked.get();
             long skipped = kneaf$mergesSkipped.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (checked > 0) {
                 double skipRate = skipped * 100.0 / checked;
-                kneaf$LOGGER.info("ItemEntity: {} merge checks, {}% skipped",
-                        checked, String.format("%.1f", skipRate));
+                kneaf$LOGGER.info("ItemEntity: {}/sec merges, {}% skipped",
+                        String.format("%.1f", checked / timeDiff), String.format("%.1f", skipRate));
             }
 
             kneaf$mergesChecked.set(0);

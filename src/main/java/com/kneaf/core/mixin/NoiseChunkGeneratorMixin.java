@@ -140,9 +140,18 @@ public abstract class NoiseChunkGeneratorMixin {
         if (total > 0) {
             double avgMs = (kneaf$totalNoiseTimeNs.get() / 1_000_000.0) / total;
             long delayed = kneaf$delayedChunks.get();
+            double chunksPerSec = total / 30.0; // 30 second interval
+            double delayedPerSec = delayed / 30.0;
 
-            kneaf$LOGGER.info("NoiseGen: {} chunks, avg {:.2f}ms, {} delayed",
-                    total, avgMs, delayed);
+            kneaf$LOGGER.info("NoiseGen: {}/sec, avg {}ms, {}/sec delayed",
+                    String.format("%.1f", chunksPerSec),
+                    String.format("%.2f", avgMs),
+                    String.format("%.2f", delayedPerSec));
+
+            // Reset counters
+            kneaf$noiseGenCount.set(0);
+            kneaf$totalNoiseTimeNs.set(0);
+            kneaf$delayedChunks.set(0);
         }
     }
 

@@ -115,11 +115,15 @@ public abstract class ConnectionMixin {
             long sent = kneaf$packetsSent.get();
             long batches = kneaf$batchesSent.get();
             long coalesced = kneaf$packetsCoalesced.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (sent > 0) {
                 double avgBatchSize = batches > 0 ? (double) sent / batches : 0;
-                kneaf$LOGGER.info("Network stats: {} packets in {} batches (avg {}/batch), {} coalesced",
-                        sent, batches, String.format("%.1f", avgBatchSize), coalesced);
+                kneaf$LOGGER.info("Network: {}/sec packets, {}/sec batches (avg {}/batch), {}/sec coalesced",
+                        String.format("%.1f", sent / timeDiff),
+                        String.format("%.1f", batches / timeDiff),
+                        String.format("%.1f", avgBatchSize),
+                        String.format("%.1f", coalesced / timeDiff));
             }
 
             kneaf$packetsSent.set(0);
