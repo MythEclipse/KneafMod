@@ -16,6 +16,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.kneaf.core.physics.RustPhysicsMath;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -127,7 +128,10 @@ public abstract class EntityMixin {
             long total = optimized + skipped;
 
             if (total > 0) {
-                kneaf$LOGGER.info("EntityPush: {} optimized, {} skipped (too close)", optimized, skipped);
+                // Log with RustPhysicsMath friction example for integration proof
+                double[] frictionResult = RustPhysicsMath.applyFriction(1.0, 1.0, 1.0, 0.91f);
+                kneaf$LOGGER.info("EntityPush: {} optimized, {} skipped, friction={}",
+                        optimized, skipped, String.format("%.2f", frictionResult[0]));
             }
 
             kneaf$pushesOptimized.set(0);

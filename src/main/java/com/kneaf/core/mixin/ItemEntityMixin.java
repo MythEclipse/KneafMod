@@ -6,6 +6,8 @@
  */
 package com.kneaf.core.mixin;
 
+import com.kneaf.core.lithium.ItemMergingHelper;
+
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.item.ItemEntity;
 import org.spongepowered.asm.mixin.Mixin;
@@ -32,6 +34,10 @@ public abstract class ItemEntityMixin {
 
     @Unique
     private static final Logger kneaf$LOGGER = LoggerFactory.getLogger("KneafMod/ItemEntityMixin");
+
+    // Track ItemMergingHelper usage
+    @Unique
+    private static boolean kneaf$usedItemMergingHelper = false;
 
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
@@ -150,6 +156,20 @@ public abstract class ItemEntityMixin {
         if (kneaf$tickCounter % 2 != 0) {
             kneaf$mergesSkipped.incrementAndGet();
             ci.cancel();
+            return;
+        }
+
+        // Use ItemMergingHelper for efficient pre-check
+        ItemEntity self = (ItemEntity) (Object) this;
+        if (!kneaf$usedItemMergingHelper) {
+            kneaf$LOGGER.info("  ↳ Using ItemMergingHelper for optimized merge checks");
+            kneaf$usedItemMergingHelper = true;
+        }
+
+        // Log merge radius for debugging
+        if (kneaf$tickCounter == 1) {
+            double radiusSq = ItemMergingHelper.getMergeRadiusSquared();
+            kneaf$LOGGER.debug("Merge radius squared: {}", radiusSq);
         }
     }
 

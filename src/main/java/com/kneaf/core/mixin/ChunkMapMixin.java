@@ -129,6 +129,7 @@ public abstract class ChunkMapMixin {
 
     /**
      * Track when a chunk holder is created/updated with priority optimization.
+     * REAL OPTIMIZATION: Skip chunk load scheduling during critical TPS.
      */
     @Inject(method = "updateChunkScheduling", at = @At("HEAD"), cancellable = true)
     private void kneaf$onUpdateChunkSchedulingHead(long chunkPos, int level,
@@ -143,10 +144,19 @@ public abstract class ChunkMapMixin {
         if (level < oldLevel) {
             kneaf$chunksLoadedThisTick++;
 
-            // Rate limit chunk loading during low TPS
+            // REAL THROTTLING: Skip non-essential chunk loading during critical TPS
+            if (currentTPS < 10.0 && kneaf$chunksLoadedThisTick > 1) {
+                // During critical TPS, only allow 1 chunk per tick
+                kneaf$chunksDelayed.incrementAndGet();
+                cir.setReturnValue(oldHolder); // Return existing holder, skip new load
+                return;
+            }
+
+            // Rate limit chunk loading during low TPS (but not critical)
             if (kneaf$chunksLoadedThisTick > maxChunks && currentTPS < 18.0) {
                 kneaf$chunksDelayed.incrementAndGet();
-                // Don't cancel - just track. Cancelling could cause issues.
+                cir.setReturnValue(oldHolder); // Return existing holder, skip new load
+                return;
             }
         }
     }

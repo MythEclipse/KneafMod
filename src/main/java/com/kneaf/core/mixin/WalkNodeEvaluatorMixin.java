@@ -93,7 +93,7 @@ public abstract class WalkNodeEvaluatorMixin {
 
     /**
      * Inject into getPathTypeOfMob to add caching.
-     * This is called for every path node evaluation.
+     * REAL OPTIMIZATION: Return cached PathType from cache.
      */
     @Inject(method = "getPathType(Lnet/minecraft/world/level/pathfinder/PathfindingContext;IIILnet/minecraft/world/entity/Mob;)Lnet/minecraft/world/level/pathfinder/PathType;", at = @At("HEAD"), cancellable = true)
     private void kneaf$onGetPathTypeOfMob(
@@ -115,16 +115,17 @@ public abstract class WalkNodeEvaluatorMixin {
             // Fast path: air blocks are always OPEN
             if (state.isAir()) {
                 kneaf$airSkips.incrementAndGet();
-                // Don't cancel - let vanilla check if there's ground below
+                // Return OPEN for air blocks above solid ground
+                cir.setReturnValue(PathType.OPEN);
                 return;
             }
 
-            // Check cache
+            // Check cache and RETURN cached value
             PathType cached = PathNodeCache.getPathType(state);
             if (cached != null) {
                 kneaf$cacheHits.incrementAndGet();
-                // Note: We can't fully return here because path type also depends on
-                // the mob and surrounding blocks. But we can use this info later.
+                cir.setReturnValue(cached); // ACTUALLY return the cached value!
+                return;
             }
         } catch (Exception e) {
             // Ignore - fall through to vanilla

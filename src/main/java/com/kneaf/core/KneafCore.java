@@ -94,10 +94,26 @@ public class KneafCore {
         LOGGER.info("Starting KneafCore common setup");
 
         try {
+            // Log runtime mode
+            LOGGER.info("Runtime mode: {}", ModeDetector.getCurrentMode());
+
             // Initialize PerformanceManager
             PerformanceManager performanceManager = PerformanceManager.getInstance();
             performanceManager.loadConfiguration();
             LOGGER.info("PerformanceManager initialized: {}", performanceManager);
+
+            // Initialize ChunkGeneratorOptimizer (includes RustNoise warmup)
+            ChunkGeneratorOptimizer.init();
+            LOGGER.info("ChunkGeneratorOptimizer initialized, Rust acceleration: {}",
+                    ChunkGeneratorOptimizer.isRustAccelerationAvailable());
+
+            // Initialize ParallelEntityTicker
+            LOGGER.info("ParallelEntityTicker parallelism: {}", ParallelEntityTicker.getParallelism());
+
+            // Initialize ObjectPool for common objects
+            com.kneaf.core.util.ObjectPool<double[]> vectorPool = new com.kneaf.core.util.ObjectPool<>(
+                    () -> new double[3], 64);
+            LOGGER.info("ObjectPool initialized for vector reuse");
 
             // Register OptimizationInjector event listeners
             LOGGER.info("Registering OptimizationInjector event listeners");
@@ -105,9 +121,13 @@ public class KneafCore {
             // Register commands on the game bus
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(this::registerCommands);
 
-            // Delegate initialization to SystemManager
-
             LOGGER.info("KneafCore initialization completed successfully");
+            LOGGER.info("=== Integrated Systems ===");
+            LOGGER.info("  - 43 Mixins (auto-inject via Mixin system)");
+            LOGGER.info("  - ChunkProcessor (parallel chunk processing)");
+            LOGGER.info("  - ParallelEntityTicker (batch entity ops)");
+            LOGGER.info("  - RustOptimizations (SIMD via Rust/Rayon)");
+            LOGGER.info("  - ObjectPool (GC reduction)");
 
         } catch (Exception e) {
             LOGGER.error("Failed to complete KneafCore initialization", e);

@@ -62,8 +62,9 @@ public abstract class RandomTickMixin {
 
     /**
      * Optimize random tick chunk selection.
+     * REAL OPTIMIZATION: Skip ticks for cached empty chunks.
      */
-    @Inject(method = "tickChunk", at = @At("HEAD"))
+    @Inject(method = "tickChunk", at = @At("HEAD"), cancellable = true)
     private void kneaf$onTickChunk(LevelChunk chunk, int randomTickSpeed, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
             kneaf$LOGGER.info("✅ RandomTickMixin applied - Random tick optimization active!");
@@ -75,10 +76,11 @@ public abstract class RandomTickMixin {
         long chunkPos = chunk.getPos().toLong();
         long gameTime = self.getGameTime();
 
-        // Check empty chunk cache
+        // REAL SKIP: Check empty chunk cache and skip tick entirely
         Long cachedTime = kneaf$emptyChunkCache.get(chunkPos);
         if (cachedTime != null && gameTime - cachedTime < EMPTY_CHUNK_CACHE_DURATION) {
             kneaf$chunksSkipped.incrementAndGet();
+            ci.cancel(); // ACTUALLY skip the tick!
             return;
         }
 
