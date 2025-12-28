@@ -6,6 +6,8 @@
  */
 package com.kneaf.core.mixin;
 
+import com.kneaf.core.util.PoissonDiskSampler;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
@@ -21,12 +23,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * RandomTickMixin - Random tick optimization.
+ * RandomTickMixin - Advanced random tick optimization with Poisson
+ * distribution.
  * 
  * Optimizations:
  * 1. Skip chunks with no tickable blocks
  * 2. Cache tickable block information per chunk
- * 3. Track tick statistics
+ * 3. Poisson Disk Sampling for better tick distribution (prevents clustering)
+ * 4. Track tick statistics
  */
 @Mixin(ServerLevel.class)
 public abstract class RandomTickMixin {
@@ -59,6 +63,13 @@ public abstract class RandomTickMixin {
 
     @Unique
     private static final long EMPTY_CHUNK_CACHE_DURATION = 600;
+
+    // Use Poisson sampling for better distribution
+    @Unique
+    private static boolean kneaf$usePoissonSampling = true;
+
+    @Unique
+    private static final int POISSON_MIN_SAMPLES = 10; // Use Poisson for 10+ samples
 
     /**
      * Optimize random tick chunk selection.

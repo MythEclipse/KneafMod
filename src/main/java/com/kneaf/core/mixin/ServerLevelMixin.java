@@ -7,6 +7,7 @@
 package com.kneaf.core.mixin;
 
 import com.kneaf.core.ParallelEntityTicker;
+import com.kneaf.core.spatial.ServerLevelOctreeManager;
 import com.kneaf.core.util.TPSTracker;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
@@ -56,6 +57,10 @@ public abstract class ServerLevelMixin implements com.kneaf.core.extension.Serve
 
     @Unique
     private static final long BATCH_INTERVAL_MS = 500; // Process batch every 500ms
+
+    // Octree manager for entity collision optimization
+    @Unique
+    private final ServerLevelOctreeManager kneaf$octreeManager = new ServerLevelOctreeManager();
 
     // Cache of entity ID -> distance squared to nearest player
     // Instance field: Separate cache per world (Overworld, Nether, End)
@@ -112,6 +117,10 @@ public abstract class ServerLevelMixin implements com.kneaf.core.extension.Serve
             kneaf$runParallelEntityProcessing((ServerLevel) (Object) this);
             kneaf$lastBatchProcess = now;
         }
+
+        // Octree periodic maintenance
+        ServerLevel self = (ServerLevel) (Object) this;
+        kneaf$octreeManager.tick(self, self.getGameTime());
 
         // Flush any pending fluid updates (ensure no latency for small batches)
         // Access Manager directly

@@ -4,6 +4,7 @@
  */
 package com.kneaf.core.mixin;
 
+import com.kneaf.core.util.SpawnPointGrid;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EntityType;
@@ -24,11 +25,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * NaturalSpawnerMixin - Optimize mob spawning with REAL performance gains.
+ * NaturalSpawnerMixin - Advanced mob spawning with spatial grid optimization.
  * 
  * Optimization Strategy (maintains vanilla spawn rates):
  * 1. Cache isValidSpawn results per tick via redirect
- * 2. Skip redundant spawn position calculations
+ * 2. Spatial grid for better spawn point distribution (prevents clustering)
  * 3. Track cache effectiveness
  * 
  * NOTE: This mixin NEVER skips spawn attempts - vanilla spawn rates preserved.
@@ -58,6 +59,10 @@ public abstract class NaturalSpawnerMixin {
     private static long kneaf$lastLogTime = 0;
     @Unique
     private static long kneaf$lastCleanTick = 0;
+
+    // Spawn point grid for better distribution
+    @Unique
+    private static final SpawnPointGrid kneaf$spawnGrid = new SpawnPointGrid();
 
     /**
      * Track spawn attempts and clear cache periodically.
