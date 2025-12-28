@@ -9,19 +9,27 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * ExplosionControl - Global budget manager for explosions to prevent TPS lag.
- * Spreads explosion processing over multiple ticks to maintain stable TPS.
+ * ExplosionControl - Dynamic budget manager for explosions to prevent TPS lag.
+ * Automatically adjusts budget based on current server TPS.
  */
 public final class ExplosionControl {
     private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/ExplosionControl");
 
-    // Limits the number of TNT clusters that can trigger per tick.
-    // 8 per tick = 160 per second. This provides even more headroom for TPS.
-    private static final int MAX_EXPLOSIONS_PER_TICK = 8;
+    // Dynamic budget range
+    private static final int MIN_EXPLOSIONS_PER_TICK = 4;
+    private static final int MAX_EXPLOSIONS_PER_TICK = 32;
+    private static final int DEFAULT_EXPLOSIONS_PER_TICK = 8;
+
+    // Current dynamic budget
+    private static volatile int currentBudget = DEFAULT_EXPLOSIONS_PER_TICK;
 
     private static final AtomicInteger explosionCount = new AtomicInteger(0);
     private static long lastTickTime = -1;
     private static boolean loggedThrottle = false;
+
+    // Budget adjustment tracking
+    private static long lastBudgetAdjustTime = 0;
+    private static final long BUDGET_ADJUST_INTERVAL = 8;
 
     /**
      * Try to acquire permission for an explosion to occur this tick.
@@ -34,12 +42,15 @@ public final class ExplosionControl {
             explosionCount.set(0);
             lastTickTime = gameTime;
             loggedThrottle = false;
+
+            // Dynamically adjust budget based on TPS
+            adjustBudget(gameTime);
         }
 
-        // We check before incrementing to avoid unnecessary increments when full
-        if (explosionCount.get() >= MAX_EXPLOSIONS_PER_TICK) {
+        if (explosionCount.get() >= currentBudget) {
             if (!loggedThrottle) {
-                LOGGER.debug("Explosion budget full - Queueing remaining TNT clusters...");
+                LOGGER.debug("Explosion budget full ({}/{}) - Queueing remaining TNT clusters...",
+                        explosionCount.get(), currentBudget);
                 loggedThrottle = true;
             }
             return false;
@@ -58,8 +69,44 @@ public final class ExplosionControl {
         if (gameTime != lastTickTime) {
             explosionCount.set(0);
             lastTickTime = gameTime;
+            adjustBudget(gameTime);
         }
         explosionCount.incrementAndGet();
+    }
+
+    /**
+     * Dynamically adjust the explosion budget based on current TPS.
+     */
+    private static void adjustBudget(long gameTime) {
+        // Only adjust every BUDGET_ADJUST_INTERVAL ticks
+        if (gameTime - lastBudgetAdjustTime < BUDGET_ADJUST_INTERVAL) {
+            return;
+        }
+        lastBudgetAdjustTime = gameTime;
+
+        double tps = TPSTracker.getCurrentTPS();
+        int oldBudget = currentBudget;
+
+        // Adaptive budget based on TPS
+        if (tps >= 19.5) {
+            // Excellent TPS - increase budget
+            currentBudget = Math.min(MAX_EXPLOSIONS_PER_TICK, currentBudget + 2);
+        } else if (tps >= 18.0) {
+            // Good TPS - slight increase
+            currentBudget = Math.min(MAX_EXPLOSIONS_PER_TICK, currentBudget + 1);
+        } else if (tps < 15.0) {
+            // Poor TPS - decrease budget aggressively
+            currentBudget = Math.max(MIN_EXPLOSIONS_PER_TICK, currentBudget - 2);
+        } else if (tps < 17.0) {
+            // Below target - slight decrease
+            currentBudget = Math.max(MIN_EXPLOSIONS_PER_TICK, currentBudget - 1);
+        }
+        // TPS 17-18: maintain current budget
+
+        if (currentBudget != oldBudget) {
+            LOGGER.info("Dynamic explosion budget adjusted: {} → {} (TPS: {:.1f})",
+                    oldBudget, currentBudget, tps);
+        }
     }
 
     /**
@@ -67,5 +114,12 @@ public final class ExplosionControl {
      */
     public static int getExplosionCount() {
         return explosionCount.get();
+    }
+
+    /**
+     * Get the current dynamic budget.
+     */
+    public static int getCurrentBudget() {
+        return currentBudget;
     }
 }

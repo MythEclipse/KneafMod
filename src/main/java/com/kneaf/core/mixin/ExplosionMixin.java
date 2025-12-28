@@ -22,9 +22,8 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Optimized Explosion handling.
- * Sequential DDA-optimized scanning to ensure 100% stability
- * while maintaining massive performance gains over vanilla.
+ * Highly optimized Explosion handling for mass TNT scenarios.
+ * Sequential DDA-optimized scanning with adaptive resolution.
  */
 @Mixin(Explosion.class)
 public abstract class ExplosionMixin {
@@ -71,14 +70,14 @@ public abstract class ExplosionMixin {
 
         com.kneaf.core.util.ExplosionControl.notifyExploded(level.getGameTime());
 
-        if (radius < 1.0f)
+        // Early exit for tiny explosions
+        if (radius < 0.5f) {
+            ci.cancel();
             return;
+        }
 
-        // Optimized Sequential Scan
         List<BlockPos> blocks = getToBlow();
         kneaf$performOptimizedScan(blocks);
-
-        // Standard Entity Impact (In-place)
         kneaf$performEntityImpact();
 
         ci.cancel();
@@ -86,7 +85,7 @@ public abstract class ExplosionMixin {
 
     @Unique
     private void kneaf$performOptimizedScan(List<BlockPos> blocks) {
-        // Rust Acceleration for huge radii (>4.0) - Math only, safe to keep
+        // Rust Acceleration for huge radii
         if (RustOptimizations.isAvailable() && radius > 4.0f) {
             try {
                 double[] origin = new double[] { x, y, z };
@@ -110,14 +109,18 @@ public abstract class ExplosionMixin {
 
         java.util.Set<BlockPos> scanSet = new java.util.HashSet<>();
 
-        // Sequential Ray Casting with DDA-style caching to optimize world access
-        for (int j = 0; j < 16; ++j) {
-            for (int k = 0; k < 16; ++k) {
-                for (int l = 0; l < 16; ++l) {
-                    if (j == 0 || j == 15 || k == 0 || k == 15 || l == 0 || l == 15) {
-                        double d0 = (double) ((float) j / 15.0F * 2.0F - 1.0F);
-                        double d1 = (double) ((float) k / 15.0F * 2.0F - 1.0F);
-                        double d2 = (double) ((float) l / 15.0F * 2.0F - 1.0F);
+        // Adaptive resolution: smaller explosions = fewer rays = faster
+        int resolution = radius < 2.0f ? 8 : (radius < 4.0f ? 12 : 16);
+        float resF = (float) (resolution - 1);
+
+        for (int j = 0; j < resolution; ++j) {
+            for (int k = 0; k < resolution; ++k) {
+                for (int l = 0; l < resolution; ++l) {
+                    if (j == 0 || j == resolution - 1 || k == 0 || k == resolution - 1 || l == 0
+                            || l == resolution - 1) {
+                        double d0 = (double) ((float) j / resF * 2.0F - 1.0F);
+                        double d1 = (double) ((float) k / resF * 2.0F - 1.0F);
+                        double d2 = (double) ((float) l / resF * 2.0F - 1.0F);
                         double d3 = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
                         d0 /= d3;
                         d1 /= d3;
@@ -169,9 +172,18 @@ public abstract class ExplosionMixin {
                 x + q + 1, y + q + 1, z + q + 1);
         List<net.minecraft.world.entity.Entity> entities = level.getEntities(getDirectSourceEntity(), aabb);
 
+        if (entities.isEmpty())
+            return;
+
+        double qSq = (double) q * (double) q;
+
         for (net.minecraft.world.entity.Entity entity : entities) {
             if (!entity.ignoreExplosion((Explosion) (Object) this)) {
-                double dist = Math.sqrt(entity.distanceToSqr(x, y, z)) / (double) q;
+                double distSq = entity.distanceToSqr(x, y, z);
+                if (distSq > qSq)
+                    continue;
+
+                double dist = Math.sqrt(distSq) / (double) q;
                 if (dist <= 1.0D) {
                     double dx = entity.getX() - x,
                             dy = (entity instanceof net.minecraft.world.entity.item.PrimedTnt ? entity.getY()
@@ -208,7 +220,8 @@ public abstract class ExplosionMixin {
                     state.getBlock().wasExploded(level, bp, (Explosion) (Object) this);
                 }
             }
-            if (blocks.size() > 50) {
+            // Lower threshold for faster batch processing
+            if (blocks.size() > 20) {
                 com.kneaf.core.util.BatchBlockRemoval.removeBlocks(level, blocks);
                 blocks.clear();
             }
