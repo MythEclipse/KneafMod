@@ -81,7 +81,13 @@ public abstract class EntityTrackerMixin {
 
         kneaf$ticksSinceLastUpdate++;
 
-        double nearestDistance = kneaf$getNearestPlayerDistance();
+        // Optimization: Try to get cached distance from ParallelEntityTicker first
+        double nearestDistance = ServerLevelMixin.kneaf$getCachedDistance(entity.getId());
+
+        // Fallback to main thread calculation if not cached
+        if (nearestDistance < 0) {
+            nearestDistance = kneaf$getNearestPlayerDistance();
+        }
 
         // Determine update frequency based on distance
         if (nearestDistance < NEAR_DISTANCE) {

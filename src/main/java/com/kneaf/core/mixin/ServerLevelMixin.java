@@ -69,7 +69,7 @@ public abstract class ServerLevelMixin {
      * @return Squared distance to nearest player, or -1 if not cached
      */
     @Unique
-    private static double kneaf$getCachedDistance(int entityId) {
+    public static double kneaf$getCachedDistance(int entityId) {
         Double cached = kneaf$entityDistanceCache.get(entityId);
         return cached != null ? cached : -1.0;
     }
