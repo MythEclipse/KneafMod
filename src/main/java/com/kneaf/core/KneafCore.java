@@ -68,6 +68,10 @@ public class KneafCore {
         AsyncLoggingManager.initialize();
         ASYNC_LOGGER.info("AsyncLoggingManager initialized - All logging operations are now non-blocking");
 
+        // Initialize centralized WorkerThreadPool
+        WorkerThreadPool.initialize();
+        ASYNC_LOGGER.info("WorkerThreadPool initialized - Centralized thread management active");
+
         // Initialize modular components
 
         // Register deferred registers

@@ -11,36 +11,37 @@ import java.util.*;
 import java.util.function.Consumer;
 
 /**
- * Cross-component event bus for coordinating performance events between different system components.
+ * Cross-component event bus for coordinating performance events between
+ * different system components.
  * Provides pub/sub messaging with thread-safe event delivery and filtering.
  */
 public final class CrossComponentEventBus {
     private static final Logger LOGGER = LoggerFactory.getLogger(CrossComponentEventBus.class);
-    
+
     // Event subscribers
     private final ConcurrentHashMap<String, List<EventSubscriber>> subscribers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<Consumer<CrossComponentEvent>>> consumers = new ConcurrentHashMap<>();
-    
+
     // Event queue for async processing
     private final BlockingQueue<CrossComponentEvent> eventQueue = new LinkedBlockingQueue<>(10000);
-    private final ExecutorService eventExecutor = Executors.newFixedThreadPool(2);
-    
+    // Use centralized WorkerThreadPool for event processing
+
     // Event processing state
     private final AtomicBoolean isProcessing = new AtomicBoolean(false);
     private final AtomicBoolean isEnabled = new AtomicBoolean(true);
     private final AtomicLong eventsPublished = new AtomicLong(0);
     private final AtomicLong eventsDelivered = new AtomicLong(0);
     private final AtomicLong eventsDropped = new AtomicLong(0);
-    
+
     // Health monitoring
     private final AtomicBoolean isHealthy = new AtomicBoolean(true);
     private final AtomicLong lastSuccessfulDelivery = new AtomicLong(System.currentTimeMillis());
-    
+
     public CrossComponentEventBus() {
         LOGGER.info("Initializing CrossComponentEventBus");
         startEventProcessing();
     }
-    
+
     /**
      * Publish an event to the bus
      */
@@ -48,7 +49,7 @@ public final class CrossComponentEventBus {
         if (!isEnabled.get()) {
             return;
         }
-        
+
         try {
             // Add to queue for async processing
             if (eventQueue.offer(event)) {
@@ -65,7 +66,7 @@ public final class CrossComponentEventBus {
             isHealthy.set(false);
         }
     }
-    
+
     /**
      * Subscribe to events by component and event type
      */
@@ -73,7 +74,7 @@ public final class CrossComponentEventBus {
         if (!isEnabled.get()) {
             return;
         }
-        
+
         try {
             String key = createSubscriptionKey(component, eventType);
             subscribers.computeIfAbsent(key, k -> new ArrayList<>()).add(subscriber);
@@ -83,7 +84,7 @@ public final class CrossComponentEventBus {
             isHealthy.set(false);
         }
     }
-    
+
     /**
      * Subscribe to events with lambda consumer
      */
@@ -91,7 +92,7 @@ public final class CrossComponentEventBus {
         if (!isEnabled.get()) {
             return;
         }
-        
+
         try {
             String key = createSubscriptionKey(component, eventType);
             consumers.computeIfAbsent(key, k -> new ArrayList<>()).add(consumer);
@@ -101,7 +102,7 @@ public final class CrossComponentEventBus {
             isHealthy.set(false);
         }
     }
-    
+
     /**
      * Unsubscribe from events
      */
@@ -116,7 +117,7 @@ public final class CrossComponentEventBus {
             LOGGER.error("Error unsubscribing from events", e);
         }
     }
-    
+
     /**
      * Unsubscribe consumer from events
      */
@@ -131,18 +132,19 @@ public final class CrossComponentEventBus {
             LOGGER.error("Error unsubscribing from events", e);
         }
     }
-    
+
     /**
      * Start event processing
      */
     private void startEventProcessing() {
         if (isProcessing.compareAndSet(false, true)) {
-            eventExecutor.submit(this::processEvents);
-            eventExecutor.submit(this::processEvents); // Second thread for parallel processing
+            com.kneaf.core.WorkerThreadPool.getIOPool().submit(this::processEvents);
+            com.kneaf.core.WorkerThreadPool.getIOPool().submit(this::processEvents); // Second thread for parallel
+                                                                                     // processing
             LOGGER.info("Event processing started");
         }
     }
-    
+
     /**
      * Process events from the queue
      */
@@ -163,34 +165,34 @@ public final class CrossComponentEventBus {
             }
         }
     }
-    
+
     /**
      * Deliver an event to all matching subscribers
      */
     private void deliverEvent(CrossComponentEvent event) {
         String component = event.getComponent();
         String eventType = event.getEventType();
-        
+
         // Deliver to specific subscribers
         String specificKey = createSubscriptionKey(component, eventType);
         deliverToSubscribers(event, specificKey);
-        
+
         // Deliver to wildcard subscribers (all components, specific event type)
         String wildcardComponentKey = createSubscriptionKey("*", eventType);
         deliverToSubscribers(event, wildcardComponentKey);
-        
+
         // Deliver to wildcard subscribers (specific component, all event types)
         String wildcardEventKey = createSubscriptionKey(component, "*");
         deliverToSubscribers(event, wildcardEventKey);
-        
+
         // Deliver to global wildcard subscribers
         String globalWildcardKey = createSubscriptionKey("*", "*");
         deliverToSubscribers(event, globalWildcardKey);
-        
+
         eventsDelivered.incrementAndGet();
         lastSuccessfulDelivery.set(System.currentTimeMillis());
     }
-    
+
     /**
      * Deliver event to subscribers for a specific key
      */
@@ -206,7 +208,7 @@ public final class CrossComponentEventBus {
                 }
             }
         }
-        
+
         // Deliver to lambda consumers
         List<Consumer<CrossComponentEvent>> consumerList = consumers.get(key);
         if (consumerList != null) {
@@ -219,35 +221,34 @@ public final class CrossComponentEventBus {
             }
         }
     }
-    
+
     /**
      * Create subscription key from component and event type
      */
     private String createSubscriptionKey(String component, String eventType) {
         return component + ":" + eventType;
     }
-    
+
     /**
      * Get event statistics
      */
     public EventStatistics getStatistics() {
         return new EventStatistics(
-            eventsPublished.get(),
-            eventsDelivered.get(),
-            eventsDropped.get(),
-            eventQueue.size(),
-            subscribers.size(),
-            consumers.size()
-        );
+                eventsPublished.get(),
+                eventsDelivered.get(),
+                eventsDropped.get(),
+                eventQueue.size(),
+                subscribers.size(),
+                consumers.size());
     }
-    
+
     /**
      * Get current event queue size
      */
     public int getQueueSize() {
         return eventQueue.size();
     }
-    
+
     /**
      * Clear all subscribers
      */
@@ -256,7 +257,7 @@ public final class CrossComponentEventBus {
         consumers.clear();
         LOGGER.info("All subscribers cleared");
     }
-    
+
     /**
      * Enable/disable event bus
      */
@@ -267,50 +268,42 @@ public final class CrossComponentEventBus {
         }
         LOGGER.info("CrossComponentEventBus {}", enabled ? "enabled" : "disabled");
     }
-    
+
     /**
      * Check if event bus is healthy
      */
     public boolean isHealthy() {
-        return isHealthy.get() && 
-               (System.currentTimeMillis() - lastSuccessfulDelivery.get()) < 30000; // 30 second timeout
+        return isHealthy.get() &&
+                (System.currentTimeMillis() - lastSuccessfulDelivery.get()) < 30000; // 30 second timeout
     }
-    
+
     /**
      * Shutdown the event bus
      */
     public void shutdown() {
         LOGGER.info("Shutting down CrossComponentEventBus");
-        
+
         isProcessing.set(false);
         setEnabled(false);
-        
+
         // Clear remaining events
         eventQueue.clear();
         clearSubscribers();
-        
-        // Shutdown executor
-        eventExecutor.shutdown();
-        try {
-            if (!eventExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                eventExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            eventExecutor.shutdownNow();
-        }
-        
+
+        // Pool managed by WorkerThreadPool
+
         LOGGER.info("CrossComponentEventBus shutdown completed");
     }
-    
+
     /**
      * Update health status
      */
     private void updateHealthStatus() {
         boolean healthy = eventsDropped.get() < 100 && // Less than 100 dropped events
-                         (System.currentTimeMillis() - lastSuccessfulDelivery.get()) < 60000; // Within 1 minute
+                (System.currentTimeMillis() - lastSuccessfulDelivery.get()) < 60000; // Within 1 minute
         isHealthy.set(healthy);
     }
-    
+
     /**
      * Event statistics
      */
@@ -321,9 +314,9 @@ public final class CrossComponentEventBus {
         private final int queueSize;
         private final int subscriberCount;
         private final int consumerCount;
-        
-        public EventStatistics(long eventsPublished, long eventsDelivered, long eventsDropped, 
-                              int queueSize, int subscriberCount, int consumerCount) {
+
+        public EventStatistics(long eventsPublished, long eventsDelivered, long eventsDropped,
+                int queueSize, int subscriberCount, int consumerCount) {
             this.eventsPublished = eventsPublished;
             this.eventsDelivered = eventsDelivered;
             this.eventsDropped = eventsDropped;
@@ -331,21 +324,40 @@ public final class CrossComponentEventBus {
             this.subscriberCount = subscriberCount;
             this.consumerCount = consumerCount;
         }
-        
-        public long getEventsPublished() { return eventsPublished; }
-        public long getEventsDelivered() { return eventsDelivered; }
-        public long getEventsDropped() { return eventsDropped; }
-        public int getQueueSize() { return queueSize; }
-        public int getSubscriberCount() { return subscriberCount; }
-        public int getConsumerCount() { return consumerCount; }
-        public double getDeliveryRate() { 
-            return eventsPublished > 0 ? (double) eventsDelivered / eventsPublished : 0.0; 
+
+        public long getEventsPublished() {
+            return eventsPublished;
         }
-        public double getDropRate() { 
-            return eventsPublished > 0 ? (double) eventsDropped / eventsPublished : 0.0; 
+
+        public long getEventsDelivered() {
+            return eventsDelivered;
+        }
+
+        public long getEventsDropped() {
+            return eventsDropped;
+        }
+
+        public int getQueueSize() {
+            return queueSize;
+        }
+
+        public int getSubscriberCount() {
+            return subscriberCount;
+        }
+
+        public int getConsumerCount() {
+            return consumerCount;
+        }
+
+        public double getDeliveryRate() {
+            return eventsPublished > 0 ? (double) eventsDelivered / eventsPublished : 0.0;
+        }
+
+        public double getDropRate() {
+            return eventsPublished > 0 ? (double) eventsDropped / eventsPublished : 0.0;
         }
     }
-    
+
     /**
      * Event subscriber interface
      */

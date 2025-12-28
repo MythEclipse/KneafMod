@@ -4,6 +4,7 @@
  */
 package com.kneaf.core.mixin;
 
+
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import com.kneaf.core.RustOptimizations;
@@ -16,7 +17,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -64,9 +64,7 @@ public abstract class NoiseChunkGeneratorMixin {
     private static final ThreadLocal<Long> kneaf$noiseStartTime = new ThreadLocal<>();
 
     // Thread pool for parallel noise processing
-    @Unique
-    private static final ForkJoinPool kneaf$noisePool = new ForkJoinPool(
-            Math.max(2, Runtime.getRuntime().availableProcessors() / 2));
+    // Use centralized WorkerThreadPool for parallel noise sampling
 
     // Noise generation configuration
     @Unique
@@ -341,11 +339,4 @@ public abstract class NoiseChunkGeneratorMixin {
                 total, kneaf$delayedChunks.get(), avgMs);
     }
 
-    /**
-     * Shutdown the noise pool on mod unload.
-     */
-    @Unique
-    private static void kneaf$shutdown() {
-        kneaf$noisePool.shutdown();
-    }
 }

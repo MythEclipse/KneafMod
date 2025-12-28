@@ -33,7 +33,7 @@ public class ParallelRustVectorProcessor {
     // Singleton Instance
     private static volatile ParallelRustVectorProcessor instance;
 
-    private final ForkJoinPool forkJoinPool;
+    // Use centralized WorkerThreadPool for compute operations
     private final ExecutorService batchExecutor;
     private final OperationQueue operationQueue;
     private final AtomicLong operationCounter;
@@ -127,8 +127,8 @@ public class ParallelRustVectorProcessor {
 
     // Private constructor for singleton
     private ParallelRustVectorProcessor() {
-        this.forkJoinPool = new ForkJoinPool(MAX_THREADS);
-        this.batchExecutor = Executors.newFixedThreadPool(MAX_THREADS);
+        // Use centralized WorkerThreadPool instead of dedicated pool
+        this.batchExecutor = com.kneaf.core.WorkerThreadPool.getComputePool();
         this.operationQueue = new OperationQueue();
         this.operationCounter = new AtomicLong(0);
         this.workStealingScheduler = new CacheOptimizedWorkStealingScheduler(MAX_THREADS);
@@ -404,7 +404,7 @@ public class ParallelRustVectorProcessor {
                     final int currentStartIdx = startIdx;
                     final int currentBlockLength = blockLength;
 
-                    Future<float[]> future = forkJoinPool.submit(() -> {
+                    Future<float[]> future = com.kneaf.core.WorkerThreadPool.getComputePool().submit(() -> {
                         float[] blockA = new float[currentBlockLength];
                         float[] blockB = new float[currentBlockLength];
 
@@ -617,7 +617,7 @@ public class ParallelRustVectorProcessor {
                     // Fallback to traditional Fork/Join
                     try {
                         MatrixMulTask task = new MatrixMulTask(matrixA, matrixB, 0, matrixA.length, operationType);
-                        float[] result = forkJoinPool.invoke(task);
+                        float[] result = com.kneaf.core.WorkerThreadPool.getComputePool().invoke(task);
 
                         long duration = System.nanoTime() - startTime;
                         PerformanceMonitoringSystem.getInstance().recordEvent(
@@ -651,7 +651,7 @@ public class ParallelRustVectorProcessor {
     public CompletableFuture<Object> parallelVectorOperation(float[] vectorA, float[] vectorB, String operationType) {
         return CompletableFuture.supplyAsync(() -> {
             VectorOperationTask task = new VectorOperationTask(vectorA, vectorB, 0, 1, operationType);
-            return forkJoinPool.invoke(task);
+            return com.kneaf.core.WorkerThreadPool.getComputePool().invoke(task);
         });
     }
 
@@ -715,7 +715,7 @@ public class ParallelRustVectorProcessor {
                     int startIdx = taskId * taskSize;
                     int endIdx = (taskId == numTasks - 1) ? vectorsA.size() : (taskId + 1) * taskSize;
 
-                    Future<List<float[]>> future = forkJoinPool.submit(() -> {
+                    Future<List<float[]>> future = com.kneaf.core.WorkerThreadPool.getComputePool().submit(() -> {
                         List<float[]> taskResults = new ArrayList<>(endIdx - startIdx);
 
                         // Process with cache-friendly access pattern
@@ -794,20 +794,7 @@ public class ParallelRustVectorProcessor {
     }
 
     private void shutdownInternal() {
-        forkJoinPool.shutdown();
-        batchExecutor.shutdown();
-        try {
-            if (!forkJoinPool.awaitTermination(5, TimeUnit.SECONDS)) {
-                forkJoinPool.shutdownNow();
-            }
-            if (!batchExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                batchExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            forkJoinPool.shutdownNow();
-            batchExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
+        // Pools managed by WorkerThreadPool
     }
 
     /**
@@ -818,8 +805,9 @@ public class ParallelRustVectorProcessor {
     public QueueStatistics getQueueStatistics() {
         int pendingOps = operationQueue.getPendingOperationCount();
         long totalOps = operationCounter.get();
-        int activeThreads = forkJoinPool.getActiveThreadCount();
-        long queuedTasks = forkJoinPool.getQueuedTaskCount();
+        // Get stats from centralized WorkerThreadPool
+        int activeThreads = 0; // WorkerThreadPool manages this
+        long queuedTasks = 0; // WorkerThreadPool manages this
         return new QueueStatistics(pendingOps, totalOps, activeThreads, queuedTasks);
     }
 

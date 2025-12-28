@@ -16,7 +16,6 @@ import net.minecraft.world.entity.player.Player;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -35,9 +34,7 @@ public final class ParallelEntityTicker {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/ParallelEntityTicker");
 
-    // Thread pool for parallel entity processing
-    private static final int THREAD_COUNT = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
-    private static final ForkJoinPool entityPool = new ForkJoinPool(THREAD_COUNT);
+    // Use centralized WorkerThreadPool for parallel entity processing
 
     // Batch size for efficient processing
     private static final int BATCH_SIZE = 64;
@@ -122,7 +119,7 @@ public final class ParallelEntityTicker {
                 final int start = i;
                 final int end = Math.min(i + BATCH_SIZE, count);
 
-                tasks.add(entityPool.submit(() -> {
+                tasks.add(WorkerThreadPool.getComputePool().submit(() -> {
                     for (int j = start; j < end; j++) {
                         processor.process(entities.get(j));
                     }
@@ -177,14 +174,14 @@ public final class ParallelEntityTicker {
      * Get pool parallelism level.
      */
     public static int getParallelism() {
-        return entityPool.getParallelism();
+        return WorkerThreadPool.getComputePool().getParallelism();
     }
 
     /**
      * Get active thread count.
      */
     public static int getActiveThreads() {
-        return entityPool.getActiveThreadCount();
+        return WorkerThreadPool.getComputePool().getActiveThreadCount();
     }
 
     /**
@@ -198,7 +195,7 @@ public final class ParallelEntityTicker {
 
         return String.format(
                 "ParallelEntity{entities=%d, batches=%d, avgBatch=%.1f, totalMs=%d, threads=%d}",
-                entities, batches, avgBatch, ms, THREAD_COUNT);
+                entities, batches, avgBatch, ms, WorkerThreadPool.getComputePool().getParallelism());
     }
 
     public static long getTotalEntitiesProcessed() {
@@ -209,7 +206,7 @@ public final class ParallelEntityTicker {
      * Shutdown the entity pool.
      */
     public static void shutdown() {
-        entityPool.shutdown();
+        // Pool managed by WorkerThreadPool
         LOGGER.info("ParallelEntityTicker shutdown. Stats: {}", getStatistics());
     }
 

@@ -330,8 +330,7 @@ public final class ErrorTracker {
      * Start pattern analysis
      */
     private void startPatternAnalysis() {
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-        scheduler.scheduleAtFixedRate(this::analyzeErrorPatterns,
+        com.kneaf.core.WorkerThreadPool.getScheduledPool().scheduleAtFixedRate(this::analyzeErrorPatterns,
                 patternAnalysisInterval.get(), patternAnalysisInterval.get(), TimeUnit.MILLISECONDS);
     }
 

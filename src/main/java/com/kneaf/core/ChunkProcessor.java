@@ -14,10 +14,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -41,29 +37,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class ChunkProcessor {
     private static final Logger LOGGER = LoggerFactory.getLogger(ChunkProcessor.class);
 
-    // === AGGRESSIVE THREAD POOL CONFIGURATION ===
-    // Use ALL available cores for chunk processing (C2ME style)
-    private static final int THREAD_COUNT = Math.max(4, Runtime.getRuntime().availableProcessors());
-
-    // Primary thread pool for chunk processing - high parallelism
-    private static final ForkJoinPool chunkPool = new ForkJoinPool(
-            THREAD_COUNT,
-            ForkJoinPool.defaultForkJoinWorkerThreadFactory,
-            (t, e) -> LOGGER.error("Chunk processor error in {}: {}", t.getName(), e.getMessage()),
-            true // async mode for better work-stealing
-    );
-
-    // Secondary executor for batch operations
-    private static final ExecutorService batchExecutor = new ThreadPoolExecutor(
-            2, THREAD_COUNT,
-            60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(1000),
-            r -> {
-                Thread t = new Thread(r, "KneafChunkBatch");
-                t.setDaemon(true);
-                return t;
-            },
-            new ThreadPoolExecutor.CallerRunsPolicy());
+    // Use centralized WorkerThreadPool for chunk processing
 
     // Pending chunk tasks for synchronization
     private static final ConcurrentLinkedQueue<CompletableFuture<?>> pendingChunkTasks = new ConcurrentLinkedQueue<>();
@@ -84,7 +58,7 @@ public final class ChunkProcessor {
     private static volatile boolean enabled = true;
 
     // Dynamic limits
-    private static final int MIN_CONCURRENT_CHUNKS = Math.max(4, Runtime.getRuntime().availableProcessors());
+    private static final int MIN_CONCURRENT_CHUNKS = Math.max(4, WorkerThreadPool.getComputePool().getParallelism());
     private static final int ABSOLUTE_MAX_CHUNKS = 256;
     private static final AtomicInteger currentMaxConcurrentChunks = new AtomicInteger(64); // Start moderate
     private static final AtomicInteger dynamicBatchSize = new AtomicInteger(16);
@@ -102,8 +76,10 @@ public final class ChunkProcessor {
     }
 
     static {
-        LOGGER.info("ChunkProcessor initialized with {} threads, dynamic limit {} (max {})",
-                THREAD_COUNT, currentMaxConcurrentChunks.get(), ABSOLUTE_MAX_CHUNKS);
+        LOGGER.info("ChunkProcessor initialized with WorkerThreadPool, dynamic limit {} (max {})",
+                currentMaxConcurrentChunks.get(), ABSOLUTE_MAX_CHUNKS);
+        LOGGER.info("ChunkProcessor initialized with WorkerThreadPool, dynamic limit {} (max {})",
+                currentMaxConcurrentChunks.get(), ABSOLUTE_MAX_CHUNKS);
     }
 
     /**
@@ -121,7 +97,6 @@ public final class ChunkProcessor {
 
         int currentLimit = currentMaxConcurrentChunks.get();
 
-
         // Calculate TPS approximation from tick time
         // 50ms = 20 TPS
         double estimatedTps = tickTimeMs > 0 ? Math.min(20.0, 1000.0 / tickTimeMs) : 20.0;
@@ -130,7 +105,6 @@ public final class ChunkProcessor {
         // long totalMem = Runtime.getRuntime().totalMemory();
         // long freeMem = Runtime.getRuntime().freeMemory();
         // long usedMem = totalMem - freeMem;
-
 
         // Adaptive logic
         if (estimatedTps < lowTpsThreshold) {
@@ -208,7 +182,7 @@ public final class ChunkProcessor {
                     processingChunks.remove(chunkPos);
                     totalProcessingTimeNs.addAndGet(System.nanoTime() - startNs);
                 }
-            }, chunkPool).exceptionally(e -> {
+            }, WorkerThreadPool.getComputePool()).exceptionally(e -> {
                 LOGGER.debug("Async chunk processing failed: {}", e.getMessage());
                 activeChunkTasks.decrementAndGet();
                 processingChunks.remove(chunkPos);
@@ -387,7 +361,7 @@ public final class ChunkProcessor {
                 processed,
                 chunksPerSecond.get(),
                 activeChunkTasks.get(),
-                chunkPool.getPoolSize(),
+                WorkerThreadPool.getComputePool().getPoolSize(),
                 avgMs);
     }
 
@@ -415,22 +389,7 @@ public final class ChunkProcessor {
      */
     public static void shutdown() {
         LOGGER.info("Shutting down chunk processor...");
-
-        chunkPool.shutdown();
-        batchExecutor.shutdown();
-
-        try {
-            if (!chunkPool.awaitTermination(5, TimeUnit.SECONDS)) {
-                chunkPool.shutdownNow();
-            }
-            if (!batchExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                batchExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            chunkPool.shutdownNow();
-            batchExecutor.shutdownNow();
-        }
-
+        // Pools managed by WorkerThreadPool
         LOGGER.info("Chunk processor shutdown complete. Stats: {}", getChunkProcessingStats());
     }
 }

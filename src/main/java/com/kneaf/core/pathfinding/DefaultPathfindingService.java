@@ -5,7 +5,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ForkJoinPool;
 
 /**
  * Default implementation of PathfindingService.
@@ -15,8 +14,7 @@ import java.util.concurrent.ForkJoinPool;
 public class DefaultPathfindingService implements PathfindingService {
     private static final Logger LOGGER = LoggerFactory.getLogger(DefaultPathfindingService.class);
     private static final DefaultPathfindingService INSTANCE = new DefaultPathfindingService();
-    private final ForkJoinPool pathfindingPool = new ForkJoinPool(
-            Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
+    // Use centralized WorkerThreadPool instead of dedicated pool
 
     private DefaultPathfindingService() {
     }
@@ -44,7 +42,7 @@ public class DefaultPathfindingService implements PathfindingService {
     public CompletableFuture<int[]> findPathAsync(boolean[] grid, int width, int height, int startX, int startY,
             int goalX, int goalY) {
         return CompletableFuture.supplyAsync(() -> findPath(grid, width, height, startX, startY, goalX, goalY),
-                pathfindingPool);
+                com.kneaf.core.WorkerThreadPool.getComputePool());
     }
 
     private int[] findPathJava(boolean[] grid, int width, int height, int startX, int startY, int goalX, int goalY) {

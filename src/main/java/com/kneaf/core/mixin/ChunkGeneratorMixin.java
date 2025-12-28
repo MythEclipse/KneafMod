@@ -18,7 +18,6 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.ArrayList;
@@ -94,9 +93,7 @@ public abstract class ChunkGeneratorMixin {
     @Unique
     private static final int PARALLEL_FEATURE_THRESHOLD = 16;
 
-    @Unique
-    private static final ForkJoinPool kneaf$featurePool = new ForkJoinPool(
-            Math.max(2, Runtime.getRuntime().availableProcessors() / 2));
+    // Note: Uses parallelStream() directly, no dedicated pool needed
 
     @Unique
     private static final ThreadLocal<List<Runnable>> kneaf$featureBatch = ThreadLocal.withInitial(ArrayList::new);
@@ -263,11 +260,4 @@ public abstract class ChunkGeneratorMixin {
                 total, kneaf$parallelFeatures.get(), kneaf$skippedDecorations.get(), avgMs);
     }
 
-    /**
-     * Shutdown the feature pool on mod unload.
-     */
-    @Unique
-    private static void kneaf$shutdown() {
-        kneaf$featurePool.shutdown();
-    }
 }

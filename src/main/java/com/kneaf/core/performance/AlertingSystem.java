@@ -26,25 +26,9 @@ public final class AlertingSystem {
 
     // Notification channels
     private final List<NotificationChannel> notificationChannels = new ArrayList<>();
-    // OPTIMIZED: Use bounded thread pool instead of cached (prevents unlimited
-    // thread creation)
-    private final ExecutorService notificationExecutor = new ThreadPoolExecutor(
-            2, 4, 60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(100),
-            new ThreadFactory() {
-                private final AtomicInteger threadNumber = new AtomicInteger(1);
-
-                @Override
-                public Thread newThread(Runnable r) {
-                    Thread t = new Thread(r, "AlertNotification-" + threadNumber.getAndIncrement());
-                    t.setDaemon(true);
-                    return t;
-                }
-            },
-            new ThreadPoolExecutor.CallerRunsPolicy());
+    // Use centralized WorkerThreadPool for notifications and alert processing
 
     // Alert processing
-    private final ScheduledExecutorService alertProcessor = Executors.newScheduledThreadPool(2);
     private final AtomicBoolean isProcessing = new AtomicBoolean(false);
     private final AtomicBoolean isEnabled = new AtomicBoolean(true);
 
@@ -295,7 +279,7 @@ public final class AlertingSystem {
      */
     private void sendNotifications(Alert alert) {
         for (NotificationChannel channel : notificationChannels) {
-            notificationExecutor.submit(() -> {
+            com.kneaf.core.WorkerThreadPool.getIOPool().submit(() -> {
                 try {
                     channel.sendNotification(alert);
                     notificationsSent.incrementAndGet();
@@ -312,7 +296,7 @@ public final class AlertingSystem {
      */
     private void sendResolutionNotification(Alert alert) {
         for (NotificationChannel channel : notificationChannels) {
-            notificationExecutor.submit(() -> {
+            com.kneaf.core.WorkerThreadPool.getIOPool().submit(() -> {
                 try {
                     channel.sendResolutionNotification(alert);
                 } catch (Exception e) {
@@ -344,10 +328,12 @@ public final class AlertingSystem {
     private void startAlertProcessing() {
         if (isProcessing.compareAndSet(false, true)) {
             // Process alerts every 30 seconds
-            alertProcessor.scheduleAtFixedRate(this::processAlerts, 0, 30, TimeUnit.SECONDS);
+            com.kneaf.core.WorkerThreadPool.getScheduledPool().scheduleAtFixedRate(this::processAlerts, 0, 30,
+                    TimeUnit.SECONDS);
 
             // Escalate alerts every minute
-            alertProcessor.scheduleAtFixedRate(this::escalateAlerts, 0, 60, TimeUnit.SECONDS);
+            com.kneaf.core.WorkerThreadPool.getScheduledPool().scheduleAtFixedRate(this::escalateAlerts, 0, 60,
+                    TimeUnit.SECONDS);
 
             LOGGER.info("Alert processing started");
         }
@@ -420,7 +406,7 @@ public final class AlertingSystem {
      */
     private void sendEscalationNotification(Alert alert) {
         for (NotificationChannel channel : notificationChannels) {
-            notificationExecutor.submit(() -> {
+            com.kneaf.core.WorkerThreadPool.getIOPool().submit(() -> {
                 try {
                     channel.sendEscalationNotification(alert);
                 } catch (Exception e) {
@@ -519,21 +505,7 @@ public final class AlertingSystem {
         setEnabled(false);
         clearAllAlerts();
 
-        // Shutdown executors
-        alertProcessor.shutdown();
-        notificationExecutor.shutdown();
-
-        try {
-            if (!alertProcessor.awaitTermination(5, TimeUnit.SECONDS)) {
-                alertProcessor.shutdownNow();
-            }
-            if (!notificationExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                notificationExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            alertProcessor.shutdownNow();
-            notificationExecutor.shutdownNow();
-        }
+        // Pools managed by WorkerThreadPool
 
         LOGGER.info("AlertingSystem shutdown completed");
     }

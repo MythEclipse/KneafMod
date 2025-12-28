@@ -60,7 +60,7 @@ public final class PerformanceMonitoringSystem {
     private volatile int adaptiveCollectionInterval = 100; // Default 100ms
 
     // Background monitoring thread dengan adaptive frequency
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
+    // Use centralized WorkerThreadPool for scheduling
     private final AtomicReference<ScheduledFuture<?>> metricsCollectionTask = new AtomicReference<>();
     private final AtomicReference<ScheduledFuture<?>> alertingTask = new AtomicReference<>();
     private final AtomicReference<ScheduledFuture<?>> adaptiveMonitoringTask = new AtomicReference<>();
@@ -133,12 +133,12 @@ public final class PerformanceMonitoringSystem {
         startAdaptiveMetricsCollection();
 
         // Alerting check every 5 seconds
-        alertingTask.set(scheduler.scheduleAtFixedRate(
+        alertingTask.set(com.kneaf.core.WorkerThreadPool.getScheduledPool().scheduleAtFixedRate(
                 this::checkAlertingThresholds,
                 0, 5, TimeUnit.SECONDS));
 
         // Adaptive monitoring task untuk menyesuaikan collection frequency
-        adaptiveMonitoringTask.set(scheduler.scheduleAtFixedRate(
+        adaptiveMonitoringTask.set(com.kneaf.core.WorkerThreadPool.getScheduledPool().scheduleAtFixedRate(
                 () -> adjustMonitoringParameters(),
                 0, 1, TimeUnit.SECONDS));
 
@@ -151,7 +151,7 @@ public final class PerformanceMonitoringSystem {
     private void startAdaptiveMetricsCollection() {
         int initialInterval = getAdaptiveCollectionInterval();
 
-        metricsCollectionTask.set(scheduler.scheduleAtFixedRate(
+        metricsCollectionTask.set(com.kneaf.core.WorkerThreadPool.getScheduledPool().scheduleAtFixedRate(
                 () -> collectAndAggregateMetricsWithSampling(),
                 0, initialInterval, TimeUnit.MILLISECONDS));
 
@@ -192,7 +192,7 @@ public final class PerformanceMonitoringSystem {
         }
 
         // Start new task dengan new interval
-        metricsCollectionTask.set(scheduler.scheduleAtFixedRate(
+        metricsCollectionTask.set(com.kneaf.core.WorkerThreadPool.getScheduledPool().scheduleAtFixedRate(
                 () -> collectAndAggregateMetricsWithSampling(),
                 0, newInterval, TimeUnit.MILLISECONDS));
     }
@@ -657,23 +657,7 @@ public final class PerformanceMonitoringSystem {
         LOGGER.info("Shutting down performance monitoring system");
 
         stopBackgroundMonitoring();
-        scheduler.shutdown();
-
-        // Shutdown all components
-        metricsCollector.shutdown();
-        metricAggregator.shutdown();
-        eventBus.shutdown();
-        errorTracker.shutdown();
-        alertingSystem.shutdown();
-        distributedTracer.shutdown();
-
-        try {
-            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                scheduler.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            scheduler.shutdownNow();
-        }
+        // Pool managed by WorkerThreadPool
 
         LOGGER.info("Performance monitoring system shutdown completed");
     }

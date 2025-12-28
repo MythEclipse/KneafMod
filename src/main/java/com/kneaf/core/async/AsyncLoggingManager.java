@@ -24,8 +24,7 @@ public final class AsyncLoggingManager {
     private final AtomicBoolean initialized = new AtomicBoolean(false);
     private final AtomicBoolean enabled = new AtomicBoolean(true);
 
-    // Background thread pool untuk async operations
-    private final ExecutorService asyncExecutor;
+    // Use centralized WorkerThreadPool for async operations
 
     // Statistics
     private final AtomicLong totalAsyncOperations = new AtomicLong(0);
@@ -34,16 +33,6 @@ public final class AsyncLoggingManager {
     private AsyncLoggingManager() {
         this.loggerRegistry = AsyncLoggerRegistry.getInstance();
         this.metricsCollector = AsyncMetricsCollector.getInstance();
-
-        // Create thread pool untuk general async operations
-        this.asyncExecutor = Executors.newFixedThreadPool(
-                Math.max(2, Runtime.getRuntime().availableProcessors() / 4),
-                r -> {
-                    Thread t = new Thread(r, "AsyncLogging-Worker");
-                    t.setDaemon(true);
-                    t.setPriority(Thread.MIN_PRIORITY);
-                    return t;
-                });
 
         // Register shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown, "AsyncLoggingManager-Shutdown"));
@@ -91,7 +80,7 @@ public final class AsyncLoggingManager {
         AsyncLoggingManager manager = getInstance();
         if (manager.enabled.get()) {
             try {
-                manager.asyncExecutor.execute(() -> {
+                com.kneaf.core.WorkerThreadPool.getIOPool().execute(() -> {
                     try {
                         task.run();
                         manager.totalAsyncOperations.incrementAndGet();
@@ -115,7 +104,7 @@ public final class AsyncLoggingManager {
      * Execute task asynchronously dengan timeout
      */
     public static CompletableFuture<Void> executeAsyncWithTimeout(Runnable task, long timeoutMs) {
-        return CompletableFuture.runAsync(task, getInstance().asyncExecutor)
+        return CompletableFuture.runAsync(task, com.kneaf.core.WorkerThreadPool.getIOPool())
                 .orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
                 .exceptionally(throwable -> {
                     LOGGER.warn("Async task failed or timed out", throwable);
@@ -134,7 +123,7 @@ public final class AsyncLoggingManager {
             } catch (Exception e) {
                 throw new CompletionException(e);
             }
-        }, getInstance().asyncExecutor);
+        }, com.kneaf.core.WorkerThreadPool.getIOPool());
     }
 
     /**
@@ -240,15 +229,7 @@ public final class AsyncLoggingManager {
         metricsCollector.shutdown();
 
         // Shutdown executor
-        asyncExecutor.shutdown();
-        try {
-            if (!asyncExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                asyncExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            asyncExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
+        // Pool managed by WorkerThreadPool
 
         LOGGER.info("AsyncLoggingManager shutdown complete");
     }
