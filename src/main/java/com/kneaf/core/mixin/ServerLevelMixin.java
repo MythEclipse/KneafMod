@@ -136,7 +136,10 @@ public abstract class ServerLevelMixin implements com.kneaf.core.extension.Serve
             level.getAllEntities().forEach(entities::add);
 
             int count = entities.size();
-            if (count > 16) {
+            // If count is massive (e.g. 100k TNT), processing on main thread
+            // even with Rust/SIMD will lag.
+            // Only process if we have a reasonable amount.
+            if (count > 16 && count < 50000) {
                 // Use ParallelEntityTicker for batch distance calculation via Rust SIMD
                 double[] distances = ParallelEntityTicker.batchCalculatePlayerDistances(entities, level);
 
@@ -145,6 +148,11 @@ public abstract class ServerLevelMixin implements com.kneaf.core.extension.Serve
                 for (int i = 0; i < count && i < distances.length; i++) {
                     kneaf$entityDistanceCache.put(entities.get(i).getId(), distances[i]);
                 }
+            } else if (count >= 50000) {
+                // For massive counts, clear cache to avoid using stale data,
+                // and let entities fall back to individual main-thread distance checks
+                // to spread the cost across the tick.
+                kneaf$entityDistanceCache.clear();
             }
         } catch (Throwable t) {
             // Ignore - don't crash server for optimization logic

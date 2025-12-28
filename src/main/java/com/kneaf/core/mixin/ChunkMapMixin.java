@@ -148,21 +148,23 @@ public abstract class ChunkMapMixin {
         int maxChunks = currentTPS < 15.0 ? MAX_CHUNKS_PER_TICK_LOW_TPS : MAX_CHUNKS_PER_TICK_NORMAL;
 
         // If we're loading a new chunk (level decreasing)
-        if (level < oldLevel) {
+        // CRITICAL FIX: NEVER return null oldHolder if there's no existing holder,
+        // as downstream code (like acquireGeneration) expects a non-null holder.
+        if (level < oldLevel && oldHolder != null) {
             kneaf$chunksLoadedThisTick++;
 
             // REAL THROTTLING: Skip non-essential chunk loading during critical TPS
             if (currentTPS < 10.0 && kneaf$chunksLoadedThisTick > 1) {
                 // During critical TPS, only allow 1 chunk per tick
                 kneaf$chunksDelayed.incrementAndGet();
-                cir.setReturnValue(oldHolder); // Return existing holder, skip new load
+                cir.setReturnValue(oldHolder);
                 return;
             }
 
             // Rate limit chunk loading during low TPS (but not critical)
             if (kneaf$chunksLoadedThisTick > maxChunks && currentTPS < 18.0) {
                 kneaf$chunksDelayed.incrementAndGet();
-                cir.setReturnValue(oldHolder); // Return existing holder, skip new load
+                cir.setReturnValue(oldHolder);
                 return;
             }
         }

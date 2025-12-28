@@ -45,9 +45,12 @@
     "PlayerChunkLoaderMixin",
     "ThreadedAnvilMixin",
     "InventoryMenuMixin",
-    "GoalSelectorMixin"
+    "GoalSelectorMixin",
+    "TntEntityMixin"
   ],
-  "client": [],
+  "client": [
+    "TntRendererMixin"
+  ],
   "server": [],
   "injectors": {
     "defaultRequire": 0

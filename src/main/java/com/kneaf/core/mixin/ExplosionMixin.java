@@ -19,6 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -88,6 +89,10 @@ public abstract class ExplosionMixin {
     @Final
     private float radius;
 
+    @Shadow
+    @Final
+    private List<BlockPos> toBlow;
+
     /**
      * Inject at HEAD to apply rate limiting and early exit optimizations.
      */
@@ -131,8 +136,37 @@ public abstract class ExplosionMixin {
      * Hook into finalizeExplosion for parallel block removal optimization.
      * Now uses Rust native ray casting for large explosions.
      */
-    @Inject(method = "finalizeExplosion", at = @At("HEAD"))
+    @Inject(method = "finalizeExplosion", at = @At("HEAD"), cancellable = true)
     private void kneaf$onFinalizeExplosion(boolean spawnParticles, CallbackInfo ci) {
+        // Optimization: Rate limit sounds and particles for massive explosions
+        BlockPos pos = BlockPos.containing(x, y, z);
+        long chunkKey = pos.asLong() >> 4;
+        Integer chunkExplosions = kneaf$explosionRateTracker.get(chunkKey);
+
+        // If this chunk already had many explosions this second, skip sounds/particles
+        // to avoid sound engine exhaustion (pool size limit).
+        if (chunkExplosions != null && chunkExplosions > 10) {
+            spawnParticles = false; // Internal flag might not be enough, we might need to skip entirely
+            // If it's really high, just skip the whole finalize (which includes sound)
+            if (chunkExplosions > 20) {
+                // Still need to remove blocks if they weren't removed yet
+                if (toBlow != null && !toBlow.isEmpty()) {
+                    com.kneaf.core.util.BatchBlockRemoval.removeBlocks(level, toBlow);
+                    toBlow.clear();
+                }
+                ci.cancel();
+                return;
+            }
+        }
+
+        // Optimization: For large explosions, use our batch block removal utility
+        // This will skip redundant neighbor updates for improved server performance
+        if (toBlow != null && toBlow.size() > 50) {
+            com.kneaf.core.util.BatchBlockRemoval.removeBlocks(level, toBlow);
+            // Clear the list so vanilla doesn't process it again (it will be empty)
+            toBlow.clear();
+        }
+
         // For large explosions (radius > 4), use Rust for parallel ray casting
         if (radius > 4.0f && RustOptimizations.isAvailable()) {
             try {
