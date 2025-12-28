@@ -63,7 +63,7 @@ public final class AsyncMetricsCollector {
 
     private AsyncMetricsCollector() {
         // Start background aggregation every 5 seconds
-        aggregator.scheduleAtFixedRate(
+        com.kneaf.core.WorkerThreadPool.getScheduledPool().scheduleAtFixedRate(
                 this::aggregateMetrics,
                 5, 5, TimeUnit.SECONDS);
     }
