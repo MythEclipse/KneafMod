@@ -263,7 +263,6 @@ public class DebugOverlayHandler {
         long elapsed = now - lastUpdateTime;
 
         if (elapsed >= 1000) { // Update every second
-            long currentChunks = chunksLoaded.get();
 
             // Top summary stats from PerformanceStats (updated by Mixins)
             chunksPerSecond = com.kneaf.core.PerformanceStats.chunkGenRate;
