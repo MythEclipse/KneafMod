@@ -19,6 +19,18 @@
 - **Item Stack Merging**: Penggabungan item stack otomatis untuk mengurangi jumlah entity di dunia
 - **Advanced Physics Optimization**: Optimasi fisika komprehensif pada sumbu horizontal dan vertikal untuk mengurangi kalkulasi berlebih
 
+### 🎛️ Mixin-Based Optimization (42 Mixins)
+
+- **Chunk System**: ChunkMapMixin, ChunkGeneratorMixin, ChunkStorageMixin, ChunkDataPacketMixin, ServerChunkCacheMixin
+- **Entity System**: EntityMixin, EntityTrackerMixin, ItemEntityMixin, BrainMixin, GoalSelectorMixin
+- **Pathfinding**: PathFinderMixin, WalkNodeEvaluatorMixin
+- **World Ticking**: ServerLevelMixin, RandomTickMixin, ScheduledTickMixin, FluidTickMixin
+- **Block & State**: BlockStateCacheMixin, BlockEntityMixin, LevelChunkSectionMixin, RedstoneWireBlockMixin
+- **Network**: ConnectionMixin (packet batching), PlayerChunkLoaderMixin
+- **Spawning**: NaturalSpawnerMixin (spawn position caching)
+- **Storage**: RegionFileStorageMixin, ThreadedAnvilMixin, RecipeManagerMixin
+- **Performance**: VoxelShapeCacheMixin, HeightmapMixin, PoiManagerMixin, WorldBorderMixin
+
 ### 🧠 Sistem AI dan Entity
 
 - **Combat System Optimization**: Sistem pertarungan yang dioptimalkan dengan SIMD dan parallel processing
@@ -364,4 +376,5 @@ Menggunakan Rayon untuk work-stealing thread pool:
 **Minecraft Version**: 1.21  
 **Mod Loader**: NeoForge 21.0.167  
 **Build Status**: Passing ✅  
-**Last Updated**: December 27, 2025
+**Mixin Count**: 42 behavior-changing mixins  
+**Last Updated**: December 28, 2025

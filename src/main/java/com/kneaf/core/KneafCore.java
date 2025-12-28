@@ -124,7 +124,7 @@ public class KneafCore {
 
             LOGGER.info("KneafCore initialization completed successfully");
             LOGGER.info("=== Integrated Systems ===");
-            LOGGER.info("  - 43 Mixins (auto-inject via Mixin system)");
+            LOGGER.info("  - 42 Mixins (auto-inject via Mixin system)");
             LOGGER.info("  - ChunkProcessor (parallel chunk processing)");
             LOGGER.info("  - ParallelEntityTicker (batch entity ops)");
             LOGGER.info("  - RustOptimizations (SIMD via Rust/Rayon)");
