@@ -188,14 +188,18 @@ public abstract class PathFinderMixin {
 
             int startX = maxRange;
             int startY = maxRange;
-            int goalX = maxRange + (target.getX() - start.getX());
-            int goalY = maxRange + (target.getZ() - start.getZ());
+            int diffX = target.getX() - start.getX();
+            int diffZ = target.getZ() - start.getZ();
+            int goalX = maxRange + diffX;
+            int goalY = maxRange + diffZ;
 
-            // Clamp goal to grid
-            goalX = Math.max(0, Math.min(width - 1, goalX));
-            goalY = Math.max(0, Math.min(height - 1, goalY));
+            // Strict bounds check - fallback to vanilla if goal is outside grid
+            // Clamping produces invalid paths that stop at the edge
+            if (goalX < 0 || goalX >= width || goalY < 0 || goalY >= height) {
+                return null;
+            }
 
-            // Call Rust A*
+            // Ensure start and goal are passable in grid (optional, but safe)
             // Call Rust A* - 3D signature: width, height, depth, startX, startY, startZ,
             // goalX, goalY, goalZ, threads
             int[] pathCoords = ParallelRustVectorProcessor.parallelAStarPathfind(

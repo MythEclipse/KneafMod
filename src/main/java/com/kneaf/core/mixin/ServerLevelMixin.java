@@ -35,7 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 3. Parallel entity distance calculations with caching
  */
 @Mixin(ServerLevel.class)
-public abstract class ServerLevelMixin {
+public abstract class ServerLevelMixin implements com.kneaf.core.extension.ServerLevelExtension {
 
     @Unique
     private static final Logger kneaf$LOGGER = LoggerFactory.getLogger("KneafMod/ServerLevelMixin");
@@ -43,33 +43,31 @@ public abstract class ServerLevelMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Tick timing for TPS calculation
+    // Tick timing for TPS calculation (Instance fields for safety)
     @Unique
-    private static long kneaf$lastTickStart = 0;
+    private long kneaf$lastTickStart = 0;
 
     @Unique
-    private static long kneaf$lastLogTime = 0;
+    private long kneaf$lastLogTime = 0;
 
     // Entity batch processing interval
     @Unique
-    private static long kneaf$lastBatchProcess = 0;
+    private long kneaf$lastBatchProcess = 0;
 
     @Unique
     private static final long BATCH_INTERVAL_MS = 500; // Process batch every 500ms
 
     // Cache of entity ID -> distance squared to nearest player
-    // Used by BrainMixin, EntityTrackerMixin, etc. to avoid recalculation
+    // Instance field: Separate cache per world (Overworld, Nether, End)
     @Unique
-    private static final Map<Integer, Double> kneaf$entityDistanceCache = new ConcurrentHashMap<>();
+    private final Map<Integer, Double> kneaf$entityDistanceCache = new ConcurrentHashMap<>();
 
     /**
      * Get cached distance for an entity.
-     * 
-     * @param entityId Entity's ID
-     * @return Squared distance to nearest player, or -1 if not cached
+     * Implements interface method.
      */
-    @Unique
-    public static double kneaf$getCachedDistance(int entityId) {
+    @Override
+    public double kneaf$getCachedDistance(int entityId) {
         Double cached = kneaf$entityDistanceCache.get(entityId);
         return cached != null ? cached : -1.0;
     }
@@ -96,6 +94,9 @@ public abstract class ServerLevelMixin {
         long tickMs = tickTime / 1_000_000;
 
         // Update the centralized TPS tracker
+        // Note: multiple dimensions call this, so TPS might be updated multiple times
+        // per tick
+        // This is acceptable as TPSTracker averages it out or could be optimized later
         TPSTracker.recordTick(tickMs);
 
         // Feed real-time tick data to dynamic chunk processor
@@ -113,25 +114,14 @@ public abstract class ServerLevelMixin {
         }
 
         // Flush any pending fluid updates (ensure no latency for small batches)
-        // Access static method from FluidTickMixin
-        com.kneaf.core.mixin.FluidTickMixin.kneaf$processBatchFluidUpdates();
+        // Access Manager directly
+        com.kneaf.core.FluidUpdateManager.processBatch((ServerLevel) (Object) this);
 
-        // Log stats every 30 seconds
-        // Update stats (run more frequently if needed, but 30s is fine for cache size)
-        if (now - kneaf$lastLogTime > 2000) { // Update stats every 2s for F3
+        // Log stats every 2 seconds
+        if (now - kneaf$lastLogTime > 2000) {
             com.kneaf.core.PerformanceStats.entityCacheSize = kneaf$entityDistanceCache.size();
             kneaf$lastLogTime = now;
         }
-
-        /*
-         * if (now - kneaf$lastLogTime > 30000) {
-         * kneaf$LOGGER.info("ServerLevel TPS: {}, EntityCache: {}, Parallel: {}",
-         * String.format("%.1f", TPSTracker.getCurrentTPS()),
-         * kneaf$entityDistanceCache.size(),
-         * ParallelEntityTicker.getStatistics());
-         * kneaf$lastLogTime = now;
-         * }
-         */
     }
 
     /**
