@@ -35,9 +35,9 @@ public class GoalSelectorMixin {
     private final Map<Goal, Long> kneaf$failureCache = new WeakHashMap<>();
 
     @Unique
-    private static final int MIN_CACHE_TICKS = 2; // Minimum ticks to assume failure persists
+    private static final int MIN_CACHE_TICKS = 1; // Minimum ticks to assume failure persists
     @Unique
-    private static final int MAX_CACHE_TICKS = 5; // Maximum ticks (randomized to avoid synchronized retries)
+    private static final int MAX_CACHE_TICKS = 2; // Maximum ticks (randomized)
 
     // Helper to get current game time indirectly or use a simple counter
     @Unique

@@ -94,17 +94,13 @@ public abstract class EntityTrackerMixin {
         }
 
         // Determine update frequency based on distance
-        if (nearestDistance < NEAR_DISTANCE) {
-            kneaf$updateFrequency = 1;
-        } else if (nearestDistance < MID_DISTANCE) {
-            kneaf$updateFrequency = 2;
-        } else if (nearestDistance < FAR_DISTANCE) {
-            kneaf$updateFrequency = 4;
-        } else {
-            kneaf$updateFrequency = 8;
-        }
+        // Optimization: We keep the frequency at 1 for all entities within tracking
+        // range
+        // to avoid the "blink blink" stuttering effect reported by the user.
+        // We still track stats but don't skip updates anymore.
+        kneaf$updateFrequency = 1;
 
-        // Skip update if not enough ticks
+        // Skip update if not enough ticks (always false now since freq=1)
         if (kneaf$ticksSinceLastUpdate < kneaf$updateFrequency) {
             kneaf$updatesSkipped.incrementAndGet();
             ci.cancel();
