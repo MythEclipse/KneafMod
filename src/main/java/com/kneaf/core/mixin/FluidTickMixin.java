@@ -137,7 +137,7 @@ public abstract class FluidTickMixin {
      * Process batched fluid updates using Rust simulation.
      */
     @Unique
-    private static void kneaf$processBatchFluidUpdates() {
+    public static void kneaf$processBatchFluidUpdates() {
         int count = kneaf$pendingFluidUpdates.size();
         if (count == 0)
             return;

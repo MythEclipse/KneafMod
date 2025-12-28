@@ -112,6 +112,10 @@ public abstract class ServerLevelMixin {
             kneaf$lastBatchProcess = now;
         }
 
+        // Flush any pending fluid updates (ensure no latency for small batches)
+        // Access static method from FluidTickMixin
+        com.kneaf.core.mixin.FluidTickMixin.kneaf$processBatchFluidUpdates();
+
         // Log stats every 30 seconds
         // Update stats (run more frequently if needed, but 30s is fine for cache size)
         if (now - kneaf$lastLogTime > 2000) { // Update stats every 2s for F3

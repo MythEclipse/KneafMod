@@ -154,8 +154,8 @@ public abstract class LightEngineMixin {
         // Clear per-tick tracking
         kneaf$checkedThisTick.clear();
 
-        // Process batch if above threshold and native is available
-        if (RustOptimizations.isAvailable() && kneaf$pendingLightUpdates.size() >= BATCH_THRESHOLD) {
+        // Process batch ALWAYS if native is available (avoid delay/light lag)
+        if (RustOptimizations.isAvailable() && !kneaf$pendingLightUpdates.isEmpty()) {
             kneaf$processBatchLightUpdates();
         }
 
