@@ -6,7 +6,6 @@ package com.kneaf.core.mixin;
 
 import com.kneaf.core.util.HopperSpatialIndex;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.world.Container;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -38,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 3. Fail Count Delay: Skip checks for hoppers that repeatedly fail
  */
 @Mixin(HopperBlockEntity.class)
+@SuppressWarnings("null")
 public abstract class HopperBlockEntityMixin extends RandomizableContainerBlockEntity implements Hopper {
 
     protected HopperBlockEntityMixin(BlockEntityType<?> type, BlockPos pos, BlockState blockState) {
@@ -91,6 +91,7 @@ public abstract class HopperBlockEntityMixin extends RandomizableContainerBlockE
     }
 
     @Inject(method = "pushItems", at = @At("HEAD"), cancellable = true)
+    @SuppressWarnings("null")
     private static void kneaf$onPushItems(Level level, BlockPos pos, BlockState state, Container source,
             CallbackInfoReturnable<Boolean> cir) {
         if ((Object) source instanceof HopperBlockEntityMixin mixin) {

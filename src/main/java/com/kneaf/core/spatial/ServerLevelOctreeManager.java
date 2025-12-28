@@ -4,14 +4,11 @@
  */
 package com.kneaf.core.spatial;
 
-import com.kneaf.core.spatial.EntityOctree;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,7 +23,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * - Thread-safe operations
  */
 public class ServerLevelOctreeManager {
-    private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/OctreeManager");
 
     // Per-chunk octrees
     private final Map<Long, EntityOctree> chunkOctrees = new ConcurrentHashMap<>();

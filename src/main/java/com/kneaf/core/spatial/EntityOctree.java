@@ -7,9 +7,6 @@ package com.kneaf.core.spatial;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.*;
 
 /**
@@ -25,8 +22,9 @@ import java.util.*;
  * Vanilla: O(n²) for n entities
  * Expected: 10-100x faster with 100+ entities per chunk
  */
+@SuppressWarnings("null")
 public class EntityOctree {
-    private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/EntityOctree");
+
 
     // Configuration
     private static final int MAX_ENTITIES_PER_NODE = 8;
@@ -72,9 +70,9 @@ public class EntityOctree {
                 return;
 
             Vec3 center = bounds.getCenter();
-            double halfX = (bounds.maxX - bounds.minX) / 2.0;
-            double halfY = (bounds.maxY - bounds.minY) / 2.0;
-            double halfZ = (bounds.maxZ - bounds.minZ) / 2.0;
+
+
+
 
             children = new OctreeNode[8];
 
@@ -87,7 +85,9 @@ public class EntityOctree {
                 double minZ = (i & 4) == 0 ? bounds.minZ : center.z;
                 double maxZ = (i & 4) == 0 ? center.z : bounds.maxZ;
 
-                children[i] = new OctreeNode(new AABB(minX, minY, minZ, maxX, maxY, maxZ), depth + 1);
+                @SuppressWarnings("null")
+                OctreeNode node = new OctreeNode(new AABB(minX, minY, minZ, maxX, maxY, maxZ), depth + 1);
+                children[i] = node;
             }
 
             // Redistribute entities to children
@@ -114,10 +114,12 @@ public class EntityOctree {
     /**
      * Insert an entity into the octree.
      */
+    @SuppressWarnings("null")
     public void insert(Entity entity) {
         if (entity == null || entity.isRemoved())
             return;
 
+        @SuppressWarnings("null")
         AABB entityBounds = entity.getBoundingBox();
         if (!root.bounds.intersects(entityBounds)) {
             // Entity outside octree bounds
@@ -127,6 +129,7 @@ public class EntityOctree {
         insertRecursive(root, entity, entityBounds);
     }
 
+    @SuppressWarnings("null")
     private void insertRecursive(OctreeNode node, Entity entity, AABB entityBounds) {
         if (!node.bounds.intersects(entityBounds)) {
             return;
@@ -153,6 +156,7 @@ public class EntityOctree {
      * Query entities within an AABB.
      * This is the main optimization - only checks relevant octants.
      */
+    @SuppressWarnings("null")
     public List<Entity> query(AABB queryBounds) {
         queryCount++;
         List<Entity> result = new ArrayList<>();
@@ -165,7 +169,9 @@ public class EntityOctree {
     }
 
     private void queryRecursive(OctreeNode node, AABB queryBounds, List<Entity> result, Set<Entity> seen) {
-        if (!node.bounds.intersects(queryBounds)) {
+        @SuppressWarnings("null")
+        boolean intersects = node.bounds.intersects(queryBounds);
+        if (!intersects) {
             return; // Early exit - this octant doesn't intersect query
         }
 
@@ -188,6 +194,7 @@ public class EntityOctree {
 
     /**
      * Query entities near a point within radius.
+    @SuppressWarnings("null")
      */
     public List<Entity> queryNearPoint(Vec3 point, double radius) {
         AABB queryBounds = new AABB(

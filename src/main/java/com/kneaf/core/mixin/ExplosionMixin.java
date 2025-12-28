@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Sequential DDA-optimized scanning with adaptive resolution.
  */
 @Mixin(Explosion.class)
+@SuppressWarnings("null")
 public abstract class ExplosionMixin {
 
     @Unique
@@ -64,6 +65,7 @@ public abstract class ExplosionMixin {
     @Shadow
     public abstract net.minecraft.world.entity.Entity getDirectSourceEntity();
 
+    @SuppressWarnings("null")
     @Inject(method = "explode", at = @At("HEAD"), cancellable = true)
     private void kneaf$onExplode(CallbackInfo ci) {
         kneaf$explosionsProcessed.incrementAndGet();
@@ -84,6 +86,7 @@ public abstract class ExplosionMixin {
     }
 
     @Unique
+    @SuppressWarnings("null")
     private void kneaf$performOptimizedScan(List<BlockPos> blocks) {
         // Rust Acceleration for huge radii
         if (RustOptimizations.isAvailable() && radius > 4.0f) {
@@ -166,6 +169,7 @@ public abstract class ExplosionMixin {
     }
 
     @Unique
+    @SuppressWarnings("null")
     private void kneaf$performEntityImpact() {
         float q = radius * 2.0F;
         net.minecraft.world.phys.AABB aabb = new net.minecraft.world.phys.AABB(x - q - 1, y - q - 1, z - q - 1,
@@ -211,6 +215,7 @@ public abstract class ExplosionMixin {
     }
 
     @Inject(method = "finalizeExplosion", at = @At("HEAD"))
+    @SuppressWarnings("null")
     private void kneaf$onFinalize(boolean spawnParticles, CallbackInfo ci) {
         List<BlockPos> blocks = getToBlow();
         if (!blocks.isEmpty()) {

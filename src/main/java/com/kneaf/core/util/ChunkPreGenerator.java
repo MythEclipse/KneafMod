@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Generates chunks when server TPS is healthy.
  */
 @EventBusSubscriber(modid = "kneafcore")
+@SuppressWarnings("null")
 public class ChunkPreGenerator {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/ChunkPreGen");
@@ -128,9 +129,9 @@ public class ChunkPreGenerator {
 
             try {
                 // getChunk with true forces generation
-                targetLevel.getChunkSource().getChunk(pos.x, pos.z,
-                        net.minecraft.world.level.chunk.status.ChunkStatus.FULL,
-                        true);
+                @SuppressWarnings("null")
+                net.minecraft.world.level.chunk.status.ChunkStatus status = net.minecraft.world.level.chunk.status.ChunkStatus.FULL;
+                targetLevel.getChunkSource().getChunk(pos.x, pos.z, status, true);
                 generatedCount.incrementAndGet();
             } catch (Exception e) {
                 LOGGER.error("Failed to generate chunk at {}", pos, e);

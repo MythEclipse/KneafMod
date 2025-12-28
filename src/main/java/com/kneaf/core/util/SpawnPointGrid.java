@@ -5,9 +5,6 @@
 package com.kneaf.core.util;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.entity.MobCategory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,7 +23,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * Expected: 40-60% better spawn distribution
  */
 public class SpawnPointGrid {
-    private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/SpawnPointGrid");
 
     // Grid cell size (8x8 blocks)
     private static final int CELL_SIZE = 8;
@@ -34,11 +30,11 @@ public class SpawnPointGrid {
     // Density tracking per cell
     private static class GridCell {
         int spawnCount = 0;
+        @SuppressWarnings("unused")
         long lastSpawnTime = 0;
         final List<BlockPos> candidatePositions = new ArrayList<>();
     }
 
-    // Grid: cell key -> cell data
     private final Map<Long, GridCell> grid = new ConcurrentHashMap<>();
 
     // Decay rate for spawn counts

@@ -120,17 +120,17 @@ public final class ChunkProcessor {
         }
 
         int currentLimit = currentMaxConcurrentChunks.get();
-        long pending = getPendingTasksCount();
+
 
         // Calculate TPS approximation from tick time
         // 50ms = 20 TPS
         double estimatedTps = tickTimeMs > 0 ? Math.min(20.0, 1000.0 / tickTimeMs) : 20.0;
 
         // Memory usage
-        long totalMem = Runtime.getRuntime().totalMemory();
-        long freeMem = Runtime.getRuntime().freeMemory();
-        long usedMem = totalMem - freeMem;
-        double memUsage = (double) usedMem / totalMem;
+        // long totalMem = Runtime.getRuntime().totalMemory();
+        // long freeMem = Runtime.getRuntime().freeMemory();
+        // long usedMem = totalMem - freeMem;
+
 
         // Adaptive logic
         if (estimatedTps < lowTpsThreshold) {

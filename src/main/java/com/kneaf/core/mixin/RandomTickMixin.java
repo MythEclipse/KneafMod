@@ -6,8 +6,6 @@
  */
 package com.kneaf.core.mixin;
 
-import com.kneaf.core.util.PoissonDiskSampler;
-import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;

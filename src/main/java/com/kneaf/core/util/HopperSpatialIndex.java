@@ -5,12 +5,6 @@
 package com.kneaf.core.util;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.entity.HopperBlockEntity;
-import net.minecraft.world.Container;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,7 +23,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * Expected: 20-50x faster in areas with many hoppers
  */
 public class HopperSpatialIndex {
-    private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/HopperSpatialIndex");
 
     // Grid cell size (16x16x16 blocks)
     private static final int CELL_SIZE = 16;

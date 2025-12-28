@@ -10,6 +10,7 @@ import net.minecraft.network.chat.Component;
 /**
  * Command untuk memonitor async logging system.
  */
+@SuppressWarnings("null")
 public class AsyncMonitorCommands {
 
         public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
@@ -130,6 +131,7 @@ public class AsyncMonitorCommands {
                 return 1;
         }
 
+        @SuppressWarnings("null")
         private static int stopProfiling(CommandContext<CommandSourceStack> context) {
                 String report = com.kneaf.core.ProfileMonitor.stop();
                 if (report != null) {
@@ -142,6 +144,7 @@ public class AsyncMonitorCommands {
                 return 1;
         }
 
+        @SuppressWarnings("null")
         private static int showProfileReport(CommandContext<CommandSourceStack> context) {
                 if (com.kneaf.core.ProfileMonitor.isActive()) {
                         context.getSource().sendFailure(Component.literal(

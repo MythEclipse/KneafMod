@@ -6,9 +6,6 @@ package com.kneaf.core.util;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.RandomSource;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.*;
 
 /**
@@ -26,7 +23,7 @@ import java.util.*;
  * Expected: 30-50% better coverage, more consistent crop growth
  */
 public class PoissonDiskSampler {
-    private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/PoissonDiskSampler");
+
 
     // Minimum distance between samples (in blocks)
     private static final double MIN_DISTANCE = 3.0;

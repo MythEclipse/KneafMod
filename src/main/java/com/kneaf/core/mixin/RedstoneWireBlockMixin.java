@@ -34,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 5. Recursion Guard: Skips updates if recursion is exhausted
  */
 @Mixin(RedStoneWireBlock.class)
+@SuppressWarnings("null")
 public abstract class RedstoneWireBlockMixin {
 
     @Unique
@@ -58,6 +59,7 @@ public abstract class RedstoneWireBlockMixin {
     private static final ThreadLocal<Boolean> kneaf$isProcessingBatch = ThreadLocal.withInitial(() -> false);
 
     @Inject(method = "updatePowerStrength", at = @At("HEAD"), cancellable = true)
+    @SuppressWarnings("null")
     private void kneaf$onUpdatePowerStrength(Level level, BlockPos pos, BlockState state, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
             kneaf$LOGGER.info("✅ RedstoneWireBlockMixin applied - Advanced redstone optimizations active!");
@@ -163,6 +165,7 @@ public abstract class RedstoneWireBlockMixin {
      * Track wire removal for graph cleanup.
      */
     @Inject(method = "onRemove", at = @At("HEAD"))
+    @SuppressWarnings("null")
     private void kneaf$onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving,
             CallbackInfo ci) {
         if (!level.isClientSide() && !newState.is(state.getBlock())) {

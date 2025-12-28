@@ -9,7 +9,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.RedStoneWireBlock;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Vanilla: O(n²) due to recursive updates
  * Expected: 5-10x faster for large contraptions
  */
+@SuppressWarnings("null")
 public class RedstoneGraph {
     private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/RedstoneGraph");
 
@@ -46,27 +46,28 @@ public class RedstoneGraph {
      * Node in the redstone dependency graph.
      */
     private static class Node {
-        final BlockPos pos;
         final Set<BlockPos> dependencies = new HashSet<>(); // Nodes this depends on
+
         final Set<BlockPos> dependents = new HashSet<>(); // Nodes that depend on this
         int inDegree = 0;
         int cachedPower = -1;
         boolean dirty = true;
 
         Node(BlockPos pos) {
-            this.pos = pos;
         }
     }
 
     /**
      * Build or update the dependency graph for a redstone wire.
      */
+    @SuppressWarnings("null")
     public void addWire(Level level, BlockPos pos) {
         Node node = nodes.computeIfAbsent(pos, Node::new);
         node.dirty = true;
 
         // Find all wires this one depends on (inputs)
         for (Direction dir : Direction.values()) {
+            @SuppressWarnings("null")
             BlockPos neighbor = pos.relative(dir);
             BlockState neighborState = level.getBlockState(neighbor);
 

@@ -42,7 +42,6 @@ public class DebugOverlayHandler {
     private static double cacheHitRate = 0.0;
     private static double parallelEntitiesPerSecond = 0.0;
     private static long lastUpdateTime = System.currentTimeMillis();
-    private static long lastChunkCount = 0;
     private static long lastParallelCount = 0;
 
     /**
@@ -265,7 +264,6 @@ public class DebugOverlayHandler {
 
         if (elapsed >= 1000) { // Update every second
             long currentChunks = chunksLoaded.get();
-            long chunksDiff = currentChunks - lastChunkCount;
 
             // Top summary stats from PerformanceStats (updated by Mixins)
             chunksPerSecond = com.kneaf.core.PerformanceStats.chunkGenRate;
@@ -282,7 +280,6 @@ public class DebugOverlayHandler {
             // "Entities Opt" can be just total processed
             entitiesOptimized.set(currentParallel);
 
-            lastChunkCount = currentChunks; // Unused now? Yes, chunksPerSecond comes from stats.
             lastParallelCount = currentParallel;
             lastUpdateTime = now;
         }
@@ -310,6 +307,5 @@ public class DebugOverlayHandler {
         cacheHits.set(0);
         cacheMisses.set(0);
         entitiesOptimized.set(0);
-        lastChunkCount = 0;
     }
 }

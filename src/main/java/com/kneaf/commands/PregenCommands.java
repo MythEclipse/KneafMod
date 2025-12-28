@@ -16,8 +16,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 
+@SuppressWarnings("null")
 public class PregenCommands {
 
+    @SuppressWarnings("null")
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(
                 Commands.literal("kneaf")
@@ -32,6 +34,7 @@ public class PregenCommands {
                                         .executes(PregenCommands::showStatus))));
     }
 
+    @SuppressWarnings("null")
     private static int startPregen(CommandContext<CommandSourceStack> context) {
         if (ChunkPreGenerator.isActive()) {
             context.getSource().sendFailure(Component.literal("Pre-generation is already active!"));
@@ -59,12 +62,14 @@ public class PregenCommands {
         return 1;
     }
 
+    @SuppressWarnings("null")
     private static int stopPregen(CommandContext<CommandSourceStack> context) {
         ChunkPreGenerator.stop();
         context.getSource().sendSuccess(() -> Component.literal("Pre-generation stopped."), true);
         return 1;
     }
 
+    @SuppressWarnings("null")
     private static int showStatus(CommandContext<CommandSourceStack> context) {
         context.getSource().sendSuccess(() -> Component.literal(
                 String.format("Pre-generation Status: %s", ChunkPreGenerator.getStatus())), false);
