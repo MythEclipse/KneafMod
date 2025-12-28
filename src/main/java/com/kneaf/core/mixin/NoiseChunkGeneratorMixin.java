@@ -136,22 +136,30 @@ public abstract class NoiseChunkGeneratorMixin {
      */
     @Unique
     private static void logNoiseStats() {
-        long total = kneaf$noiseGenCount.get();
-        if (total > 0) {
-            double avgMs = (kneaf$totalNoiseTimeNs.get() / 1_000_000.0) / total;
-            long delayed = kneaf$delayedChunks.get();
-            double chunksPerSec = total / 30.0; // 30 second interval
-            double delayedPerSec = delayed / 30.0;
+        long now = System.currentTimeMillis();
+        // Update stats every 1 second
+        if (now - kneaf$lastLogTime > 1000) {
+            long total = kneaf$noiseGenCount.get();
+            if (total > 0) {
+                double avgMs = (kneaf$totalNoiseTimeNs.get() / 1_000_000.0) / total;
+                long delayed = kneaf$delayedChunks.get();
+                double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
+                double chunksPerSec = total / timeDiff;
+                double delayedPerSec = delayed / timeDiff;
 
-            kneaf$LOGGER.info("NoiseGen: {}/sec, avg {}ms, {}/sec delayed",
-                    String.format("%.1f", chunksPerSec),
-                    String.format("%.2f", avgMs),
-                    String.format("%.2f", delayedPerSec));
+                // Update central stats
+                com.kneaf.core.PerformanceStats.noiseGenRate = chunksPerSec;
+                com.kneaf.core.PerformanceStats.noiseGenAvgMs = avgMs;
+                com.kneaf.core.PerformanceStats.noiseGenDelayRate = delayedPerSec;
 
-            // Reset counters
-            kneaf$noiseGenCount.set(0);
-            kneaf$totalNoiseTimeNs.set(0);
-            kneaf$delayedChunks.set(0);
+                // Reset counters
+                kneaf$noiseGenCount.set(0);
+                kneaf$totalNoiseTimeNs.set(0);
+                kneaf$delayedChunks.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.noiseGenRate = 0;
+            }
+            kneaf$lastLogTime = now;
         }
     }
 

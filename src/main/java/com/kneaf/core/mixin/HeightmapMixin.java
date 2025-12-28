@@ -123,7 +123,8 @@ public abstract class HeightmapMixin {
 
         // Log stats periodically
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long requested = kneaf$updatesRequested.get();
             long coalesced = kneaf$updatesCoalesced.get();
             long hits = kneaf$cacheHits.get();
@@ -132,19 +133,20 @@ public abstract class HeightmapMixin {
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (requested > 0 || total > 0) {
-                double coalesceRate = requested > 0 ? (coalesced * 100.0 / requested) : 0;
-                double hitRate = total > 0 ? (hits * 100.0 / total) : 0;
-                kneaf$LOGGER.info("Heightmap: {}/sec updates ({}/sec coalesced, {}%), {}% cache hit",
-                        String.format("%.1f", requested / timeDiff),
-                        String.format("%.1f", coalesced / timeDiff),
-                        String.format("%.1f", coalesceRate),
-                        String.format("%.1f", hitRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.heightmapUpdates = requested / timeDiff;
+                com.kneaf.core.PerformanceStats.heightmapCoalesced = coalesced / timeDiff;
 
-            kneaf$updatesRequested.set(0);
-            kneaf$updatesCoalesced.set(0);
-            kneaf$cacheHits.set(0);
-            kneaf$cacheMisses.set(0);
+                double hitRate = total > 0 ? (hits * 100.0 / total) : 0;
+                com.kneaf.core.PerformanceStats.heightmapCacheHitPercent = hitRate;
+
+                kneaf$updatesRequested.set(0);
+                kneaf$updatesCoalesced.set(0);
+                kneaf$cacheHits.set(0);
+                kneaf$cacheMisses.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.heightmapUpdates = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

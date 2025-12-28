@@ -134,20 +134,23 @@ public abstract class EntityTrackerMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long skipped = kneaf$updatesSkipped.get();
             long sent = kneaf$updatesSent.get();
             long total = skipped + sent;
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
-                double skipRate = skipped * 100.0 / total;
-                kneaf$LOGGER.info("EntityTracker: {}/sec updates, {}% skipped",
-                        String.format("%.1f", total / timeDiff), String.format("%.1f", skipRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.trackerUpdates = total / timeDiff;
+                com.kneaf.core.PerformanceStats.trackerSkipped = skipped / timeDiff;
 
-            kneaf$updatesSkipped.set(0);
-            kneaf$updatesSent.set(0);
+                kneaf$updatesSkipped.set(0);
+                kneaf$updatesSent.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.trackerUpdates = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

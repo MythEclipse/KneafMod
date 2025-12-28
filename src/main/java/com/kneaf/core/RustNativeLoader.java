@@ -42,7 +42,7 @@ public class RustNativeLoader {
                 }
                 LOGGER.error("❌ Failed to load native library from all attempted locations");
                 return false;
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 LOGGER.error("❌ Exception while loading native library", e);
                 return false;
             }
@@ -77,7 +77,7 @@ public class RustNativeLoader {
             loadedLibraryPath = absolutePath;
             LOGGER.info("✅ SUCCESS: Loaded native library from classpath: {} -> {}", resourcePath, absolutePath);
             return true;
-        } catch (Exception e) {
+        } catch (Throwable e) {
             LOGGER.debug("Failed to extract and load from classpath", e);
             return false;
         }
@@ -100,7 +100,7 @@ public class RustNativeLoader {
                     LOGGER.info("✅ SUCCESS: Loaded native library from filesystem: {}", absolutePath);
                     return true;
                 }
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 LOGGER.trace("Failed to load from path: {}", pathStr, e);
             }
         }

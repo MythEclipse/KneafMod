@@ -166,7 +166,8 @@ public abstract class ThreadedAnvilMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long saved = kneaf$chunksSaved.get();
             long skipped = kneaf$savesSkipped.get();
             long throttled = kneaf$savesThrottled.get();
@@ -174,17 +175,17 @@ public abstract class ThreadedAnvilMixin {
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
-                double skipRate = (skipped + throttled) * 100.0 / total;
-                kneaf$LOGGER.info("ChunkSave: {}/sec saved, {}/sec skipped, {}/sec throttled ({}% reduction)",
-                        String.format("%.1f", saved / timeDiff),
-                        String.format("%.1f", skipped / timeDiff),
-                        String.format("%.1f", throttled / timeDiff),
-                        String.format("%.1f", skipRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.anvilSaved = saved / timeDiff;
+                com.kneaf.core.PerformanceStats.anvilSkipped = skipped / timeDiff;
+                com.kneaf.core.PerformanceStats.anvilThrottled = throttled / timeDiff;
 
-            kneaf$chunksSaved.set(0);
-            kneaf$savesSkipped.set(0);
-            kneaf$savesThrottled.set(0);
+                kneaf$chunksSaved.set(0);
+                kneaf$savesSkipped.set(0);
+                kneaf$savesThrottled.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.anvilSaved = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

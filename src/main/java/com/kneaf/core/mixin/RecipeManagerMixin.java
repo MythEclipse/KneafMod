@@ -145,18 +145,24 @@ public abstract class RecipeManagerMixin {
     @Unique
     private void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
             long total = hits + misses;
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
+                // Update central stats
+                com.kneaf.core.PerformanceStats.recipeLookups = total / timeDiff;
                 double hitRate = hits * 100.0 / total;
-                kneaf$LOGGER.info("RecipeCache: {}/sec lookups, {}% hit rate, {} entries",
-                        String.format("%.1f", total / timeDiff),
-                        String.format("%.1f", hitRate),
-                        kneaf$recipeCache.size());
+                com.kneaf.core.PerformanceStats.recipeHitPercent = hitRate;
+                com.kneaf.core.PerformanceStats.recipeCacheSize = kneaf$recipeCache.size();
+
+                kneaf$cacheHits.set(0);
+                kneaf$cacheMisses.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.recipeLookups = 0;
             }
 
             // Don't reset time every hit, only when we actually log

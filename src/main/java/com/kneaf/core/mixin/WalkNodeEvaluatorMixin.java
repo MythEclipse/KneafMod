@@ -72,24 +72,31 @@ public abstract class WalkNodeEvaluatorMixin {
             kneaf$loggedFirstApply = true;
         }
 
-        // Log stats periodically
+        // Call the new stats logging method
+        kneaf$logStats();
+    }
+
+    @Unique
+    private void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 30000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long queries = kneaf$pathTypeQueries.get();
             if (queries > 0) {
                 long hits = kneaf$cacheHits.get();
                 long airs = kneaf$airSkips.get();
                 double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
-                double hitRate = (double) (hits + airs) / queries * 100;
-                kneaf$LOGGER.info("Pathfinding: {}/sec queries, {}/sec cache hits, {}/sec air skips ({}% optimized)",
-                        String.format("%.1f", queries / timeDiff),
-                        String.format("%.1f", hits / timeDiff),
-                        String.format("%.1f", airs / timeDiff),
-                        String.format("%.1f", hitRate));
+
+                // Update central stats
+                com.kneaf.core.PerformanceStats.walkPathQueries = queries / timeDiff;
+                com.kneaf.core.PerformanceStats.walkCacheHits = hits / timeDiff;
+                com.kneaf.core.PerformanceStats.walkAirSkips = airs / timeDiff;
 
                 kneaf$pathTypeQueries.set(0);
                 kneaf$cacheHits.set(0);
                 kneaf$airSkips.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.walkPathQueries = 0;
             }
             kneaf$lastLogTime = now;
         }

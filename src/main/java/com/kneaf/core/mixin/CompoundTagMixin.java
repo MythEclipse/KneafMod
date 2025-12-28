@@ -156,7 +156,8 @@ public abstract class CompoundTagMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long created = kneaf$tagsCreated.get();
             long accesses = kneaf$tagAccesses.get();
             long interned = kneaf$keysInterned.get();
@@ -164,16 +165,19 @@ public abstract class CompoundTagMixin {
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (created > 0 || accesses > 0) {
-                kneaf$LOGGER.info("NBT: {}/sec tags, {}/sec accesses, {} keys, {}/sec empty skips",
-                        String.format("%.1f", created / timeDiff),
-                        String.format("%.1f", accesses / timeDiff),
-                        interned,
-                        String.format("%.1f", skips / timeDiff));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.nbtTagRate = created / timeDiff;
+                com.kneaf.core.PerformanceStats.nbtAccessRate = accesses / timeDiff;
+                com.kneaf.core.PerformanceStats.nbtKeysInterned = (int) interned;
+                com.kneaf.core.PerformanceStats.nbtEmptySkipRate = skips / timeDiff;
 
-            kneaf$tagsCreated.set(0);
-            kneaf$tagAccesses.set(0);
-            kneaf$emptyTagSkips.set(0);
+                kneaf$tagsCreated.set(0);
+                kneaf$tagAccesses.set(0);
+                kneaf$emptyTagSkips.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.nbtTagRate = 0;
+                com.kneaf.core.PerformanceStats.nbtAccessRate = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

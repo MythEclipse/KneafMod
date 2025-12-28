@@ -47,6 +47,9 @@ public final class ParallelEntityTicker {
     private static final AtomicLong batchesProcessed = new AtomicLong(0);
     private static final AtomicLong parallelMs = new AtomicLong(0);
     private static long lastLogTime = 0;
+    private static long lastLogEntities = 0;
+    private static long lastLogBatches = 0;
+    private static long lastLogMs = 0;
 
     private ParallelEntityTicker() {
     }
@@ -207,12 +210,28 @@ public final class ParallelEntityTicker {
     private static void logStats() {
         long now = System.currentTimeMillis();
         if (now - lastLogTime > 60000) {
-            LOGGER.info(getStatistics());
-            entitiesProcessed.set(0);
-            batchesProcessed.set(0);
-            parallelMs.set(0);
+            long currentEntities = entitiesProcessed.get();
+            long currentBatches = batchesProcessed.get();
+            long currentMs = parallelMs.get();
+
+            long deltaEntities = currentEntities - lastLogEntities;
+            long deltaBatches = currentBatches - lastLogBatches;
+            long deltaMs = currentMs - lastLogMs;
+
+            double avgBatch = deltaBatches > 0 ? (double) deltaEntities / deltaBatches : 0;
+
+            LOGGER.info("ParallelEntityTicker (Last 60s): entities={}, batches={}, avgBatch={:.1f}, ms={}",
+                    deltaEntities, deltaBatches, avgBatch, deltaMs);
+
+            lastLogEntities = currentEntities;
+            lastLogBatches = currentBatches;
+            lastLogMs = currentMs;
             lastLogTime = now;
         }
+    }
+
+    public static long getTotalEntitiesProcessed() {
+        return entitiesProcessed.get();
     }
 
     /**

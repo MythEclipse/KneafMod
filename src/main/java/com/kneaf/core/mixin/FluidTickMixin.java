@@ -102,7 +102,8 @@ public abstract class FluidTickMixin {
         // TPS-based throttling
         double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
 
-        if (currentTPS < CRITICAL_TPS_THRESHOLD) {
+        // Safe Fallback: Check if Rust is available before batching
+        if (com.kneaf.core.RustOptimizations.isAvailable() && currentTPS < CRITICAL_TPS_THRESHOLD) {
             // Critical TPS - queue for batch processing
             kneaf$pendingFluidUpdates.put(posKey, (byte) state.getAmount());
 
@@ -198,21 +199,27 @@ public abstract class FluidTickMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long skipped = kneaf$ticksSkipped.get();
             long processed = kneaf$ticksProcessed.get();
             long rust = kneaf$rustBatchCalls.get();
             long total = skipped + processed;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
+                // Update central stats
+                com.kneaf.core.PerformanceStats.fluidTicks = total / timeDiff;
                 double skipRate = skipped * 100.0 / total;
-                kneaf$LOGGER.info("FluidTick: {} total, {}% skipped, {} Rust batches",
-                        total, String.format("%.1f", skipRate), rust);
-            }
+                com.kneaf.core.PerformanceStats.fluidSkippedPercent = skipRate;
+                com.kneaf.core.PerformanceStats.fluidRustBatches = (int) (rust / timeDiff);
 
-            kneaf$ticksSkipped.set(0);
-            kneaf$ticksProcessed.set(0);
-            kneaf$rustBatchCalls.set(0);
+                kneaf$ticksSkipped.set(0);
+                kneaf$ticksProcessed.set(0);
+                kneaf$rustBatchCalls.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.fluidTicks = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

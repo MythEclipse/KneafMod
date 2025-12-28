@@ -123,24 +123,25 @@ public abstract class RegionFileStorageMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long writes = kneaf$totalWrites.get();
             long skipped = kneaf$writesSkipped.get();
             long reads = kneaf$totalReads.get();
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (writes > 0 || reads > 0) {
-                double skipRate = writes > 0 ? skipped * 100.0 / writes : 0;
-                kneaf$LOGGER.info("RegionFile: {}/sec reads, {}/sec writes, {}/sec skipped ({}%)",
-                        String.format("%.1f", reads / timeDiff),
-                        String.format("%.1f", writes / timeDiff),
-                        String.format("%.1f", skipped / timeDiff),
-                        String.format("%.1f", skipRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.regionReads = reads / timeDiff;
+                com.kneaf.core.PerformanceStats.regionWrites = writes / timeDiff;
+                com.kneaf.core.PerformanceStats.regionSkipped = skipped / timeDiff;
 
-            kneaf$totalWrites.set(0);
-            kneaf$writesSkipped.set(0);
-            kneaf$totalReads.set(0);
+                kneaf$totalWrites.set(0);
+                kneaf$writesSkipped.set(0);
+                kneaf$totalReads.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.regionReads = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

@@ -107,9 +107,9 @@ public abstract class ChunkMapMixin {
      */
     @Inject(method = "tick", at = @At("TAIL"))
     private void kneaf$onTickTail(CallbackInfo ci) {
-        // Log stats every 10 seconds
+        // Update stats every 1s
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 10000) {
+        if (now - kneaf$lastLogTime > 1000) {
             long currentCount = kneaf$chunksLoaded.get();
             long chunksDiff = currentCount - kneaf$lastChunkCount;
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
@@ -118,10 +118,13 @@ public abstract class ChunkMapMixin {
                 double loadRate = chunksDiff / timeDiff;
                 double prioritizeRate = kneaf$chunksPrioritized.get() / timeDiff;
                 double delayRate = kneaf$chunksDelayed.get() / timeDiff;
-                kneaf$LOGGER.info("ChunkMap: {}/sec loaded, {}/sec prioritized, {}/sec delayed",
-                        String.format("%.1f", loadRate),
-                        String.format("%.1f", prioritizeRate),
-                        String.format("%.1f", delayRate));
+                // Update central stats
+                com.kneaf.core.PerformanceStats.chunkMapLoadRate = loadRate;
+                com.kneaf.core.PerformanceStats.chunkMapPriorRate = prioritizeRate;
+                com.kneaf.core.PerformanceStats.chunkMapDelayRate = delayRate;
+
+                // kneaf$LOGGER.info("ChunkMap: {}/sec loaded, {}/sec prioritized, {}/sec
+                // delayed", ...
                 kneaf$chunksPrioritized.set(0);
                 kneaf$chunksDelayed.set(0);
             }

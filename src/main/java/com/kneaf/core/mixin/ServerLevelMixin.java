@@ -113,13 +113,21 @@ public abstract class ServerLevelMixin {
         }
 
         // Log stats every 30 seconds
-        if (now - kneaf$lastLogTime > 30000) {
-            kneaf$LOGGER.info("ServerLevel TPS: {}, EntityCache: {}, Parallel: {}",
-                    String.format("%.1f", TPSTracker.getCurrentTPS()),
-                    kneaf$entityDistanceCache.size(),
-                    ParallelEntityTicker.getStatistics());
+        // Update stats (run more frequently if needed, but 30s is fine for cache size)
+        if (now - kneaf$lastLogTime > 2000) { // Update stats every 2s for F3
+            com.kneaf.core.PerformanceStats.entityCacheSize = kneaf$entityDistanceCache.size();
             kneaf$lastLogTime = now;
         }
+
+        /*
+         * if (now - kneaf$lastLogTime > 30000) {
+         * kneaf$LOGGER.info("ServerLevel TPS: {}, EntityCache: {}, Parallel: {}",
+         * String.format("%.1f", TPSTracker.getCurrentTPS()),
+         * kneaf$entityDistanceCache.size(),
+         * ParallelEntityTicker.getStatistics());
+         * kneaf$lastLogTime = now;
+         * }
+         */
     }
 
     /**

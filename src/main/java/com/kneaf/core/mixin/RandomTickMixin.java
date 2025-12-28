@@ -113,7 +113,8 @@ public abstract class RandomTickMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long skipped = kneaf$chunksSkipped.get();
             long processed = kneaf$chunksProcessed.get();
             long ticks = kneaf$ticksApplied.get();
@@ -121,16 +122,18 @@ public abstract class RandomTickMixin {
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
+                // Update central stats
+                com.kneaf.core.PerformanceStats.randomTickChunks = total / timeDiff;
                 double skipRate = skipped * 100.0 / total;
-                kneaf$LOGGER.info("RandomTick: {}/sec chunks, {}% skipped, {}/sec ticks",
-                        String.format("%.1f", total / timeDiff),
-                        String.format("%.1f", skipRate),
-                        String.format("%.1f", ticks / timeDiff));
-            }
+                com.kneaf.core.PerformanceStats.randomTickSkippedPercent = skipRate;
+                com.kneaf.core.PerformanceStats.randomTicks = ticks / timeDiff;
 
-            kneaf$chunksSkipped.set(0);
-            kneaf$chunksProcessed.set(0);
-            kneaf$ticksApplied.set(0);
+                kneaf$chunksSkipped.set(0);
+                kneaf$chunksProcessed.set(0);
+                kneaf$ticksApplied.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.randomTickChunks = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

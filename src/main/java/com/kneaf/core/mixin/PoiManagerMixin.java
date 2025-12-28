@@ -192,7 +192,8 @@ public abstract class PoiManagerMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
             long skipped = kneaf$searchesSkipped.get();
@@ -200,17 +201,17 @@ public abstract class PoiManagerMixin {
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
-                double hitRate = hits * 100.0 / total;
-                kneaf$LOGGER.info("POI: {}/sec hits, {}/sec misses ({}% hit rate), {}/sec skipped",
-                        String.format("%.1f", hits / timeDiff),
-                        String.format("%.1f", misses / timeDiff),
-                        String.format("%.1f", hitRate),
-                        String.format("%.1f", skipped / timeDiff));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.poiHits = hits / timeDiff;
+                com.kneaf.core.PerformanceStats.poiMisses = misses / timeDiff;
+                com.kneaf.core.PerformanceStats.poiSkipped = skipped / timeDiff;
 
-            kneaf$cacheHits.set(0);
-            kneaf$cacheMisses.set(0);
-            kneaf$searchesSkipped.set(0);
+                kneaf$cacheHits.set(0);
+                kneaf$cacheMisses.set(0);
+                kneaf$searchesSkipped.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.poiHits = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

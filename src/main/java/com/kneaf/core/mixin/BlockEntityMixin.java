@@ -87,24 +87,7 @@ public abstract class BlockEntityMixin {
         }
 
         // Log stats periodically
-        long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
-            long changes = kneaf$totalChanges.get();
-            long skipped = kneaf$ticksSkipped.get();
-            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
-            if (changes > 0 || skipped > 0) {
-                double skipRate = (changes + skipped) > 0
-                        ? (skipped * 100.0 / (changes + skipped))
-                        : 0;
-                kneaf$LOGGER.info("BlockEntity: {}/sec changes, {}/sec skipped ({}% idle)",
-                        String.format("%.1f", changes / timeDiff),
-                        String.format("%.1f", skipped / timeDiff),
-                        String.format("%.1f", skipRate));
-                kneaf$totalChanges.set(0);
-                kneaf$ticksSkipped.set(0);
-            }
-            kneaf$lastLogTime = now;
-        }
+        kneaf$logStats();
     }
 
     /**
@@ -116,6 +99,30 @@ public abstract class BlockEntityMixin {
         kneaf$idleTicks = 0;
         // Reduce sleep duration on activity (adaptive)
         kneaf$sleepDuration = Math.max(MIN_SLEEP_DURATION, kneaf$sleepDuration - 5);
+    }
+
+    @Unique
+    private void kneaf$logStats() {
+        long now = System.currentTimeMillis();
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
+            long changes = kneaf$totalChanges.get();
+            long skipped = kneaf$ticksSkipped.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
+
+            if (changes > 0 || skipped > 0) {
+                // Update central stats
+                com.kneaf.core.PerformanceStats.beChanges = changes / timeDiff;
+                com.kneaf.core.PerformanceStats.beSkipped = skipped / timeDiff;
+
+                kneaf$totalChanges.set(0);
+                kneaf$ticksSkipped.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.beChanges = 0;
+            }
+            kneaf$lastLogTime = now;
+        }
+
     }
 
     /**

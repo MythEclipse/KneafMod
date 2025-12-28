@@ -227,23 +227,29 @@ public abstract class LightEngineMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
             long skipped = kneaf$checksSkipped.get();
             long rust = kneaf$rustBatchCalls.get();
             long total = hits + misses;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
+                // Update central stats
                 double hitRate = hits * 100.0 / total;
-                kneaf$LOGGER.info("LightEngine: {}% cache hit, {} skipped, {} Rust batches",
-                        String.format("%.1f", hitRate), skipped, rust);
-            }
+                com.kneaf.core.PerformanceStats.lightCacheHitPercent = hitRate;
+                com.kneaf.core.PerformanceStats.lightSkipped = skipped / timeDiff;
+                com.kneaf.core.PerformanceStats.lightRustBatches = rust / timeDiff;
 
-            kneaf$cacheHits.set(0);
-            kneaf$cacheMisses.set(0);
-            kneaf$checksSkipped.set(0);
-            kneaf$rustBatchCalls.set(0);
+                kneaf$cacheHits.set(0);
+                kneaf$cacheMisses.set(0);
+                kneaf$checksSkipped.set(0);
+                kneaf$rustBatchCalls.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.lightSkipped = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

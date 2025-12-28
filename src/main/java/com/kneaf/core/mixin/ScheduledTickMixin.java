@@ -119,21 +119,22 @@ public abstract class ScheduledTickMixin<T> {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long scheduled = kneaf$ticksScheduled.get();
             long skipped = kneaf$duplicatesSkipped.get();
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (scheduled > 0) {
-                double skipRate = skipped * 100.0 / scheduled;
-                kneaf$LOGGER.info("ScheduledTick: {}/sec scheduled, {}/sec skipped ({}%)",
-                        String.format("%.1f", scheduled / timeDiff),
-                        String.format("%.1f", skipped / timeDiff),
-                        String.format("%.1f", skipRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.tickScheduled = scheduled / timeDiff;
+                com.kneaf.core.PerformanceStats.tickSkipped = skipped / timeDiff;
 
-            kneaf$ticksScheduled.set(0);
-            kneaf$duplicatesSkipped.set(0);
+                kneaf$ticksScheduled.set(0);
+                kneaf$duplicatesSkipped.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.tickScheduled = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

@@ -118,20 +118,23 @@ public abstract class BlockStatePropertyMapMixin<O, S> {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long states = kneaf$statesCreated.get();
             long deduped = kneaf$valuesDeduplicated.get();
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (states > 0) {
-                kneaf$LOGGER.info("BlockState: {}/sec states, {}/sec deduplicated, {} cached",
-                        String.format("%.1f", states / timeDiff),
-                        String.format("%.1f", deduped / timeDiff),
-                        kneaf$internedValues.size());
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.blockStateCount = states / timeDiff;
+                com.kneaf.core.PerformanceStats.blockStateDedup = deduped / timeDiff;
+                com.kneaf.core.PerformanceStats.blockStateCached = kneaf$internedValues.size();
 
-            kneaf$statesCreated.set(0);
-            kneaf$valuesDeduplicated.set(0);
+                kneaf$statesCreated.set(0);
+                kneaf$valuesDeduplicated.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.blockStateCount = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

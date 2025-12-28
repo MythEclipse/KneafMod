@@ -165,6 +165,13 @@ public abstract class ItemEntityMixin {
             kneaf$usedItemMergingHelper = true;
         }
 
+        ItemEntity self = (ItemEntity) (Object) this;
+        ItemMergingHelper.tryMergeWithNearby(self, self.level());
+
+        // We replaced the entire logic with ItemMergingHelper, so cancel Vanilla
+        // execution
+        ci.cancel();
+
         // Log merge radius for debugging
         if (kneaf$tickCounter == 1) {
             double radiusSq = ItemMergingHelper.getMergeRadiusSquared();
@@ -175,19 +182,22 @@ public abstract class ItemEntityMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long checked = kneaf$mergesChecked.get();
             long skipped = kneaf$mergesSkipped.get();
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (checked > 0) {
-                double skipRate = skipped * 100.0 / checked;
-                kneaf$LOGGER.info("ItemEntity: {}/sec merges, {}% skipped",
-                        String.format("%.1f", checked / timeDiff), String.format("%.1f", skipRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.itemMerges = checked / timeDiff;
+                com.kneaf.core.PerformanceStats.itemSkipped = skipped / timeDiff;
 
-            kneaf$mergesChecked.set(0);
-            kneaf$mergesSkipped.set(0);
+                kneaf$mergesChecked.set(0);
+                kneaf$mergesSkipped.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.itemMerges = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

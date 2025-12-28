@@ -184,26 +184,36 @@ public abstract class ChunkGeneratorMixin {
      */
     @Unique
     private static void logGenerationStats() {
-        long totalChunks = kneaf$chunksGenerated.get();
-        long chunksDiff = totalChunks - kneaf$lastChunkCount;
-        kneaf$lastChunkCount = totalChunks;
+        long now = System.currentTimeMillis();
+        // Update stats every 1 second for F3 responsiveness
+        if (now - kneaf$lastLogTime > 1000) {
+            long totalChunks = kneaf$chunksGenerated.get();
+            long chunksDiff = totalChunks - kneaf$lastChunkCount;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
-        if (chunksDiff > 0) {
-            long totalNs = kneaf$totalGenTimeNs.get();
-            double avgMs = totalChunks > 0 ? (totalNs / 1_000_000.0) / totalChunks : 0;
-            double chunksPerSec = chunksDiff / 10.0;
-            double parallelPerSec = kneaf$parallelFeatures.get() / 10.0;
-            double skippedPerSec = kneaf$skippedDecorations.get() / 10.0;
+            if (chunksDiff > 0 || kneaf$parallelFeatures.get() > 0) {
+                long totalNs = kneaf$totalGenTimeNs.get();
+                double avgMs = totalChunks > 0 ? (totalNs / 1_000_000.0) / totalChunks : 0;
+                double chunksPerSec = chunksDiff / timeDiff;
+                double parallelPerSec = kneaf$parallelFeatures.get() / timeDiff;
+                double skippedPerSec = kneaf$skippedDecorations.get() / timeDiff;
 
-            kneaf$LOGGER.info("ChunkGen: {}/sec, avg {}ms, {}/sec parallel, {}/sec skipped",
-                    String.format("%.1f", chunksPerSec),
-                    String.format("%.2f", avgMs),
-                    String.format("%.1f", parallelPerSec),
-                    String.format("%.1f", skippedPerSec));
+                // Update central stats
+                com.kneaf.core.PerformanceStats.chunkGenRate = chunksPerSec;
+                com.kneaf.core.PerformanceStats.chunkGenAvgMs = avgMs;
+                com.kneaf.core.PerformanceStats.chunkGenParallelRate = parallelPerSec;
+                com.kneaf.core.PerformanceStats.chunkGenSkippedRate = skippedPerSec;
 
-            // Reset periodic counters
-            kneaf$parallelFeatures.set(0);
-            kneaf$skippedDecorations.set(0);
+                // Reset periodic counters
+                kneaf$parallelFeatures.set(0);
+                kneaf$skippedDecorations.set(0);
+                kneaf$lastChunkCount = totalChunks;
+            } else {
+                // Decay rates to 0 if idle
+                com.kneaf.core.PerformanceStats.chunkGenRate = 0;
+                com.kneaf.core.PerformanceStats.chunkGenParallelRate = 0;
+            }
+            kneaf$lastLogTime = now;
         }
     }
 

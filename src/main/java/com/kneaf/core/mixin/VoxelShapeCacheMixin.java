@@ -235,7 +235,8 @@ public abstract class VoxelShapeCacheMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
             long fastPath = kneaf$fastPathHits.get();
@@ -244,17 +245,19 @@ public abstract class VoxelShapeCacheMixin {
 
             if (total > 0) {
                 double hitRate = hits * 100.0 / total;
-                kneaf$LOGGER.info("VoxelShape: {}/sec hits, {}/sec misses ({}% hit), {}/sec fast-path, {} cached",
-                        String.format("%.1f", hits / timeDiff),
-                        String.format("%.1f", misses / timeDiff),
-                        String.format("%.1f", hitRate),
-                        String.format("%.1f", fastPath / timeDiff),
-                        kneaf$collisionShapeCache.size());
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.voxelHitRate = hits / timeDiff;
+                com.kneaf.core.PerformanceStats.voxelMissRate = misses / timeDiff;
+                com.kneaf.core.PerformanceStats.voxelHitPercent = hitRate;
+                com.kneaf.core.PerformanceStats.voxelFastPathRate = fastPath / timeDiff;
+                com.kneaf.core.PerformanceStats.voxelCacheSize = kneaf$collisionShapeCache.size();
 
-            kneaf$cacheHits.set(0);
-            kneaf$cacheMisses.set(0);
-            kneaf$fastPathHits.set(0);
+                kneaf$cacheHits.set(0);
+                kneaf$cacheMisses.set(0);
+                kneaf$fastPathHits.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.voxelHitRate = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

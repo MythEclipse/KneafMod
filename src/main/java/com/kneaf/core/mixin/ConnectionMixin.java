@@ -108,27 +108,30 @@ public abstract class ConnectionMixin {
                 kneaf$packetsCoalesced.addAndGet(pending - 1);
             }
         }
+        kneaf$logStats();
+    }
 
-        // Log stats periodically
+    private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long sent = kneaf$packetsSent.get();
             long batches = kneaf$batchesSent.get();
             long coalesced = kneaf$packetsCoalesced.get();
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (sent > 0) {
-                double avgBatchSize = batches > 0 ? (double) sent / batches : 0;
-                kneaf$LOGGER.info("Network: {}/sec packets, {}/sec batches (avg {}/batch), {}/sec coalesced",
-                        String.format("%.1f", sent / timeDiff),
-                        String.format("%.1f", batches / timeDiff),
-                        String.format("%.1f", avgBatchSize),
-                        String.format("%.1f", coalesced / timeDiff));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.netPackets = sent / timeDiff;
+                com.kneaf.core.PerformanceStats.netBatches = batches / timeDiff;
+                com.kneaf.core.PerformanceStats.netCoalesced = coalesced / timeDiff;
 
-            kneaf$packetsSent.set(0);
-            kneaf$batchesSent.set(0);
-            kneaf$packetsCoalesced.set(0);
+                kneaf$packetsSent.set(0);
+                kneaf$batchesSent.set(0);
+                kneaf$packetsCoalesced.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.netPackets = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

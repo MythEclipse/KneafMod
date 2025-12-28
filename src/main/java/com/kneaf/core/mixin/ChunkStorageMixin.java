@@ -150,7 +150,8 @@ public abstract class ChunkStorageMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long hits = kneaf$readCacheHits.get();
             long misses = kneaf$readCacheMisses.get();
             long skipped = kneaf$writesSkipped.get();
@@ -158,16 +159,18 @@ public abstract class ChunkStorageMixin {
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0 || skipped > 0) {
+                // Update central stats
+                com.kneaf.core.PerformanceStats.storageReads = total / timeDiff;
                 double hitRate = total > 0 ? hits * 100.0 / total : 0;
-                kneaf$LOGGER.info("ChunkStorage: {}/sec reads ({}% hit), {}/sec writes skipped",
-                        String.format("%.1f", total / timeDiff),
-                        String.format("%.1f", hitRate),
-                        String.format("%.1f", skipped / timeDiff));
-            }
+                com.kneaf.core.PerformanceStats.storageHitPercent = hitRate;
+                com.kneaf.core.PerformanceStats.storageWritesSkipped = skipped / timeDiff;
 
-            kneaf$readCacheHits.set(0);
-            kneaf$readCacheMisses.set(0);
-            kneaf$writesSkipped.set(0);
+                kneaf$readCacheHits.set(0);
+                kneaf$readCacheMisses.set(0);
+                kneaf$writesSkipped.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.storageReads = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

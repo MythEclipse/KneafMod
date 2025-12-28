@@ -159,7 +159,8 @@ public abstract class ChunkDataPacketMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long packets = kneaf$packetsCreated.get();
             long duplicates = kneaf$duplicatesDetected.get();
             long hotChunks = kneaf$hotChunksDetected.get();
@@ -167,21 +168,19 @@ public abstract class ChunkDataPacketMixin {
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (packets > 0) {
-                double packetRate = packets / timeDiff;
-                double dupRate = duplicates / timeDiff;
-                double dupPercent = duplicates * 100.0 / packets;
-                kneaf$LOGGER.info("ChunkPacket: {}/sec created, {}/sec duplicates ({}%), {}/sec hot, {}/sec empty",
-                        String.format("%.1f", packetRate),
-                        String.format("%.1f", dupRate),
-                        String.format("%.1f", dupPercent),
-                        String.format("%.1f", hotChunks / timeDiff),
-                        String.format("%.1f", empty / timeDiff));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.chunkPacketCreated = packets / timeDiff;
+                com.kneaf.core.PerformanceStats.chunkPacketDuplicates = duplicates / timeDiff;
+                com.kneaf.core.PerformanceStats.chunkPacketHot = hotChunks / timeDiff;
+                com.kneaf.core.PerformanceStats.chunkPacketEmpty = empty / timeDiff;
 
-            kneaf$packetsCreated.set(0);
-            kneaf$duplicatesDetected.set(0);
-            kneaf$hotChunksDetected.set(0);
-            kneaf$emptySections.set(0);
+                kneaf$packetsCreated.set(0);
+                kneaf$duplicatesDetected.set(0);
+                kneaf$hotChunksDetected.set(0);
+                kneaf$emptySections.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.chunkPacketCreated = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

@@ -98,20 +98,23 @@ public abstract class WorldBorderMixin {
     @Unique
     private void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long skipped = kneaf$checksSkipped.get();
             long performed = kneaf$checksPerformed.get();
             long total = skipped + performed;
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
-                double skipRate = skipped * 100.0 / total;
-                kneaf$LOGGER.info("WorldBorder: {}/sec checks, {}% skipped",
-                        String.format("%.1f", total / timeDiff), String.format("%.1f", skipRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.borderChecks = total / timeDiff;
+                com.kneaf.core.PerformanceStats.borderSkipped = skipped / timeDiff;
 
-            kneaf$checksSkipped.set(0);
-            kneaf$checksPerformed.set(0);
+                kneaf$checksSkipped.set(0);
+                kneaf$checksPerformed.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.borderChecks = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

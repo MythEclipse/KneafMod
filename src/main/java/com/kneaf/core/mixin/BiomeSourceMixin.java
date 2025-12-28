@@ -172,22 +172,23 @@ public abstract class BiomeSourceMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
             long total = hits + misses;
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
-                double hitRate = hits * 100.0 / total;
-                kneaf$LOGGER.info("BiomeCache: {}/sec hits, {}/sec misses ({}% hit rate)",
-                        String.format("%.1f", hits / timeDiff),
-                        String.format("%.1f", misses / timeDiff),
-                        String.format("%.1f", hitRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.biomeCacheHits = hits / timeDiff;
+                com.kneaf.core.PerformanceStats.biomeCacheMisses = misses / timeDiff;
 
-            kneaf$cacheHits.set(0);
-            kneaf$cacheMisses.set(0);
+                kneaf$cacheHits.set(0);
+                kneaf$cacheMisses.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.biomeCacheHits = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

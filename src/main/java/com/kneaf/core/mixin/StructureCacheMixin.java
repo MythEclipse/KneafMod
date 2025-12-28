@@ -77,8 +77,8 @@ public abstract class StructureCacheMixin {
             kneaf$loggedFirstApply = true;
         }
 
-        long chunkPos = ChunkPos.asLong(SectionPos.blockToSectionCoord(pos.getX()), 
-                                        SectionPos.blockToSectionCoord(pos.getZ()));
+        long chunkPos = ChunkPos.asLong(SectionPos.blockToSectionCoord(pos.getX()),
+                SectionPos.blockToSectionCoord(pos.getZ()));
         long cacheKey = kneaf$getCacheKey(structure, chunkPos);
 
         // Check no-structure cache first
@@ -107,8 +107,8 @@ public abstract class StructureCacheMixin {
     private void kneaf$afterGetStructureAt(net.minecraft.core.BlockPos pos, Structure structure,
             CallbackInfoReturnable<StructureStart> cir) {
         StructureStart result = cir.getReturnValue();
-        long chunkPos = ChunkPos.asLong(SectionPos.blockToSectionCoord(pos.getX()), 
-                                        SectionPos.blockToSectionCoord(pos.getZ()));
+        long chunkPos = ChunkPos.asLong(SectionPos.blockToSectionCoord(pos.getX()),
+                SectionPos.blockToSectionCoord(pos.getZ()));
         long cacheKey = kneaf$getCacheKey(structure, chunkPos);
 
         if (result == null || result == StructureStart.INVALID_START) {
@@ -146,22 +146,28 @@ public abstract class StructureCacheMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
             long noHits = kneaf$noStructureHits.get();
             long total = hits + misses + noHits;
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
+                // Update central stats
+                com.kneaf.core.PerformanceStats.structureLookups = total / timeDiff;
                 double hitRate = (hits + noHits) * 100.0 / total;
-                kneaf$LOGGER.info("StructureCache: {} lookups, {}% hit rate, {} struct cached, {} empty cached",
-                        total, String.format("%.1f", hitRate), 
-                        kneaf$structureCache.size(), kneaf$noStructureCache.size());
-            }
+                com.kneaf.core.PerformanceStats.structureHitPercent = hitRate;
+                com.kneaf.core.PerformanceStats.structureCached = kneaf$structureCache.size();
+                com.kneaf.core.PerformanceStats.structureEmptyCached = kneaf$noStructureCache.size();
 
-            kneaf$cacheHits.set(0);
-            kneaf$cacheMisses.set(0);
-            kneaf$noStructureHits.set(0);
+                kneaf$cacheHits.set(0);
+                kneaf$cacheMisses.set(0);
+                kneaf$noStructureHits.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.structureLookups = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

@@ -105,10 +105,32 @@ public class KneafCore {
             // Initialize Mod Compatibility
             ModCompatibility.init();
 
+            // Initialize Rust Optimizations (triggers native load)
+            RustOptimizations.initialize();
+
             // Initialize ChunkGeneratorOptimizer (includes RustNoise warmup)
             ChunkGeneratorOptimizer.init();
-            LOGGER.info("ChunkGeneratorOptimizer initialized, Rust acceleration: {}",
-                    ChunkGeneratorOptimizer.isRustAccelerationAvailable());
+            boolean rustAvailable = ChunkGeneratorOptimizer.isRustAccelerationAvailable();
+            LOGGER.info("ChunkGeneratorOptimizer initialized, Rust acceleration: {}", rustAvailable);
+
+            if (!rustAvailable) {
+                LOGGER.error("""
+
+
+                        ============================================================
+                        CRITICAL WARNING: NATIVE RUST LIBRARY NOT LOADED
+                        ============================================================
+                        The native Rust optimization library could not be loaded.
+                        KneafCore will strictly operate in JAVA FALLBACK MODE.
+
+                        Performance will be SIGNIFICANTLY reduced compared to native mode.
+                        Advanced features like SIMD fluid simulation and batched lighting
+                        will use slower Java implementations or be disabled.
+
+                        Please verify your OS/Architecture compatibility and check logs.
+                        ============================================================
+                        """);
+            }
 
             // Initialize ParallelEntityTicker
             LOGGER.info("ParallelEntityTicker parallelism: {}", ParallelEntityTicker.getParallelism());

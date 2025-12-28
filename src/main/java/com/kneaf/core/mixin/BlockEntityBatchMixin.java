@@ -164,20 +164,25 @@ public abstract class BlockEntityBatchMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long total = kneaf$totalTicks.get();
             long skipped = kneaf$skippedTicks.get();
             long batched = kneaf$batchedTicks.get();
+            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0 || batched > 0) {
-                double skipRate = (total + skipped) > 0 ? (skipped * 100.0 / (total + skipped)) : 0;
-                kneaf$LOGGER.info("BlockEntityBatch: {} ticks, {} batched, {} skipped ({}%)",
-                        total, batched, skipped, String.format("%.1f", skipRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.beBatchTicks = total / timeDiff;
+                com.kneaf.core.PerformanceStats.beBatched = batched / timeDiff;
+                com.kneaf.core.PerformanceStats.beBatchSkipped = skipped / timeDiff;
 
-            kneaf$totalTicks.set(0);
-            kneaf$skippedTicks.set(0);
-            kneaf$batchedTicks.set(0);
+                kneaf$totalTicks.set(0);
+                kneaf$skippedTicks.set(0);
+                kneaf$batchedTicks.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.beBatchTicks = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

@@ -237,11 +237,15 @@ public final class ChunkProcessor {
             lastStatsTime = now;
             lastChunkCount = currentCount;
 
+            // Update central stats
+            com.kneaf.core.PerformanceStats.chunkThroughput = chunksPerSecond.get();
+            com.kneaf.core.PerformanceStats.chunkActiveThreads = activeChunkTasks.get();
+
             // Log high throughput
-            if (chunksDiff > 50) {
-                LOGGER.info("Chunk throughput: {} chunks/sec, active: {}",
-                        chunksPerSecond.get(), activeChunkTasks.get());
-            }
+            // if (chunksDiff > 50) {
+            // LOGGER.info("Chunk throughput: {} chunks/sec, active: {}",
+            // chunksPerSecond.get(), activeChunkTasks.get());
+            // }
         }
     }
 

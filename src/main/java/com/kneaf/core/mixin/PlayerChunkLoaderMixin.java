@@ -98,21 +98,24 @@ public abstract class PlayerChunkLoaderMixin {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
-        if (now - kneaf$lastLogTime > 60000) {
+        // Update stats every 1s
+        if (now - kneaf$lastLogTime > 1000) {
             long moves = kneaf$movesCalled.get();
             long skipped = kneaf$movesSkipped.get();
             double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (moves > 0) {
                 double skipRate = skipped * 100.0 / moves;
-                kneaf$LOGGER.info("PlayerChunk: {}/sec moves, {}/sec skipped ({}% saved)",
-                        String.format("%.1f", moves / timeDiff),
-                        String.format("%.1f", skipped / timeDiff),
-                        String.format("%.1f", skipRate));
-            }
+                // Update central stats
+                com.kneaf.core.PerformanceStats.playerChunkMoveRate = moves / timeDiff;
+                com.kneaf.core.PerformanceStats.playerChunkSkipRate = skipped / timeDiff;
+                com.kneaf.core.PerformanceStats.playerChunkSavedPercent = skipRate;
 
-            kneaf$movesCalled.set(0);
-            kneaf$movesSkipped.set(0);
+                kneaf$movesCalled.set(0);
+                kneaf$movesSkipped.set(0);
+            } else {
+                com.kneaf.core.PerformanceStats.playerChunkMoveRate = 0;
+            }
             kneaf$lastLogTime = now;
         }
     }

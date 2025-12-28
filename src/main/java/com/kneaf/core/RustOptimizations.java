@@ -32,14 +32,18 @@ public class RustOptimizations {
         initialized = true;
 
         try {
+            // Attempt to load the library
+            RustNativeLoader.loadLibrary();
+
             if (RustNativeLoader.isLibraryLoaded()) {
                 nativeAvailable = true;
-                // LOGGER.info("✅ RustOptimizations bridge initialized");
+                LOGGER.info("✅ RustOptimizations bridge initialized");
             } else {
                 LOGGER.warn("Native library not loaded - RustOptimizations using Java fallbacks");
             }
         } catch (Throwable e) {
             nativeAvailable = false;
+            LOGGER.warn("Failed to initialize RustOptimizations bridge", e);
         }
     }
 
