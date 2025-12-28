@@ -6,7 +6,9 @@
  */
 package com.kneaf.core.mixin;
 
-import net.minecraft.world.level.chunk.storage.RegionFile;
+import com.kneaf.core.io.AsyncChunkPrefetcher;
+import com.kneaf.core.io.PrefetchedChunkCache;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.chunk.storage.RegionFileStorage;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -18,6 +20,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -29,6 +32,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * timeframe
  * 2. Track recently accessed regions for prefetch hints
  * 3. Skip redundant I/O for chunks that haven't changed
+ * 4. Async chunk prefetching with intelligent movement prediction
+ * 5. LRU cache for prefetched chunk data
  */
 @Mixin(RegionFileStorage.class)
 public abstract class RegionFileStorageMixin {
@@ -63,6 +68,13 @@ public abstract class RegionFileStorageMixin {
     @Unique
     private static long kneaf$lastCleanupTime = 0;
 
+    // Prefetch cache statistics
+    @Unique
+    private static final AtomicLong kneaf$cacheHits = new AtomicLong(0);
+
+    @Unique
+    private static final AtomicLong kneaf$cacheMisses = new AtomicLong(0);
+
     // Shadow removed as it was unused and caused InvalidMixinException
     /*
      * @Shadow
@@ -72,27 +84,53 @@ public abstract class RegionFileStorageMixin {
      */
 
     /**
-     * Track reads for metrics.
+     * Initialize async prefetcher on first access.
      */
-    @Inject(method = "getRegionFile", at = @At("HEAD"))
-    private void kneaf$onGetRegionFile(net.minecraft.world.level.ChunkPos pos, CallbackInfoReturnable<RegionFile> cir) {
+    @Inject(method = "<init>", at = @At("TAIL"))
+    private void kneaf$onInit(CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ RegionFileStorageMixin applied - I/O optimization active!");
+            kneaf$LOGGER.info("✅ RegionFileStorageMixin applied - I/O optimization + async prefetch active!");
             kneaf$loggedFirstApply = true;
-        }
 
+            // Initialize prefetcher
+            AsyncChunkPrefetcher.initialize();
+
+            // Pass reference to prefetcher
+            AsyncChunkPrefetcher.setRegionFileStorage((RegionFileStorage) (Object) this);
+        }
+    }
+
+    /**
+     * OPTIMIZATION: Check prefetch cache before reading from disk.
+     */
+    @Inject(method = "read", at = @At("HEAD"), cancellable = true)
+    private void kneaf$onRead(net.minecraft.world.level.ChunkPos pos,
+            CallbackInfoReturnable<CompoundTag> cir) {
         kneaf$totalReads.incrementAndGet();
+
+        // Check prefetch cache first
+        Optional<CompoundTag> cached = PrefetchedChunkCache.get(pos);
+        if (cached.isPresent()) {
+            kneaf$cacheHits.incrementAndGet();
+            cir.setReturnValue(cached.get()); // ✅ CACHE HIT - instant return!
+        } else {
+            kneaf$cacheMisses.incrementAndGet();
+            // Fallback to vanilla blocking read
+        }
     }
 
     /**
      * OPTIMIZATION: Skip duplicate writes to same chunk within coalesce time.
-     */
-    /**
-     * OPTIMIZATION: Skip duplicate writes to same chunk within coalesce time.
+     * CRITICAL: Also invalidate prefetch cache to prevent stale data!
      */
     @Inject(method = "write", at = @At("HEAD"), cancellable = true)
     private void kneaf$onWrite(net.minecraft.world.level.ChunkPos pos,
             net.minecraft.nbt.CompoundTag tag, CallbackInfo ci) {
+
+        // ✅ CRITICAL: Invalidate prefetch cache FIRST to prevent serving stale data
+        PrefetchedChunkCache.invalidate(pos);
+        // Also cancel any in-flight prefetch for this chunk
+        AsyncChunkPrefetcher.cancelPrefetch(pos);
         kneaf$totalWrites.incrementAndGet();
 
         long chunkKey = pos.toLong();
@@ -136,9 +174,19 @@ public abstract class RegionFileStorageMixin {
                 com.kneaf.core.PerformanceStats.regionWrites = writes / timeDiff;
                 com.kneaf.core.PerformanceStats.regionSkipped = skipped / timeDiff;
 
+                // Prefetch cache stats
+                long hits = kneaf$cacheHits.get();
+                long misses = kneaf$cacheMisses.get();
+                double hitRate = (hits + misses) > 0 ? (hits * 100.0 / (hits + misses)) : 0;
+                com.kneaf.core.PerformanceStats.prefetchCacheHits = hits / timeDiff;
+                com.kneaf.core.PerformanceStats.prefetchCacheMisses = misses / timeDiff;
+                com.kneaf.core.PerformanceStats.prefetchCacheHitRate = hitRate;
+
                 kneaf$totalWrites.set(0);
                 kneaf$writesSkipped.set(0);
                 kneaf$totalReads.set(0);
+                kneaf$cacheHits.set(0);
+                kneaf$cacheMisses.set(0);
             } else {
                 com.kneaf.core.PerformanceStats.regionReads = 0;
             }

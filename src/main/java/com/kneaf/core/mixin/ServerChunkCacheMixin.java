@@ -80,9 +80,27 @@ public abstract class ServerChunkCacheMixin {
         long key = kneaf$chunkKey(x, z);
         ChunkAccess cached = kneaf$hotChunkCache.get(key);
 
-        if (cached != null && cached instanceof LevelChunk) {
-            kneaf$cacheHits.incrementAndGet();
-            cir.setReturnValue(cached);
+        if (cached != null && cached instanceof LevelChunk levelChunk) {
+            // ✅ CRITICAL: Validate chunk is still loaded and valid
+            // A stale chunk reference can cause "No chunk holder after ticket" crash
+            try {
+                // Check if chunk is still part of the level
+                if (level != null && level.getChunkSource().hasChunk(x, z)) {
+                    // Verify chunk hasn't been unloaded
+                    if (levelChunk.getLevel() == level) {
+                        kneaf$cacheHits.incrementAndGet();
+                        cir.setReturnValue(cached);
+                        return;
+                    }
+                }
+            } catch (Exception e) {
+                // Chunk is invalid, remove from cache
+                kneaf$hotChunkCache.remove(key);
+            }
+
+            // Cache entry is stale, remove it
+            kneaf$hotChunkCache.remove(key);
+            kneaf$cacheMisses.incrementAndGet();
         } else {
             kneaf$cacheMisses.incrementAndGet();
         }
@@ -99,7 +117,22 @@ public abstract class ServerChunkCacheMixin {
         }
 
         ChunkAccess result = cir.getReturnValue();
-        if (result instanceof LevelChunk levelChunk && levelChunk.getBlockEntities().size() >= 0) {
+        if (result instanceof LevelChunk levelChunk) {
+            // ✅ VALIDATION: Only cache valid, fully-loaded chunks
+            try {
+                // Ensure chunk is properly loaded and part of this level
+                if (levelChunk.getLevel() != level) {
+                    return; // Don't cache chunks from different levels
+                }
+
+                // Don't cache empty or unloaded chunks
+                if (levelChunk.isEmpty()) {
+                    return;
+                }
+            } catch (Exception e) {
+                return; // Skip invalid chunks
+            }
+
             long key = kneaf$chunkKey(x, z);
 
             // Limit cache size
@@ -120,13 +153,23 @@ public abstract class ServerChunkCacheMixin {
     @Unique
     private static long kneaf$lastLogTime = 0;
 
+    @Unique
+    private static long kneaf$lastCacheCleanup = 0;
+
     /**
      * Inject into tick to clean stale cache entries.
      */
     @Inject(method = "tick", at = @At("TAIL"))
     private void kneaf$onTick(java.util.function.BooleanSupplier hasTimeLeft, boolean tickChunks, CallbackInfo ci) {
-        // Periodically update stats
         long now = System.currentTimeMillis();
+        
+        // ✅ CRITICAL: Periodic stale cache cleanup (every 5 seconds)
+        if (now - kneaf$lastCacheCleanup > 5000) {
+            kneaf$cleanupStaleCache();
+            kneaf$lastCacheCleanup = now;
+        }
+        
+        // Periodically update stats
         if (now - kneaf$lastLogTime > 1000) {
             long accesses = kneaf$chunkAccesses.get();
             long hits = kneaf$cacheHits.get();
@@ -147,6 +190,51 @@ public abstract class ServerChunkCacheMixin {
                 com.kneaf.core.PerformanceStats.chunkCacheAccesses = 0;
             }
             kneaf$lastLogTime = now;
+        }
+    }
+    
+    /**
+     * Remove stale chunks from cache (chunks that are no longer loaded).
+     */
+    @Unique
+    private void kneaf$cleanupStaleCache() {
+        if (level == null) {
+            kneaf$hotChunkCache.clear();
+            return;
+        }
+        
+        int removed = 0;
+        var iterator = kneaf$hotChunkCache.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            ChunkAccess chunk = entry.getValue();
+            
+            if (chunk instanceof LevelChunk levelChunk) {
+                try {
+                    // Remove if chunk's level doesn't match or chunk is unloaded
+                    if (levelChunk.getLevel() != level) {
+                        iterator.remove();
+                        removed++;
+                        continue;
+                    }
+                    
+                    // Check if chunk is still loaded in chunk source
+                    int x = levelChunk.getPos().x;
+                    int z = levelChunk.getPos().z;
+                    if (!level.getChunkSource().hasChunk(x, z)) {
+                        iterator.remove();
+                        removed++;
+                    }
+                } catch (Exception e) {
+                    iterator.remove();
+                    removed++;
+                }
+            }
+        }
+        
+        if (removed > 0) {
+            kneaf$LOGGER.debug("Cleaned {} stale chunks from hot cache (remaining: {})", 
+                    removed, kneaf$hotChunkCache.size());
         }
     }
 

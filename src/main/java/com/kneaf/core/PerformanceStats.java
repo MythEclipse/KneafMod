@@ -148,6 +148,13 @@ public class PerformanceStats {
     public static volatile double regionWrites;
     public static volatile double regionSkipped;
 
+    // AsyncChunkPrefetcher
+    public static volatile double prefetchCacheHits;
+    public static volatile double prefetchCacheMisses;
+    public static volatile double prefetchCacheHitRate;
+    public static volatile int prefetchActive;
+    public static volatile int prefetchQueueSize;
+
     // RandomTickMixin
     public static volatile double randomTickChunks;
     public static volatile double randomTickSkippedPercent;
