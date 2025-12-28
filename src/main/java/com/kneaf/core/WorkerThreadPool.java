@@ -32,6 +32,9 @@ public final class WorkerThreadPool {
             LOGGER.info("WorkerThreadPool initialized - using Minecraft's built-in executors");
             LOGGER.info("  - Compute/Background tasks: Util.backgroundExecutor()");
             LOGGER.info("  - I/O operations: Util.ioPool()");
+
+            // Log initial worker status
+            logWorkerStatus();
         }
     }
 
@@ -89,6 +92,60 @@ public final class WorkerThreadPool {
             // Don't shutdown Minecraft's built-in executors
             // They're managed by Minecraft's lifecycle
             initialized = false;
+        }
+    }
+
+    /**
+     * Log current worker thread status for monitoring
+     */
+    public static void logWorkerStatus() {
+        try {
+            ForkJoinPool computePool = getComputePool();
+            ExecutorService ioPool = getIOPool();
+
+            // Log compute pool (ForkJoinPool) status
+            LOGGER.info("=== Worker Thread Pool Status ===");
+            LOGGER.info("Compute Pool (ForkJoin):");
+            LOGGER.info("  - Parallelism: " + computePool.getParallelism());
+            LOGGER.info("  - Active threads: " + computePool.getActiveThreadCount());
+            LOGGER.info("  - Running threads: " + computePool.getRunningThreadCount());
+            LOGGER.info("  - Queued tasks: " + computePool.getQueuedTaskCount());
+            LOGGER.info("  - Pool size: " + computePool.getPoolSize());
+
+            // Log I/O pool status
+            if (ioPool instanceof java.util.concurrent.ThreadPoolExecutor) {
+                java.util.concurrent.ThreadPoolExecutor tpe = (java.util.concurrent.ThreadPoolExecutor) ioPool;
+                LOGGER.info("I/O Pool (ThreadPoolExecutor):");
+                LOGGER.info("  - Core size: " + tpe.getCorePoolSize());
+                LOGGER.info("  - Max size: " + tpe.getMaximumPoolSize());
+                LOGGER.info("  - Active threads: " + tpe.getActiveCount());
+                LOGGER.info("  - Pool size: " + tpe.getPoolSize());
+                LOGGER.info("  - Largest pool size: " + tpe.getLargestPoolSize());
+                LOGGER.info("  - Task count: " + tpe.getTaskCount());
+                LOGGER.info("  - Completed: " + tpe.getCompletedTaskCount());
+            } else {
+                LOGGER.info("I/O Pool: " + ioPool.getClass().getSimpleName());
+            }
+
+            LOGGER.info("Scheduled Pool: Wrapper (minimal overhead)");
+            LOGGER.info("===================================");
+        } catch (Exception e) {
+            LOGGER.error("Error logging worker status", e);
+        }
+    }
+
+    /**
+     * Get worker thread statistics for monitoring
+     */
+    public static String getWorkerStats() {
+        try {
+            ForkJoinPool computePool = getComputePool();
+            return String.format(
+                    "Workers{compute=%d/%d active, I/O=Minecraft-managed}",
+                    computePool.getActiveThreadCount(),
+                    computePool.getParallelism());
+        } catch (Exception e) {
+            return "Workers{error: " + e.getMessage() + "}";
         }
     }
 
