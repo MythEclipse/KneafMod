@@ -50,7 +50,7 @@ public abstract class ExplosionMixin {
 
     // Configuration
     @Unique
-    private static final int MAX_EXPLOSIONS_PER_CHUNK_PER_SECOND = 50;
+    private static final int MAX_EXPLOSIONS_PER_CHUNK_PER_SECOND = 200;
 
     @Unique
     private static final float SMALL_EXPLOSION_THRESHOLD = 1.5f;
@@ -90,8 +90,7 @@ public abstract class ExplosionMixin {
     private float radius;
 
     @Shadow
-    @Final
-    private List<BlockPos> toBlow;
+    public abstract List<BlockPos> getToBlow();
 
     /**
      * Inject at HEAD to apply rate limiting and early exit optimizations.
@@ -119,10 +118,9 @@ public abstract class ExplosionMixin {
 
         if (explosionCount > MAX_EXPLOSIONS_PER_CHUNK_PER_SECOND) {
             kneaf$explosionsSkipped.incrementAndGet();
-            // Skip: bypass this explosion's block destruction to prevent lag
-            // The explosion still happens (damage, knockback) but blocks survive
-            ci.cancel();
-            return;
+            // We no longer cancel here. Canceling skipping entity damage/knockback
+            // which breaks chain reactions. Instead, we'll skip block removal
+            // and effects in finalizeExplosion.
         }
 
         // Early exit for very small explosions - let them proceed without optimization
@@ -130,6 +128,9 @@ public abstract class ExplosionMixin {
         if (radius < SMALL_EXPLOSION_THRESHOLD) {
             return; // Small explosions don't benefit from parallel processing
         }
+
+        // Notify budget manager
+        com.kneaf.core.util.ExplosionControl.notifyExploded(level.getGameTime());
     }
 
     /**
@@ -150,9 +151,10 @@ public abstract class ExplosionMixin {
             // If it's really high, just skip the whole finalize (which includes sound)
             if (chunkExplosions > 20) {
                 // Still need to remove blocks if they weren't removed yet
-                if (toBlow != null && !toBlow.isEmpty()) {
-                    com.kneaf.core.util.BatchBlockRemoval.removeBlocks(level, toBlow);
-                    toBlow.clear();
+                List<BlockPos> blocks = getToBlow();
+                if (blocks != null && !blocks.isEmpty()) {
+                    com.kneaf.core.util.BatchBlockRemoval.removeBlocks(level, blocks);
+                    blocks.clear();
                 }
                 ci.cancel();
                 return;
@@ -161,10 +163,30 @@ public abstract class ExplosionMixin {
 
         // Optimization: For large explosions, use our batch block removal utility
         // This will skip redundant neighbor updates for improved server performance
-        if (toBlow != null && toBlow.size() > 50) {
-            com.kneaf.core.util.BatchBlockRemoval.removeBlocks(level, toBlow);
-            // Clear the list so vanilla doesn't process it again (it will be empty)
-            toBlow.clear();
+        List<BlockPos> blocks = getToBlow();
+        if (blocks != null && !blocks.isEmpty()) {
+            // CRITICAL FIX: Before batch removal, we must ignite any TNT blocks
+            // in the list, otherwise chain reactions will fail!
+            for (BlockPos bpos : blocks) {
+                if (bpos == null)
+                    continue;
+                net.minecraft.world.level.block.state.BlockState state = level.getBlockState(bpos);
+                if (state != null && state.is(net.minecraft.world.level.block.Blocks.TNT)) {
+                    @SuppressWarnings("null")
+                    net.minecraft.world.level.block.Block block = state.getBlock();
+                    if (block != null) {
+                        @SuppressWarnings("null")
+                        net.minecraft.world.level.Level l = level;
+                        block.wasExploded(l, bpos, (Explosion) (Object) this);
+                    }
+                }
+            }
+
+            if (blocks.size() > 50) {
+                com.kneaf.core.util.BatchBlockRemoval.removeBlocks(level, blocks);
+                // Clear the list so vanilla doesn't process it again (it will be empty)
+                blocks.clear();
+            }
         }
 
         // For large explosions (radius > 4), use Rust for parallel ray casting

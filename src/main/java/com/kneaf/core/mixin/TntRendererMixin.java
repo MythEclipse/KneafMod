@@ -34,11 +34,15 @@ public abstract class TntRendererMixin extends EntityRenderer<PrimedTnt> {
     @Inject(method = "render(Lnet/minecraft/world/entity/item/PrimedTnt;FFLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;I)V", at = @At("HEAD"), cancellable = true)
     private void kneaf$onRender(PrimedTnt entity, float yaw, float partialTicks, PoseStack poseStack,
             MultiBufferSource buffer, int packedLight, CallbackInfo ci) {
-        // Skip rendering if too far to save draw calls when thousands of TNT are
-        // exploding
-        // 64 blocks squared is 4096
-        if (entity.distanceToSqr(this.entityRenderDispatcher.camera.getPosition()) > 4096.0) {
-            ci.cancel();
+        net.minecraft.client.Camera camera = net.minecraft.client.Minecraft.getInstance().gameRenderer.getMainCamera();
+        if (camera != null) {
+            net.minecraft.world.phys.Vec3 cameraPos = camera.getPosition();
+            if (cameraPos != null) {
+                double dist = entity.position().distanceToSqr(cameraPos);
+                if (dist > 64 * 64) {
+                    ci.cancel();
+                }
+            }
         }
     }
 }

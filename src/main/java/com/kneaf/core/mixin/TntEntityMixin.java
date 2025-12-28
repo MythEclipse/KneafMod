@@ -5,7 +5,6 @@
 package com.kneaf.core.mixin;
 
 import com.kneaf.core.extension.ServerLevelExtension;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.PrimedTnt;
 import net.minecraft.world.level.Level;
 import org.spongepowered.asm.mixin.Mixin;
@@ -60,6 +59,26 @@ public abstract class TntEntityMixin {
 
         kneaf$tickCounter++;
 
+        // 0. Explosion Budget (Queueing System)
+        // If the fuse is about to run out, check if we have budget for more explosions
+        // this tick.
+        if (getFuse() <= 1 && !level.isClientSide) {
+            if (!com.kneaf.core.util.ExplosionControl.tryExplode(level.getGameTime())) {
+                // Budget full! Defer this explosion to the next tick.
+                // This spreads the load and prevents TPS drop to 0.
+                if (getFuse() <= 0) {
+                    // Small visual hint that it's primed but waiting
+                    @SuppressWarnings("null")
+                    net.minecraft.core.particles.ParticleOptions smoke = net.minecraft.core.particles.ParticleTypes.SMOKE;
+                    if (smoke != null) {
+                        level.addParticle(smoke, self.getX(), self.getY() + 0.5, self.getZ(), 0.0, 0.1, 0.0);
+                    }
+                }
+                ci.cancel();
+                return;
+            }
+        }
+
         // 1. Get distance to nearest player (cached if on server)
         double dist = -1.0;
         if (level instanceof ServerLevelExtension) {
@@ -70,6 +89,7 @@ public abstract class TntEntityMixin {
         int tntCount = kneaf$activeTntCount.get();
 
         // If thousands of TNT exist, start skipping minor updates for far ones
+        // This condition will not be met if dist remains -1.0
         if (tntCount > 500 && dist > 64.0) {
             // Far TNT: Update fuse every 2nd tick
             if (kneaf$tickCounter % 2 != 0) {
@@ -80,6 +100,7 @@ public abstract class TntEntityMixin {
 
         // 3. Movement Throttling (Gravity/Collision)
         // If extremely far (> 128) and many TNT, skip movement entirely to save CPU
+        // This condition will not be met if dist remains -1.0
         if (tntCount > 200 && dist > 128.0) {
             // Just decrease fuse manually and cancel vanilla tick (which handles movement)
             int fuse = getFuse();

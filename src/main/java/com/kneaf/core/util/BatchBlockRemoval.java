@@ -6,9 +6,6 @@ package com.kneaf.core.util;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.List;
 
@@ -29,15 +26,23 @@ public final class BatchBlockRemoval {
      * @param positions List of positions to remove
      */
     public static void removeBlocks(Level level, List<BlockPos> positions) {
-        if (positions.isEmpty())
+        if (positions == null || positions.isEmpty())
             return;
 
-        // For large batches, use flag 2 (BLOCK_UPDATE) to skip neighbor updates
-        // which are the main source of lag in explosions.
-        int flag = (positions.size() > 64) ? 2 : 3;
+        // Optimization: Use flag 2 (BLOCK_UPDATE) for large batches to skip individual
+        // neighbor updates
+        // Neighbor updates will be triggered once at the end or left to vanilla logic
+        int flag = positions.size() > 64 ? 2 : 3;
 
-        for (BlockPos pos : positions) {
-            level.setBlock(pos, Blocks.AIR.defaultBlockState(), flag);
+        for (net.minecraft.core.BlockPos pos : positions) {
+            if (pos != null) {
+                @SuppressWarnings("null")
+                net.minecraft.world.level.block.state.BlockState airState = net.minecraft.world.level.block.Blocks.AIR
+                        .defaultBlockState();
+                if (airState != null) {
+                    level.setBlock(pos, airState, flag);
+                }
+            }
         }
 
         // If we skipped neighbor updates, we might want to trigger a single update

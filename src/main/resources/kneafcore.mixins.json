@@ -48,9 +48,7 @@
     "GoalSelectorMixin",
     "TntEntityMixin"
   ],
-  "client": [
-    "TntRendererMixin"
-  ],
+  "client": ["TntRendererMixin"],
   "server": [],
   "injectors": {
     "defaultRequire": 0
