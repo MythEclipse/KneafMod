@@ -98,15 +98,6 @@ public abstract class EntityTrackerMixin {
         // range
         // to avoid the "blink blink" stuttering effect reported by the user.
         // We still track stats but don't skip updates anymore.
-        kneaf$updateFrequency = 1;
-
-        // Skip update if not enough ticks (always false now since freq=1)
-        if (kneaf$ticksSinceLastUpdate < kneaf$updateFrequency) {
-            kneaf$updatesSkipped.incrementAndGet();
-            ci.cancel();
-            return;
-        }
-
         kneaf$ticksSinceLastUpdate = 0;
         kneaf$updatesSent.incrementAndGet();
         kneaf$logStats();

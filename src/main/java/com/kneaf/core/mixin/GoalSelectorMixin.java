@@ -66,7 +66,7 @@ public class GoalSelectorMixin {
 
         // 3. Update Cache on Failure
         if (!result) {
-            // If it failed, don't check again for a random 2-5 ticks
+            // If it failed, don't check again for 1-2 ticks to improve throughput.
             int delay = ThreadLocalRandom.current().nextInt(MIN_CACHE_TICKS, MAX_CACHE_TICKS + 1);
             kneaf$failureCache.put(goal, kneaf$tickCounter + delay);
         } else {
