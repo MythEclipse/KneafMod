@@ -6,8 +6,10 @@
  */
 package com.kneaf.core.mixin;
 
+import com.kneaf.core.ParallelEntityTicker;
 import com.kneaf.core.util.TPSTracker;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -16,14 +18,21 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
- * ServerLevelMixin - TPS tracking and performance monitoring.
+ * ServerLevelMixin - TPS tracking, parallel processing, and performance
+ * monitoring.
  * 
  * Target: net.minecraft.server.level.ServerLevel
  * 
  * Optimizations:
  * 1. TPS calculation and tracking
  * 2. Dynamic chunk processor concurrency adjustment
+ * 3. Parallel entity distance calculations with caching
  */
 @Mixin(ServerLevel.class)
 public abstract class ServerLevelMixin {
@@ -41,13 +50,36 @@ public abstract class ServerLevelMixin {
     @Unique
     private static long kneaf$lastLogTime = 0;
 
+    // Entity batch processing interval
+    @Unique
+    private static long kneaf$lastBatchProcess = 0;
+
+    @Unique
+    private static final long BATCH_INTERVAL_MS = 500; // Process batch every 500ms
+
+    // Cache of entity ID -> distance squared to nearest player
+    // Used by BrainMixin, EntityTrackerMixin, etc. to avoid recalculation
+    @Unique
+    private static final Map<Integer, Double> kneaf$entityDistanceCache = new ConcurrentHashMap<>();
+
+    /**
+     * Get cached distance for an entity.
+     * 
+     * @param entityId Entity's ID
+     * @return Squared distance to nearest player, or -1 if not cached
+     */
+    public static double getCachedDistance(int entityId) {
+        Double cached = kneaf$entityDistanceCache.get(entityId);
+        return cached != null ? cached : -1.0;
+    }
+
     /**
      * Track tick start time.
      */
     @Inject(method = "tick", at = @At("HEAD"))
     private void kneaf$onTickHead(java.util.function.BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ ServerLevelMixin applied - TPS tracking active!");
+            kneaf$LOGGER.info("✅ ServerLevelMixin applied - TPS tracking + ParallelEntityTicker active!");
             kneaf$loggedFirstApply = true;
         }
 
@@ -55,7 +87,7 @@ public abstract class ServerLevelMixin {
     }
 
     /**
-     * Track tick end time and update TPS calculation.
+     * Track tick end time, update TPS, and run parallel entity processing.
      */
     @Inject(method = "tick", at = @At("RETURN"))
     private void kneaf$onTickReturn(java.util.function.BooleanSupplier hasTimeLeft, CallbackInfo ci) {
@@ -72,11 +104,47 @@ public abstract class ServerLevelMixin {
             // Ignore - don't crash server for optimization logic
         }
 
-        // Log stats every 30 seconds
+        // Run parallel entity batch processing periodically
         long now = System.currentTimeMillis();
+        if (now - kneaf$lastBatchProcess > BATCH_INTERVAL_MS) {
+            kneaf$runParallelEntityProcessing((ServerLevel) (Object) this);
+            kneaf$lastBatchProcess = now;
+        }
+
+        // Log stats every 30 seconds
         if (now - kneaf$lastLogTime > 30000) {
-            kneaf$LOGGER.info("ServerLevel TPS: {}", String.format("%.1f", TPSTracker.getCurrentTPS()));
+            kneaf$LOGGER.info("ServerLevel TPS: {}, EntityCache: {}, Parallel: {}",
+                    String.format("%.1f", TPSTracker.getCurrentTPS()),
+                    kneaf$entityDistanceCache.size(),
+                    ParallelEntityTicker.getStatistics());
             kneaf$lastLogTime = now;
+        }
+    }
+
+    /**
+     * Run parallel entity distance calculations and cache results.
+     * Other mixins can use getCachedDistance() to get pre-computed values.
+     */
+    @Unique
+    private void kneaf$runParallelEntityProcessing(ServerLevel level) {
+        try {
+            // Collect entities for batch processing
+            List<Entity> entities = new ArrayList<>();
+            level.getAllEntities().forEach(entities::add);
+
+            int count = entities.size();
+            if (count > 16) {
+                // Use ParallelEntityTicker for batch distance calculation via Rust SIMD
+                double[] distances = ParallelEntityTicker.batchCalculatePlayerDistances(entities, level);
+
+                // Cache results for use by other mixins
+                kneaf$entityDistanceCache.clear();
+                for (int i = 0; i < count && i < distances.length; i++) {
+                    kneaf$entityDistanceCache.put(entities.get(i).getId(), distances[i]);
+                }
+            }
+        } catch (Throwable t) {
+            // Ignore - don't crash server for optimization logic
         }
     }
 }
