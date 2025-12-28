@@ -232,4 +232,36 @@ public class RustOptimizations {
         return results;
     }
 
+    /**
+     * Compute tick rates for entities based on distance to player.
+     * Returns: tick divisors (1 = every tick, 2 = every 2 ticks, etc.)
+     */
+    public static int[] computeEntityTickRates(double[] distancesSq, double nearThresholdSq,
+            double farThresholdSq, int count) {
+        if (nativeAvailable) {
+            try {
+                return RustNativeLoader.computeEntityTickRates(distancesSq, nearThresholdSq, farThresholdSq, count);
+            } catch (Throwable e) {
+            }
+        }
+
+        // Java fallback
+        int[] rates = new int[count];
+        double veryFarSq = farThresholdSq * 4.0;
+
+        for (int i = 0; i < count; i++) {
+            double d = distancesSq[i];
+            if (d <= nearThresholdSq) {
+                rates[i] = 1;
+            } else if (d <= farThresholdSq) {
+                rates[i] = 2;
+            } else if (d <= veryFarSq) {
+                rates[i] = 4;
+            } else {
+                rates[i] = 8;
+            }
+        }
+        return rates;
+    }
+
 }
