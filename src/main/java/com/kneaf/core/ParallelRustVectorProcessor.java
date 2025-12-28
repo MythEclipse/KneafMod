@@ -744,9 +744,9 @@ public class ParallelRustVectorProcessor {
                     futures.add(future);
                 }
 
-                // Collect results
+                // Collect results with timeout to prevent deadlock
                 for (Future<List<float[]>> future : futures) {
-                    results.addAll(future.get());
+                    results.addAll(future.get(10, TimeUnit.SECONDS));
                 }
 
                 long duration = System.nanoTime() - startTime;

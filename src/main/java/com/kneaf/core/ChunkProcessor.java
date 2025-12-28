@@ -133,9 +133,6 @@ public final class ChunkProcessor {
         double memUsage = (double) usedMem / totalMem;
 
         // Adaptive logic
-        // Adaptive logic - Rely primarily on TPS (User Request: Java uses high RAM
-        // naturally)
-        // If GC is thrashing, TPS will drop, so TPS is the ultimate metric.
         if (estimatedTps < lowTpsThreshold) {
             // Performance struggling - decrease concurrency
             int newLimit = Math.max(MIN_CONCURRENT_CHUNKS, (int) (currentLimit * 0.7));
@@ -144,14 +141,21 @@ public final class ChunkProcessor {
                 LOGGER.debug("Scale DOWN: TPS={}, Limit={}->{}",
                         String.format("%.1f", estimatedTps), currentLimit, newLimit);
             }
-        } else if (estimatedTps > highTpsThreshold && pending > currentLimit * 0.8) {
-            // Performance good & high demand - increase concurrency
+        } else if (estimatedTps > highTpsThreshold) {
+            // Performance good - increase concurrency (TPS-based only)
             int newLimit = Math.min(ABSOLUTE_MAX_CHUNKS, (int) (currentLimit * 1.2) + 2);
             if (newLimit > currentLimit) {
                 currentMaxConcurrentChunks.set(newLimit);
-                LOGGER.debug("Scale UP: TPS={}, Mem={}%, Limit={}->{}",
-                        String.format("%.1f", estimatedTps), String.format("%.0f", memUsage * 100), currentLimit,
-                        newLimit);
+                LOGGER.debug("Scale UP: TPS={}, Limit={}->{}",
+                        String.format("%.1f", estimatedTps), currentLimit, newLimit);
+            }
+        } else if (estimatedTps >= lowTpsThreshold + 1.0 && currentLimit < 64) {
+            // TPS stable (19+) - gradual recovery to default (TPS-based only)
+            int newLimit = Math.min(64, currentLimit + 4);
+            if (newLimit > currentLimit) {
+                currentMaxConcurrentChunks.set(newLimit);
+                LOGGER.debug("Scale RECOVER: TPS={}, Limit={}->{}",
+                        String.format("%.1f", estimatedTps), currentLimit, newLimit);
             }
         }
 

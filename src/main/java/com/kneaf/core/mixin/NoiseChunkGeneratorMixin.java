@@ -176,24 +176,23 @@ public abstract class NoiseChunkGeneratorMixin {
 
         int yLevels = maxY - minY;
 
-        // Parallel generation across Y levels using streams
-        kneaf$noisePool.submit(() -> {
-            java.util.stream.IntStream.range(0, yLevels).parallel().forEach(yLevel -> {
-                int currentY = minY + yLevel;
+        // Parallel generation across Y levels - use parallelStream directly to avoid
+        // deadlock
+        java.util.stream.IntStream.range(0, yLevels).parallel().forEach(yLevel -> {
+            int currentY = minY + yLevel;
 
-                // Generate noise for this Y slice using deterministic algorithm
-                for (int z = 0; z < SAMPLES_PER_CHUNK; z++) {
-                    for (int x = 0; x < SAMPLES_PER_CHUNK; x++) {
-                        // Simple deterministic noise based on position and seed
-                        // This is a real noise function, not a placeholder
-                        double worldX = chunkX * CHUNK_WIDTH + x * NOISE_SAMPLE_STRIDE;
-                        double worldZ = chunkZ * CHUNK_WIDTH + z * NOISE_SAMPLE_STRIDE;
+            // Generate noise for this Y slice using deterministic algorithm
+            for (int z = 0; z < SAMPLES_PER_CHUNK; z++) {
+                for (int x = 0; x < SAMPLES_PER_CHUNK; x++) {
+                    // Simple deterministic noise based on position and seed
+                    // This is a real noise function, not a placeholder
+                    double worldX = chunkX * CHUNK_WIDTH + x * NOISE_SAMPLE_STRIDE;
+                    double worldZ = chunkZ * CHUNK_WIDTH + z * NOISE_SAMPLE_STRIDE;
 
-                        samples3D[yLevel][z][x] = kneaf$fastNoise(worldX, currentY, worldZ, seed);
-                    }
+                    samples3D[yLevel][z][x] = kneaf$fastNoise(worldX, currentY, worldZ, seed);
                 }
-            });
-        }).join();
+            }
+        });
     }
 
     /**

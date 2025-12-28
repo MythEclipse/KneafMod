@@ -239,8 +239,8 @@ public abstract class ChunkGeneratorMixin {
         kneaf$parallelFeatures.addAndGet(features.size());
 
         try {
-            // Use ForkJoinPool for parallel processing
-            kneaf$featurePool.submit(() -> features.parallelStream().forEach(processor)).get();
+            // Use parallelStream directly - avoid nested pool submission deadlock
+            features.parallelStream().forEach(processor);
         } catch (Exception e) {
             // Fallback to sequential on error
             kneaf$LOGGER.debug("Parallel feature processing failed: {}", e.getMessage());
