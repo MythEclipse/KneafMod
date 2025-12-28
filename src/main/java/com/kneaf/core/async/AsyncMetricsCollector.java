@@ -33,13 +33,7 @@ public final class AsyncMetricsCollector {
     private final ConcurrentHashMap<String, TimerRingBuffer> timers = new ConcurrentHashMap<>();
 
     // Background aggregation
-    private final ScheduledExecutorService aggregator = Executors.newSingleThreadScheduledExecutor(
-            r -> {
-                Thread t = new Thread(r, "AsyncMetricsAggregator");
-                t.setDaemon(true);
-                t.setPriority(Thread.MIN_PRIORITY);
-                return t;
-            });
+    // Background aggregation via WorkerThreadPool
 
     // Configuration
     private final AtomicBoolean enabled = new AtomicBoolean(true);
@@ -314,12 +308,7 @@ public final class AsyncMetricsCollector {
      * Shutdown async metrics collector
      */
     public void shutdown() {
-        aggregator.shutdown();
-        try {
-            aggregator.awaitTermination(5, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        // Pool managed by WorkerThreadPool
     }
 
     /**
@@ -336,6 +325,6 @@ public final class AsyncMetricsCollector {
      * Check if collector is healthy
      */
     public boolean isHealthy() {
-        return !aggregator.isShutdown() && !aggregator.isTerminated();
+        return true; // Pool managed by WorkerThreadPool
     }
 }
