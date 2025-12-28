@@ -16,8 +16,8 @@ public final class ExplosionControl {
     private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/ExplosionControl");
 
     // Limits the number of TNT clusters that can trigger per tick.
-    // 16 per tick = 320 per second. This is a sweet spot for performance.
-    private static final int MAX_EXPLOSIONS_PER_TICK = 16;
+    // 8 per tick = 160 per second. This provides even more headroom for TPS.
+    private static final int MAX_EXPLOSIONS_PER_TICK = 8;
 
     private static final AtomicInteger explosionCount = new AtomicInteger(0);
     private static long lastTickTime = -1;
