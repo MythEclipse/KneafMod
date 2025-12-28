@@ -75,6 +75,11 @@ public abstract class BlockStatePropertyMapMixin<O, S> {
 
         kneaf$statesCreated.incrementAndGet();
 
+        // Null check - some mods (like Create's Ponder) create states with null entries
+        if (entries == null) {
+            return;
+        }
+
         // Deduplicate property values
         for (var entry : entries.entrySet()) {
             Comparable<?> value = entry.getValue();
