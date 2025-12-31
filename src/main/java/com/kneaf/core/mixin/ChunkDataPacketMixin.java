@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 3. Detect hot chunks that are frequently resent
  * 4. Log actual bandwidth savings
  */
-@Mixin(ClientboundLevelChunkWithLightPacket.class)
+//@Mixin(ClientboundLevelChunkWithLightPacket.class)
 public abstract class ChunkDataPacketMixin {
 
     @Unique
@@ -79,7 +79,7 @@ public abstract class ChunkDataPacketMixin {
     @Unique
     private boolean kneaf$isUnchanged = false;
 
-    @Inject(method = "<init>(Lnet/minecraft/world/level/chunk/LevelChunk;Lnet/minecraft/world/level/lighting/LevelLightEngine;Ljava/util/BitSet;Ljava/util/BitSet;)V", at = @At("RETURN"))
+    @Inject(method = "<init>", at = @At("RETURN"))
     private void kneaf$onPacketCreate(LevelChunk chunk, LevelLightEngine lightEngine,
             BitSet skyLight, BitSet blockLight, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {

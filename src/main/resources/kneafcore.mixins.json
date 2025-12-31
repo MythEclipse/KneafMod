@@ -38,7 +38,7 @@
     "VoxelShapeCacheMixin",
     "BrainMixin",
     "BiomeSourceMixin",
-    "ChunkDataPacketMixin",
+
     "RegionFileStorageMixin",
     "BlockStatePropertyMapMixin",
     "CompoundTagMixin",

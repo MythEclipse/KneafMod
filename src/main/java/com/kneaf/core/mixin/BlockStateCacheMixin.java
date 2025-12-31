@@ -36,26 +36,8 @@ public abstract class BlockStateCacheMixin {
     private static boolean kneaf$loggedFirstApply = false;
 
     @Unique
-    private static final ThreadLocal<StateCache> kneaf$threadCache = ThreadLocal.withInitial(StateCache::new);
-
-    @Unique
-    private static class StateCache {
-        // Use parallel arrays for value and presence
-        public boolean[] isAirValues = new boolean[4096];
-        public boolean[] isAirPresent = new boolean[4096];
-
-        public void ensureCapacity(int id) {
-            if (id >= isAirValues.length) {
-                int newSize = Math.max(id + 1024, isAirValues.length * 2);
-                isAirValues = java.util.Arrays.copyOf(isAirValues, newSize);
-                isAirPresent = java.util.Arrays.copyOf(isAirPresent, newSize);
-            }
-        }
-
-        public void clear() {
-            java.util.Arrays.fill(isAirPresent, false);
-        }
-    }
+    private static final ThreadLocal<com.kneaf.core.util.BlockStateCacheHelper> kneaf$threadCache = ThreadLocal
+            .withInitial(com.kneaf.core.util.BlockStateCacheHelper::new);
 
     // Track cache effectiveness (loose stats for performance)
     @Unique
@@ -79,7 +61,7 @@ public abstract class BlockStateCacheMixin {
         BlockState self = (BlockState) (Object) this;
         int id = net.minecraft.world.level.block.Block.getId(self);
 
-        StateCache cache = kneaf$threadCache.get();
+        com.kneaf.core.util.BlockStateCacheHelper cache = kneaf$threadCache.get();
         if (id < cache.isAirPresent.length && cache.isAirPresent[id]) {
             kneaf$cacheHits.incrementAndGet();
             cir.setReturnValue(cache.isAirValues[id]);
@@ -97,7 +79,7 @@ public abstract class BlockStateCacheMixin {
         int id = net.minecraft.world.level.block.Block.getId(self);
         boolean result = cir.getReturnValue();
 
-        StateCache cache = kneaf$threadCache.get();
+        com.kneaf.core.util.BlockStateCacheHelper cache = kneaf$threadCache.get();
         cache.ensureCapacity(id);
 
         cache.isAirValues[id] = result;
