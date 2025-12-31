@@ -151,6 +151,13 @@ public class PrimitiveMaps {
                 }
             }
         }
+        public void forEach(java.util.function.BiConsumer<Long, V> consumer) {
+            for (int i = 0; i < capacity; i++) {
+                if (used[i]) {
+                    consumer.accept(keys[i], values[i]);
+                }
+            }
+        }
     }
 
     /**

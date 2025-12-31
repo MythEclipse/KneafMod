@@ -45,11 +45,16 @@ public abstract class ChunkDataPacketMixin {
     // Track chunk hashes to detect duplicates
     // Key: chunk position, Value: content hash
     @Unique
-    private static final Map<Long, Integer> kneaf$chunkHashes = new ConcurrentHashMap<>(256);
+    private static final com.kneaf.core.util.PrimitiveMaps.Long2IntOpenHashMap kneaf$chunkHashes = new com.kneaf.core.util.PrimitiveMaps.Long2IntOpenHashMap(
+            256);
 
     // Track hot chunks (frequently resent)
     @Unique
-    private static final Map<Long, Integer> kneaf$resendCounts = new ConcurrentHashMap<>(256);
+    private static final com.kneaf.core.util.PrimitiveMaps.Long2IntOpenHashMap kneaf$resendCounts = new com.kneaf.core.util.PrimitiveMaps.Long2IntOpenHashMap(
+            256);
+
+    @Unique
+    private static final java.util.concurrent.locks.StampedLock kneaf$lock = new java.util.concurrent.locks.StampedLock();
 
     // Statistics
     @Unique
@@ -89,22 +94,40 @@ public abstract class ChunkDataPacketMixin {
         long posKey = pos.toLong();
         int contentHash = kneaf$calculateChunkHash(chunk);
 
-        // Check for duplicate
-        Integer previousHash = kneaf$chunkHashes.get(posKey);
-        if (previousHash != null && previousHash == contentHash) {
-            // Chunk unchanged - mark for potential optimization
-            kneaf$duplicatesDetected.incrementAndGet();
-            kneaf$isUnchanged = true;
+        long stamp = kneaf$lock.writeLock();
+        try {
+            // Check for duplicate
+            int previousHash = kneaf$chunkHashes.get(posKey);
+            if (previousHash != -1 && previousHash == contentHash) {
+                // Chunk unchanged - mark for potential optimization
+                kneaf$duplicatesDetected.incrementAndGet();
+                kneaf$isUnchanged = true;
 
-            // Track as hot chunk
-            int resendCount = kneaf$resendCounts.compute(posKey, (k, v) -> v == null ? 1 : v + 1);
-            if (resendCount > 5) {
-                kneaf$hotChunksDetected.incrementAndGet();
+                // Track as hot chunk
+                int resendCount = kneaf$resendCounts.get(posKey);
+                if (resendCount == -1)
+                    resendCount = 0;
+                resendCount++;
+                kneaf$resendCounts.put(posKey, resendCount);
+
+                if (resendCount > 5) {
+                    kneaf$hotChunksDetected.incrementAndGet();
+                }
+            } else {
+                // New or changed content
+                kneaf$chunkHashes.put(posKey, contentHash);
+                kneaf$resendCounts.remove(posKey);
             }
-        } else {
-            // New or changed content
-            kneaf$chunkHashes.put(posKey, contentHash);
-            kneaf$resendCounts.remove(posKey);
+
+            // Periodic cleanup
+            long now = System.currentTimeMillis();
+            if (now - kneaf$lastCleanTime > 300000) { // Every 5 minutes
+                kneaf$chunkHashes.clear();
+                kneaf$resendCounts.clear();
+                kneaf$lastCleanTime = now;
+            }
+        } finally {
+            kneaf$lock.unlockWrite(stamp);
         }
 
         // Count empty sections
@@ -112,14 +135,6 @@ public abstract class ChunkDataPacketMixin {
             if (section.hasOnlyAir()) {
                 kneaf$emptySections.incrementAndGet();
             }
-        }
-
-        // Periodic cleanup and logging
-        long now = System.currentTimeMillis();
-        if (now - kneaf$lastCleanTime > 300000) { // Every 5 minutes
-            kneaf$chunkHashes.clear();
-            kneaf$resendCounts.clear();
-            kneaf$lastCleanTime = now;
         }
 
         kneaf$logStats();

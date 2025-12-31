@@ -40,7 +40,11 @@ public abstract class ScheduledTickMixin<T> {
     // Track recently scheduled ticks to skip duplicates
     // Key = position + type hash, Value = game tick when scheduled
     @Unique
-    private Map<Long, Long> kneaf$recentlyScheduled = new ConcurrentHashMap<>(256);
+    private com.kneaf.core.util.PrimitiveMaps.Long2LongOpenHashMap kneaf$recentlyScheduled = new com.kneaf.core.util.PrimitiveMaps.Long2LongOpenHashMap(
+            256);
+
+    @Unique
+    private final java.util.concurrent.locks.StampedLock kneaf$lock = new java.util.concurrent.locks.StampedLock();
 
     // Minimum ticks between same position+type scheduling
     @Unique
@@ -58,7 +62,7 @@ public abstract class ScheduledTickMixin<T> {
     private static final AtomicLong kneaf$duplicatesSkipped = new AtomicLong(0);
 
     @Unique
-    private static long kneaf$lastLogTime = 0;
+    private static final AtomicLong kneaf$lastLogTime = new AtomicLong(0);
 
     /**
      * OPTIMIZATION: Skip duplicate tick scheduling.
@@ -70,28 +74,27 @@ public abstract class ScheduledTickMixin<T> {
             kneaf$loggedFirstApply = true;
         }
 
-        // Ensure map exists
-        if (kneaf$recentlyScheduled == null) {
-            kneaf$recentlyScheduled = new ConcurrentHashMap<>(256);
-        }
-
-        kneaf$ticksScheduled.incrementAndGet();
-
         // Create key from position + type
         BlockPos pos = tick.pos();
         long key = pos.asLong() ^ ((long) tick.type().hashCode() << 32);
 
-        // Check if recently scheduled
-        Long lastScheduled = kneaf$recentlyScheduled.get(key);
-        if (lastScheduled != null && (kneaf$currentTick - lastScheduled) < MIN_SCHEDULE_INTERVAL) {
-            // Duplicate - skip this schedule
-            kneaf$duplicatesSkipped.incrementAndGet();
-            ci.cancel();
-            return;
-        }
+        long stamp = kneaf$lock.writeLock();
+        try {
+            // Check if recently scheduled
+            long lastScheduled = kneaf$recentlyScheduled.get(key);
+            if (lastScheduled != -1L && (kneaf$currentTick - lastScheduled) < MIN_SCHEDULE_INTERVAL) {
+                // Duplicate - skip this schedule
+                kneaf$duplicatesSkipped.incrementAndGet();
+                ci.cancel();
+                return;
+            }
 
-        // Record this schedule
-        kneaf$recentlyScheduled.put(key, kneaf$currentTick);
+            // Record this schedule
+            kneaf$recentlyScheduled.put(key, kneaf$currentTick);
+            kneaf$ticksScheduled.incrementAndGet();
+        } finally {
+            kneaf$lock.unlockWrite(stamp);
+        }
 
         kneaf$logStats();
     }
@@ -104,14 +107,19 @@ public abstract class ScheduledTickMixin<T> {
         kneaf$currentTick++;
 
         // Periodic cleanup
-        if (kneaf$currentTick % 100 == 0 && kneaf$recentlyScheduled != null) {
-            // Remove old entries
-            long threshold = kneaf$currentTick - 20;
-            kneaf$recentlyScheduled.entrySet().removeIf(e -> e.getValue() < threshold);
+        if (kneaf$currentTick % 100 == 0) {
+            long stamp = kneaf$lock.writeLock();
+            try {
+                // Remove old entries
+                long threshold = kneaf$currentTick - 20;
+                kneaf$recentlyScheduled.removeIf((k, v) -> v < threshold);
 
-            // Limit size
-            if (kneaf$recentlyScheduled.size() > 1000) {
-                kneaf$recentlyScheduled.clear();
+                // Limit size
+                if (kneaf$recentlyScheduled.size() > 1000) {
+                    kneaf$recentlyScheduled.clear();
+                }
+            } finally {
+                kneaf$lock.unlockWrite(stamp);
             }
         }
     }
@@ -119,23 +127,25 @@ public abstract class ScheduledTickMixin<T> {
     @Unique
     private static void kneaf$logStats() {
         long now = System.currentTimeMillis();
+        long last = kneaf$lastLogTime.get();
         // Update stats every 1s
-        if (now - kneaf$lastLogTime > 1000) {
-            long scheduled = kneaf$ticksScheduled.get();
-            long skipped = kneaf$duplicatesSkipped.get();
-            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
+        if (now - last > 1000) {
+            if (kneaf$lastLogTime.compareAndSet(last, now)) {
+                long scheduled = kneaf$ticksScheduled.get();
+                long skipped = kneaf$duplicatesSkipped.get();
+                double timeDiff = (now - last) / 1000.0;
 
-            if (scheduled > 0) {
-                // Update central stats
-                com.kneaf.core.PerformanceStats.tickScheduled = scheduled / timeDiff;
-                com.kneaf.core.PerformanceStats.tickSkipped = skipped / timeDiff;
+                if (scheduled > 0) {
+                    // Update central stats
+                    com.kneaf.core.PerformanceStats.tickScheduled = scheduled / timeDiff;
+                    com.kneaf.core.PerformanceStats.tickSkipped = skipped / timeDiff;
 
-                kneaf$ticksScheduled.set(0);
-                kneaf$duplicatesSkipped.set(0);
-            } else {
-                com.kneaf.core.PerformanceStats.tickScheduled = 0;
+                    kneaf$ticksScheduled.set(0);
+                    kneaf$duplicatesSkipped.set(0);
+                } else {
+                    com.kneaf.core.PerformanceStats.tickScheduled = 0;
+                }
             }
-            kneaf$lastLogTime = now;
         }
     }
 

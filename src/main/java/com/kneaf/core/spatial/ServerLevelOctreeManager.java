@@ -25,7 +25,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ServerLevelOctreeManager {
 
     // Per-chunk octrees
-    private final Map<Long, EntityOctree> chunkOctrees = new ConcurrentHashMap<>();
+    private final com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<EntityOctree> chunkOctrees = new com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<>(
+            512);
+    private final java.util.concurrent.locks.StampedLock lock = new java.util.concurrent.locks.StampedLock();
 
     // Rebuild tracking
     private long lastRebuildTime = 0;
@@ -47,13 +49,22 @@ public class ServerLevelOctreeManager {
      */
     public EntityOctree getOrCreateOctree(int chunkX, int chunkZ) {
         long key = getChunkKey(chunkX, chunkZ);
-        return chunkOctrees.computeIfAbsent(key, k -> {
-            // Create octree for 16x256x16 chunk bounds
-            double minX = chunkX * 16.0;
-            double minZ = chunkZ * 16.0;
-            AABB bounds = new AABB(minX, -64, minZ, minX + 16, 320, minZ + 16);
-            return new EntityOctree(bounds);
-        });
+
+        long stamp = lock.writeLock();
+        try {
+            EntityOctree octree = chunkOctrees.get(key);
+            if (octree == null) {
+                // Create octree for 16x256x16 chunk bounds
+                double minX = chunkX * 16.0;
+                double minZ = chunkZ * 16.0;
+                AABB bounds = new AABB(minX, -64, minZ, minX + 16, 320, minZ + 16);
+                octree = new EntityOctree(bounds);
+                chunkOctrees.put(key, octree);
+            }
+            return octree;
+        } finally {
+            lock.unlockWrite(stamp);
+        }
     }
 
     /**
@@ -91,15 +102,20 @@ public class ServerLevelOctreeManager {
 
         Set<Entity> result = new HashSet<>();
 
-        // Query all relevant chunks
-        for (int cx = minChunkX; cx <= maxChunkX; cx++) {
-            for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
-                EntityOctree octree = chunkOctrees.get(getChunkKey(cx, cz));
-                if (octree != null) {
-                    result.addAll(octree.query(queryBounds));
-                    octreeHits++;
+        long stamp = lock.readLock();
+        try {
+            // Query all relevant chunks
+            for (int cx = minChunkX; cx <= maxChunkX; cx++) {
+                for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
+                    EntityOctree octree = chunkOctrees.get(getChunkKey(cx, cz));
+                    if (octree != null) {
+                        result.addAll(octree.query(queryBounds));
+                        octreeHits++;
+                    }
                 }
             }
+        } finally {
+            lock.unlockRead(stamp);
         }
 
         return new ArrayList<>(result);
@@ -127,7 +143,12 @@ public class ServerLevelOctreeManager {
      * Remove octree for unloaded chunk.
      */
     public void removeChunk(int chunkX, int chunkZ) {
-        chunkOctrees.remove(getChunkKey(chunkX, chunkZ));
+        long stamp = lock.writeLock();
+        try {
+            chunkOctrees.remove(getChunkKey(chunkX, chunkZ));
+        } finally {
+            lock.unlockWrite(stamp);
+        }
     }
 
     /**
@@ -139,20 +160,24 @@ public class ServerLevelOctreeManager {
         }
         lastRebuildTime = gameTime;
 
-        // Rebuild octrees for loaded chunks
-        // This is done periodically to handle entity movement
-        for (Map.Entry<Long, EntityOctree> entry : chunkOctrees.entrySet()) {
-            long key = entry.getKey();
-            int chunkX = ChunkPos.getX(key);
-            int chunkZ = ChunkPos.getZ(key);
+        long stamp = lock.readLock();
+        try {
+            // Rebuild octrees for loaded chunks
+            // Use forEach with bi-consumer
+            chunkOctrees.forEach((key, octree) -> {
+                int chunkX = ChunkPos.getX(key);
+                int chunkZ = ChunkPos.getZ(key);
 
-            // Get entities in this chunk
-            AABB chunkBounds = new AABB(
-                    chunkX * 16.0, -64, chunkZ * 16.0,
-                    chunkX * 16.0 + 16, 320, chunkZ * 16.0 + 16);
+                // Get entities in this chunk
+                AABB chunkBounds = new AABB(
+                        chunkX * 16.0, -64, chunkZ * 16.0,
+                        chunkX * 16.0 + 16, 320, chunkZ * 16.0 + 16);
 
-            List<Entity> chunkEntities = level.getEntities((Entity) null, chunkBounds);
-            entry.getValue().rebuild(chunkEntities);
+                List<Entity> chunkEntities = level.getEntities((Entity) null, chunkBounds);
+                octree.rebuild(chunkEntities);
+            });
+        } finally {
+            lock.unlockRead(stamp);
         }
     }
 
@@ -160,7 +185,12 @@ public class ServerLevelOctreeManager {
      * Clear all octrees.
      */
     public void clear() {
-        chunkOctrees.clear();
+        long stamp = lock.writeLock();
+        try {
+            chunkOctrees.clear();
+        } finally {
+            lock.unlockWrite(stamp);
+        }
     }
 
     /**
