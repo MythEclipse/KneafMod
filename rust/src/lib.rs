@@ -23,8 +23,11 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 // Import all modules
+mod aabb;
 mod arena_memory;
+mod light_prop;
 mod load_balancer;
+mod noise_gen;
 mod optimization_jni;
 mod parallel_astar;
 mod parallel_matrix;
@@ -32,6 +35,7 @@ mod parallel_processing;
 mod performance;
 mod performance_monitoring;
 mod simd_runtime;
+mod spatial_grid;
 mod tests;
 
 // Performance Monitoring System modules
@@ -2489,5 +2493,89 @@ pub extern "C" fn Java_com_kneaf_core_RustNoise_batchNoise2d<'a>(
 
     let output = env.new_double_array(size as i32).unwrap();
     env.set_double_array_region(&output, 0, &results).unwrap();
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchNoiseGenerate3D<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    seed: jlong,
+    coords: jni::objects::JFloatArray<'a>,
+    count: jint,
+) -> jni::objects::JFloatArray<'a> {
+    let mut coords_vec = vec![0.0f32; (count * 3) as usize];
+    env.get_float_array_region(&coords, 0, &mut coords_vec)
+        .unwrap();
+
+    let result = noise_gen::batch_noise_generate_3d(seed as i64, &coords_vec, count);
+
+    let output = env.new_float_array(count).unwrap();
+    env.set_float_array_region(&output, 0, &result).unwrap();
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchLightPropagate<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    levels: jni::objects::JIntArray<'a>,
+    opacity: jni::objects::JByteArray<'a>,
+    count: jint,
+) -> jni::objects::JIntArray<'a> {
+    let mut levels_vec = vec![0i32; count as usize];
+    env.get_int_array_region(&levels, 0, &mut levels_vec)
+        .unwrap();
+
+    let mut opacity_vec = vec![0i8; count as usize];
+    env.get_byte_array_region(&opacity, 0, &mut opacity_vec)
+        .unwrap();
+
+    let result = light_prop::batch_light_propagate(&levels_vec, &opacity_vec, count);
+
+    let output = env.new_int_array(count).unwrap();
+    env.set_int_array_region(&output, 0, &result).unwrap();
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchSpatialHash<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    positions: jni::objects::JDoubleArray<'a>,
+    cell_size: jdouble,
+    count: jint,
+) -> jni::objects::JLongArray<'a> {
+    let mut pos_vec = vec![0.0f64; (count * 3) as usize];
+    env.get_double_array_region(&positions, 0, &mut pos_vec)
+        .unwrap();
+
+    let result = spatial_grid::batch_spatial_hash(&pos_vec, cell_size, count);
+
+    let output = env.new_long_array(count).unwrap();
+    env.set_long_array_region(&output, 0, &result).unwrap();
+    output
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_kneaf_core_RustNativeLoader_batchAABBIntersection<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    boxes: jni::objects::JDoubleArray<'a>,
+    test_box: jni::objects::JDoubleArray<'a>,
+    count: jint,
+) -> jni::objects::JIntArray<'a> {
+    let mut boxes_vec = vec![0.0f64; (count * 6) as usize];
+    env.get_double_array_region(&boxes, 0, &mut boxes_vec)
+        .unwrap();
+
+    let mut test_box_vec = vec![0.0f64; 6];
+    env.get_double_array_region(&test_box, 0, &mut test_box_vec)
+        .unwrap();
+
+    let result = aabb::batch_aabb_intersection(&boxes_vec, &test_box_vec, count);
+
+    let output = env.new_int_array(count).unwrap();
+    env.set_int_array_region(&output, 0, &result).unwrap();
     output
 }
