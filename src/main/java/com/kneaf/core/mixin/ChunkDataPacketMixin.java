@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 3. Detect hot chunks that are frequently resent
  * 4. Log actual bandwidth savings
  */
-//@Mixin(ClientboundLevelChunkWithLightPacket.class)
+@Mixin(ClientboundLevelChunkWithLightPacket.class)
 public abstract class ChunkDataPacketMixin {
 
     @Unique
