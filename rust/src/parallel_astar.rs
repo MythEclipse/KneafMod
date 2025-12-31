@@ -1929,7 +1929,16 @@ pub fn Java_com_kneaf_core_ParallelRustVectorProcessor_parallelAStarPathfind<'a>
             result_array.into()
         }
         Err(e) => {
-            eprintln!("Pathfinding failed: {}", e);
+            // Only log significant errors, not common "position not walkable" which happens frequently
+            // during normal gameplay (entities trying to pathfind to unreachable locations)
+            match &e {
+                PathfindingError::InvalidPosition { .. } | PathfindingError::NoPathExists => {
+                    // These are expected during normal gameplay, don't spam logs
+                }
+                _ => {
+                    eprintln!("Pathfinding failed: {}", e);
+                }
+            }
             // Return empty array if no path found or error occurred
             let array_class = env.find_class("[I").unwrap_or_else(|_| {
                 panic!("Failed to find array class");

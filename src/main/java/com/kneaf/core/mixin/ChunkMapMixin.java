@@ -154,29 +154,23 @@ public abstract class ChunkMapMixin {
 
         // Rate limiting during low TPS
         double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
-        int maxChunks = currentTPS < 15.0 ? MAX_CHUNKS_PER_TICK_LOW_TPS : MAX_CHUNKS_PER_TICK_NORMAL;
 
         // If we're loading a new chunk (level decreasing)
-        // CRITICAL FIX: NEVER return null oldHolder if there's no existing holder,
-        // as downstream code (like acquireGeneration) expects a non-null holder.
+        // CRITICAL FIX: Never cancel chunk loading as it can corrupt chunk state
+        // and cause ArrayIndexOutOfBoundsException in Aquifer system with extreme
+        // coordinates
         if (level < oldLevel && oldHolder != null) {
             kneaf$chunksLoadedThisTick++;
 
-            // REAL THROTTLING: Skip non-essential chunk loading during critical TPS
-            if (currentTPS < 10.0 && kneaf$chunksLoadedThisTick > 1) {
-                // During critical TPS, only allow 1 chunk per tick
+            // STATISTICS ONLY: Track delayed chunks but don't actually block them
+            // Blocking chunk loading caused crashes with mods like Mowzie's Mobs
+            int maxChunks = currentTPS < 15.0 ? MAX_CHUNKS_PER_TICK_LOW_TPS : MAX_CHUNKS_PER_TICK_NORMAL;
+            if (kneaf$chunksLoadedThisTick > maxChunks) {
                 kneaf$chunksDelayed.incrementAndGet();
-                cir.setReturnValue(oldHolder);
-                return;
-            }
-
-            // Rate limit chunk loading during low TPS (but not critical)
-            if (kneaf$chunksLoadedThisTick > maxChunks && currentTPS < 18.0) {
-                kneaf$chunksDelayed.incrementAndGet();
-                cir.setReturnValue(oldHolder);
-                return;
+                // Note: We no longer cancel here to prevent chunk state corruption
             }
         }
+        // Let vanilla handle the chunk loading - never cancel this method
     }
 
     /**

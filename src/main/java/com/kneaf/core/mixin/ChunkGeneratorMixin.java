@@ -92,17 +92,12 @@ public abstract class ChunkGeneratorMixin {
 
         kneaf$genStartTime.set(System.nanoTime());
 
-        // Skip decoration during low TPS
-        double currentTPS = com.kneaf.core.util.TPSTracker.getCurrentTPS();
-        if (currentTPS < 14.0) {
-            // During very low TPS, skip some decorations to prioritize gameplay
-            long chunkPos = chunk.getPos().toLong();
-            if ((chunkPos + kneaf$chunksGenerated.get()) % 3 == 0) {
-                kneaf$skippedDecorations.incrementAndGet();
-                ci.cancel(); // Skip this decoration pass
-                return;
-            }
-        }
+        // SAFETY FIX: Never skip biome decoration as it can cause:
+        // 1. Incomplete chunks that confuse structure mods
+        // 2. ArrayIndexOutOfBoundsException in Aquifer when chunks are partially
+        // generated
+        // 3. Crashes with mods like Mowzie's Mobs that query chunk height
+        // We only track timing now, no skipping
     }
 
     /**

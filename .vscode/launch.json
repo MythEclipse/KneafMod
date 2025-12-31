@@ -12,13 +12,13 @@
       "projectName": "KneafMod",
       "mainClass": "net.neoforged.devlaunch.Main",
       "args": [
-        "@/home/asephs/KneafMod/build/moddev/clientRunProgramArgs.txt"
+        "@D:\\KneafMod-1\\build\\moddev\\clientRunProgramArgs.txt"
       ],
       "vmArgs": [
-        "@/home/asephs/KneafMod/build/moddev/clientRunVmArgs.txt",
-        "-Dfml.modFolders\u003dkneafcore%%/home/asephs/KneafMod/bin/main"
+        "@D:\\KneafMod-1\\build\\moddev\\clientRunVmArgs.txt",
+        "-Dfml.modFolders\u003dkneafcore%%D:\\KneafMod-1\\bin\\main"
       ],
-      "cwd": "${workspaceFolder}/run",
+      "cwd": "${workspaceFolder}\\run",
       "env": {},
       "console": "internalConsole",
       "shortenCommandLine": "none"
@@ -34,13 +34,13 @@
       "projectName": "KneafMod",
       "mainClass": "net.neoforged.devlaunch.Main",
       "args": [
-        "@/home/asephs/KneafMod/build/moddev/dataRunProgramArgs.txt"
+        "@D:\\KneafMod-1\\build\\moddev\\dataRunProgramArgs.txt"
       ],
       "vmArgs": [
-        "@/home/asephs/KneafMod/build/moddev/dataRunVmArgs.txt",
-        "-Dfml.modFolders\u003dkneafcore%%/home/asephs/KneafMod/bin/main"
+        "@D:\\KneafMod-1\\build\\moddev\\dataRunVmArgs.txt",
+        "-Dfml.modFolders\u003dkneafcore%%D:\\KneafMod-1\\bin\\main"
       ],
-      "cwd": "${workspaceFolder}/run",
+      "cwd": "${workspaceFolder}\\run",
       "env": {},
       "console": "internalConsole",
       "shortenCommandLine": "none"
@@ -56,13 +56,13 @@
       "projectName": "KneafMod",
       "mainClass": "net.neoforged.devlaunch.Main",
       "args": [
-        "@/home/asephs/KneafMod/build/moddev/gameTestServerRunProgramArgs.txt"
+        "@D:\\KneafMod-1\\build\\moddev\\gameTestServerRunProgramArgs.txt"
       ],
       "vmArgs": [
-        "@/home/asephs/KneafMod/build/moddev/gameTestServerRunVmArgs.txt",
-        "-Dfml.modFolders\u003dkneafcore%%/home/asephs/KneafMod/bin/main"
+        "@D:\\KneafMod-1\\build\\moddev\\gameTestServerRunVmArgs.txt",
+        "-Dfml.modFolders\u003dkneafcore%%D:\\KneafMod-1\\bin\\main"
       ],
-      "cwd": "${workspaceFolder}/run",
+      "cwd": "${workspaceFolder}\\run",
       "env": {},
       "console": "internalConsole",
       "shortenCommandLine": "none"
@@ -78,13 +78,13 @@
       "projectName": "KneafMod",
       "mainClass": "net.neoforged.devlaunch.Main",
       "args": [
-        "@/home/asephs/KneafMod/build/moddev/serverRunProgramArgs.txt"
+        "@D:\\KneafMod-1\\build\\moddev\\serverRunProgramArgs.txt"
       ],
       "vmArgs": [
-        "@/home/asephs/KneafMod/build/moddev/serverRunVmArgs.txt",
-        "-Dfml.modFolders\u003dkneafcore%%/home/asephs/KneafMod/bin/main"
+        "@D:\\KneafMod-1\\build\\moddev\\serverRunVmArgs.txt",
+        "-Dfml.modFolders\u003dkneafcore%%D:\\KneafMod-1\\bin\\main"
       ],
-      "cwd": "${workspaceFolder}/run",
+      "cwd": "${workspaceFolder}\\run",
       "env": {},
       "console": "internalConsole",
       "shortenCommandLine": "none"

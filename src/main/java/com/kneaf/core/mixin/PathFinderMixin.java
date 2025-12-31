@@ -205,7 +205,17 @@ public abstract class PathFinderMixin {
                 return null;
             }
 
-            // Ensure start and goal are passable in grid (optional, but safe)
+            // Validate start and goal positions are walkable in the grid
+            // This prevents unnecessary Rust calls that will fail
+            int startGridIdx = startY * width + startX;
+            int goalGridIdx = goalY * width + goalX;
+            if (startGridIdx >= 0 && startGridIdx < grid.length && grid[startGridIdx] == 1) {
+                return null; // Start position is blocked
+            }
+            if (goalGridIdx >= 0 && goalGridIdx < grid.length && grid[goalGridIdx] == 1) {
+                return null; // Goal position is blocked
+            }
+
             // Call Rust A* - 3D signature: width, height, depth, startX, startY, startZ,
             // goalX, goalY, goalZ, threads
             int[] pathCoords = ParallelRustVectorProcessor.parallelAStarPathfind(
