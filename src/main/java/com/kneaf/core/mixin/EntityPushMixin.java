@@ -32,34 +32,21 @@ public abstract class EntityPushMixin {
             return;
         }
 
-        // Condition 2: If connected (vehicle/passenger), stop (vanilla usually checks
-        // this, but let's be sure)
+        // Condition 2: If connected (vehicle/passenger), stop
         if (self.isPassengerOfSameVehicle(other)) {
             ci.cancel();
             return;
         }
 
         // Condition 3: Simple distance check
-        // If center points are too far apart, AABB definitely won't intersect
-        // (approximation)
-        // Or if they are virtually at the same spot (delta ~ 0) but not intersecting
-        // due to offsets?
-        // Actually, vanilla calculates delta X and Z.
-
-        // Let's do a Manhattan distance check on horizontal plane first.
-        // Bounding boxes are usually < 1-2 blocks wide.
-        // If dx > width1 + width2, no collision.
         double dx = other.getX() - self.getX();
         double dz = other.getZ() - self.getZ();
-
+        
         double combinedWidth = self.getBbWidth() + other.getBbWidth();
-
+        
         if (Math.abs(dx) > combinedWidth || Math.abs(dz) > combinedWidth) {
             ci.cancel();
             return;
         }
-
-        // If we passed the fast check, let vanilla do the precise AABB intersection and
-        // pushing.
     }
 }

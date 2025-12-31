@@ -30,16 +30,28 @@ public abstract class ExperienceOrbMixin extends Entity {
     /**
      * Redirect the expensive entity scan to run less frequently.
      * We target the method call where ExperienceOrb scans for other orbs.
-     * In Vanilla 1.21, this is likely 'level.getEntities(...)'.
      */
     @Redirect(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/Level;getEntities(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/world/phys/AABB;Ljava/util/function/Predicate;)Ljava/util/List;"))
     private List<Entity> kneaf$rateLimitMergeScan(Level level, Entity entity, net.minecraft.world.phys.AABB aabb,
             java.util.function.Predicate<? super Entity> predicate) {
         // Optimization: Only scan for merge candidates every 10 ticks (0.5s)
-        // Orbs don't move fast enough to necessitate per-tick merging.
         if (this.kneaf$tickCounter++ % 10 != 0) {
             return java.util.Collections.emptyList();
         }
         return level.getEntities(entity, aabb, predicate);
+    }
+
+    /**
+     * Optimize player distance check.
+     */
+    @Redirect(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/Level;getNearestPlayer(Lnet/minecraft/world/entity/Entity;D)Lnet/minecraft/world/entity/player/Player;"))
+    private net.minecraft.world.entity.player.Player kneaf$rateLimitPlayerScan(Level level, Entity entity,
+            double distance) {
+        // Only look for players every 5 ticks.
+        // Orbs follow players, but 5 ticks (0.25s) latency is fine for AI follow.
+        if (entity.tickCount % 5 != 0) {
+            return null;
+        }
+        return level.getNearestPlayer(entity, distance);
     }
 }

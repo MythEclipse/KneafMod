@@ -55,7 +55,12 @@
     "FastMathMixin",
     "PassiveEntityTickMixin",
     "ItemEntityAggressiveMixin",
-    "EntityPushMixin"
+    "EnumValuesMixin",
+    "ExplosionExposureMixin",
+    "LightEngineStateCacheMixin",
+    "ExperienceOrbMixin",
+    "LeafDecayMixin",
+    "PlayerTickMixin"
   ],
   "client": ["TntRendererMixin"],
   "server": [],

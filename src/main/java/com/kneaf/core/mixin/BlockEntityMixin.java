@@ -187,6 +187,24 @@ public abstract class BlockEntityMixin {
     @Inject(method = "clearRemoved", at = @At("RETURN"))
     private void kneaf$onClearRemoved(CallbackInfo ci) {
         kneaf$wakeUp();
+
+        BlockEntity self = (BlockEntity) (Object) this;
+        if (self.getLevel() != null && !self.getLevel().isClientSide()
+                && self instanceof net.minecraft.world.Container) {
+            com.kneaf.core.util.HopperSpatialIndex.getForLevel(self.getLevel()).addInventory(self.getBlockPos());
+        }
+    }
+
+    /**
+     * Unregister from spatial index when removed.
+     */
+    @Inject(method = "setRemoved", at = @At("HEAD"))
+    private void kneaf$onSetRemoved(CallbackInfo ci) {
+        BlockEntity self = (BlockEntity) (Object) this;
+        if (self.getLevel() != null && !self.getLevel().isClientSide()
+                && self instanceof net.minecraft.world.Container) {
+            com.kneaf.core.util.HopperSpatialIndex.getForLevel(self.getLevel()).removeInventory(self.getBlockPos());
+        }
     }
 
     /**

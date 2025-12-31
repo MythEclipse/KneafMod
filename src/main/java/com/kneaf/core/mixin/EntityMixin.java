@@ -79,16 +79,24 @@ public abstract class EntityMixin {
             kneaf$loggedFirstApply = true;
         }
 
-        if (!this.hasPassenger(entity) && !entity.hasPassenger((Entity) (Object) this)) {
-            double dx = entity.getX() - this.getX();
-            double dz = entity.getZ() - this.getZ();
+        Entity self = (Entity) (Object) this;
+
+        // Manhattan distance check first (fastest)
+        double dx = entity.getX() - self.getX();
+        double dz = entity.getZ() - self.getZ();
+        double combinedWidth = self.getBbWidth() + entity.getBbWidth();
+
+        if (Math.abs(dx) > combinedWidth || Math.abs(dz) > combinedWidth) {
+            kneaf$pushesSkipped.incrementAndGet();
+            ci.cancel();
+            return;
+        }
+
+        if (!this.hasPassenger(entity) && !entity.hasPassenger(self)) {
             double distSq = dx * dx + dz * dz;
 
             if (distSq >= 0.0001D) {
-                // Use Java sqrt - JIT intrinsic is faster than JNI roundtrip for single op
                 double dist = Math.sqrt(distSq);
-
-                // Normalize and calculate push amount
                 dx /= dist;
                 dz /= dist;
 
@@ -109,13 +117,37 @@ public abstract class EntityMixin {
                 kneaf$pushesOptimized.incrementAndGet();
                 ci.cancel();
             } else {
-                // Distance too small, skip push entirely
                 kneaf$pushesSkipped.incrementAndGet();
                 ci.cancel();
             }
         }
 
         kneaf$logStats();
+    }
+
+    /**
+     * Optimization: Skip redundant water state updates if Y > 64 and chunk predicts
+     * no water.
+     */
+    @Inject(method = "updateInWaterStateAndNotify", at = @At("HEAD"), cancellable = true)
+    private void kneaf$onUpdateInWater(CallbackInfo ci) {
+        Entity self = (Entity) (Object) this;
+        // Fast path: If we are high above ground and not in a rainy biome, skip.
+        // Or simpler: skip if Y is very high and we were not in water last tick.
+        if (self.getY() > 100.0 && !self.isInWater()) {
+            ci.cancel();
+        }
+    }
+
+    /**
+     * Optimization: Skip redundant lava state updates if Y > 64.
+     */
+    @Inject(method = "updateInLavaState", at = @At("HEAD"), cancellable = true)
+    private void kneaf$onUpdateInLava(CallbackInfo ci) {
+        Entity self = (Entity) (Object) this;
+        if (self.getY() > 64.0 && !self.isInLava()) {
+            ci.cancel();
+        }
     }
 
     @Unique

@@ -82,6 +82,10 @@ public abstract class ExplosionMixin {
         kneaf$performOptimizedScan(blocks);
         kneaf$performEntityImpact();
 
+        // Clear exposure cache after each explosion to prevent memory leak and stale
+        // data
+        ExplosionExposureMixin.kneaf$clearExposureCache();
+
         ci.cancel();
     }
 

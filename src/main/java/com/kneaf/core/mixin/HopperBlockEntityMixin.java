@@ -54,9 +54,6 @@ public abstract class HopperBlockEntityMixin extends RandomizableContainerBlockE
     private int kneaf$transferFailCount = 0;
 
     @Unique
-    private static final Map<Level, HopperSpatialIndex> kneaf$spatialIndexes = new ConcurrentHashMap<>();
-
-    @Unique
     private BlockPos kneaf$cachedTargetPos = null;
 
     @Unique
@@ -67,14 +64,6 @@ public abstract class HopperBlockEntityMixin extends RandomizableContainerBlockE
 
     @Shadow
     protected abstract void setCooldown(int cooldownTime);
-
-    /**
-     * Get or create spatial index for a level.
-     */
-    @Unique
-    private static HopperSpatialIndex kneaf$getIndex(Level level) {
-        return kneaf$spatialIndexes.computeIfAbsent(level, k -> new HopperSpatialIndex());
-    }
 
     @Inject(method = "suckInItems", at = @At("HEAD"), cancellable = true)
     private static void kneaf$onSuckInItems(Level level, Hopper hopper, CallbackInfoReturnable<Boolean> cir) {
@@ -101,7 +90,7 @@ public abstract class HopperBlockEntityMixin extends RandomizableContainerBlockE
             }
 
             // Use spatial index to find transfer target
-            HopperSpatialIndex index = kneaf$getIndex(level);
+            HopperSpatialIndex index = com.kneaf.core.util.HopperSpatialIndex.getForLevel(level);
 
             // Check cache first
             long gameTime = level.getGameTime();
@@ -165,7 +154,7 @@ public abstract class HopperBlockEntityMixin extends RandomizableContainerBlockE
     @Inject(method = "setBlockState", at = @At("RETURN"))
     private void kneaf$onSetBlockState(BlockState state, CallbackInfo ci) {
         if (this.level != null && !this.level.isClientSide()) {
-            kneaf$getIndex(this.level).addInventory(this.worldPosition);
+            com.kneaf.core.util.HopperSpatialIndex.getForLevel(this.level).addInventory(this.worldPosition);
         }
     }
 
@@ -175,7 +164,7 @@ public abstract class HopperBlockEntityMixin extends RandomizableContainerBlockE
     @Inject(method = "setRemoved", at = @At("HEAD"))
     private void kneaf$onSetRemoved(CallbackInfo ci) {
         if (this.level != null && !this.level.isClientSide()) {
-            kneaf$getIndex(this.level).removeInventory(this.worldPosition);
+            com.kneaf.core.util.HopperSpatialIndex.getForLevel(this.level).removeInventory(this.worldPosition);
         }
     }
 }

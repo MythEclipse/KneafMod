@@ -40,18 +40,69 @@ public abstract class EnumValuesMixin {
     }
 
     // Also optimize Axis
-    @Mixin(Direction.Axis.class)
+    @Mixin(net.minecraft.core.Direction.Axis.class)
     public static abstract class AxisMixin {
         @Unique
-        private static final Direction.Axis[] kneaf$CACHED_AXIS = Direction.Axis.values();
+        private static final net.minecraft.core.Direction.Axis[] kneaf$CACHED_AXIS = net.minecraft.core.Direction.Axis
+                .values();
 
         /**
          * @author KneafMod
          * @reason Cache values
          */
         @Overwrite
-        public static Direction.Axis[] values() {
+        public static net.minecraft.core.Direction.Axis[] values() {
             return kneaf$CACHED_AXIS;
+        }
+    }
+
+    // InteractionHand
+    @Mixin(net.minecraft.world.InteractionHand.class)
+    public static abstract class InteractionHandMixin {
+        @Unique
+        private static final net.minecraft.world.InteractionHand[] kneaf$CACHED_VALUES = net.minecraft.world.InteractionHand
+                .values();
+
+        /**
+         * @author KneafMod
+         * @reason Cache values
+         */
+        @Overwrite
+        public static net.minecraft.world.InteractionHand[] values() {
+            return kneaf$CACHED_VALUES;
+        }
+    }
+
+    // ChatFormatting
+    @Mixin(net.minecraft.ChatFormatting.class)
+    public static abstract class ChatFormattingMixin {
+        @Unique
+        private static final net.minecraft.ChatFormatting[] kneaf$CACHED_VALUES = net.minecraft.ChatFormatting.values();
+
+        /**
+         * @author KneafMod
+         * @reason Cache values
+         */
+        @Overwrite
+        public static net.minecraft.ChatFormatting[] values() {
+            return kneaf$CACHED_VALUES;
+        }
+    }
+
+    // EquipmentSlot
+    @Mixin(net.minecraft.world.entity.EquipmentSlot.class)
+    public static abstract class EquipmentSlotMixin {
+        @Unique
+        private static final net.minecraft.world.entity.EquipmentSlot[] kneaf$CACHED_VALUES = net.minecraft.world.entity.EquipmentSlot
+                .values();
+
+        /**
+         * @author KneafMod
+         * @reason Cache values
+         */
+        @Overwrite
+        public static net.minecraft.world.entity.EquipmentSlot[] values() {
+            return kneaf$CACHED_VALUES;
         }
     }
 }
