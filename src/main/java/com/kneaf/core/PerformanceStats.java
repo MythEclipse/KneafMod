@@ -190,4 +190,101 @@ public class PerformanceStats {
     public static volatile long sensorTicksSkipped;
     public static volatile long sensorTicksProcessed;
     public static volatile double sensorSkipPercent;
+
+    // BrainMixin
+    public static volatile long brainTicksSkipped;
+    public static volatile long brainTicksProcessed;
+    public static volatile double brainSkipPercent;
+
+    // EnumValuesMixin
+    public static volatile long enumClonesAvoided;
+
+    // ExperienceOrbMixin
+    public static volatile long expOrbSearchesSkipped;
+    public static volatile long expOrbSearchesProcessed;
+
+    // ExplosionExposureMixin
+    public static volatile long explosionCacheHits;
+    public static volatile long explosionCacheMisses;
+    public static volatile double explosionCacheHitPercent;
+
+    // ExplosionMixin
+    public static volatile long explosionsDDA;
+    public static volatile long explosionsRust;
+    public static volatile double explosionAvgBlocks;
+
+    // FastMathMixin (no stats needed - pure calculation)
+
+    // FluidStateCacheMixin
+    public static volatile long fluidStateCacheHits;
+    public static volatile long fluidStateCacheMisses;
+    public static volatile double fluidStateCacheHitPercent;
+
+    // GoalSelectorMixin
+    public static volatile long goalUpdatesSkipped;
+    public static volatile long goalUpdatesProcessed;
+
+    // HopperBlockEntityMixin & HopperExtractionMixin
+    public static volatile long hopperTransfers;
+    public static volatile long hopperSkipped;
+    public static volatile double hopperSkipPercent;
+    public static volatile int hopperSpatialIndexSize;
+
+    // InventoryMenuMixin
+    public static volatile long inventorySyncsSkipped;
+    public static volatile long inventorySyncsProcessed;
+
+    // ItemEntityAggressiveMixin
+    public static volatile long itemAggressiveMerges;
+    public static volatile long itemAggressiveSkipped;
+
+    // LeafDecayMixin
+    public static volatile long leafFastPaths;
+    public static volatile long leafSlowPaths;
+
+    // LevelChunkSectionMixin
+    public static volatile long chunkSectionOptimizations;
+
+    // LightEngineBatchMixin
+    public static volatile long lightBatchSkipped;
+    public static volatile long lightBatchProcessed;
+
+    // LightEngineStateCacheMixin
+    public static volatile long lightStateCacheHits;
+    public static volatile long lightStateCacheMisses;
+    public static volatile double lightStateCacheHitPercent;
+
+    // NaturalSpawnerMixin
+    public static volatile long spawnerValidationCacheHits;
+    public static volatile long spawnerValidationCacheMisses;
+    public static volatile int spawnerCacheSize;
+
+    // PassiveEntityTickMixin
+    public static volatile long passiveTicksSkipped;
+    public static volatile long passiveTicksProcessed;
+
+    // PathFinderMixin
+    public static volatile long pathfinderNodesEvaluated;
+    public static volatile long pathfinderPathsFound;
+    public static volatile double pathfinderAvgMs;
+
+    // PlayerTickMixin
+    public static volatile long playerPrefetchChunks;
+    public static volatile long playerPrefetchSkipped;
+
+    // RedstoneWireBlockMixin
+    public static volatile long redstoneUpdatesOptimized;
+    public static volatile long redstoneUpdatesSkipped;
+
+    // TntEntityMixin
+    public static volatile long tntExplosionsBatched;
+    public static volatile long tntExplosionsProcessed;
+
+    // VoxelShapeMixin
+    public static volatile long voxelFastFails;
+    public static volatile long voxelIntersections;
+
+    // DedicatedServerMixin, TntRendererMixin - client/server specific, no general
+    // stats
+    // BlockStateCacheMixin, BlockCollisionsMixin - removed/unused
 }

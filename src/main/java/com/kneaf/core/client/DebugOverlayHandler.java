@@ -253,6 +253,139 @@ public class DebugOverlayHandler {
                     PerformanceStats.entityPushOptimized, PerformanceStats.entityPushSkipped));
         }
 
+        if (PerformanceStats.brainTicksSkipped + PerformanceStats.brainTicksProcessed > 0) {
+            double total = PerformanceStats.brainTicksSkipped + PerformanceStats.brainTicksProcessed;
+            double skipRate = PerformanceStats.brainTicksSkipped * 100.0 / Math.max(1, total);
+            rightText.add(String.format("Brain: §a%.0f/s§r Proc (%.1f%% Skip)",
+                    PerformanceStats.brainTicksProcessed, skipRate));
+        }
+
+        if (PerformanceStats.enumClonesAvoided > 0) {
+            rightText.add(String.format("Enum: §a%.0f/s§r Clones Avoided",
+                    PerformanceStats.enumClonesAvoided));
+        }
+
+        if (PerformanceStats.expOrbSearchesSkipped + PerformanceStats.expOrbSearchesProcessed > 0) {
+            double total = PerformanceStats.expOrbSearchesSkipped + PerformanceStats.expOrbSearchesProcessed;
+            double skipRate = PerformanceStats.expOrbSearchesSkipped * 100.0 / Math.max(1, total);
+            rightText.add(String.format("ExpOrb: §a%.0f/s§r Search (%.1f%% Skip)",
+                    PerformanceStats.expOrbSearchesProcessed, skipRate));
+        }
+
+        if (PerformanceStats.explosionCacheHits + PerformanceStats.explosionCacheMisses > 0) {
+            double total = PerformanceStats.explosionCacheHits + PerformanceStats.explosionCacheMisses;
+            double hitRate = PerformanceStats.explosionCacheHits * 100.0 / Math.max(1, total);
+            rightText.add(String.format("ExpExposure: §a%.0f/s§r Hit (%.1f%%)",
+                    PerformanceStats.explosionCacheHits, hitRate));
+        }
+
+        if (PerformanceStats.explosionsDDA + PerformanceStats.explosionsRust > 0) {
+            rightText.add(String.format("Explosions: §a%.0f/s§r DDA, §a%.0f/s§r Rust (Avg: %.1f blk)",
+                    PerformanceStats.explosionsDDA, PerformanceStats.explosionsRust,
+                    PerformanceStats.explosionAvgBlocks));
+        }
+
+        if (PerformanceStats.fluidStateCacheHits + PerformanceStats.fluidStateCacheMisses > 0) {
+            double total = PerformanceStats.fluidStateCacheHits + PerformanceStats.fluidStateCacheMisses;
+            double hitRate = PerformanceStats.fluidStateCacheHits * 100.0 / Math.max(1, total);
+            rightText.add(String.format("FluidState: §a%.0f/s§r Hit (%.1f%%)",
+                    PerformanceStats.fluidStateCacheHits, hitRate));
+        }
+
+        if (PerformanceStats.goalUpdatesSkipped + PerformanceStats.goalUpdatesProcessed > 0) {
+            double total = PerformanceStats.goalUpdatesSkipped + PerformanceStats.goalUpdatesProcessed;
+            double skipRate = PerformanceStats.goalUpdatesSkipped * 100.0 / Math.max(1, total);
+            rightText.add(String.format("Goals: §a%.0f/s§r Upd (%.1f%% Skip)",
+                    PerformanceStats.goalUpdatesProcessed, skipRate));
+        }
+
+        if (PerformanceStats.hopperTransfers + PerformanceStats.hopperSkipped > 0) {
+            double total = PerformanceStats.hopperTransfers + PerformanceStats.hopperSkipped;
+            double skipRate = PerformanceStats.hopperSkipped * 100.0 / Math.max(1, total);
+            rightText.add(String.format("Hopper: §a%.0f/s§r Xfer (%.1f%% Skip, %d Idx)",
+                    PerformanceStats.hopperTransfers, skipRate, PerformanceStats.hopperSpatialIndexSize));
+        }
+
+        if (PerformanceStats.inventorySyncsSkipped + PerformanceStats.inventorySyncsProcessed > 0) {
+            double total = PerformanceStats.inventorySyncsSkipped + PerformanceStats.inventorySyncsProcessed;
+            double skipRate = PerformanceStats.inventorySyncsSkipped * 100.0 / Math.max(1, total);
+            rightText.add(String.format("Inventory: §a%.0f/s§r Sync (%.1f%% Skip)",
+                    PerformanceStats.inventorySyncsProcessed, skipRate));
+        }
+
+        if (PerformanceStats.itemAggressiveMerges + PerformanceStats.itemAggressiveSkipped > 0) {
+            rightText.add(String.format("ItemAggr: §a%.0f/s§r Merge, §a%.0f/s§r Skip",
+                    PerformanceStats.itemAggressiveMerges, PerformanceStats.itemAggressiveSkipped));
+        }
+
+        if (PerformanceStats.leafFastPaths + PerformanceStats.leafSlowPaths > 0) {
+            double total = PerformanceStats.leafFastPaths + PerformanceStats.leafSlowPaths;
+            double fastRate = PerformanceStats.leafFastPaths * 100.0 / Math.max(1, total);
+            rightText.add(String.format("LeafDecay: §a%.0f/s§r (%.1f%% Fast)",
+                    total, fastRate));
+        }
+
+        if (PerformanceStats.chunkSectionOptimizations > 0) {
+            rightText.add(String.format("ChunkSec: §a%.0f/s§r Opt",
+                    PerformanceStats.chunkSectionOptimizations));
+        }
+
+        if (PerformanceStats.lightBatchSkipped + PerformanceStats.lightBatchProcessed > 0) {
+            double total = PerformanceStats.lightBatchSkipped + PerformanceStats.lightBatchProcessed;
+            double skipRate = PerformanceStats.lightBatchSkipped * 100.0 / Math.max(1, total);
+            rightText.add(String.format("LightBatch: §a%.0f/s§r Proc (%.1f%% Skip)",
+                    PerformanceStats.lightBatchProcessed, skipRate));
+        }
+
+        if (PerformanceStats.lightStateCacheHits + PerformanceStats.lightStateCacheMisses > 0) {
+            double total = PerformanceStats.lightStateCacheHits + PerformanceStats.lightStateCacheMisses;
+            double hitRate = PerformanceStats.lightStateCacheHits * 100.0 / Math.max(1, total);
+            rightText.add(String.format("LightStateCache: §a%.0f/s§r Hit (%.1f%%)",
+                    PerformanceStats.lightStateCacheHits, hitRate));
+        }
+
+        if (PerformanceStats.spawnerValidationCacheHits + PerformanceStats.spawnerValidationCacheMisses > 0) {
+            double total = PerformanceStats.spawnerValidationCacheHits + PerformanceStats.spawnerValidationCacheMisses;
+            double hitRate = PerformanceStats.spawnerValidationCacheHits * 100.0 / Math.max(1, total);
+            rightText.add(String.format("NaturalSpawn: §a%.0f/s§r Hit (%.1f%%, %d Cache)",
+                    PerformanceStats.spawnerValidationCacheHits, hitRate, PerformanceStats.spawnerCacheSize));
+        }
+
+        if (PerformanceStats.passiveTicksSkipped + PerformanceStats.passiveTicksProcessed > 0) {
+            double total = PerformanceStats.passiveTicksSkipped + PerformanceStats.passiveTicksProcessed;
+            double skipRate = PerformanceStats.passiveTicksSkipped * 100.0 / Math.max(1, total);
+            rightText.add(String.format("PassiveTick: §a%.0f/s§r Proc (%.1f%% Skip)",
+                    PerformanceStats.passiveTicksProcessed, skipRate));
+        }
+
+        if (PerformanceStats.pathfinderNodesEvaluated > 0) {
+            rightText.add(String.format("Pathfind: §a%.0f/s§r Nodes, §a%.0f/s§r Paths (Avg: %.2fms)",
+                    PerformanceStats.pathfinderNodesEvaluated, PerformanceStats.pathfinderPathsFound,
+                    PerformanceStats.pathfinderAvgMs));
+        }
+
+        if (PerformanceStats.playerPrefetchChunks > 0) {
+            rightText.add(String.format("PlayerPrefetch: §a%.0f/s§r Chunks, §a%.0f/s§r Skip",
+                    PerformanceStats.playerPrefetchChunks, PerformanceStats.playerPrefetchSkipped));
+        }
+
+        if (PerformanceStats.redstoneUpdatesOptimized + PerformanceStats.redstoneUpdatesSkipped > 0) {
+            rightText.add(String.format("Redstone: §a%.0f/s§r Opt, §a%.0f/s§r Skip",
+                    PerformanceStats.redstoneUpdatesOptimized, PerformanceStats.redstoneUpdatesSkipped));
+        }
+
+        if (PerformanceStats.tntExplosionsBatched + PerformanceStats.tntExplosionsProcessed > 0) {
+            rightText.add(String.format("TNT: §a%.0f/s§r Batch, §a%.0f/s§r Proc",
+                    PerformanceStats.tntExplosionsBatched, PerformanceStats.tntExplosionsProcessed));
+        }
+
+        if (PerformanceStats.voxelFastFails + PerformanceStats.voxelIntersections > 0) {
+            double total = PerformanceStats.voxelFastFails + PerformanceStats.voxelIntersections;
+            double fastRate = PerformanceStats.voxelFastFails * 100.0 / Math.max(1, total);
+            rightText.add(String.format("VoxelShape: §a%.0f/s§r Check (%.1f%% FastFail)",
+                    total, fastRate));
+        }
+
     }
 
     /**
