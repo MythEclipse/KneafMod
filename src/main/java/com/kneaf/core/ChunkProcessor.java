@@ -52,7 +52,10 @@ public final class ChunkProcessor {
     private static long lastChunkCount = 0;
 
     // Chunk positions being processed (to avoid duplicate processing)
-    private static final Set<Long> processingChunks = ConcurrentHashMap.newKeySet();
+    // Using primitive set to save memory
+    private static final com.kneaf.core.util.PrimitiveMaps.LongOpenHashSet processingChunks = new com.kneaf.core.util.PrimitiveMaps.LongOpenHashSet(
+            512);
+    private static final java.util.concurrent.locks.StampedLock processingLock = new java.util.concurrent.locks.StampedLock();
 
     // === DYNAMIC CONCURRENCY CONFIGURATION ===
     private static volatile boolean enabled = true;
@@ -100,11 +103,6 @@ public final class ChunkProcessor {
         // Calculate TPS approximation from tick time
         // 50ms = 20 TPS
         double estimatedTps = tickTimeMs > 0 ? Math.min(20.0, 1000.0 / tickTimeMs) : 20.0;
-
-        // Memory usage
-        // long totalMem = Runtime.getRuntime().totalMemory();
-        // long freeMem = Runtime.getRuntime().freeMemory();
-        // long usedMem = totalMem - freeMem;
 
         // Adaptive logic
         if (estimatedTps < lowTpsThreshold) {
@@ -165,8 +163,15 @@ public final class ChunkProcessor {
 
             // Get chunk position for deduplication
             long chunkPos = getChunkPos(chunk);
-            if (chunkPos == Long.MIN_VALUE || !processingChunks.add(chunkPos)) {
-                return; // Already processing this chunk
+
+            // Deduplication check using primitive set
+            long stamp = processingLock.writeLock();
+            try {
+                if (!processingChunks.add(chunkPos)) {
+                    return; // Already processing this chunk
+                }
+            } finally {
+                processingLock.unlockWrite(stamp);
             }
 
             activeChunkTasks.incrementAndGet();
@@ -179,13 +184,23 @@ public final class ChunkProcessor {
                     asyncChunkOps.incrementAndGet();
                 } finally {
                     activeChunkTasks.decrementAndGet();
-                    processingChunks.remove(chunkPos);
+                    long freeStamp = processingLock.writeLock();
+                    try {
+                        processingChunks.remove(chunkPos);
+                    } finally {
+                        processingLock.unlockWrite(freeStamp);
+                    }
                     totalProcessingTimeNs.addAndGet(System.nanoTime() - startNs);
                 }
             }, WorkerThreadPool.getComputePool()).exceptionally(e -> {
                 LOGGER.debug("Async chunk processing failed: {}", e.getMessage());
                 activeChunkTasks.decrementAndGet();
-                processingChunks.remove(chunkPos);
+                long freeStamp = processingLock.writeLock();
+                try {
+                    processingChunks.remove(chunkPos);
+                } finally {
+                    processingLock.unlockWrite(freeStamp);
+                }
                 return null;
             });
 

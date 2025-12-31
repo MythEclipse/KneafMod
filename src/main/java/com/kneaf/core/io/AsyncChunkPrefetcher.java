@@ -38,7 +38,9 @@ public final class AsyncChunkPrefetcher {
             QUEUE_CAPACITY);
 
     // Track in-flight prefetch operations
-    private static final Map<ChunkPos, CompletableFuture<CompoundTag>> inFlight = new ConcurrentHashMap<>();
+    private static final com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<CompletableFuture<CompoundTag>> inFlight = new com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<>(
+            256);
+    private static final java.util.concurrent.locks.StampedLock lock = new java.util.concurrent.locks.StampedLock();
 
     // Rate limiter
     private static final Semaphore rateLimiter = new Semaphore(maxConcurrentIO);
@@ -92,8 +94,13 @@ public final class AsyncChunkPrefetcher {
         }
 
         // Cancel all in-flight operations
-        inFlight.values().forEach(future -> future.cancel(true));
-        inFlight.clear();
+        long stamp = lock.writeLock();
+        try {
+            inFlight.forEach((k, future) -> future.cancel(true));
+            inFlight.clear();
+        } finally {
+            lock.unlockWrite(stamp);
+        }
         prefetchQueue.clear();
 
         LOGGER.info("AsyncChunkPrefetcher shutdown. Stats: {}", getStatistics());
@@ -112,9 +119,22 @@ public final class AsyncChunkPrefetcher {
         int scheduled = 0;
         for (int i = 0; i < chunks.size(); i++) {
             ChunkPos pos = chunks.get(i);
+            long posKey = pos.toLong();
 
             // Skip if already cached or in-flight
-            if (PrefetchedChunkCache.contains(pos) || inFlight.containsKey(pos)) {
+            boolean alreadyInFlight;
+            long stamp = lock.tryOptimisticRead();
+            alreadyInFlight = inFlight.containsKey(posKey);
+            if (!lock.validate(stamp)) {
+                stamp = lock.readLock();
+                try {
+                    alreadyInFlight = inFlight.containsKey(posKey);
+                } finally {
+                    lock.unlockRead(stamp);
+                }
+            }
+
+            if (PrefetchedChunkCache.contains(pos) || alreadyInFlight) {
                 continue;
             }
 
@@ -161,7 +181,13 @@ public final class AsyncChunkPrefetcher {
 
                 // Execute prefetch asynchronously
                 CompletableFuture<CompoundTag> future = executePrefetch(task);
-                inFlight.put(task.getPos(), future);
+
+                long stamp = lock.writeLock();
+                try {
+                    inFlight.put(task.getPos().toLong(), future);
+                } finally {
+                    lock.unlockWrite(stamp);
+                }
 
             } catch (InterruptedException e) {
                 if (!running) {
@@ -207,7 +233,14 @@ public final class AsyncChunkPrefetcher {
 
                 // Cleanup
                 activeOperations.decrementAndGet();
-                inFlight.remove(task.getPos());
+
+                long stamp = lock.writeLock();
+                try {
+                    inFlight.remove(task.getPos().toLong());
+                } finally {
+                    lock.unlockWrite(stamp);
+                }
+
                 rateLimiter.release();
             }
         }, WorkerThreadPool.getIOPool());
@@ -254,7 +287,19 @@ public final class AsyncChunkPrefetcher {
      */
     public static void cancelPrefetch(ChunkPos pos) {
         // Cancel in-flight operation
-        CompletableFuture<CompoundTag> future = inFlight.remove(pos);
+        long posKey = pos.toLong();
+        CompletableFuture<CompoundTag> future = null;
+
+        long stamp = lock.writeLock();
+        try {
+            future = inFlight.get(posKey);
+            if (future != null) {
+                inFlight.remove(posKey);
+            }
+        } finally {
+            lock.unlockWrite(stamp);
+        }
+
         if (future != null) {
             future.cancel(true);
             tasksCancelled.incrementAndGet();
