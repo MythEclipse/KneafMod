@@ -40,7 +40,14 @@ public abstract class HopperExtractionMixin {
 
         net.minecraft.core.BlockPos pos = net.minecraft.core.BlockPos.containing(hopper.getLevelX(),
                 hopper.getLevelY() + 1.0D, hopper.getLevelZ());
-        if (!cir.getReturnValue()) {
+
+        // Safely get the return value - it might be null if cancelled early
+        Boolean returnValue = cir.getReturnValue();
+        if (returnValue == null) {
+            return; // Method was cancelled before setting a return value
+        }
+
+        if (!returnValue) {
             // If it returned false, it means no item was extracted.
             // We can mark this position as "defined as empty" for now.
             com.kneaf.core.util.SlotCache.setFirstNonEmptySlot(pos, -2);
