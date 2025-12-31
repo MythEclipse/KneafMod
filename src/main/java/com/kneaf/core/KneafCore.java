@@ -1,8 +1,6 @@
 package com.kneaf.core;
 
 import com.kneaf.entities.ModEntities;
-import com.kneaf.core.async.AsyncLoggingManager;
-import com.kneaf.core.async.AsyncLogger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.neoforged.bus.api.IEventBus;
@@ -39,9 +37,6 @@ public class KneafCore {
     /** Logger for the mod */
     public static final Logger LOGGER = LoggerFactory.getLogger(KneafCore.class);
 
-    /** Async logger for non-blocking operations */
-    private static final AsyncLogger ASYNC_LOGGER = AsyncLoggingManager.getAsyncLogger(KneafCore.class);
-
     // Deferred Registers
     /** Deferred register for blocks */
     public static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(MODID);
@@ -63,14 +58,9 @@ public class KneafCore {
     public KneafCore(IEventBus modEventBus, ModContainer modContainer) {
         INSTANCE.set(this);
 
-        // Initialize async logging system FIRST untuk ensure all logging is
-        // non-blocking
-        AsyncLoggingManager.initialize();
-        ASYNC_LOGGER.info("AsyncLoggingManager initialized - All logging operations are now non-blocking");
-
         // Initialize centralized WorkerThreadPool
         WorkerThreadPool.initialize();
-        ASYNC_LOGGER.info("WorkerThreadPool initialized - Centralized thread management active");
+        LOGGER.info("WorkerThreadPool initialized - Centralized thread management active");
 
         // Initialize modular components
 
@@ -85,7 +75,7 @@ public class KneafCore {
         modEventBus.addListener(this::clientSetup);
         modEventBus.addListener(this::buildCreativeTabContents);
 
-        ASYNC_LOGGER.info("KneafCore mod constructor completed - waiting for initialization");
+        LOGGER.info("KneafCore mod constructor completed - waiting for initialization");
     }
 
     /**
