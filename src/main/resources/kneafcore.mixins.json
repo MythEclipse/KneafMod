@@ -46,7 +46,12 @@
     "ThreadedAnvilMixin",
     "InventoryMenuMixin",
     "GoalSelectorMixin",
-    "TntEntityMixin"
+    "TntEntityMixin",
+    "NeighborBlockAccessMixin",
+    "MapItemSavedDataMixin",
+    "EntitySectionMixin",
+    "SpawnerBlockEntityMixin",
+    "SensorMixin"
   ],
   "client": ["TntRendererMixin"],
   "server": [],

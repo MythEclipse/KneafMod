@@ -163,4 +163,31 @@ public class PerformanceStats {
     // EntityMixin
     public static volatile double entityPushOptimized;
     public static volatile double entityPushSkipped;
+
+    // NeighborBlockAccessMixin
+    public static volatile long neighborCacheHits;
+    public static volatile long neighborCacheMisses;
+    public static volatile double neighborCacheHitPercent;
+    public static volatile int neighborCacheSize;
+
+    // MapItemSavedDataMixin
+    public static volatile long mapUpdatesSkipped;
+    public static volatile long mapUpdatesSent;
+    public static volatile double mapSkipPercent;
+
+    // EntitySectionMixin
+    public static volatile long entityGridLookups;
+    public static volatile long entityFullScans;
+    public static volatile double entityGridHitPercent;
+
+    // SpawnerBlockEntityMixin
+    public static volatile long spawnerTicksSkipped;
+    public static volatile long spawnerTicksProcessed;
+    public static volatile long spawnerCacheHits;
+    public static volatile double spawnerSkipPercent;
+
+    // SensorMixin
+    public static volatile long sensorTicksSkipped;
+    public static volatile long sensorTicksProcessed;
+    public static volatile double sensorSkipPercent;
 }
