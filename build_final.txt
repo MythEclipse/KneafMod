@@ -1,0 +1,26 @@
+﻿
+> Configure project :
+Successfully located 1 Rust library artifacts for copying
+
+> Task :buildRustNative UP-TO-DATE
+> Task :copyRustLib UP-TO-DATE
+> Task :buildRust UP-TO-DATE
+> Task :cleanSrcNatives
+
+> Task :copyRustToSrc
+Successfully copied Rust native libraries to src/main/resources/natives
+
+> Task :createMinecraftArtifacts UP-TO-DATE
+> Task :compileJava UP-TO-DATE
+> Task :copyNativeLibraries UP-TO-DATE
+> Task :generateModMetadata UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :jarJar NO-SOURCE
+> Task :jar UP-TO-DATE
+> Task :assemble UP-TO-DATE
+> Task :check
+> Task :build
+
+BUILD SUCCESSFUL in 1s
+10 actionable tasks: 2 executed, 8 up-to-date

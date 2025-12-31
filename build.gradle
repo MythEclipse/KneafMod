@@ -370,54 +370,30 @@ tasks.named('processResources').configure {
 }
 
 
+// Optional cross-compilation task - run manually with: gradlew buildRustCross
+// This is NOT included in the default build because it requires Zig and cargo-zigbuild
 tasks.register('buildRustCross', Exec) {
     group = 'build'
-    description = 'Cross-compile Rust library for Linux using Zig linker'
+    description = 'Cross-compile Rust library for Linux using Zig linker (OPTIONAL - run manually)'
     workingDir = file('rust')
     
-    // Check if we're on Windows and want to cross-compile for Linux
     def os = System.getProperty('os.name').toLowerCase()
     
     if (os.contains('windows')) {
-        // Use cargo-zigbuild which uses Zig as a cross-compiler
-        // Much simpler than Docker-based cross or manual GCC setup
         commandLine = ['cargo', 'zigbuild', '--release', '--target', 'x86_64-unknown-linux-gnu']
-        
-        // Don't fail the build if cross-compilation fails
         ignoreExitValue = true
-        
-        doFirst {
-            logger.lifecycle("🔧 Cross-compiling for Linux using Zig linker...")
-        }
-        
-        doLast {
-            def soFile = file('rust/target/x86_64-unknown-linux-gnu/release/librustperf.so')
-            if (soFile.exists()) {
-                logger.lifecycle("✅ Linux cross-compilation successful!")
-                // Copy to resources
-                copy {
-                    from soFile
-                    into file('src/main/resources/natives')
-                }
-                logger.lifecycle("✅ Copied librustperf.so to src/main/resources/natives")
-            } else {
-                logger.warn("⚠️ Linux cross-compilation failed. Ensure:")
-                logger.warn("   - Zig is installed: winget install zig.zig")
-                logger.warn("   - cargo-zigbuild is installed: cargo install cargo-zigbuild")
-            }
-        }
     } else {
-        // On Linux/Mac, just skip (native build handles it)
         commandLine = ['sh', '-c', 'true']
     }
 }
 
-// Wrapper task that depends on both builders so CI can call a single task
+// Main build task - only depends on native build, cross-compilation is optional
 tasks.register('buildRust') {
     group = 'build'
-    description = 'Build Rust artifacts (native and cross where supported)'
-    dependsOn tasks.named('buildRustNative'), tasks.named('buildRustCross')
+    description = 'Build Rust native library for host platform'
+    dependsOn tasks.named('buildRustNative')
 }
+
 
 // Task to copy Rust libraries to resources. It will only copy files that actually exist
 // so local development won't fail when a cross build target wasn't produced.
