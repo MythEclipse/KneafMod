@@ -54,7 +54,8 @@
     "SensorMixin",
     "FastMathMixin",
     "PassiveEntityTickMixin",
-    "ItemEntityAggressiveMixin"
+    "ItemEntityAggressiveMixin",
+    "EntityPushMixin"
   ],
   "client": ["TntRendererMixin"],
   "server": [],
