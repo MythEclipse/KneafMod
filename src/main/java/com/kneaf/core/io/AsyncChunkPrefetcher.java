@@ -249,6 +249,7 @@ public final class AsyncChunkPrefetcher {
     /**
      * Read chunk NBT from disk using RegionFileStorage.
      * This performs the actual I/O operation on a background thread.
+     * CRITICAL: Synchronized to prevent thread-safety issues in RegionFileStorage.
      */
     @SuppressWarnings("null")
     private static CompoundTag readChunkFromDisk(ChunkPos pos) {
@@ -258,9 +259,16 @@ public final class AsyncChunkPrefetcher {
         }
 
         try {
-            // Use RegionFileStorage.read() to get chunk NBT data
-            // This is a blocking I/O call, but we're on the I/O thread pool
-            CompoundTag chunkData = regionFileStorage.read(pos);
+            // CRITICAL: RegionFileStorage is NOT thread-safe!
+            // Multiple background threads calling read() simultaneously can corrupt
+            // the internal Long2ObjectLinkedOpenHashMap, causing:
+            // "ArrayIndexOutOfBoundsException: Index -1 out of bounds for length 33"
+            //
+            // We MUST synchronize access to regionFileStorage to prevent this.
+            CompoundTag chunkData;
+            synchronized (regionFileStorage) {
+                chunkData = regionFileStorage.read(pos);
+            }
 
             if (chunkData != null) {
                 LOGGER.trace("Successfully prefetched chunk {} ({} bytes)",
