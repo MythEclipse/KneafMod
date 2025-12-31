@@ -88,7 +88,7 @@ public abstract class ExplosionMixin {
     @Unique
     @SuppressWarnings("null")
     private void kneaf$performOptimizedScan(List<BlockPos> blocks) {
-        // Rust Acceleration for huge radii
+        // Rust Acceleration for huge radii (Keep existing logic)
         if (RustOptimizations.isAvailable() && radius > 4.0f) {
             try {
                 double[] origin = new double[] { x, y, z };
@@ -112,8 +112,12 @@ public abstract class ExplosionMixin {
 
         java.util.Set<BlockPos> scanSet = new java.util.HashSet<>();
 
-        // Adaptive resolution: smaller explosions = fewer rays = faster
-        int resolution = radius < 2.0f ? 8 : (radius < 4.0f ? 12 : 16);
+        // Amanatides-Woo 3D DDA Algorithm
+        // Visits every voxel on the line exactly once.
+        // Much faster than stepping 0.3 units (which oversamples) or 1.0 units (which
+        // might skip).
+
+        int resolution = 16;
         float resF = (float) (resolution - 1);
 
         for (int j = 0; j < resolution; ++j) {
@@ -121,45 +125,81 @@ public abstract class ExplosionMixin {
                 for (int l = 0; l < resolution; ++l) {
                     if (j == 0 || j == resolution - 1 || k == 0 || k == resolution - 1 || l == 0
                             || l == resolution - 1) {
-                        double d0 = (double) ((float) j / resF * 2.0F - 1.0F);
-                        double d1 = (double) ((float) k / resF * 2.0F - 1.0F);
-                        double d2 = (double) ((float) l / resF * 2.0F - 1.0F);
-                        double d3 = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
-                        d0 /= d3;
-                        d1 /= d3;
-                        d2 /= d3;
+                        double dx = (double) ((float) j / resF * 2.0F - 1.0F);
+                        double dy = (double) ((float) k / resF * 2.0F - 1.0F);
+                        double dz = (double) ((float) l / resF * 2.0F - 1.0F);
+                        double mag = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                        dx /= mag;
+                        dy /= mag;
+                        dz /= mag;
 
                         float f = radius * (0.7F + level.random.nextFloat() * 0.6F);
-                        double cx = x, cy = y, cz = z;
-                        BlockPos last = null;
 
-                        for (; f > 0.0F; f -= 0.225F) {
-                            int ix = net.minecraft.util.Mth.floor(cx);
-                            int iy = net.minecraft.util.Mth.floor(cy);
-                            int iz = net.minecraft.util.Mth.floor(cz);
+                        // Start position
+                        int currentX = net.minecraft.util.Mth.floor(x);
+                        int currentY = net.minecraft.util.Mth.floor(y);
+                        int currentZ = net.minecraft.util.Mth.floor(z);
 
-                            if (last == null || last.getX() != ix || last.getY() != iy || last.getZ() != iz) {
-                                BlockPos bp = new BlockPos(ix, iy, iz);
-                                last = bp;
+                        // Direction signs
+                        int stepX = (dx > 0) ? 1 : -1;
+                        int stepY = (dy > 0) ? 1 : -1;
+                        int stepZ = (dz > 0) ? 1 : -1;
 
-                                if (!level.isInWorldBounds(bp))
-                                    break;
+                        // Ray delta
+                        double deltaDistX = (dx == 0) ? Double.MAX_VALUE : Math.abs(1.0 / dx);
+                        double deltaDistY = (dy == 0) ? Double.MAX_VALUE : Math.abs(1.0 / dy);
+                        double deltaDistZ = (dz == 0) ? Double.MAX_VALUE : Math.abs(1.0 / dz);
 
-                                net.minecraft.world.level.block.state.BlockState state = level.getBlockState(bp);
-                                net.minecraft.world.level.material.FluidState fluid = level.getFluidState(bp);
-                                Explosion self = (Explosion) (Object) this;
-                                java.util.Optional<Float> res = damageCalculator.getBlockExplosionResistance(self,
-                                        level, bp, state, fluid);
-                                if (res.isPresent()) {
-                                    f -= (res.get() + 0.3F) * 0.3F;
+                        // Initial intersection distance
+                        double sideDistX = (dx > 0) ? (currentX + 1.0 - x) * deltaDistX : (x - currentX) * deltaDistX;
+                        double sideDistY = (dy > 0) ? (currentY + 1.0 - y) * deltaDistY : (y - currentY) * deltaDistY;
+                        double sideDistZ = (dz > 0) ? (currentZ + 1.0 - z) * deltaDistZ : (z - currentZ) * deltaDistZ;
+
+                        BlockPos.MutableBlockPos mutPos = new BlockPos.MutableBlockPos();
+
+                        while (f > 0.0F) {
+                            mutPos.set(currentX, currentY, currentZ);
+
+                            if (!level.isInWorldBounds(mutPos))
+                                break;
+
+                            net.minecraft.world.level.block.state.BlockState state = level.getBlockState(mutPos);
+                            net.minecraft.world.level.material.FluidState fluid = level.getFluidState(mutPos);
+                            Explosion self = (Explosion) (Object) this;
+
+                            java.util.Optional<Float> res = damageCalculator.getBlockExplosionResistance(self,
+                                    level, mutPos, state, fluid);
+
+                            if (res.isPresent()) {
+                                f -= (res.get() + 0.3F) * 0.3F;
+                            }
+
+                            if (f > 0.0F && damageCalculator.shouldBlockExplode(self, level, mutPos, state, f)) {
+                                scanSet.add(mutPos.immutable());
+                            }
+
+                            // Advance ray to next voxel
+                            if (sideDistX < sideDistY) {
+                                if (sideDistX < sideDistZ) {
+                                    f -= 0.3F; // Heuristic approximation of distance consumed for checking
+                                    sideDistX += deltaDistX;
+                                    currentX += stepX;
+                                } else {
+                                    f -= 0.3F;
+                                    sideDistZ += deltaDistZ;
+                                    currentZ += stepZ;
                                 }
-                                if (f > 0.0F && damageCalculator.shouldBlockExplode(self, level, bp, state, f)) {
-                                    scanSet.add(bp);
+                            } else {
+                                if (sideDistY < sideDistZ) {
+                                    f -= 0.3F;
+                                    sideDistY += deltaDistY;
+                                    currentY += stepY;
+                                } else {
+                                    f -= 0.3F;
+                                    sideDistZ += deltaDistZ;
+                                    currentZ += stepZ;
                                 }
                             }
-                            cx += d0 * 0.3D;
-                            cy += d1 * 0.3D;
-                            cz += d2 * 0.3D;
                         }
                     }
                 }

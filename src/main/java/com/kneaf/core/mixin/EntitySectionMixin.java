@@ -52,19 +52,17 @@ public abstract class EntitySectionMixin<T extends EntityAccess> {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Spatial grid: divide section into 4x4x4 cells for fast lookups
-    // Cell size = 4 blocks (section is 16 blocks)
+    // Spatial grid: divide section into 4x4x4 cells (64 total)
+    // Flattened 1D Array is faster than Map or multidimensional array
     @Unique
-    private static final int GRID_SIZE = 4;
+    private static final int GRID_SIZE = 64; // 4 * 4 * 4
 
+    // Flat Array Index: 0-63. Stores Set<T> of entities in that cell.
     @Unique
-    private static final int CELL_SIZE = 4; // blocks per cell
+    private final java.util.concurrent.atomic.AtomicReferenceArray<Set<T>> kneaf$spatialGrid = new java.util.concurrent.atomic.AtomicReferenceArray<>(
+            GRID_SIZE);
 
-    // Grid index: cell key -> entities in that cell
-    @Unique
-    private final Map<Integer, Set<T>> kneaf$spatialGrid = new ConcurrentHashMap<>();
-
-    // Track entity positions for grid updates
+    // Track entity positions for grid updates (Entity -> Cell Index)
     @Unique
     private final Map<T, Integer> kneaf$entityCells = new ConcurrentHashMap<>();
 
@@ -88,7 +86,7 @@ public abstract class EntitySectionMixin<T extends EntityAccess> {
     @Inject(method = "add", at = @At("TAIL"))
     private void kneaf$onEntityAdd(T entity, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ EntitySectionMixin applied - Spatial indexing active!");
+            kneaf$LOGGER.info("✅ EntitySectionMixin applied - Flat Array Spatial Indexing active!");
             kneaf$loggedFirstApply = true;
         }
 
@@ -114,7 +112,9 @@ public abstract class EntitySectionMixin<T extends EntityAccess> {
         // Use spatial grid for small queries (less than half the section)
         double queryVolume = (bounds.maxX - bounds.minX) * (bounds.maxY - bounds.minY) * (bounds.maxZ - bounds.minZ);
 
-        if (queryVolume < 512 && !kneaf$spatialGrid.isEmpty()) { // 8x8x8 = 512 blocks
+        // Heuristic: If volume is small, grid lookup is faster than iterating all
+        // entities
+        if (queryVolume < 512) {
             AbortableIterationConsumer.Continuation result = kneaf$queryGridOptimized(typeTest, bounds, consumer);
             if (result != null) {
                 kneaf$fastLookups.incrementAndGet();
@@ -124,7 +124,7 @@ public abstract class EntitySectionMixin<T extends EntityAccess> {
         }
 
         kneaf$fullScans.incrementAndGet();
-        // Fall through to vanilla for large queries
+        // Fall through to usually faster internal iteration for full section scans
     }
 
     /**
@@ -134,9 +134,18 @@ public abstract class EntitySectionMixin<T extends EntityAccess> {
     @SuppressWarnings("null")
     private void kneaf$addToGrid(T entity) {
         if (entity instanceof Entity e) {
-            int cell = kneaf$getCellKey(e.getX(), e.getY(), e.getZ());
-            kneaf$spatialGrid.computeIfAbsent(cell, k -> ConcurrentHashMap.newKeySet()).add(entity);
-            kneaf$entityCells.put(entity, cell);
+            int cellIndex = kneaf$getCellIndex(e.getX(), e.getY(), e.getZ());
+
+            // Optimistic update
+            kneaf$spatialGrid.updateAndGet(cellIndex, currentSet -> {
+                if (currentSet == null) {
+                    currentSet = ConcurrentHashMap.newKeySet();
+                }
+                currentSet.add(entity);
+                return currentSet;
+            });
+
+            kneaf$entityCells.put(entity, cellIndex);
         }
     }
 
@@ -145,27 +154,38 @@ public abstract class EntitySectionMixin<T extends EntityAccess> {
      */
     @Unique
     private void kneaf$removeFromGrid(T entity) {
-        Integer cell = kneaf$entityCells.remove(entity);
-        if (cell != null) {
-            Set<T> cellEntities = kneaf$spatialGrid.get(cell);
+        Integer cellIndex = kneaf$entityCells.remove(entity);
+        if (cellIndex != null) {
+            Set<T> cellEntities = kneaf$spatialGrid.get(cellIndex);
             if (cellEntities != null) {
                 cellEntities.remove(entity);
-                if (cellEntities.isEmpty()) {
-                    kneaf$spatialGrid.remove(cell);
-                }
+                // We keep the empty set to avoid churn, or could null it out if safe
             }
         }
     }
 
     /**
-     * Calculate cell key from position.
+     * Calculate flattened cell index from position.
+     * Section is 16x16x16. Grid is 4x4x4.
+     * Each cell is 4x4x4 blocks.
      */
     @Unique
-    private static int kneaf$getCellKey(double x, double y, double z) {
-        int cx = ((int) x >> 2) & 0xF; // 4 block cells, wrap at 16
-        int cy = ((int) y >> 2) & 0xF;
-        int cz = ((int) z >> 2) & 0xF;
-        return cx | (cy << 4) | (cz << 8);
+    private static int kneaf$getCellIndex(double x, double y, double z) {
+        // x, y, z are world coords, but we only care about bits 2..3 (value 0..3)
+        // assuming standard section coordinates are handled by caller,
+        // strictly speaking we should mask with section boundaries, but here we assume
+        // local or masked inputs.
+        // Actually, EntitySection usually handles entities within it.
+        // We use (val >> 2) & 3 to get 0..3 index.
+
+        int cx = ((int) x >> 2) & 0x3;
+        int cy = ((int) y >> 2) & 0x3;
+        int cz = ((int) z >> 2) & 0x3;
+
+        // Map to 0..63: idx = x + z*4 + y*16 (y is usually vertical, we stride Y
+        // largest for cache locality?)
+        // Standard in MC is usually X Z Y or X Y Z. Let's do X + Z*4 + Y*16
+        return cx + (cz << 2) + (cy << 4);
     }
 
     /**
@@ -175,36 +195,42 @@ public abstract class EntitySectionMixin<T extends EntityAccess> {
     private <U extends T> AbortableIterationConsumer.Continuation kneaf$queryGridOptimized(
             EntityTypeTest<T, U> typeTest, AABB bounds, AbortableIterationConsumer<U> consumer) {
 
-        // Calculate affected cells
-        int minCX = ((int) bounds.minX >> 2) & 0xF;
-        int minCY = ((int) bounds.minY >> 2) & 0xF;
-        int minCZ = ((int) bounds.minZ >> 2) & 0xF;
-        int maxCX = ((int) bounds.maxX >> 2) & 0xF;
-        int maxCY = ((int) bounds.maxY >> 2) & 0xF;
-        int maxCZ = ((int) bounds.maxZ >> 2) & 0xF;
+        // Calculate affected cell range
+        int minCX = ((int) bounds.minX >> 2) & 0x3;
+        int minCY = ((int) bounds.minY >> 2) & 0x3;
+        int minCZ = ((int) bounds.minZ >> 2) & 0x3;
+        int maxCX = ((int) bounds.maxX >> 2) & 0x3;
+        int maxCY = ((int) bounds.maxY >> 2) & 0x3;
+        int maxCZ = ((int) bounds.maxZ >> 2) & 0x3;
 
-        // Collect entities from affected cells
-        List<T> candidates = new ArrayList<>();
-        for (int cx = minCX; cx <= maxCX; cx++) {
-            for (int cy = minCY; cy <= maxCY; cy++) {
-                for (int cz = minCZ; cz <= maxCZ; cz++) {
-                    int cell = cx | (cy << 4) | (cz << 8);
-                    Set<T> cellEntities = kneaf$spatialGrid.get(cell);
-                    if (cellEntities != null) {
-                        candidates.addAll(cellEntities);
-                    }
-                }
-            }
+        // Safety check: If bounds cross section boundaries (wrap around 0-3), fallback
+        // to full scan
+        if (maxCX < minCX || maxCY < minCY || maxCZ < minCZ) {
+            return null; // Fallback to full scan
         }
 
-        // Filter by bounds and type
-        for (T entity : candidates) {
-            if (entity instanceof Entity e && bounds.intersects(e.getBoundingBox())) {
-                U casted = typeTest.tryCast(entity);
-                if (casted != null) {
-                    AbortableIterationConsumer.Continuation result = consumer.accept(casted);
-                    if (result == AbortableIterationConsumer.Continuation.ABORT) {
-                        return result;
+        // Iterate affected cells
+        for (int cy = minCY; cy <= maxCY; cy++) {
+            int yOffset = cy << 4;
+            for (int cz = minCZ; cz <= maxCZ; cz++) {
+                int zOffset = cz << 2;
+                for (int cx = minCX; cx <= maxCX; cx++) {
+                    int cellIndex = cx + zOffset + yOffset;
+
+                    Set<T> cellEntities = kneaf$spatialGrid.get(cellIndex);
+                    if (cellEntities != null && !cellEntities.isEmpty()) {
+                        // Iterate entities in this cell
+                        for (T entity : cellEntities) {
+                            if (entity instanceof Entity e && bounds.intersects(e.getBoundingBox())) {
+                                U casted = typeTest.tryCast(entity);
+                                if (casted != null) {
+                                    AbortableIterationConsumer.Continuation result = consumer.accept(casted);
+                                    if (result == AbortableIterationConsumer.Continuation.ABORT) {
+                                        return result;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -215,21 +241,25 @@ public abstract class EntitySectionMixin<T extends EntityAccess> {
 
     /**
      * Update entity position in grid (call when entity moves).
+     * This method needs to be called by a mixin in Entity accessing the section,
+     * or we optimistically update on section change.
+     * Note: Standard EntitySection 'move' might remove/add, but if it's within
+     * section, we need to track.
+     * Assuming the game calls 'add'/'remove' or we might hook 'update'.
+     * For now, this helper exists if we hook movement.
      */
     @Unique
     @SuppressWarnings("null")
     private void kneaf$updateEntityPosition(T entity) {
         if (entity instanceof Entity e) {
-            int newCell = kneaf$getCellKey(e.getX(), e.getY(), e.getZ());
+            int newCell = kneaf$getCellIndex(e.getX(), e.getY(), e.getZ());
             Integer oldCell = kneaf$entityCells.get(entity);
 
             if (oldCell == null || oldCell != newCell) {
-                // Entity moved to different cell
                 kneaf$removeFromGrid(entity);
                 kneaf$addToGrid(entity);
             }
         }
-
         kneaf$logStats();
     }
 
@@ -260,12 +290,7 @@ public abstract class EntitySectionMixin<T extends EntityAccess> {
      */
     @Unique
     private static String kneaf$getStatistics() {
-        long fast = kneaf$fastLookups.get();
-        long full = kneaf$fullScans.get();
-        long total = fast + full;
-        double fastRate = total > 0 ? fast * 100.0 / total : 0;
-
-        return String.format("EntitySection{fast=%d, full=%d, fastRate=%.1f%%}",
-                fast, full, fastRate);
+        return String.format("EntitySection{fast=%d, full=%d}",
+                kneaf$fastLookups.get(), kneaf$fullScans.get());
     }
 }

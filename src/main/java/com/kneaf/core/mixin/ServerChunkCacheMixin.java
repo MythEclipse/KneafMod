@@ -54,6 +54,11 @@ public abstract class ServerChunkCacheMixin {
     @Unique
     private final ConcurrentHashMap<Long, ChunkAccess> kneaf$hotChunkCache = new ConcurrentHashMap<>();
 
+    // ThreadLocal L1 cache: Lock-free, instant access for the same thread accessing
+    // the same chunk repeatedly
+    @Unique
+    private static final ThreadLocal<ChunkAccess> kneaf$threadLocalChunk = new ThreadLocal<>();
+
     @Shadow
     @Final
     ServerLevel level;
@@ -76,7 +81,21 @@ public abstract class ServerChunkCacheMixin {
             return;
         }
 
-        // Check hot cache
+        // 1. ThreadLocal L1 Cache (Fastest, No Locks)
+        ChunkAccess tlChunk = kneaf$threadLocalChunk.get();
+        if (tlChunk != null) {
+            net.minecraft.world.level.ChunkPos pos = tlChunk.getPos();
+            if (pos.x == x && pos.z == z) {
+                // Validate it's still part of this level (fast check)
+                if (tlChunk instanceof LevelChunk lc && lc.getLevel() == level) {
+                    kneaf$cacheHits.incrementAndGet();
+                    cir.setReturnValue(tlChunk);
+                    return;
+                }
+            }
+        }
+
+        // 2. Hot Cache (Shared, ConcurrentHashMap)
         long key = kneaf$chunkKey(x, z);
         ChunkAccess cached = kneaf$hotChunkCache.get(key);
 
@@ -89,6 +108,8 @@ public abstract class ServerChunkCacheMixin {
                     // Verify chunk hasn't been unloaded
                     if (levelChunk.getLevel() == level) {
                         kneaf$cacheHits.incrementAndGet();
+                        // Update L1 cache
+                        kneaf$threadLocalChunk.set(cached);
                         cir.setReturnValue(cached);
                         return;
                     }
@@ -147,6 +168,8 @@ public abstract class ServerChunkCacheMixin {
             }
 
             kneaf$hotChunkCache.put(key, result);
+            // Update L1 cache
+            kneaf$threadLocalChunk.set(result);
         }
     }
 
@@ -162,13 +185,13 @@ public abstract class ServerChunkCacheMixin {
     @Inject(method = "tick", at = @At("TAIL"))
     private void kneaf$onTick(java.util.function.BooleanSupplier hasTimeLeft, boolean tickChunks, CallbackInfo ci) {
         long now = System.currentTimeMillis();
-        
+
         // ✅ CRITICAL: Periodic stale cache cleanup (every 5 seconds)
         if (now - kneaf$lastCacheCleanup > 5000) {
             kneaf$cleanupStaleCache();
             kneaf$lastCacheCleanup = now;
         }
-        
+
         // Periodically update stats
         if (now - kneaf$lastLogTime > 1000) {
             long accesses = kneaf$chunkAccesses.get();
@@ -192,7 +215,7 @@ public abstract class ServerChunkCacheMixin {
             kneaf$lastLogTime = now;
         }
     }
-    
+
     /**
      * Remove stale chunks from cache (chunks that are no longer loaded).
      */
@@ -202,13 +225,13 @@ public abstract class ServerChunkCacheMixin {
             kneaf$hotChunkCache.clear();
             return;
         }
-        
+
         int removed = 0;
         var iterator = kneaf$hotChunkCache.entrySet().iterator();
         while (iterator.hasNext()) {
             var entry = iterator.next();
             ChunkAccess chunk = entry.getValue();
-            
+
             if (chunk instanceof LevelChunk levelChunk) {
                 try {
                     // Remove if chunk's level doesn't match or chunk is unloaded
@@ -217,7 +240,7 @@ public abstract class ServerChunkCacheMixin {
                         removed++;
                         continue;
                     }
-                    
+
                     // Check if chunk is still loaded in chunk source
                     int x = levelChunk.getPos().x;
                     int z = levelChunk.getPos().z;
@@ -231,9 +254,9 @@ public abstract class ServerChunkCacheMixin {
                 }
             }
         }
-        
+
         if (removed > 0) {
-            kneaf$LOGGER.debug("Cleaned {} stale chunks from hot cache (remaining: {})", 
+            kneaf$LOGGER.debug("Cleaned {} stale chunks from hot cache (remaining: {})",
                     removed, kneaf$hotChunkCache.size());
         }
     }

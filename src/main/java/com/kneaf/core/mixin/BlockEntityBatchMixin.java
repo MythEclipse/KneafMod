@@ -84,12 +84,27 @@ public abstract class BlockEntityBatchMixin {
     private static final int MAX_BATCH_SIZE = 64;
 
     /**
-     * Track block entity ticking for batching optimization.
+     * REDIRECT: Intercept the actual tick call to implement Idle Skipping.
+     */
+    @org.spongepowered.asm.mixin.injection.Redirect(method = "tickBlockEntities", at = @org.spongepowered.asm.mixin.injection.At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/entity/BlockEntityTicker;tick(Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/block/entity/BlockEntity;)V"))
+    private <T extends BlockEntity> void kneaf$redirectTick(BlockEntityTicker<T> ticker, Level level, BlockPos pos,
+            net.minecraft.world.level.block.state.BlockState state, T blockEntity) {
+        // Idle Skip Optimization
+        if (kneaf$shouldSkipIdle(pos)) {
+            return;
+        }
+
+        // Proceed with tick
+        ticker.tick(level, pos, state, blockEntity);
+    }
+
+    /**
+     * Track block entity ticking for batching and threshold adjustments.
      */
     @Inject(method = "tickBlockEntities", at = @At("HEAD"))
     private void kneaf$onTickBlockEntitiesHead(CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ BlockEntityBatchMixin applied - Block entity batching optimization active!");
+            kneaf$LOGGER.info("✅ BlockEntityBatchMixin applied - Idle Tick Skipping active!");
             kneaf$loggedFirstApply = true;
         }
 
@@ -97,9 +112,7 @@ public abstract class BlockEntityBatchMixin {
         kneaf$adjustThresholds();
     }
 
-    /**
-     * Log statistics after block entity ticking.
-     */
+    // Log stats at return
     @Inject(method = "tickBlockEntities", at = @At("RETURN"))
     private void kneaf$onTickBlockEntitiesReturn(CallbackInfo ci) {
         kneaf$logStats();

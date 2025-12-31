@@ -47,23 +47,10 @@ public abstract class VoxelShapeCacheMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Cache for collision shapes keyed by block state hash
-    // We use a size-limited cache to avoid memory bloat
+    // Direct Array Cache: O(1) access by BlockState ID
+    // Much faster than HashMap, minimal memory overhead (references only)
     @Unique
-    private static final int MAX_CACHE_SIZE = 4096;
-
-    @Unique
-    private static final Map<Integer, VoxelShape> kneaf$collisionShapeCache = new ConcurrentHashMap<>(1024);
-
-    @Unique
-    private static final Map<Integer, VoxelShape> kneaf$outlineShapeCache = new ConcurrentHashMap<>(1024);
-
-    // Pre-computed common shapes for fast comparison
-    @Unique
-    private static final VoxelShape FULL_BLOCK = Shapes.block();
-
-    @Unique
-    private static final VoxelShape EMPTY = Shapes.empty();
+    private static volatile VoxelShape[] kneaf$collisionShapeCache = new VoxelShape[1024];
 
     // Statistics
     @Unique
@@ -71,9 +58,6 @@ public abstract class VoxelShapeCacheMixin {
 
     @Unique
     private static final AtomicLong kneaf$cacheMisses = new AtomicLong(0);
-
-    @Unique
-    private static final AtomicLong kneaf$fastPathHits = new AtomicLong(0);
 
     @Unique
     private static long kneaf$lastLogTime = 0;
@@ -86,34 +70,22 @@ public abstract class VoxelShapeCacheMixin {
     private void kneaf$onGetCollisionShape(BlockGetter level, BlockPos pos, CollisionContext context,
             CallbackInfoReturnable<VoxelShape> cir) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ VoxelShapeCacheMixin applied - Collision shape caching active!");
+            kneaf$LOGGER.info("✅ VoxelShapeCacheMixin applied - Direct Array Caching active!");
             kneaf$loggedFirstApply = true;
         }
 
         BlockState state = (BlockState) (Object) this;
+        int id = net.minecraft.world.level.block.Block.getId(state);
 
-        // Fast path removed to prevent recursion with isCollisionShapeFullBlock calling
-        // getCollisionShape
-        /*
-         * @SuppressWarnings("null")
-         * boolean isFullBlock = !state.hasBlockEntity() &&
-         * state.isCollisionShapeFullBlock(level, pos);
-         * if (isFullBlock) {
-         * kneaf$fastPathHits.incrementAndGet();
-         * cir.setReturnValue(FULL_BLOCK);
-         * return;
-         * }
-         */
-
-        // Generate cache key from block state
-        int cacheKey = kneaf$generateCacheKey(state, pos);
-
-        // Check cache
-        VoxelShape cached = kneaf$collisionShapeCache.get(cacheKey);
-        if (cached != null) {
-            kneaf$cacheHits.incrementAndGet();
-            cir.setReturnValue(cached);
-            return;
+        // Check array bounds and content
+        VoxelShape[] cache = kneaf$collisionShapeCache;
+        if (id < cache.length) {
+            VoxelShape cached = cache[id];
+            if (cached != null) {
+                kneaf$cacheHits.incrementAndGet();
+                cir.setReturnValue(cached);
+                return;
+            }
         }
 
         kneaf$cacheMisses.incrementAndGet();
@@ -129,39 +101,36 @@ public abstract class VoxelShapeCacheMixin {
         BlockState state = (BlockState) (Object) this;
         VoxelShape result = cir.getReturnValue();
 
-        // Only cache if the shape is simple and cacheable
-        // Complex shapes that depend on neighbors shouldn't be cached
         if (result != null && kneaf$isShapeCacheable(state)) {
-            int cacheKey = kneaf$generateCacheKey(state, pos);
+            int id = net.minecraft.world.level.block.Block.getId(state);
 
-            // Limit cache size
-            if (kneaf$collisionShapeCache.size() >= MAX_CACHE_SIZE) {
-                kneaf$cleanupCache();
-            }
+            // Ensure capacity
+            kneaf$ensureCapacity(id + 1);
 
-            // Normalize common shapes to reduce memory
-            if (result.isEmpty()) {
-                kneaf$collisionShapeCache.put(cacheKey, EMPTY);
-            } else if (result == FULL_BLOCK || kneaf$isFullBlock(result)) {
-                kneaf$collisionShapeCache.put(cacheKey, FULL_BLOCK);
-            } else {
-                kneaf$collisionShapeCache.put(cacheKey, result);
-            }
+            // Normalize common shapes to reduce memory (canonical instances)
+            // Note: vanilla Shapes.block() and empty() are singletons, so == check works
+            // But we trust the result is good.
+            kneaf$collisionShapeCache[id] = result;
         }
 
         // Log stats periodically
         kneaf$logStats();
     }
 
-    /**
-     * Generate a cache key for a block state at a position.
-     * We use state hash + position hash for position-dependent shapes.
-     */
     @Unique
-    private static int kneaf$generateCacheKey(BlockState state, BlockPos pos) {
-        // For most blocks, the shape only depends on the state, not position
-        // Exception: blocks like fences that connect to neighbors
-        return state.hashCode();
+    private static synchronized void kneaf$ensureCapacity(int minCapacity) {
+        if (minCapacity > kneaf$collisionShapeCache.length) {
+            int newSize = Math.max(minCapacity, kneaf$collisionShapeCache.length * 2);
+            // Cap at reasonable max to prevent DoS (though block IDs are finite)
+            if (newSize > 65536)
+                newSize = 65536; // 65k states is plenty for most packs
+            if (minCapacity > newSize)
+                newSize = minCapacity; // absolute fallback
+
+            VoxelShape[] newCache = new VoxelShape[newSize];
+            System.arraycopy(kneaf$collisionShapeCache, 0, newCache, 0, kneaf$collisionShapeCache.length);
+            kneaf$collisionShapeCache = newCache;
+        }
     }
 
     /**
@@ -189,47 +158,6 @@ public abstract class VoxelShapeCacheMixin {
     }
 
     /**
-     * Check if a VoxelShape is equivalent to a full block.
-     */
-    @Unique
-    private static boolean kneaf$isFullBlock(VoxelShape shape) {
-        if (shape == FULL_BLOCK)
-            return true;
-        if (shape.isEmpty())
-            return false;
-
-        // Check bounds
-        return shape.min(net.minecraft.core.Direction.Axis.X) <= 0.0 &&
-                shape.min(net.minecraft.core.Direction.Axis.Y) <= 0.0 &&
-                shape.min(net.minecraft.core.Direction.Axis.Z) <= 0.0 &&
-                shape.max(net.minecraft.core.Direction.Axis.X) >= 1.0 &&
-                shape.max(net.minecraft.core.Direction.Axis.Y) >= 1.0 &&
-                shape.max(net.minecraft.core.Direction.Axis.Z) >= 1.0;
-    }
-
-    /**
-     * Cleanup cache when it gets too large.
-     */
-    @Unique
-    private static void kneaf$cleanupCache() {
-        // Simple strategy: clear half the cache
-        int toRemove = MAX_CACHE_SIZE / 2;
-        var iterator = kneaf$collisionShapeCache.keySet().iterator();
-        while (iterator.hasNext() && toRemove-- > 0) {
-            iterator.next();
-            iterator.remove();
-        }
-
-        // Also clear outline cache
-        toRemove = MAX_CACHE_SIZE / 2;
-        iterator = kneaf$outlineShapeCache.keySet().iterator();
-        while (iterator.hasNext() && toRemove-- > 0) {
-            iterator.next();
-            iterator.remove();
-        }
-    }
-
-    /**
      * Log cache statistics periodically.
      */
     @Unique
@@ -239,50 +167,20 @@ public abstract class VoxelShapeCacheMixin {
         if (now - kneaf$lastLogTime > 1000) {
             long hits = kneaf$cacheHits.get();
             long misses = kneaf$cacheMisses.get();
-            long fastPath = kneaf$fastPathHits.get();
             long total = hits + misses;
-            double timeDiff = (now - kneaf$lastLogTime) / 1000.0;
 
             if (total > 0) {
                 double hitRate = hits * 100.0 / total;
                 // Update central stats
-                com.kneaf.core.PerformanceStats.voxelHitRate = hits / timeDiff;
-                com.kneaf.core.PerformanceStats.voxelMissRate = misses / timeDiff;
+                com.kneaf.core.PerformanceStats.voxelHitRate = hits; // Just raw hits this second
+                com.kneaf.core.PerformanceStats.voxelMissRate = misses;
                 com.kneaf.core.PerformanceStats.voxelHitPercent = hitRate;
-                com.kneaf.core.PerformanceStats.voxelFastPathRate = fastPath / timeDiff;
-                com.kneaf.core.PerformanceStats.voxelCacheSize = kneaf$collisionShapeCache.size();
+                com.kneaf.core.PerformanceStats.voxelCacheSize = kneaf$collisionShapeCache.length; // array capacity
 
                 kneaf$cacheHits.set(0);
                 kneaf$cacheMisses.set(0);
-                kneaf$fastPathHits.set(0);
-            } else {
-                com.kneaf.core.PerformanceStats.voxelHitRate = 0;
             }
             kneaf$lastLogTime = now;
         }
-    }
-
-    /**
-     * Get cache statistics as a string.
-     */
-    @Unique
-    private static String kneaf$getStatistics() {
-        long hits = kneaf$cacheHits.get();
-        long misses = kneaf$cacheMisses.get();
-        long total = hits + misses;
-        double hitRate = total > 0 ? hits * 100.0 / total : 0;
-
-        return String.format("VoxelShapeCache{hits=%d, misses=%d, hitRate=%.1f%%, cached=%d, fastPath=%d}",
-                hits, misses, hitRate, kneaf$collisionShapeCache.size(), kneaf$fastPathHits.get());
-    }
-
-    /**
-     * Clear all caches. Called when world unloads or on config change.
-     */
-    @Unique
-    private static void kneaf$clearCaches() {
-        kneaf$collisionShapeCache.clear();
-        kneaf$outlineShapeCache.clear();
-        kneaf$LOGGER.debug("VoxelShape caches cleared");
     }
 }

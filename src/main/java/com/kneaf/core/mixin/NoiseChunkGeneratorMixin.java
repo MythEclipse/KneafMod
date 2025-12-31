@@ -256,9 +256,19 @@ public abstract class NoiseChunkGeneratorMixin {
         kneaf$javaNoiseCount.incrementAndGet();
 
         // Java fallback implementation
-        int ix = (int) Math.floor(x);
-        int iy = (int) Math.floor(y);
-        int iz = (int) Math.floor(z);
+        // Fast floor: (int)d - (d < (int)d ? 1 : 0) is usually faster than Math.floor
+        // logic
+        int ix = (int) x;
+        if (x < ix)
+            ix--;
+
+        int iy = (int) y;
+        if (y < iy)
+            iy--;
+
+        int iz = (int) z;
+        if (z < iz)
+            iz--;
 
         double fx = x - ix;
         double fy = y - iy;
