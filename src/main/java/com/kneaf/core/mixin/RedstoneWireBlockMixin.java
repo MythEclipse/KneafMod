@@ -104,8 +104,10 @@ public abstract class RedstoneWireBlockMixin {
         kneaf$pendingUpdates.get().add(pos);
 
         try {
-            // Build/update graph for affected wires
-            kneaf$graph.addWire(level, pos);
+            // Lazy build: Only add if not present
+            if (!kneaf$graph.hasNode(pos)) {
+                kneaf$graph.addWire(level, pos);
+            }
             kneaf$graph.markDirty(pos);
 
             // Get topological order

@@ -68,8 +68,14 @@ public abstract class PathFinderMixin {
     private static final AtomicLong kneaf$trivialSkips = new AtomicLong(0);
 
     // Path cache
+    // Path cache with allocation-free keys
     @Unique
-    private static final ConcurrentHashMap<String, CachedPath> kneaf$pathCache = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<PathCacheKey, CachedPath> kneaf$pathCache = new ConcurrentHashMap<>();
+
+    // Record for zero-allocation cache keys
+    @Unique
+    private record PathCacheKey(long start, long target) {
+    }
 
     /**
      * Inject at HEAD of findPath to use Rust for complex pathfinding.
@@ -115,7 +121,7 @@ public abstract class PathFinderMixin {
             }
 
             // Check cache
-            String cacheKey = kneaf$createCacheKey(startPos, targetPos);
+            PathCacheKey cacheKey = kneaf$createCacheKey(startPos, targetPos);
             CachedPath cached = kneaf$pathCache.get(cacheKey);
             if (cached != null && System.currentTimeMillis() - cached.timestamp() < PATH_CACHE_TTL_MS) {
                 kneaf$cacheHits.incrementAndGet();
@@ -234,17 +240,18 @@ public abstract class PathFinderMixin {
      * Create cache key for path.
      */
     @Unique
-    private static String kneaf$createCacheKey(BlockPos start, BlockPos target) {
-        return String.format("%d,%d,%d->%d,%d,%d",
-                start.getX() / 4, start.getY() / 4, start.getZ() / 4, // Quantize for cache efficiency
-                target.getX() / 4, target.getY() / 4, target.getZ() / 4);
+    private static PathCacheKey kneaf$createCacheKey(BlockPos start, BlockPos target) {
+        // Quantize coordinates for fuzzy matching (match original logic: / 4)
+        long startKey = BlockPos.asLong(start.getX() / 4, start.getY() / 4, start.getZ() / 4);
+        long targetKey = BlockPos.asLong(target.getX() / 4, target.getY() / 4, target.getZ() / 4);
+        return new PathCacheKey(startKey, targetKey);
     }
 
     /**
      * Cache a computed path.
      */
     @Unique
-    private static void kneaf$cacheResult(String key, Path path) {
+    private static void kneaf$cacheResult(PathCacheKey key, Path path) {
         // Limit cache size
         if (kneaf$pathCache.size() >= PATH_CACHE_SIZE) {
             // Remove oldest entries (simple cleanup)

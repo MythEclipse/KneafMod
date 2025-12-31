@@ -58,6 +58,13 @@ public class RedstoneGraph {
     }
 
     /**
+     * Check if a node exists in the graph.
+     */
+    public boolean hasNode(BlockPos pos) {
+        return nodes.containsKey(pos);
+    }
+
+    /**
      * Build or update the dependency graph for a redstone wire.
      */
     @SuppressWarnings("null")

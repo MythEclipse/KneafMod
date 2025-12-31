@@ -46,15 +46,23 @@ public abstract class BrainMixin<E extends LivingEntity> {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Memory status cache - avoids repeated isPresent/isAbsent checks per tick
-    // Key: memory type hashcode, Value: cached status
+    // Memory status cache - key: type hash, value: status
     @Unique
     private final ConcurrentHashMap<Integer, MemoryStatus> kneaf$memoryStatusCache = new ConcurrentHashMap<>();
 
-    // Memory VALUE cache - caches isMemoryValue results within a tick
-    // Key: combined hash of (type + value), Value: result
+    // PRIMITIVE CACHE for isMemoryValue (High Frequency)
+    // Replaces ConcurrentHashMap<Integer, Boolean> to avoid allocations
     @Unique
-    private final ConcurrentHashMap<Integer, Boolean> kneaf$memoryValueCache = new ConcurrentHashMap<>();
+    private static final int CACHE_SIZE = 64; // Power of 2
+    @Unique
+    private static final int CACHE_MASK = CACHE_SIZE - 1;
+
+    @Unique
+    private final int[] kneaf$keyCache = new int[CACHE_SIZE];
+    @Unique
+    private final boolean[] kneaf$valueCache = new boolean[CACHE_SIZE];
+    @Unique
+    private final boolean[] kneaf$occupiedCache = new boolean[CACHE_SIZE];
 
     @Unique
     private long kneaf$lastCacheClearTick = 0;
@@ -74,18 +82,19 @@ public abstract class BrainMixin<E extends LivingEntity> {
      * Log that optimization is active.
      */
     @Inject(method = "tick", at = @At("HEAD"))
+    @SuppressWarnings("null")
     private void kneaf$onBrainTickStart(ServerLevel level, E entity, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ BrainMixin applied - Memory caching active (no throttling)!");
+            kneaf$LOGGER.info("✅ BrainMixin applied - Primitive Array Cache active!");
             kneaf$loggedFirstApply = true;
         }
 
-        // Clear cache every tick (memory status can change)
-        // The cache is for WITHIN a single tick - caching repeated calls
+        // Clear cache every tick
         long gameTick = level.getGameTime();
         if (gameTick != kneaf$lastCacheClearTick) {
             kneaf$memoryStatusCache.clear();
-            kneaf$memoryValueCache.clear();
+            // Fast clear for primitive cache
+            java.util.Arrays.fill(kneaf$occupiedCache, false);
             kneaf$lastCacheClearTick = gameTick;
         }
 
@@ -95,28 +104,39 @@ public abstract class BrainMixin<E extends LivingEntity> {
 
     /**
      * Optimize memory status checks by caching within a tick.
-     * Memory status is checked multiple times per tick by behaviors.
-     * REAL OPTIMIZATION: Cache results to skip repeated expensive lookups.
+     * ZERO-ALLOCATION linear probe implementation.
      */
     @Redirect(method = "checkMemory", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/ai/Brain;isMemoryValue(Lnet/minecraft/world/entity/ai/memory/MemoryModuleType;Ljava/lang/Object;)Z"))
     private <U> boolean kneaf$cachedIsMemoryValue(Brain<E> brain, MemoryModuleType<U> type, U value) {
-        // Create cache key from type and value
+        // Create cache key
         int key = type.hashCode() ^ (value != null ? value.hashCode() * 31 : 0);
 
-        // Check cache first
-        Boolean cached = kneaf$memoryValueCache.get(key);
-        if (cached != null) {
-            kneaf$cacheHits.incrementAndGet();
-            return cached;
+        // Linear Probe Lookup
+        int idx = key & CACHE_MASK;
+        int startIdx = idx;
+
+        while (kneaf$occupiedCache[idx]) {
+            if (kneaf$keyCache[idx] == key) {
+                kneaf$cacheHits.incrementAndGet();
+                return kneaf$valueCache[idx];
+            }
+            idx = (idx + 1) & CACHE_MASK;
+            if (idx == startIdx)
+                break; // Cache full (unlikely with size 64 per tick)
         }
 
         // Compute actual result
         kneaf$cacheMisses.incrementAndGet();
-        @SuppressWarnings("null") // isMemoryValue handles null value internally
+        @SuppressWarnings("null")
         boolean result = brain.isMemoryValue(type, value);
 
-        // Cache for future lookups within same tick
-        kneaf$memoryValueCache.put(key, result);
+        // Cache the result (if slot found)
+        if (!kneaf$occupiedCache[idx]) {
+            kneaf$occupiedCache[idx] = true;
+            kneaf$keyCache[idx] = key;
+            kneaf$valueCache[idx] = result;
+        }
+
         return result;
     }
 
