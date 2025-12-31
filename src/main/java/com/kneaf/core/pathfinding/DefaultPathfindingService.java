@@ -1,6 +1,5 @@
 package com.kneaf.core.pathfinding;
 
-import com.kneaf.core.RustNativeLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,13 +25,6 @@ public class DefaultPathfindingService implements PathfindingService {
     @Override
     public int[] findPath(boolean[] grid, int width, int height, int startX, int startY, int goalX, int goalY) {
         // Try Rust implementation first
-        if (RustNativeLoader.isLibraryLoaded()) {
-            try {
-                return RustNativeLoader.rustperf_astar_pathfind(grid, width, height, startX, startY, goalX, goalY);
-            } catch (Exception e) {
-                LOGGER.warn("Rust pathfinding failed, falling back to Java implementation", e);
-            }
-        }
 
         // Fallback to Java implementation
         return findPathJava(grid, width, height, startX, startY, goalX, goalY);

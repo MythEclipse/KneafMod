@@ -11,7 +11,6 @@ import org.junit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Random;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Comprehensive benchmark tests comparing Rust native optimizations vs Java
@@ -1026,4 +1025,7 @@ class RustVsJavaBenchmarkTest {
         System.out.printf("  %-20s │ Java: %8.3f ms │ Rust: %8.3f ms │ %s%n",
                 name, javaMs, rustMs, speedupStr);
     }
+
+    // Simple A* for Benchmark
+
 }

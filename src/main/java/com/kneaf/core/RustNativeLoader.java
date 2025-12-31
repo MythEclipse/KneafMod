@@ -222,13 +222,8 @@ public class RustNativeLoader {
     public static native byte[] simulateFluidFlow(byte[] fluidLevels, byte[] solidBlocks, int width, int height,
             int depth);
 
-    public static native int[] rustperf_astar_pathfind(boolean[] grid, int width, int height, int startX, int startY,
-            int goalX, int goalY);
-
     public static native void rustperf_batch_spatial_grid_zero_copy(java.nio.ByteBuffer input,
             java.nio.ByteBuffer output, int count);
-
-    public static native double[] rustperf_batch_entity_physics(double[] velocities, int entityCount, double damping);
 
     // ========================================
     // CATEGORY 5: Memory Management

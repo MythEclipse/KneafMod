@@ -10,7 +10,7 @@ package com.kneaf.core.mixin;
 import net.minecraft.core.Holder;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Climate;
-import com.kneaf.core.RustNativeLoader;
+
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -116,19 +116,6 @@ public abstract class BiomeSourceMixin {
      */
     @Unique
     private long kneaf$positionKey(int x, int y, int z) {
-        // Try Rust spatial hashing
-        if (kneaf$rustHashCount.get() > 0 || kneaf$cacheHits.get() % 100 == 0) {
-            try {
-                double[] positions = new double[] { x, y, z };
-                long[] hashes = RustNativeLoader.batchSpatialHash(positions, 1.0, 1);
-                if (hashes != null && hashes.length > 0) {
-                    kneaf$rustHashCount.incrementAndGet();
-                    return hashes[0];
-                }
-            } catch (Throwable e) {
-                // Fall through to Java implementation if native fails or links incorrectly
-            }
-        }
 
         kneaf$javaHashCount.incrementAndGet();
 
