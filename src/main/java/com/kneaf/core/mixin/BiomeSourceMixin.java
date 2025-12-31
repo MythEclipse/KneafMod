@@ -19,8 +19,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
 
@@ -41,7 +39,12 @@ public abstract class BiomeSourceMixin {
     private static final int MAX_CACHE_SIZE = 16384;
 
     @Unique
-    private final Map<Long, Holder<Biome>> kneaf$biomeCache = new ConcurrentHashMap<>(4096);
+    private final com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<Holder<Biome>> kneaf$biomeCache = new com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<>(
+            4096);
+
+    // Lock for thread safety
+    @Unique
+    private final java.util.concurrent.locks.StampedLock kneaf$lock = new java.util.concurrent.locks.StampedLock();
 
     // Statistics
     @Unique
@@ -77,8 +80,19 @@ public abstract class BiomeSourceMixin {
         // Generate cache key from coordinates
         long cacheKey = kneaf$positionKey(x, y, z);
 
-        // Check cache
+        // Check cache with optimistic read
+        long stamp = kneaf$lock.tryOptimisticRead();
         Holder<Biome> cached = kneaf$biomeCache.get(cacheKey);
+
+        if (!kneaf$lock.validate(stamp)) {
+            stamp = kneaf$lock.readLock();
+            try {
+                cached = kneaf$biomeCache.get(cacheKey);
+            } finally {
+                kneaf$lock.unlockRead(stamp);
+            }
+        }
+
         if (cached != null) {
             kneaf$cacheHits.incrementAndGet();
             cir.setReturnValue(cached);
@@ -99,13 +113,24 @@ public abstract class BiomeSourceMixin {
             return;
 
         long cacheKey = kneaf$positionKey(x, y, z);
+        long now = System.currentTimeMillis();
 
-        // Check cache size and cleanup if needed
-        if (kneaf$biomeCache.size() >= MAX_CACHE_SIZE) {
-            kneaf$cleanupCache();
+        long stamp = kneaf$lock.writeLock();
+        try {
+            // Check cache size and cleanup if needed
+            if (kneaf$biomeCache.size() >= MAX_CACHE_SIZE) {
+                if (now - kneaf$lastCleanupTime > 5000) {
+                    kneaf$cleanupCache(); // Cleanup takes lock? No, called inside lock
+                    kneaf$lastCleanupTime = now;
+                }
+            }
+
+            // Double check inside lock if we still need to put?
+            // Actually primitive maps overwrite is fine.
+            kneaf$biomeCache.put(cacheKey, result);
+        } finally {
+            kneaf$lock.unlockWrite(stamp);
         }
-
-        kneaf$biomeCache.put(cacheKey, result);
 
         // Log stats periodically
         kneaf$logStats();
@@ -127,22 +152,18 @@ public abstract class BiomeSourceMixin {
 
     /**
      * Cleanup cache when it gets too large.
+     * MUST be called while holding write lock.
      */
     @Unique
     private void kneaf$cleanupCache() {
-        long now = System.currentTimeMillis();
-
-        if (now - kneaf$lastCleanupTime < 5000) {
-            return;
-        }
-        kneaf$lastCleanupTime = now;
-
-        int toRemove = MAX_CACHE_SIZE / 2;
-        var iterator = kneaf$biomeCache.keySet().iterator();
-        while (iterator.hasNext() && toRemove-- > 0) {
-            iterator.next();
-            iterator.remove();
-        }
+        // Simple clear for primitive map as we don't have iterator yet or complex
+        // eviction
+        // For now, clearing half is hard without iterator support in PrimitiveMaps
+        // public API
+        // So we just clear it all to be safe and simple.
+        // Or we improved PrimitiveMaps? We didn't add iterator.
+        // Clearing is safer than OOM.
+        kneaf$biomeCache.clear();
     }
 
     /**
@@ -150,7 +171,12 @@ public abstract class BiomeSourceMixin {
      */
     @Unique
     public void kneaf$clearCache() {
-        kneaf$biomeCache.clear();
+        long stamp = kneaf$lock.writeLock();
+        try {
+            kneaf$biomeCache.clear();
+        } finally {
+            kneaf$lock.unlockWrite(stamp);
+        }
     }
 
     /**

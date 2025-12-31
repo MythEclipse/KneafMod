@@ -60,7 +60,11 @@ public abstract class ChunkMapMixin {
 
     // Hot chunks that are frequently accessed - delay unloading
     @Unique
-    private final ConcurrentHashMap<Long, Long> kneaf$hotChunks = new ConcurrentHashMap<>();
+    private final com.kneaf.core.util.PrimitiveMaps.Long2LongOpenHashMap kneaf$hotChunks = new com.kneaf.core.util.PrimitiveMaps.Long2LongOpenHashMap(
+            256);
+
+    @Unique
+    private final java.util.concurrent.locks.StampedLock kneaf$cacheLock = new java.util.concurrent.locks.StampedLock();
 
     @Unique
     private static final int HOT_CHUNK_THRESHOLD = 50; // Access count to be considered "hot"
@@ -98,7 +102,12 @@ public abstract class ChunkMapMixin {
         // Clean up old hot chunk entries periodically
         long gameTime = level.getGameTime();
         if (gameTime % 1200 == 0) { // Every minute
-            kneaf$hotChunks.entrySet().removeIf(entry -> gameTime - entry.getValue() > HOT_CHUNK_GRACE_PERIOD);
+            long stamp = kneaf$cacheLock.writeLock();
+            try {
+                kneaf$hotChunks.removeIf((k, v) -> gameTime - v > HOT_CHUNK_GRACE_PERIOD);
+            } finally {
+                kneaf$cacheLock.unlockWrite(stamp);
+            }
         }
     }
 
@@ -183,11 +192,15 @@ public abstract class ChunkMapMixin {
             kneaf$chunksLoaded.incrementAndGet();
 
             // Track hot chunks
-            Long existingTime = kneaf$hotChunks.get(chunkPos);
-            if (existingTime != null) {
-                kneaf$chunksPrioritized.incrementAndGet();
+            long stamp = kneaf$cacheLock.writeLock();
+            try {
+                if (kneaf$hotChunks.containsKey(chunkPos)) {
+                    kneaf$chunksPrioritized.incrementAndGet();
+                }
+                kneaf$hotChunks.put(chunkPos, this.level.getGameTime());
+            } finally {
+                kneaf$cacheLock.unlockWrite(stamp);
             }
-            kneaf$hotChunks.put(chunkPos, this.level.getGameTime());
         }
     }
 
@@ -224,7 +237,12 @@ public abstract class ChunkMapMixin {
      */
     @Unique
     public boolean kneaf$isHotChunk(long chunkPos) {
-        return kneaf$hotChunks.containsKey(chunkPos);
+        long stamp = kneaf$cacheLock.readLock();
+        try {
+            return kneaf$hotChunks.containsKey(chunkPos);
+        } finally {
+            kneaf$cacheLock.unlockRead(stamp);
+        }
     }
 
     /**

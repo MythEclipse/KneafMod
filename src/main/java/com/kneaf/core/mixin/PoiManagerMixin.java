@@ -46,11 +46,16 @@ public abstract class PoiManagerMixin {
 
     // Cache for getInRange results - key is hash of search params
     @Unique
-    private final Map<Long, CachedPoiResult> kneaf$searchCache = new ConcurrentHashMap<>(256);
+    private final com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<com.kneaf.core.util.CachedPoiResult> kneaf$searchCache = new com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<>(
+            256);
 
     // Track sections that have been modified
     @Unique
-    private final Map<Long, Long> kneaf$sectionModTimes = new ConcurrentHashMap<>();
+    private final com.kneaf.core.util.PrimitiveMaps.Long2LongOpenHashMap kneaf$sectionModTimes = new com.kneaf.core.util.PrimitiveMaps.Long2LongOpenHashMap(
+            256);
+
+    @Unique
+    private final java.util.concurrent.locks.StampedLock kneaf$cacheLock = new java.util.concurrent.locks.StampedLock();
 
     // Statistics
     @Unique
@@ -92,8 +97,20 @@ public abstract class PoiManagerMixin {
         // Create cache key
         long cacheKey = kneaf$createCacheKey(pos, distance, typePredicate.hashCode(), occupancy.hashCode());
 
-        // Check cache
-        CachedPoiResult cached = kneaf$searchCache.get(cacheKey);
+        // Check cache with optimistic read
+        com.kneaf.core.util.CachedPoiResult cached = null;
+        long stamp = kneaf$cacheLock.tryOptimisticRead();
+        cached = kneaf$searchCache.get(cacheKey);
+
+        if (!kneaf$cacheLock.validate(stamp)) {
+            stamp = kneaf$cacheLock.readLock();
+            try {
+                cached = kneaf$searchCache.get(cacheKey);
+            } finally {
+                kneaf$cacheLock.unlockRead(stamp);
+            }
+        }
+
         if (cached != null && (kneaf$currentTick - cached.timestamp) < CACHE_TTL_TICKS) {
             // Cache hit - return cached result
             kneaf$cacheHits.incrementAndGet();
@@ -116,8 +133,14 @@ public abstract class PoiManagerMixin {
         long cacheKey = kneaf$createCacheKey(pos, distance, typePredicate.hashCode(), occupancy.hashCode());
 
         // Only cache if not too large
-        if (kneaf$searchCache.size() < MAX_CACHE_SIZE) {
-            kneaf$searchCache.put(cacheKey, new CachedPoiResult(cir.getReturnValue(), kneaf$currentTick));
+        long stamp = kneaf$cacheLock.writeLock();
+        try {
+            if (kneaf$searchCache.size() < MAX_CACHE_SIZE) {
+                kneaf$searchCache.put(cacheKey,
+                        new com.kneaf.core.util.CachedPoiResult(cir.getReturnValue(), kneaf$currentTick));
+            }
+        } finally {
+            kneaf$cacheLock.unlockWrite(stamp);
         }
 
         kneaf$logStats();
@@ -163,29 +186,24 @@ public abstract class PoiManagerMixin {
 
     @Unique
     private void kneaf$invalidateNearby(BlockPos pos) {
-        // Clear entries within range
-        int cleared = 0;
-        var iterator = kneaf$searchCache.entrySet().iterator();
-        while (iterator.hasNext() && cleared < 100) {
-            iterator.next();
-            iterator.remove();
-            cleared++;
+        // Clear cache on structural changes to be safe
+        long stamp = kneaf$cacheLock.writeLock();
+        try {
+            kneaf$searchCache.clear();
+        } finally {
+            kneaf$cacheLock.unlockWrite(stamp);
         }
     }
 
     @Unique
     private void kneaf$cleanupCache() {
-        // Remove expired entries
-        kneaf$searchCache.entrySet().removeIf(e -> (kneaf$currentTick - e.getValue().timestamp) > CACHE_TTL_TICKS);
-
-        // Limit size
-        if (kneaf$searchCache.size() > MAX_CACHE_SIZE) {
-            int toRemove = kneaf$searchCache.size() / 2;
-            var iter = kneaf$searchCache.entrySet().iterator();
-            while (iter.hasNext() && toRemove-- > 0) {
-                iter.next();
-                iter.remove();
-            }
+        long stamp = kneaf$cacheLock.writeLock();
+        try {
+            // Simple clear strategy for primitive map cleanup
+            // In a more complex implementation we would iterate and remove expired
+            kneaf$searchCache.clear();
+        } finally {
+            kneaf$cacheLock.unlockWrite(stamp);
         }
     }
 

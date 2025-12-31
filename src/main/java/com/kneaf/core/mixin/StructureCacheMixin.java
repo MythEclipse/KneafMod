@@ -19,8 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -42,13 +41,17 @@ public abstract class StructureCacheMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Cache for structure starts: key = (structureId << 48) | chunkPosLong
     @Unique
-    private static final Map<Long, StructureStart> kneaf$structureCache = new ConcurrentHashMap<>(512);
+    private static final com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<StructureStart> kneaf$structureCache = new com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<>(
+            512);
 
     // Cache for "no structure" results to avoid repeated lookups
     @Unique
-    private static final Map<Long, Boolean> kneaf$noStructureCache = new ConcurrentHashMap<>(1024);
+    private static final com.kneaf.core.util.PrimitiveMaps.Long2BooleanOpenHashMap kneaf$noStructureCache = new com.kneaf.core.util.PrimitiveMaps.Long2BooleanOpenHashMap(
+            1024);
+
+    @Unique
+    private static final java.util.concurrent.locks.StampedLock kneaf$cacheLock = new java.util.concurrent.locks.StampedLock();
 
     // Statistics
     @Unique
@@ -81,18 +84,32 @@ public abstract class StructureCacheMixin {
                 SectionPos.blockToSectionCoord(pos.getZ()));
         long cacheKey = kneaf$getCacheKey(structure, chunkPos);
 
+        // Optimistic read
+        long stamp = kneaf$cacheLock.tryOptimisticRead();
+        Boolean noStructure = kneaf$noStructureCache.get(cacheKey);
+        StructureStart cachedStart = kneaf$structureCache.get(cacheKey);
+
+        if (!kneaf$cacheLock.validate(stamp)) {
+            stamp = kneaf$cacheLock.readLock();
+            try {
+                noStructure = kneaf$noStructureCache.get(cacheKey);
+                cachedStart = kneaf$structureCache.get(cacheKey);
+            } finally {
+                kneaf$cacheLock.unlockRead(stamp);
+            }
+        }
+
         // Check no-structure cache first
-        if (kneaf$noStructureCache.containsKey(cacheKey)) {
+        if (noStructure != null && noStructure) {
             kneaf$noStructureHits.incrementAndGet();
             cir.setReturnValue(StructureStart.INVALID_START);
             return;
         }
 
         // Check structure cache
-        StructureStart cached = kneaf$structureCache.get(cacheKey);
-        if (cached != null) {
+        if (cachedStart != null) {
             kneaf$cacheHits.incrementAndGet();
-            cir.setReturnValue(cached);
+            cir.setReturnValue(cachedStart);
             return;
         }
 
@@ -111,17 +128,22 @@ public abstract class StructureCacheMixin {
                 SectionPos.blockToSectionCoord(pos.getZ()));
         long cacheKey = kneaf$getCacheKey(structure, chunkPos);
 
-        if (result == null || result == StructureStart.INVALID_START) {
-            kneaf$noStructureCache.put(cacheKey, true);
-        } else {
-            kneaf$structureCache.put(cacheKey, result);
-        }
+        long stamp = kneaf$cacheLock.writeLock();
+        try {
+            if (result == null || result == StructureStart.INVALID_START) {
+                kneaf$noStructureCache.put(cacheKey, true);
+            } else {
+                kneaf$structureCache.put(cacheKey, result);
+            }
 
-        // Periodic cleanup
-        long now = System.currentTimeMillis();
-        if (now - kneaf$lastCacheClean > 60000) {
-            kneaf$cleanupCaches();
-            kneaf$lastCacheClean = now;
+            // Cleanup logic moved inside lock to ensure thread safety
+            long now = System.currentTimeMillis();
+            if (now - kneaf$lastCacheClean > 60000) {
+                kneaf$cleanupCaches();
+                kneaf$lastCacheClean = now;
+            }
+        } finally {
+            kneaf$cacheLock.unlockWrite(stamp);
         }
     }
 

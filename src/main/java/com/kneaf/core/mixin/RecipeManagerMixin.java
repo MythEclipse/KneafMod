@@ -42,9 +42,13 @@ public abstract class RecipeManagerMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Cache for recipe lookups
+    // Cache for recipe lookups - usage StampedLock for best read performance
     @Unique
-    private final Map<Long, Optional<RecipeHolder<?>>> kneaf$recipeCache = new ConcurrentHashMap<>(512);
+    private final com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<Optional<RecipeHolder<?>>> kneaf$recipeCache = new com.kneaf.core.util.PrimitiveMaps.Long2ObjectOpenHashMap<>(
+            2048);
+
+    @Unique
+    private final java.util.concurrent.locks.StampedLock kneaf$cacheLock = new java.util.concurrent.locks.StampedLock();
 
     // Statistics
     @Unique
@@ -62,13 +66,20 @@ public abstract class RecipeManagerMixin {
     @Inject(method = "apply*", at = @At("HEAD"))
     private void kneaf$onRecipeReload(CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ RecipeManagerMixin applied - Recipe caching optimization active!");
+            kneaf$LOGGER.info("✅ RecipeManagerMixin applied - Primitive Map Recipe Cache active!");
             kneaf$loggedFirstApply = true;
         }
 
         // Clear cache on reload
-        int oldSize = kneaf$recipeCache.size();
-        kneaf$recipeCache.clear();
+        long stamp = kneaf$cacheLock.writeLock();
+        int oldSize = 0;
+        try {
+            oldSize = kneaf$recipeCache.size();
+            kneaf$recipeCache.clear();
+        } finally {
+            kneaf$cacheLock.unlockWrite(stamp);
+        }
+
         kneaf$cacheHits.set(0);
         kneaf$cacheMisses.set(0);
 
@@ -84,23 +95,27 @@ public abstract class RecipeManagerMixin {
     @Inject(method = "getRecipeFor(Lnet/minecraft/world/item/crafting/RecipeType;Lnet/minecraft/world/item/crafting/RecipeInput;Lnet/minecraft/world/level/Level;)Ljava/util/Optional;", at = @At("HEAD"), cancellable = true)
     private void kneaf$onGetRecipeFor(RecipeType<?> recipeType, RecipeInput input, Level level,
             CallbackInfoReturnable<Optional<RecipeHolder<?>>> cir) {
-        // Only cache crafting recipes for now as they are the most frequent and
-        // stateless
-        // Some recipe types might depend on more than just the input items (e.g. world
-        // time, position) regarding the Level
-        // But for standard crafting, input items are usually enough.
-        // To be safe, we compute a hash from the input and the recipe type.
 
         if (input == null)
             return;
 
-        // Simple hash combination: RecipeType hash + Input items hash
-        // Note: RecipeInput implementations must implement a good hashCode for this to
-        // be effective.
-        // Most vanilla inputs do (e.g. CraftingInput).
         long cacheKey = (long) recipeType.hashCode() ^ ((long) input.hashCode() << 32);
 
-        Optional<RecipeHolder<?>> cached = kneaf$recipeCache.get(cacheKey);
+        Optional<RecipeHolder<?>> cached = null;
+
+        // Optimistic read
+        long stamp = kneaf$cacheLock.tryOptimisticRead();
+        cached = kneaf$recipeCache.get(cacheKey);
+
+        if (!kneaf$cacheLock.validate(stamp)) {
+            // Fallback to read lock
+            stamp = kneaf$cacheLock.readLock();
+            try {
+                cached = kneaf$recipeCache.get(cacheKey);
+            } finally {
+                kneaf$cacheLock.unlockRead(stamp);
+            }
+        }
 
         if (cached != null) {
             kneaf$cacheHits.incrementAndGet();
@@ -108,11 +123,6 @@ public abstract class RecipeManagerMixin {
             kneaf$logStats();
         } else {
             kneaf$cacheMisses.incrementAndGet();
-            // We cannot easily capture the result of the vanilla method in the same HEAD
-            // injection
-            // without doing a double-invoke or using a different injection point.
-            // But doing a Tail injection allows us to capture the return value and cache
-            // it.
         }
     }
 
@@ -124,18 +134,20 @@ public abstract class RecipeManagerMixin {
 
         long cacheKey = (long) recipeType.hashCode() ^ ((long) input.hashCode() << 32);
 
-        // If it wasn't in cache (we can assume this because we check in HEAD), store
-        // it.
-        // To avoid race conditions where we overwrite a parallel put, computeIfAbsent
-        // is theoretically better,
-        // but here we just want to put the result.
-        // We accept the slight race of multiple threads computing the same recipe once.
-
-        // Only cache if we haven't exceeded size limit (simple protection)
-        if (kneaf$recipeCache.size() < 5000) {
-            kneaf$recipeCache.put(cacheKey, cir.getReturnValue());
-        } else if (kneaf$recipeCache.size() == 5000) {
-            kneaf$cleanupCache();
+        // Store result
+        long stamp = kneaf$cacheLock.writeLock();
+        try {
+            // Limit size to prevent unbounded growth
+            if (kneaf$recipeCache.size() < 5000) {
+                kneaf$recipeCache.put(cacheKey, cir.getReturnValue());
+            } else if (kneaf$recipeCache.size() >= 5000 && (kneaf$recipeCache.size() % 100 == 0)) {
+                // Simple loose check to clear occasionally if full
+                if (kneaf$recipeCache.size() > 6000) {
+                    kneaf$recipeCache.clear();
+                }
+            }
+        } finally {
+            kneaf$cacheLock.unlockWrite(stamp);
         }
     }
 

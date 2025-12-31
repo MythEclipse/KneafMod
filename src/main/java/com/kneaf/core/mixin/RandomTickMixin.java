@@ -39,9 +39,13 @@ public abstract class RandomTickMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Cache of empty chunks
+    // Cache of empty chunks - Key: ChunkPos long, Value: GameTime last checked
     @Unique
-    private static final Map<Long, Long> kneaf$emptyChunkCache = new ConcurrentHashMap<>(256);
+    private static final com.kneaf.core.util.PrimitiveMaps.Long2LongOpenHashMap kneaf$emptyChunkCache = new com.kneaf.core.util.PrimitiveMaps.Long2LongOpenHashMap(
+            256);
+
+    @Unique
+    private static final java.util.concurrent.locks.StampedLock kneaf$cacheLock = new java.util.concurrent.locks.StampedLock();
 
     // Statistics
     @Unique
@@ -86,8 +90,20 @@ public abstract class RandomTickMixin {
         long gameTime = self.getGameTime();
 
         // REAL SKIP: Check empty chunk cache and skip tick entirely
-        Long cachedTime = kneaf$emptyChunkCache.get(chunkPos);
-        if (cachedTime != null && gameTime - cachedTime < EMPTY_CHUNK_CACHE_DURATION) {
+        long cachedTime = -1L;
+        long stamp = kneaf$cacheLock.tryOptimisticRead();
+        cachedTime = kneaf$emptyChunkCache.get(chunkPos);
+
+        if (!kneaf$cacheLock.validate(stamp)) {
+            stamp = kneaf$cacheLock.readLock();
+            try {
+                cachedTime = kneaf$emptyChunkCache.get(chunkPos);
+            } finally {
+                kneaf$cacheLock.unlockRead(stamp);
+            }
+        }
+
+        if (cachedTime != -1L && gameTime - cachedTime < EMPTY_CHUNK_CACHE_DURATION) {
             kneaf$chunksSkipped.incrementAndGet();
             ci.cancel(); // ACTUALLY skip the tick!
             return;
@@ -114,8 +130,13 @@ public abstract class RandomTickMixin {
 
     @Unique
     private static void kneaf$cleanupCache(long currentTime) {
-        if (kneaf$emptyChunkCache.size() > 1000) {
-            kneaf$emptyChunkCache.clear();
+        long stamp = kneaf$cacheLock.writeLock();
+        try {
+            if (kneaf$emptyChunkCache.size() > 1000) {
+                kneaf$emptyChunkCache.clear();
+            }
+        } finally {
+            kneaf$cacheLock.unlockWrite(stamp);
         }
     }
 

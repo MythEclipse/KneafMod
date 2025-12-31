@@ -35,43 +35,56 @@ public abstract class BlockStateCacheMixin {
     @Unique
     private static boolean kneaf$loggedFirstApply = false;
 
-    // Cache for isAir check - very frequently called
     @Unique
-    private static final ConcurrentHashMap<BlockState, Boolean> kneaf$isAirCache = new ConcurrentHashMap<>(1024);
+    private static final ThreadLocal<StateCache> kneaf$threadCache = ThreadLocal.withInitial(StateCache::new);
 
-    // Cache for isSolid check
     @Unique
-    private static final ConcurrentHashMap<BlockState, Boolean> kneaf$isSolidCache = new ConcurrentHashMap<>(1024);
+    private static class StateCache {
+        // Use parallel arrays for value and presence
+        public boolean[] isAirValues = new boolean[4096];
+        public boolean[] isAirPresent = new boolean[4096];
 
-    // Cache for hasBlockEntity check
-    @Unique
-    private static final ConcurrentHashMap<BlockState, Boolean> kneaf$hasBlockEntityCache = new ConcurrentHashMap<>(
-            512);
+        public void ensureCapacity(int id) {
+            if (id >= isAirValues.length) {
+                int newSize = Math.max(id + 1024, isAirValues.length * 2);
+                isAirValues = java.util.Arrays.copyOf(isAirValues, newSize);
+                isAirPresent = java.util.Arrays.copyOf(isAirPresent, newSize);
+            }
+        }
 
-    // Track cache effectiveness
+        public void clear() {
+            java.util.Arrays.fill(isAirPresent, false);
+        }
+    }
+
+    // Track cache effectiveness (loose stats for performance)
     @Unique
-    private static long kneaf$cacheHits = 0;
+    private static final java.util.concurrent.atomic.AtomicLong kneaf$cacheHits = new java.util.concurrent.atomic.AtomicLong(
+            0);
     @Unique
-    private static long kneaf$cacheMisses = 0;
+    private static final java.util.concurrent.atomic.AtomicLong kneaf$cacheMisses = new java.util.concurrent.atomic.AtomicLong(
+            0);
 
     /**
      * Cache isAir results - called millions of times per tick
+     * Optimization: ThreadLocal Direct Array Indexing (O(1))
      */
     @Inject(method = "isAir", at = @At("HEAD"), cancellable = true)
     private void kneaf$onIsAir(CallbackInfoReturnable<Boolean> cir) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ BlockStateCacheMixin applied - aggressive state caching active!");
+            kneaf$LOGGER.info("✅ BlockStateCacheMixin applied - ThreadLocal Array Cache active!");
             kneaf$loggedFirstApply = true;
         }
 
         BlockState self = (BlockState) (Object) this;
-        Boolean cached = kneaf$isAirCache.get(self);
+        int id = net.minecraft.world.level.block.Block.getId(self);
 
-        if (cached != null) {
-            kneaf$cacheHits++;
-            cir.setReturnValue(cached);
+        StateCache cache = kneaf$threadCache.get();
+        if (id < cache.isAirPresent.length && cache.isAirPresent[id]) {
+            kneaf$cacheHits.incrementAndGet();
+            cir.setReturnValue(cache.isAirValues[id]);
         } else {
-            kneaf$cacheMisses++;
+            kneaf$cacheMisses.incrementAndGet();
         }
     }
 
@@ -80,21 +93,29 @@ public abstract class BlockStateCacheMixin {
      */
     @Inject(method = "isAir", at = @At("RETURN"))
     private void kneaf$afterIsAir(CallbackInfoReturnable<Boolean> cir) {
-        if (kneaf$isAirCache.size() < 4096) {
-            BlockState self = (BlockState) (Object) this;
-            kneaf$isAirCache.putIfAbsent(self, cir.getReturnValue());
-        }
+        BlockState self = (BlockState) (Object) this;
+        int id = net.minecraft.world.level.block.Block.getId(self);
+        boolean result = cir.getReturnValue();
+
+        StateCache cache = kneaf$threadCache.get();
+        cache.ensureCapacity(id);
+
+        cache.isAirValues[id] = result;
+        cache.isAirPresent[id] = true;
     }
 
     /**
      * Clear caches periodically to prevent memory issues
+     * Note: This only clears the current thread's cache, which is imperfect but
+     * acceptable.
+     * For true cleanup we rely on ThreadLocal weakness or explicit management,
+     * but strictly clearing the heavy array is good enough.
      */
     @Unique
     private static void kneaf$clearCaches() {
-        kneaf$isAirCache.clear();
-        kneaf$isSolidCache.clear();
-        kneaf$hasBlockEntityCache.clear();
-        kneaf$LOGGER.info("BlockState caches cleared");
+        // Can't easily clear all threads' caches without a registry of them.
+        // But we can clear the current thread's cache if this is called on main thread.
+        kneaf$threadCache.get().clear();
     }
 
     /**
@@ -102,9 +123,11 @@ public abstract class BlockStateCacheMixin {
      */
     @Unique
     private static String kneaf$getStats() {
-        long total = kneaf$cacheHits + kneaf$cacheMisses;
-        double hitRate = total > 0 ? (double) kneaf$cacheHits / total * 100 : 0;
-        return String.format("BlockStateCache: %d hits, %d misses (%.1f%% hit rate), %d cached states",
-                kneaf$cacheHits, kneaf$cacheMisses, hitRate, kneaf$isAirCache.size());
+        long hits = kneaf$cacheHits.get();
+        long misses = kneaf$cacheMisses.get();
+        long total = hits + misses;
+        double hitRate = total > 0 ? (double) hits / total * 100 : 0;
+        return String.format("BlockStateCache: %d hits, %d misses (%.1f%% hit rate)",
+                hits, misses, hitRate);
     }
 }

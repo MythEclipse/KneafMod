@@ -21,7 +21,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -50,7 +49,12 @@ public abstract class CompoundTagMixin {
 
     // String key interning cache
     @Unique
-    private static final Map<String, String> kneaf$internedKeys = new ConcurrentHashMap<>(256);
+    private static final com.kneaf.core.util.PrimitiveMaps.Object2ObjectOpenHashMap<String, String> kneaf$internedKeys = new com.kneaf.core.util.PrimitiveMaps.Object2ObjectOpenHashMap<>(
+            256);
+
+    // Lock for thread safety
+    @Unique
+    private static final java.util.concurrent.locks.StampedLock kneaf$lock = new java.util.concurrent.locks.StampedLock();
 
     // Common tag key patterns
     @Unique
@@ -132,11 +136,35 @@ public abstract class CompoundTagMixin {
         if (key == null)
             return;
 
-        if (!kneaf$internedKeys.containsKey(key) && kneaf$internedKeys.size() < MAX_INTERNED_KEYS) {
-            // Use String.intern() for JVM-level deduplication
-            String interned = key.intern();
-            kneaf$internedKeys.put(key, interned);
-            kneaf$keysInterned.incrementAndGet();
+        // Optimistic read
+        long stamp = kneaf$lock.tryOptimisticRead();
+        boolean contains = kneaf$internedKeys.containsKey(key);
+        int size = kneaf$internedKeys.size();
+
+        if (!kneaf$lock.validate(stamp)) {
+            stamp = kneaf$lock.readLock();
+            try {
+                contains = kneaf$internedKeys.containsKey(key);
+                size = kneaf$internedKeys.size();
+            } finally {
+                kneaf$lock.unlockRead(stamp);
+            }
+        }
+
+        if (!contains && size < MAX_INTERNED_KEYS) {
+            // Write intention
+            stamp = kneaf$lock.writeLock();
+            try {
+                // Double check
+                if (!kneaf$internedKeys.containsKey(key) && kneaf$internedKeys.size() < MAX_INTERNED_KEYS) {
+                    // Use String.intern() for JVM-level deduplication
+                    String interned = key.intern();
+                    kneaf$internedKeys.put(key, interned);
+                    kneaf$keysInterned.incrementAndGet();
+                }
+            } finally {
+                kneaf$lock.unlockWrite(stamp);
+            }
         }
     }
 
@@ -147,7 +175,20 @@ public abstract class CompoundTagMixin {
     private static String kneaf$getInternedKey(String key) {
         if (key == null)
             return null;
-        return kneaf$internedKeys.getOrDefault(key, key);
+
+        long stamp = kneaf$lock.tryOptimisticRead();
+        String val = kneaf$internedKeys.get(key);
+
+        if (!kneaf$lock.validate(stamp)) {
+            stamp = kneaf$lock.readLock();
+            try {
+                val = kneaf$internedKeys.get(key);
+            } finally {
+                kneaf$lock.unlockRead(stamp);
+            }
+        }
+
+        return val != null ? val : key;
     }
 
     /**
@@ -187,6 +228,9 @@ public abstract class CompoundTagMixin {
      */
     @Unique
     private static String kneaf$getStatistics() {
+        // Size read needs lock or safe check? primitive maps size() is simple read,
+        // benign data race usually
+        // But for strictness let's assume it's fine for stats
         return String.format("NBTStats{tags=%d, accesses=%d, interned=%d}",
                 kneaf$tagsCreated.get(), kneaf$tagAccesses.get(), kneaf$internedKeys.size());
     }
@@ -196,6 +240,11 @@ public abstract class CompoundTagMixin {
      */
     @Unique
     private static void kneaf$clearInternedKeys() {
-        kneaf$internedKeys.clear();
+        long stamp = kneaf$lock.writeLock();
+        try {
+            kneaf$internedKeys.clear();
+        } finally {
+            kneaf$lock.unlockWrite(stamp);
+        }
     }
 }

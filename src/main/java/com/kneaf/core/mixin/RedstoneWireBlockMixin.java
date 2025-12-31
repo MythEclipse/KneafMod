@@ -44,7 +44,11 @@ public abstract class RedstoneWireBlockMixin {
     private static boolean kneaf$loggedFirstApply = false;
 
     @Unique
-    private static final Map<BlockPos, Integer> kneaf$updateCounts = new ConcurrentHashMap<>();
+    private static final com.kneaf.core.util.PrimitiveMaps.Long2IntOpenHashMap kneaf$updateCounts = new com.kneaf.core.util.PrimitiveMaps.Long2IntOpenHashMap(
+            1024);
+
+    @Unique
+    private static final java.util.concurrent.locks.StampedLock kneaf$countLock = new java.util.concurrent.locks.StampedLock();
 
     @Unique
     private static long kneaf$lastCleanTick = 0;
@@ -53,7 +57,8 @@ public abstract class RedstoneWireBlockMixin {
     private static final RedstoneGraph kneaf$graph = new RedstoneGraph();
 
     @Unique
-    private static final ThreadLocal<Set<BlockPos>> kneaf$pendingUpdates = ThreadLocal.withInitial(HashSet::new);
+    private static final ThreadLocal<com.kneaf.core.util.PrimitiveMaps.LongOpenHashSet> kneaf$pendingUpdates = ThreadLocal
+            .withInitial(() -> new com.kneaf.core.util.PrimitiveMaps.LongOpenHashSet(64));
 
     @Unique
     private static final ThreadLocal<Boolean> kneaf$isProcessingBatch = ThreadLocal.withInitial(() -> false);
@@ -68,13 +73,23 @@ public abstract class RedstoneWireBlockMixin {
 
         // Anti-Lag Machine Logic
         long gameTime = level.getGameTime();
-        if (gameTime - kneaf$lastCleanTick > 200) { // Every 10 seconds
-            kneaf$updateCounts.clear();
-            kneaf$lastCleanTick = gameTime;
-        }
+        long stamp = kneaf$countLock.writeLock();
+        int count;
+        try {
+            if (gameTime - kneaf$lastCleanTick > 200) { // Every 10 seconds
+                kneaf$updateCounts.clear();
+                kneaf$lastCleanTick = gameTime;
+            }
 
-        int count = kneaf$updateCounts.getOrDefault(pos, 0) + 1;
-        kneaf$updateCounts.put(pos, count);
+            long posKey = pos.asLong();
+            count = kneaf$updateCounts.get(posKey);
+            if (count == -1)
+                count = 0;
+            count++;
+            kneaf$updateCounts.put(posKey, count);
+        } finally {
+            kneaf$countLock.unlockWrite(stamp);
+        }
 
         if (count > 100) {
             ci.cancel(); // Skip update for lag machines
@@ -93,7 +108,7 @@ public abstract class RedstoneWireBlockMixin {
 
         // If we're already processing a batch, just add to pending
         if (kneaf$isProcessingBatch.get()) {
-            kneaf$pendingUpdates.get().add(pos);
+            kneaf$pendingUpdates.get().add(pos.asLong());
             ci.cancel();
             return;
         }
@@ -101,7 +116,7 @@ public abstract class RedstoneWireBlockMixin {
         // Start batch processing
         kneaf$isProcessingBatch.set(true);
         kneaf$pendingUpdates.get().clear();
-        kneaf$pendingUpdates.get().add(pos);
+        kneaf$pendingUpdates.get().add(pos.asLong());
 
         try {
             // Lazy build: Only add if not present

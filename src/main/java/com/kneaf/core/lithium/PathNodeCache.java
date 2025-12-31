@@ -26,13 +26,16 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class PathNodeCache {
 
-    // PathType cache for individual block states - Thread Safe
-    private static final Map<BlockState, PathType> BLOCK_PATH_TYPE_CACHE = new java.util.concurrent.ConcurrentHashMap<>(
+    // PathType cache - using Block ID (int) instead of BlockState object keys
+    private static final com.kneaf.core.util.PrimitiveMaps.Int2ObjectOpenHashMap<PathType> BLOCK_PATH_TYPE_CACHE = new com.kneaf.core.util.PrimitiveMaps.Int2ObjectOpenHashMap<>(
             4096);
 
-    // Cache for "is this block type always open/walkable"
-    private static final Map<BlockState, Boolean> ALWAYS_PASSABLE_CACHE = new java.util.concurrent.ConcurrentHashMap<>(
+    // Passable cache - using Block ID (int)
+    private static final com.kneaf.core.util.PrimitiveMaps.Int2BooleanOpenHashMap ALWAYS_PASSABLE_CACHE = new com.kneaf.core.util.PrimitiveMaps.Int2BooleanOpenHashMap(
             1024);
+
+    // Lock for thread safety (PrimitiveMaps are not thread safe)
+    private static final java.util.concurrent.locks.StampedLock cacheLock = new java.util.concurrent.locks.StampedLock();
 
     // Statistics
     private static final AtomicLong cacheHits = new AtomicLong(0);
@@ -47,7 +50,21 @@ public class PathNodeCache {
      */
     @Nullable
     public static PathType getPathType(BlockState state) {
-        PathType cached = BLOCK_PATH_TYPE_CACHE.get(state);
+        int id = net.minecraft.world.level.block.Block.getId(state);
+
+        // Optimistic read
+        long stamp = cacheLock.tryOptimisticRead();
+        PathType cached = BLOCK_PATH_TYPE_CACHE.get(id);
+
+        if (!cacheLock.validate(stamp)) {
+            stamp = cacheLock.readLock();
+            try {
+                cached = BLOCK_PATH_TYPE_CACHE.get(id);
+            } finally {
+                cacheLock.unlockRead(stamp);
+            }
+        }
+
         if (cached != null) {
             cacheHits.incrementAndGet();
             return cached;
@@ -60,8 +77,14 @@ public class PathNodeCache {
      * Cache a PathType for a BlockState.
      */
     public static void cachePathType(BlockState state, PathType type) {
-        if (BLOCK_PATH_TYPE_CACHE.size() < MAX_CACHE_SIZE) {
-            BLOCK_PATH_TYPE_CACHE.put(state, type);
+        long stamp = cacheLock.writeLock();
+        try {
+            if (BLOCK_PATH_TYPE_CACHE.size() < MAX_CACHE_SIZE) {
+                int id = net.minecraft.world.level.block.Block.getId(state);
+                BLOCK_PATH_TYPE_CACHE.put(id, type);
+            }
+        } finally {
+            cacheLock.unlockWrite(stamp);
         }
     }
 
@@ -75,7 +98,22 @@ public class PathNodeCache {
             return true;
         }
 
-        Boolean cached = ALWAYS_PASSABLE_CACHE.get(state);
+        int id = net.minecraft.world.level.block.Block.getId(state);
+        Boolean cached = null;
+
+        // Optimistic read
+        long stamp = cacheLock.tryOptimisticRead();
+        cached = ALWAYS_PASSABLE_CACHE.get(id);
+
+        if (!cacheLock.validate(stamp)) {
+            stamp = cacheLock.readLock();
+            try {
+                cached = ALWAYS_PASSABLE_CACHE.get(id);
+            } finally {
+                cacheLock.unlockRead(stamp);
+            }
+        }
+
         if (cached != null) {
             return cached;
         }
@@ -87,8 +125,14 @@ public class PathNodeCache {
      * Mark a block state as always passable (for future checks).
      */
     public static void markAsPassable(BlockState state, boolean passable) {
-        if (ALWAYS_PASSABLE_CACHE.size() < 2048) {
-            ALWAYS_PASSABLE_CACHE.put(state, passable);
+        long stamp = cacheLock.writeLock();
+        try {
+            if (ALWAYS_PASSABLE_CACHE.size() < 2048) {
+                int id = net.minecraft.world.level.block.Block.getId(state);
+                ALWAYS_PASSABLE_CACHE.put(id, passable);
+            }
+        } finally {
+            cacheLock.unlockWrite(stamp);
         }
     }
 
@@ -206,8 +250,13 @@ public class PathNodeCache {
      * Clear all caches. Call on world unload.
      */
     public static void clearCaches() {
-        BLOCK_PATH_TYPE_CACHE.clear();
-        ALWAYS_PASSABLE_CACHE.clear();
+        long stamp = cacheLock.writeLock();
+        try {
+            BLOCK_PATH_TYPE_CACHE.clear();
+            ALWAYS_PASSABLE_CACHE.clear();
+        } finally {
+            cacheLock.unlockWrite(stamp);
+        }
     }
 
     /**

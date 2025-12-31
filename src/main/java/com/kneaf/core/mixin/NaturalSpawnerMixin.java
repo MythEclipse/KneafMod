@@ -46,7 +46,11 @@ public abstract class NaturalSpawnerMixin {
     // Cache for isValidSpawn results - cleared each tick
     // Key: position hash, Value: result
     @Unique
-    private static final Map<Long, Boolean> kneaf$validSpawnCache = new ConcurrentHashMap<>(512);
+    private static final com.kneaf.core.util.PrimitiveMaps.Long2BooleanOpenHashMap kneaf$validSpawnCache = 
+        new com.kneaf.core.util.PrimitiveMaps.Long2BooleanOpenHashMap(1024);
+    
+    @Unique
+    private static final java.util.concurrent.locks.StampedLock kneaf$cacheLock = new java.util.concurrent.locks.StampedLock();
 
     // Statistics
     @Unique
@@ -73,7 +77,7 @@ public abstract class NaturalSpawnerMixin {
             boolean spawnEnemies, boolean spawnMapData, CallbackInfo ci) {
 
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ NaturalSpawnerMixin applied - Spawn position caching active!");
+            kneaf$LOGGER.info("✅ NaturalSpawnerMixin applied - Primitive Map Spawn Cache active!");
             kneaf$loggedFirstApply = true;
         }
 
@@ -82,7 +86,12 @@ public abstract class NaturalSpawnerMixin {
         // Clean cache every 20 ticks
         long gameTick = level.getGameTime();
         if (gameTick - kneaf$lastCleanTick > 20) {
-            kneaf$validSpawnCache.clear();
+            long stamp = kneaf$cacheLock.writeLock();
+            try {
+                kneaf$validSpawnCache.clear();
+            } finally {
+                kneaf$cacheLock.unlockWrite(stamp);
+            }
             kneaf$lastCleanTick = gameTick;
         }
 
@@ -101,8 +110,20 @@ public abstract class NaturalSpawnerMixin {
         // Create cache key from position and entity type
         long key = pos.asLong() ^ ((long) type.hashCode() << 32);
 
-        // Check cache first
-        Boolean cached = kneaf$validSpawnCache.get(key);
+        Boolean cached = null;
+        
+        long stamp = kneaf$cacheLock.tryOptimisticRead();
+        cached = kneaf$validSpawnCache.get(key);
+        
+        if (!kneaf$cacheLock.validate(stamp)) {
+            stamp = kneaf$cacheLock.readLock();
+            try {
+                cached = kneaf$validSpawnCache.get(key);
+            } finally {
+                kneaf$cacheLock.unlockRead(stamp);
+            }
+        }
+
         if (cached != null) {
             kneaf$cacheHits.incrementAndGet();
             return cached;
@@ -112,7 +133,13 @@ public abstract class NaturalSpawnerMixin {
         kneaf$cacheMisses.incrementAndGet();
         @SuppressWarnings("null") // level is non-null at runtime from mixin context
         boolean result = state.isValidSpawn(level, pos, type);
-        kneaf$validSpawnCache.put(key, result);
+        
+        stamp = kneaf$cacheLock.writeLock();
+        try {
+            kneaf$validSpawnCache.put(key, result);
+        } finally {
+            kneaf$cacheLock.unlockWrite(stamp);
+        }
 
         return result;
     }

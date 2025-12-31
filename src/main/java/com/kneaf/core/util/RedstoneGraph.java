@@ -13,7 +13,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.StampedLock;
 
 /**
  * RedstoneGraph - Topological sorting for redstone wire updates.
@@ -33,27 +34,29 @@ public class RedstoneGraph {
     private static final Logger LOGGER = LoggerFactory.getLogger("KneafMod/RedstoneGraph");
 
     // Graph structure
-    private final Map<BlockPos, Node> nodes = new ConcurrentHashMap<>();
-    private final Map<BlockPos, Integer> powerCache = new ConcurrentHashMap<>();
+    private final PrimitiveMaps.Long2ObjectOpenHashMap<Node> nodes = new PrimitiveMaps.Long2ObjectOpenHashMap<>(1024);
+    private final PrimitiveMaps.Long2IntOpenHashMap powerCache = new PrimitiveMaps.Long2IntOpenHashMap(1024);
+    private final StampedLock lock = new StampedLock();
 
     // Statistics
-    private long graphBuilds = 0;
-    private long topologicalSorts = 0;
-    private long cacheHits = 0;
-    private long cacheMisses = 0;
+    private final AtomicLong graphBuilds = new AtomicLong(0);
+    private final AtomicLong topologicalSorts = new AtomicLong(0);
+    private final AtomicLong cacheHits = new AtomicLong(0);
+    private final AtomicLong cacheMisses = new AtomicLong(0);
 
     /**
      * Node in the redstone dependency graph.
      */
     private static class Node {
-        final Set<BlockPos> dependencies = new HashSet<>(); // Nodes this depends on
-
-        final Set<BlockPos> dependents = new HashSet<>(); // Nodes that depend on this
+        final PrimitiveMaps.LongOpenHashSet dependencies = new PrimitiveMaps.LongOpenHashSet(8); // Nodes this depends
+                                                                                                 // on
+        final PrimitiveMaps.LongOpenHashSet dependents = new PrimitiveMaps.LongOpenHashSet(8); // Nodes that depend on
+                                                                                               // this
         int inDegree = 0;
         int cachedPower = -1;
         boolean dirty = true;
 
-        Node(BlockPos pos) {
+        Node() {
         }
     }
 
@@ -61,7 +64,18 @@ public class RedstoneGraph {
      * Check if a node exists in the graph.
      */
     public boolean hasNode(BlockPos pos) {
-        return nodes.containsKey(pos);
+        long key = pos.asLong();
+        long stamp = lock.tryOptimisticRead();
+        boolean contains = nodes.containsKey(key);
+        if (!lock.validate(stamp)) {
+            stamp = lock.readLock();
+            try {
+                contains = nodes.containsKey(key);
+            } finally {
+                lock.unlockRead(stamp);
+            }
+        }
+        return contains;
     }
 
     /**
@@ -69,69 +83,101 @@ public class RedstoneGraph {
      */
     @SuppressWarnings("null")
     public void addWire(Level level, BlockPos pos) {
-        Node node = nodes.computeIfAbsent(pos, Node::new);
-        node.dirty = true;
+        long posKey = pos.asLong();
+        long stamp = lock.writeLock();
+        try {
+            if (nodes.containsKey(posKey))
+                return;
 
-        // Find all wires this one depends on (inputs)
-        for (Direction dir : Direction.values()) {
-            @SuppressWarnings("null")
-            BlockPos neighbor = pos.relative(dir);
-            BlockState neighborState = level.getBlockState(neighbor);
+            Node node = new Node();
+            nodes.put(posKey, node);
+            node.dirty = true;
 
-            if (neighborState.getBlock() instanceof RedStoneWireBlock) {
-                Node neighborNode = nodes.computeIfAbsent(neighbor, Node::new);
+            // Find all wires this one depends on (inputs)
+            for (Direction dir : Direction.values()) {
+                BlockPos neighbor = pos.relative(dir);
+                BlockState neighborState = level.getBlockState(neighbor);
 
-                // Add dependency: this node depends on neighbor
-                if (node.dependencies.add(neighbor)) {
-                    neighborNode.dependents.add(pos);
-                    node.inDegree++;
+                if (neighborState.getBlock() instanceof RedStoneWireBlock) {
+                    long neighborKey = neighbor.asLong();
+                    Node neighborNode = nodes.get(neighborKey);
+                    if (neighborNode == null) {
+                        neighborNode = new Node();
+                        nodes.put(neighborKey, neighborNode);
+                    }
+
+                    // Add dependency: this node depends on neighbor
+                    if (node.dependencies.add(neighborKey)) {
+                        neighborNode.dependents.add(posKey);
+                        node.inDegree++;
+                    }
                 }
             }
+            graphBuilds.incrementAndGet();
+        } finally {
+            lock.unlockWrite(stamp);
         }
-
-        graphBuilds++;
     }
 
     /**
      * Remove a wire from the graph.
      */
     public void removeWire(BlockPos pos) {
-        Node node = nodes.remove(pos);
-        if (node != null) {
-            // Remove from all dependents
-            for (BlockPos dep : node.dependencies) {
-                Node depNode = nodes.get(dep);
-                if (depNode != null) {
-                    depNode.dependents.remove(pos);
-                }
-            }
+        long posKey = pos.asLong();
+        long stamp = lock.writeLock();
+        try {
+            Node node = nodes.get(posKey);
+            nodes.remove(posKey); // Long2ObjectMap remove(key)
 
-            // Remove from all dependencies
-            for (BlockPos dependent : node.dependents) {
-                Node dependentNode = nodes.get(dependent);
-                if (dependentNode != null) {
-                    dependentNode.dependencies.remove(pos);
-                    dependentNode.inDegree--;
-                }
+            if (node != null) {
+                // Remove from all dependents
+                node.dependencies.forEach(depKey -> {
+                    Node depNode = nodes.get(depKey);
+                    if (depNode != null) {
+                        depNode.dependents.remove(posKey); // LongOpenHashSet remove(key)
+                    }
+                });
+
+                // Remove from all dependencies
+                node.dependents.forEach(dependentKey -> {
+                    Node dependentNode = nodes.get(dependentKey);
+                    if (dependentNode != null) {
+                        dependentNode.dependencies.remove(posKey);
+                        dependentNode.inDegree--;
+                    }
+                });
             }
+            powerCache.remove(posKey);
+        } finally {
+            lock.unlockWrite(stamp);
         }
-        powerCache.remove(pos);
     }
 
     /**
      * Mark a wire as dirty (needs recalculation).
      */
     public void markDirty(BlockPos pos) {
-        Node node = nodes.get(pos);
-        if (node != null) {
-            node.dirty = true;
-            // Propagate dirty flag to dependents
-            for (BlockPos dependent : node.dependents) {
-                Node dependentNode = nodes.get(dependent);
-                if (dependentNode != null) {
-                    dependentNode.dirty = true;
-                }
+        long posKey = pos.asLong();
+        long stamp = lock.writeLock();
+        try {
+            Node node = nodes.get(posKey);
+            if (node != null) {
+                markDirtyRecursive(node);
             }
+        } finally {
+            lock.unlockWrite(stamp);
+        }
+    }
+
+    private void markDirtyRecursive(Node node) {
+        if (!node.dirty) {
+            node.dirty = true;
+            node.dependents.forEach(dependentKey -> {
+                Node dependentNode = nodes.get(dependentKey);
+                if (dependentNode != null) {
+                    markDirtyRecursive(dependentNode);
+                }
+            });
         }
     }
 
@@ -140,12 +186,23 @@ public class RedstoneGraph {
      * Returns -1 if not cached or dirty.
      */
     public int getCachedPower(BlockPos pos) {
-        Node node = nodes.get(pos);
+        long posKey = pos.asLong();
+        long stamp = lock.tryOptimisticRead();
+        Node node = nodes.get(posKey);
+        if (!lock.validate(stamp)) {
+            stamp = lock.readLock();
+            try {
+                node = nodes.get(posKey);
+            } finally {
+                lock.unlockRead(stamp);
+            }
+        }
+
         if (node != null && !node.dirty && node.cachedPower >= 0) {
-            cacheHits++;
+            cacheHits.incrementAndGet();
             return node.cachedPower;
         }
-        cacheMisses++;
+        cacheMisses.incrementAndGet();
         return -1;
     }
 
@@ -153,19 +210,28 @@ public class RedstoneGraph {
      * Update cached power level for a wire.
      */
     public void updatePower(BlockPos pos, int power) {
-        Node node = nodes.get(pos);
-        if (node != null) {
-            // Only mark dirty if power actually changed
-            if (node.cachedPower != power) {
-                node.cachedPower = power;
-                node.dirty = false;
-                powerCache.put(pos, power);
+        long posKey = pos.asLong();
+        long stamp = lock.writeLock();
+        try {
+            Node node = nodes.get(posKey);
+            if (node != null) {
+                // Only mark dirty if power actually changed
+                if (node.cachedPower != power) {
+                    node.cachedPower = power;
+                    node.dirty = false;
+                    powerCache.put(posKey, power);
 
-                // Mark dependents as dirty
-                for (BlockPos dependent : node.dependents) {
-                    markDirty(dependent);
+                    // Mark dependents as dirty
+                    node.dependents.forEach(dependentKey -> {
+                        Node dependentNode = nodes.get(dependentKey);
+                        if (dependentNode != null) {
+                            markDirtyRecursive(dependentNode);
+                        }
+                    });
                 }
             }
+        } finally {
+            lock.unlockWrite(stamp);
         }
     }
 
@@ -175,78 +241,107 @@ public class RedstoneGraph {
      * 
      * @return List of positions in topological order, or null if cycle detected
      */
-    public List<BlockPos> getUpdateOrder(Set<BlockPos> affectedWires) {
-        if (affectedWires.isEmpty()) {
+    public List<BlockPos> getUpdateOrder(PrimitiveMaps.LongOpenHashSet affectedWires) {
+        if (affectedWires.size() == 0) {
             return Collections.emptyList();
         }
 
-        topologicalSorts++;
+        topologicalSorts.incrementAndGet();
+        long stamp = lock.readLock();
+        try {
+            // Step 1: Calc local In-Degrees
+            PrimitiveMaps.Long2IntOpenHashMap localInDegrees = new PrimitiveMaps.Long2IntOpenHashMap(
+                    affectedWires.size());
+            // Using ArrayDeque for queue (autoboxing Long is acceptable here)
+            Queue<Long> localQueue = new ArrayDeque<>(affectedWires.size());
 
-        // Create working copy of in-degrees
-        Map<BlockPos, Integer> inDegrees = new HashMap<>();
-        for (BlockPos pos : affectedWires) {
-            Node node = nodes.get(pos);
-            if (node != null) {
-                inDegrees.put(pos, node.inDegree);
-            }
-        }
-
-        // Queue for nodes with no dependencies
-        Queue<BlockPos> queue = new ArrayDeque<>();
-        for (BlockPos pos : affectedWires) {
-            if (inDegrees.getOrDefault(pos, 0) == 0) {
-                queue.offer(pos);
-            }
-        }
-
-        List<BlockPos> result = new ArrayList<>();
-
-        while (!queue.isEmpty()) {
-            BlockPos current = queue.poll();
-            result.add(current);
-
-            Node node = nodes.get(current);
-            if (node != null) {
-                // Reduce in-degree for all dependents
-                for (BlockPos dependent : node.dependents) {
-                    if (affectedWires.contains(dependent)) {
-                        int newDegree = inDegrees.get(dependent) - 1;
-                        inDegrees.put(dependent, newDegree);
-
-                        if (newDegree == 0) {
-                            queue.offer(dependent);
+            affectedWires.forEach(posKey -> {
+                Node node = nodes.get(posKey);
+                if (node != null) {
+                    // Check dependencies
+                    final int[] deg = { 0 };
+                    node.dependencies.forEach(depKey -> {
+                        if (affectedWires.contains(depKey)) {
+                            deg[0]++;
                         }
+                    });
+
+                    localInDegrees.put(posKey, deg[0]);
+                    if (deg[0] == 0) {
+                        localQueue.offer(posKey);
                     }
                 }
+            });
+
+            List<BlockPos> result = new ArrayList<>(affectedWires.size());
+
+            while (!localQueue.isEmpty()) {
+                long currentKey = localQueue.poll();
+                result.add(BlockPos.of(currentKey));
+
+                Node node = nodes.get(currentKey);
+                if (node != null) {
+                    node.dependents.forEach(depKey -> {
+                        if (affectedWires.contains(depKey)) {
+                            int currentDegree = localInDegrees.get(depKey);
+                            if (currentDegree > 0) {
+                                currentDegree--;
+                                localInDegrees.put(depKey, currentDegree);
+                                if (currentDegree == 0) {
+                                    localQueue.offer(depKey);
+                                }
+                            }
+                        }
+                    });
+                }
             }
-        }
 
-        // Check for cycles
-        if (result.size() < affectedWires.size()) {
-            LOGGER.debug("Cycle detected in redstone graph, falling back to vanilla order");
-            return null; // Cycle detected, fall back to vanilla
-        }
+            // Check for cycles
+            if (result.size() < affectedWires.size()) {
+                LOGGER.debug("Cycle detected in redstone graph, falling back to vanilla order");
+                return null;
+            }
 
-        return result;
+            return result;
+        } finally {
+            lock.unlockRead(stamp);
+        }
     }
 
     /**
      * Clear all cached data (for testing or memory management).
      */
     public void clear() {
-        nodes.clear();
-        powerCache.clear();
+        long stamp = lock.writeLock();
+        try {
+            nodes.clear();
+            powerCache.clear();
+        } finally {
+            lock.unlockWrite(stamp);
+        }
     }
 
     /**
      * Get statistics for monitoring.
      */
     public String getStatistics() {
-        long totalCacheAccess = cacheHits + cacheMisses;
-        double hitRate = totalCacheAccess > 0 ? (cacheHits * 100.0 / totalCacheAccess) : 0.0;
+        long hits = cacheHits.get();
+        long totalCacheAccess = hits + cacheMisses.get();
+        double hitRate = totalCacheAccess > 0 ? (hits * 100.0 / totalCacheAccess) : 0.0;
+
+        long stamp = lock.tryOptimisticRead();
+        int size = nodes.size();
+        if (!lock.validate(stamp)) {
+            stamp = lock.readLock();
+            try {
+                size = nodes.size();
+            } finally {
+                lock.unlockRead(stamp);
+            }
+        }
 
         return String.format(
                 "RedstoneGraph{nodes=%d, builds=%d, sorts=%d, cacheHits=%d, cacheMisses=%d, hitRate=%.1f%%}",
-                nodes.size(), graphBuilds, topologicalSorts, cacheHits, cacheMisses, hitRate);
+                size, graphBuilds.get(), topologicalSorts.get(), hits, cacheMisses.get(), hitRate);
     }
 }
