@@ -12,6 +12,8 @@ import net.minecraft.core.Holder;
 import net.minecraft.world.entity.ai.village.poi.PoiManager;
 import net.minecraft.world.entity.ai.village.poi.PoiType;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Overwrite;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -82,68 +84,89 @@ public abstract class PoiManagerMixin {
     // Inner class removed to avoid IllegalClassLoadError
     // Using com.kneaf.core.util.CachedPoiResult instead
 
+    @Shadow
+    protected abstract java.util.stream.Stream<net.minecraft.world.entity.ai.village.poi.PoiRecord> getInChunk(
+            java.util.function.Predicate<net.minecraft.core.Holder<net.minecraft.world.entity.ai.village.poi.PoiType>> typePredicate,
+            net.minecraft.world.level.ChunkPos pos,
+            net.minecraft.world.entity.ai.village.poi.PoiManager.Occupancy occupancy);
+
     /**
-     * OPTIMIZATION: Cache and return POI search results.
+     * OPTIMIZATION: Direct iterative search with caching.
+     * Replaces expensive Stream-based flatMap/filter/min with manual chunk
+     * iteration.
      */
-    @Inject(method = "findClosest", at = @At("HEAD"), cancellable = true)
-    private void kneaf$onFindClosest(Predicate<Holder<PoiType>> typePredicate, BlockPos pos,
-            int distance, PoiManager.Occupancy occupancy,
-            CallbackInfoReturnable<Optional<BlockPos>> cir) {
+    @Overwrite
+    public java.util.Optional<BlockPos> findClosest(
+            java.util.function.Predicate<net.minecraft.core.Holder<net.minecraft.world.entity.ai.village.poi.PoiType>> typePredicate,
+            BlockPos pos,
+            int distance, net.minecraft.world.entity.ai.village.poi.PoiManager.Occupancy occupancy) {
+
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ PoiManagerMixin applied - POI search caching with skip active!");
+            kneaf$LOGGER.info("✅ PoiManagerMixin applied - Extreme iterative search + cache active!");
             kneaf$loggedFirstApply = true;
         }
 
         // Create cache key
         long cacheKey = kneaf$createCacheKey(pos, distance, typePredicate.hashCode(), occupancy.hashCode());
 
-        // Check cache with optimistic read
+        // Check cache
         com.kneaf.core.util.CachedPoiResult cached = null;
-        long stamp = kneaf$cacheLock.tryOptimisticRead();
-        cached = kneaf$searchCache.get(cacheKey);
-
-        if (!kneaf$cacheLock.validate(stamp)) {
-            stamp = kneaf$cacheLock.readLock();
-            try {
-                cached = kneaf$searchCache.get(cacheKey);
-            } finally {
-                kneaf$cacheLock.unlockRead(stamp);
-            }
+        long stamp = kneaf$cacheLock.readLock();
+        try {
+            cached = kneaf$searchCache.get(cacheKey);
+        } finally {
+            kneaf$cacheLock.unlockRead(stamp);
         }
 
         if (cached != null && (kneaf$currentTick - cached.timestamp) < CACHE_TTL_TICKS) {
-            // Cache hit - return cached result
             kneaf$cacheHits.incrementAndGet();
             kneaf$searchesSkipped.incrementAndGet();
-            cir.setReturnValue(cached.result);
-            return;
+            return cached.result;
         }
 
         kneaf$cacheMisses.incrementAndGet();
-    }
 
-    /**
-     * Cache the result after search completes.
-     */
-    @Inject(method = "findClosest", at = @At("RETURN"))
-    private void kneaf$afterFindClosest(Predicate<Holder<PoiType>> typePredicate, BlockPos pos,
-            int distance, PoiManager.Occupancy occupancy,
-            CallbackInfoReturnable<Optional<BlockPos>> cir) {
+        // Iterative Search
+        int r = (distance >> 4) + 1;
+        BlockPos bestPos = null;
+        double bestDistSqr = (double) distance * distance;
+        int centerX = pos.getX() >> 4;
+        int centerZ = pos.getZ() >> 4;
+
+        // Iterate chunks in a square around the center
+        for (int dz = -r; dz <= r; dz++) {
+            for (int dx = -r; dx <= r; dx++) {
+                net.minecraft.world.level.ChunkPos cp = new net.minecraft.world.level.ChunkPos(centerX + dx,
+                        centerZ + dz);
+
+                // Manual iteration over chunk records
+                java.util.List<net.minecraft.world.entity.ai.village.poi.PoiRecord> chunkRecords = this
+                        .getInChunk(typePredicate, cp, occupancy).toList();
+                for (net.minecraft.world.entity.ai.village.poi.PoiRecord record : chunkRecords) {
+                    BlockPos poiPos = record.getPos();
+                    double d = poiPos.distSqr(pos);
+                    if (d < bestDistSqr) {
+                        bestDistSqr = d;
+                        bestPos = poiPos;
+                    }
+                }
+            }
+        }
+
+        java.util.Optional<BlockPos> result = java.util.Optional.ofNullable(bestPos);
+
         // Cache the result
-        long cacheKey = kneaf$createCacheKey(pos, distance, typePredicate.hashCode(), occupancy.hashCode());
-
-        // Only cache if not too large
-        long stamp = kneaf$cacheLock.writeLock();
+        stamp = kneaf$cacheLock.writeLock();
         try {
             if (kneaf$searchCache.size() < MAX_CACHE_SIZE) {
-                kneaf$searchCache.put(cacheKey,
-                        new com.kneaf.core.util.CachedPoiResult(cir.getReturnValue(), kneaf$currentTick));
+                kneaf$searchCache.put(cacheKey, new com.kneaf.core.util.CachedPoiResult(result, kneaf$currentTick));
             }
         } finally {
             kneaf$cacheLock.unlockWrite(stamp);
         }
 
         kneaf$logStats();
+        return result;
     }
 
     /**
@@ -177,11 +200,20 @@ public abstract class PoiManagerMixin {
 
     @Unique
     private long kneaf$createCacheKey(BlockPos pos, int distance, int typeHash, int occupancyHash) {
-        long key = pos.asLong();
-        key ^= ((long) distance << 48);
-        key ^= ((long) typeHash << 32);
-        key ^= occupancyHash;
-        return key;
+        // More robust mixing to prevent collisions
+        long x = pos.getX();
+        long y = pos.getY();
+        long z = pos.getZ();
+
+        long h = x * 3121L + z * 374761393L + y * 132145325L;
+        h += distance * 31L;
+        h += typeHash * 17L;
+        h += occupancyHash;
+
+        // Final mix
+        h = (h ^ (h >>> 30)) * 0xBF58476D1CE4E5B9L;
+        h = (h ^ (h >>> 27)) * 0x94D049BB133111EBL;
+        return h ^ (h >>> 31);
     }
 
     @Unique

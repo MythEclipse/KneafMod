@@ -84,7 +84,7 @@ public abstract class ExplosionMixin {
 
         // Clear exposure cache after each explosion to prevent memory leak and stale
         // data
-        ExplosionExposureMixin.kneaf$clearExposureCache();
+        com.kneaf.core.util.ExplosionControl.clearExposureCache();
 
         ci.cancel();
     }

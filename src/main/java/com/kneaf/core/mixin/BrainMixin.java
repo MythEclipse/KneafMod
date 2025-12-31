@@ -79,18 +79,38 @@ public abstract class BrainMixin<E extends LivingEntity> {
     public abstract Map<MemoryModuleType<?>, Optional<?>> getMemories();
 
     /**
-     * Log that optimization is active.
+     * Log that optimization is active and implement dynamic ticking.
      */
-    @Inject(method = "tick", at = @At("HEAD"))
+    @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
     @SuppressWarnings("null")
     private void kneaf$onBrainTickStart(ServerLevel level, E entity, CallbackInfo ci) {
         if (!kneaf$loggedFirstApply) {
-            kneaf$LOGGER.info("✅ BrainMixin applied - Primitive Array Cache active!");
+            kneaf$LOGGER.info("✅ BrainMixin applied - Dynamic AI Ticking active!");
             kneaf$loggedFirstApply = true;
         }
 
-        // Clear cache every tick
         long gameTick = level.getGameTime();
+
+        // 1. Dynamic Ticking Optimization
+        // If entity is far from any player, we can reduce its AI update rate.
+        double distSq = level.getNearestPlayer(entity, 128.0) == null ? 16384.0
+                : entity.distanceToSqr(level.getNearestPlayer(entity, 128.0));
+
+        int tickRate = 1;
+        if (distSq > 64 * 64) {
+            tickRate = 20; // 1 FPS AI for distant mobs
+        } else if (distSq > 32 * 32) {
+            tickRate = 10; // 2 FPS AI for medium distance
+        } else if (distSq > 16 * 16) {
+            tickRate = 2; // 10 FPS AI
+        }
+
+        if (tickRate > 1 && gameTick % tickRate != 0) {
+            ci.cancel();
+            return;
+        }
+
+        // Clear cache every tick it actually runs
         if (gameTick != kneaf$lastCacheClearTick) {
             kneaf$memoryStatusCache.clear();
             // Fast clear for primitive cache

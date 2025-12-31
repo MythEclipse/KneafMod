@@ -84,6 +84,7 @@ public abstract class BlockEntityMixin {
         BlockEntity self = (BlockEntity) (Object) this;
         if (self.getBlockPos() != null) {
             com.kneaf.core.util.BlockEntityTracker.markBlockEntityActive(self.getBlockPos());
+            com.kneaf.core.util.SlotCache.invalidate(self.getBlockPos());
         }
 
         // Log stats periodically
