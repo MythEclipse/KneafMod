@@ -125,7 +125,7 @@ updates:
       actions:
         dependency-type: "production"
 
-  # Derived from 6 open Dependabot alerts on
+  # Derived from 1 open Dependabot alert on
   # /rust — without this lane Dependabot never sees the manifest, so
   # the advisory can never become a PR. Re-derived on every sync; do not edit.
   - package-ecosystem: "cargo"
