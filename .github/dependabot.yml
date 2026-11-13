@@ -124,21 +124,3 @@ updates:
     groups:
       actions:
         dependency-type: "production"
-
-  # Derived from 1 open Dependabot alert on
-  # /rust — without this lane Dependabot never sees the manifest, so
-  # the advisory can never become a PR. Re-derived on every sync; do not edit.
-  - package-ecosystem: "cargo"
-    directory: "/rust"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "Asia/Jakarta"
-    labels: ["dependencies"]
-    open-pull-requests-limit: 3
-    groups:
-      production:
-        dependency-type: "production"
-      development:
-        dependency-type: "development"
